@@ -17,6 +17,10 @@ Usage:
 Available Commands:
   config    View or update central control plane and gateway host URLs
   register  Enroll edge LTD with central BAP Control Plane using one-time code (OTC)
+  setup     1-click workstation onboarding for Claude Code & AI agents (BAP-471)
+  status    Inspect local active sessions, Cedar policy cache, layers, and spool backlog (BAP-472)
+  why       Explain Cedar policy decision for a command directly in the terminal (BAP-472)
+  sweep     Clean sweep orphaned sessions, purge dead process locks, and flush offline audit (BAP-470)
   sync      Synchronize or inspect local policy cache from control plane (with offline fallback)
   serve     Start the zero-trust attestation server on Unix domain socket
   exec      Evaluate command against Cedar policy and run in sandboxed kernel namespace
@@ -27,11 +31,16 @@ Available Commands:
   help        Display help information
 
 Examples:
+  bapedge setup --app claude-code
+  bapedge status
+  bapedge why "rm -rf /"
+  bapedge why "git status"
+  bapedge sweep
   bapedge register --server http://localhost:8080 --code LTD-OTC-XXXX-XXXX
   bapedge sync --server http://localhost:8080
   bapedge exec "echo hello world"
-  bapedge exec "ls -la /"
   bapedge exec "rm -rf /"
+
   bapedge serve --socket /tmp/ltd.sock
   bapedge attest --socket /tmp/ltd.sock
 `
@@ -54,6 +63,26 @@ func main() {
 	args := os.Args[2:]
 
 	switch command {
+	case "setup":
+		if err := cmd.RunSetup(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error in setup: %v\n", err)
+			os.Exit(1)
+		}
+	case "status":
+		if err := cmd.RunStatus(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error inspecting status: %v\n", err)
+			os.Exit(1)
+		}
+	case "why", "explain":
+		if err := cmd.RunWhy(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error explaining policy: %v\n", err)
+			os.Exit(1)
+		}
+	case "sweep", "clean-sweep":
+		if err := cmd.RunSweep(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error running clean sweep: %v\n", err)
+			os.Exit(1)
+		}
 	case "register":
 		if err := cmd.RunRegister(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error registering agent: %v\n", err)

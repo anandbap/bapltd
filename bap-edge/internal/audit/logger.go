@@ -266,3 +266,40 @@ func ClearLog(logPath string) error {
 	}
 	return os.Truncate(logPath, 0)
 }
+
+// ReadEntries parses and returns all valid AuditEntry records from the given logPath.
+func ReadEntries(logPath string) ([]AuditEntry, error) {
+	if logPath == "" {
+		logPath = DefaultLogPath()
+	}
+	mu.Lock()
+	defer mu.Unlock()
+
+	info, err := os.Stat(logPath)
+	if os.IsNotExist(err) || (err == nil && info.Size() == 0) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		return nil, err
+	}
+
+	lines := bytes.Split(bytes.TrimSpace(content), []byte("\n"))
+	var entries []AuditEntry
+	for _, line := range lines {
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) == 0 {
+			continue
+		}
+		var entry AuditEntry
+		if err := json.Unmarshal(trimmed, &entry); err == nil {
+			entries = append(entries, entry)
+		}
+	}
+	return entries, nil
+}
+

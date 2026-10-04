@@ -199,6 +199,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/inspector/data", s.handleInspectorData)
 	s.mux.HandleFunc("/api/v1/control/revocations", s.handleGetRevocations)
 	s.mux.HandleFunc("/api/v1/control/chain/verify", s.handleVerifyChain)
+	s.mux.HandleFunc("/api/v1/control/sweep", s.handleControlSweep)
 
 	// Web Inspector & React Admin Handshake / Login
 	s.mux.HandleFunc("/api/v1/auth/inspector-handshake", s.handleInspectorHandshake)
@@ -992,6 +993,61 @@ func (s *Server) handleGetRevocations(w http.ResponseWriter, r *http.Request) {
 		"revoked_sessions": revokedSessions,
 		"revoked_users":    revokedUsers,
 		"updated_at":       time.Now().UTC(),
+	})
+}
+
+// BAP-470: handleControlSweep sweeps orphaned and idle sessions across the fleet and reconciles unpresented grants.
+func (s *Server) handleControlSweep(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req struct {
+		SessionID        string `json:"session_id"`
+		NodeID           string `json:"node_id"`
+		StaleIdleSeconds int    `json:"stale_idle_seconds"`
+		Reason           string `json:"reason"`
+	}
+
+	if r.Method == http.MethodPost && r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+
+	sweptSessions := 0
+	if req.SessionID != "" && s.sessionStore != nil {
+		reason := req.Reason
+		if reason == "" {
+			reason = "orphaned_crash_sweep"
+		}
+		if err := s.sessionStore.End(req.SessionID, reason); err == nil {
+			sweptSessions++
+		}
+	}
+
+	idleTimeout := 5 * time.Minute
+	if req.StaleIdleSeconds > 0 {
+		idleTimeout = time.Duration(req.StaleIdleSeconds) * time.Second
+	}
+
+	if s.sessionStore != nil {
+		sweptSessions += s.sessionStore.PurgeStale(idleTimeout)
+	}
+
+	reconciledGrants := 0
+	if s.govStore != nil {
+		rep := s.govStore.ReconcileOrphans(idleTimeout)
+		if rep != nil {
+			reconciledGrants = rep.ReconciledCount
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":            "reconciled",
+		"swept_sessions":    sweptSessions,
+		"reconciled_grants": reconciledGrants,
+		"idle_timeout_sec":  int(idleTimeout.Seconds()),
+		"timestamp":         time.Now().UTC().Format(time.RFC3339),
 	})
 }
 

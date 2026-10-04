@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"bap-edge/internal/audit"
 	"bap-edge/internal/config"
 )
 
@@ -372,6 +373,7 @@ func cleanupStaleSessionMarkers() {
 				if marker.SessionID != "" {
 					_ = os.Remove(sessionMarkerPath(marker.SessionID))
 				}
+				_ = os.Remove(sessionPIDMarkerPath(marker.PID))
 			}
 		}
 	}
@@ -407,6 +409,7 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string) {
 	deadCheckCount := 0
 	sessionFile := sessionMarkerPath(sessionID)
 	var lastScannedEpoch int64
+	heartbeatCounter := 0
 
 	for range ticker.C {
 		// If watchPID was not specified at launch, look for it in local session marker
@@ -462,6 +465,14 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string) {
 
 		// Keep alive & pulse heartbeat continuously
 		statusHB, reasonHB, scanEpoch := pulseHeartbeat(serverURL, sessionID)
+		if statusHB == "ok" {
+			heartbeatCounter++
+			if heartbeatCounter%5 == 0 {
+				go func() {
+					_, _ = audit.FlushOfflineAudit(serverURL, "")
+				}()
+			}
+		}
 		if scanEpoch > 0 && scanEpoch != lastScannedEpoch {
 			lastScannedEpoch = scanEpoch
 			if isLocalScanRunning.CompareAndSwap(false, true) {

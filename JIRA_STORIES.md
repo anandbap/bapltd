@@ -84,8 +84,9 @@ This document represents the complete functional and non-functional requirements
 | `BAP-EPIC-18` | Resource-Side Enforcement (Gateway PEP & Grants) | MVP Core | **DONE** |
 | `BAP-EPIC-19` | Tool and Execution Integration | MVP Core | **DONE** |
 | `BAP-EPIC-20` | Standalone Observability Plane & Timeline | MVP Core | **DONE** |
-| `BAP-EPIC-21` | Failure Modes, Resilience & Security Behavior | MVP Core | **DONE** |
 | `BAP-EPIC-22` | Operations & Governance Extension (BAP-450–BAP-459) | MVP Enterprise Pack | **DONE** |
+| `BAP-EPIC-23` | Layered Endpoint Enforcement & Workstation Hardening (BAP-460–BAP-463) | MVP Enterprise Pack | **DONE** |
+| `BAP-EPIC-24` | Operational Resilience, Crash Sweeps & Developer CLI Tooling (BAP-470–BAP-473) | MVP Enterprise Pack | **DONE** |
 
 ---
 
@@ -1716,4 +1717,67 @@ Includes enterprise MDM compliance gating (Intune/Jamf profile packaging), FIDO2
   2. Tier 1 commands (tests, builds, formatting) evaluate locally against the cached Cedar bundle indefinitely offline.
   3. Tier 2 requests (reaching corporate microservices or databases) enforce strict 15-minute TTLs and fail closed when offline grants expire.
   4. Automatic reconciliation occurs upon reconnection, transmitting offline audit batches and verifying chain integrity.
+
+---
+
+## Epic 24: Operational Resilience, Crash Sweeps & Developer CLI Tooling (BAP-EPIC-24)
+
+### Executive Summary
+Provides automated crash recovery, fleet state reconciliation, and streamlined operational tooling for developer workstations running autonomous agent workloads:
+- **Clean Sweep Reconciler**: Purges orphaned process markers, abandoned locks, and dead session state following abrupt power-offs, system restarts, or process termination, cleanly rejoining the fleet without state residue.
+- **1-Click Developer Setup CLI**: Idempotently initializes workstation agent environments (`bapedge setup --app=claude-code`), locking `dangerouslySkipPermissions: false` and binding PreToolUse hooks directly to the policy broker.
+- **In-Terminal Policy Inspection**: Delivers high-visibility policy debugging directly to developer terminals (`bapedge status` and `bapedge why <cmd>`) with zero browser dashboard friction.
+- **Offline Audit Spooling & Reconnection Flush**: Buffers local execution records during offline travel or tunnel drops, and automatically dispatches queued batches to the central cryptographic ledger upon heartbeat reconnection.
+
+---
+
+### Stories
+
+#### BAP-470: Clean Sweep & Crash Recovery Reconciler
+* **Status**: DONE
+* **Type**: High Availability & Operational Resiliency
+* **As a**: Platform Reliability Engineer (SRE) / Fleet Administrator
+* **I want**: Workstation daemons and the control plane to automatically detect and purge orphaned state after sudden crashes or abrupt machine shutdowns
+* **So that**: Developers and workstations immediately rejoin the active fleet in a pristine, healthy state with zero orphaned locks, stale session markers, or desynchronized session telemetry.
+* **Acceptance Criteria**:
+  1. CLI command `bapedge sweep` scans `.bap/sessions/`, identifies deceased target process IDs, purges stale marker files, and releases abandoned workspace locks.
+  2. Edge daemon notifies control plane via `/api/v1/control/sweep` with specific session IDs and `reason: "orphaned_crash_sweep"`.
+  3. Control plane `/api/v1/control/sweep` endpoint safely marks crashed/idle sessions as closed and invokes governance orphan reconciliation to expire unpresented grants.
+  4. Automatic sweep is executed on daemon startup and session initialization, preventing crash residue accumulation.
+
+#### BAP-471: 1-Click Developer Setup CLI
+* **Status**: DONE
+* **Type**: Developer Experience & Workstation Onboarding
+* **As a**: Software Engineer onboarding onto enterprise AI agent tooling
+* **I want**: A single idempotent CLI command (`bapedge setup --app=claude-code`) that configures local agent settings and registers lifecycle hooks
+* **So that**: Zero-trust execution governance is configured correctly in under 5 seconds without manual JSON editing or human error.
+* **Acceptance Criteria**:
+  1. Idempotently creates or updates `.claude/managed-settings.json` and `.bap/config.json`.
+  2. Invariant enforcement: strictly sets `dangerouslySkipPermissions: false`, preventing bypass of permission boundaries.
+  3. Registers lifecycle PreToolUse hook pointing directly to `bapedge exec`.
+  4. Configures resolved control plane URL and prints human-readable verification checklist.
+
+#### BAP-472: In-Terminal Policy Inspection (`bapedge status` & `bapedge why`)
+* **Status**: DONE
+* **Type**: Developer Experience & Policy Transparency
+* **As a**: Developer or Security Auditor
+* **I want**: To inspect workstation compliance (`bapedge status`) and query Cedar policy decisions directly in the terminal (`bapedge why "<command>"`)
+* **So that**: I can immediately understand why a command is allowed or denied without context-switching to a web browser.
+* **Acceptance Criteria**:
+  1. `bapedge status` prints active/stale sessions, cached Cedar policy version and rules digest, 3-tier layer compliance status (Layers A, B, C), and offline spool backlog count.
+  2. `bapedge why "<cmd>"` parses target command, evaluates local Cedar policy and workspace boundaries, and outputs `ALLOWED` or `DENIED`.
+  3. Displays specific Cedar policy rule ID / trigger reason, workspace escape detection status, and zero-trust principal/action/resource attributes.
+
+#### BAP-473: Offline Audit Spooling & Reconnection Flush
+* **Status**: DONE
+* **Type**: Cryptographic Auditability & Offline Resilience
+* **As a**: Enterprise Compliance Officer & Traveling Engineer
+* **I want**: Audit entries generated during offline flight or network outage periods to be spooled locally in a tamper-evident log and flushed to the control plane upon reconnection
+* **So that**: 100% of agent execution telemetry is accounted for without gaps, and local edge disk space is automatically pruned after verified server acknowledgement.
+* **Acceptance Criteria**:
+  1. Local execution events maintain SHA-256 hash chaining linking to previous entries during offline operation.
+  2. Background heartbeat monitor in `bapedge watch` periodically triggers `audit.FlushOfflineAudit` upon successful reconnection.
+  3. Batch ingestion verifies server `HandshakeAck` (`chain_valid: true`, `ingested > 0`), safely purging local entries to prevent edge storage bloat.
+  4. Manual flushing supported via `bapedge sweep`.
+
 

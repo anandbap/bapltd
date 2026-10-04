@@ -122,3 +122,104 @@ func Transmit(entry AuditEntry, serverURL string, logPath string) (bool, string,
 
 	return true, ack.ReceiptHash, nil
 }
+
+// FlushOfflineAudit reads un-ingested local audit entries and flushes them to the central control plane.
+// Returns the count of successfully ingested entries.
+func FlushOfflineAudit(serverURL string, logPath string) (int, error) {
+	if serverURL == "" || serverURL == "off" || serverURL == "none" {
+		return 0, nil
+	}
+	if logPath == "" {
+		logPath = DefaultLogPath()
+	}
+
+	entries, err := ReadEntries(logPath)
+	if err != nil || len(entries) == 0 {
+		return 0, err
+	}
+
+	// Filter out test-mode entries to prevent polluting production control plane
+	var toSend []AuditEntry
+	for _, entry := range entries {
+		srcLower := strings.ToLower(entry.Source)
+		if strings.Contains(srcLower, "test") || strings.Contains(srcLower, "pytest") || strings.Contains(srcLower, "selftest") {
+			continue
+		}
+		cmdLower := strings.ToLower(entry.FullCommand)
+		if strings.HasPrefix(cmdLower, "pytest") || strings.Contains(cmdLower, "test_leak.py") || strings.Contains(cmdLower, "go test") {
+			continue
+		}
+		toSend = append(toSend, entry)
+	}
+
+	if len(toSend) == 0 {
+		return 0, nil
+	}
+
+	serverURL = strings.TrimRight(serverURL, "/")
+	ingestURL := serverURL + "/api/v1/audit/ingest"
+
+	var payload []map[string]any
+	for _, entry := range toSend {
+		if entry.EventID == "" {
+			entry.EventID = GenerateEventID()
+		}
+		payload = append(payload, map[string]any{
+			"event_id":      entry.EventID,
+			"session_id":    entry.SessionID,
+			"user_id":       entry.UserID,
+			"user_email":    entry.UserEmail,
+			"spiffe_id":     entry.SPIFFEID,
+			"timestamp":     entry.Timestamp.UTC().Format(time.RFC3339),
+			"source":        entry.Source,
+			"user_prompt":   entry.UserPrompt,
+			"client_pid":    entry.ClientPID,
+			"executable":    entry.Executable,
+			"arguments":     entry.Arguments,
+			"full_command":  entry.FullCommand,
+			"decision":      entry.Decision,
+			"reason":        entry.Reason,
+			"duration_ms":   entry.DurationMs,
+			"exit_code":     entry.ExitCode,
+			"previous_hash": entry.PreviousHash,
+			"entry_hash":    entry.EntryHash,
+		})
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return 0, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, ingestURL, bytes.NewReader(data))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return 0, nil // Server currently unreachable: fail-secure, keep local entries intact
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("ingest endpoint returned HTTP %d", resp.StatusCode)
+	}
+
+	var ack HandshakeAck
+	if err := json.NewDecoder(resp.Body).Decode(&ack); err != nil {
+		return 0, fmt.Errorf("failed to decode server handshake: %w", err)
+	}
+
+	if ack.Ingested > 0 && ack.ChainValid {
+		if os.Getenv("BAP_RETAIN_LOCAL") != "1" {
+			for _, entry := range toSend {
+				_ = RemoveEntry(entry.EventID, logPath)
+			}
+		}
+		return ack.Ingested, nil
+	}
+
+	return 0, nil
+}
+
