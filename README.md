@@ -21,6 +21,44 @@ The core idea is simple:
 
 ---
 
+## 🏛️ The Five Architectural Invariants
+
+These foundational invariants define the security boundaries of BAP and prevent architectural drift:
+
+> **I1 — Intent is context, never authority.**  
+> An agent declaring intent to "update customer 123" does not grant executable privilege to write, cancel, or modify resources. Intent provides context for policy evaluation and audit evidence, never executable permission.
+
+> **I2 — bap-edge determines what authority an agent may obtain; it is not assumed to execute every resulting operation.**  
+> bap-edge evaluates local policy and broker requests, but cannot be assumed to observe or execute every downstream HTTP/RPC call. Local intent or policy approval alone is never proof that an actual operation was authorized.
+
+> **I3 — Actual protected operations are independently enforced at a resource-side PEP against bounded authority.**  
+> Business APIs and microservices are protected by gateway Policy Enforcement Points (PEP) that derive actual actions from trusted request characteristics (HTTP method, route, parameters), validating bounded cryptographically signed grants.
+
+> **I4 — Control Plane owns master policy, lifecycle, and centralized state; ordinary authorization must not unnecessarily depend on a synchronous Control Plane round-trip.**  
+> The Control Plane distributes signed, immutable policy bundles. High-throughput edge decisions evaluate locally cached policies in sub-2ms; only operations requiring mutable state (e.g. single-use atomic consumption) hit central state.
+
+> **I5 — Observability establishes causality and evidence across Runtime → Authority → PEP → Execution, but telemetry itself is never treated as authorization.**  
+> The Observability Plane reconstructs the end-to-end timeline for forensic integrity, but telemetry reporting or health signals never substitute for cryptographic authorization tokens.
+
+### 🛡️ The 10-Point Architectural Adversarial Test Matrix
+
+Every pull request and security enhancement must answer whether a compromised or misbehaving agent can:
+
+1. **Claim a different intent?**
+2. **Modify its requested authority?**
+3. **Use a grant against another resource?**
+4. **Perform an additional operation?**
+5. **Reuse or over-consume a constrained grant?**
+6. **Execute operations concurrently to bypass limits?**
+7. **Bypass bap-edge?**
+8. **Bypass Gateway PEP?**
+9. **Disable endpoint telemetry?**
+10. **Forge the evidence trail?**
+
+*If YES to any of 1–10: the architecture must still prevent the unauthorized operation or produce authoritative evidence of the violation.*
+
+---
+
 ## Why BAP exists
 
 AI agents are no longer limited to suggesting code. They can run commands, change files, call APIs, query data, and trigger workflows.

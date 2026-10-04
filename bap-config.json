@@ -5,6 +5,5 @@
   "trust_domain": "bap.internal",
   "environment": "development",
   "enforcement_mode": "enforce",
-  "capture_user_prompt": true,
   "config_source": "C:\\Users\\User\\pyprj\\bapltd\\bap-config.json"
 }

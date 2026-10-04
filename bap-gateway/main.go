@@ -29,24 +29,32 @@ type GatewayConfig struct {
 }
 
 type ConsumeResponse struct {
-	Consumed  bool     `json:"consumed"`
-	GrantID   string   `json:"grant_id"`
-	AgentID   string   `json:"agent_id"`
-	AppID     string   `json:"app_id"`
-	Scopes    []string `json:"scopes"`
-	ExpiresAt int64    `json:"expires_at"`
+	Consumed      bool     `json:"consumed"`
+	GrantID       string   `json:"grant_id"`
+	AgentID       string   `json:"agent_id"`
+	AppID         string   `json:"app_id"`
+	SessionID     string   `json:"session_id,omitempty"`
+	Action        string   `json:"action,omitempty"`
+	Resource      string   `json:"resource,omitempty"`
+	PolicyVersion string   `json:"policy_version,omitempty"`
+	Scopes        []string `json:"scopes"`
+	ExpiresAt     int64    `json:"expires_at"`
 }
 
 type TokenClaims struct {
-	GrantID    string   `json:"jti"`
-	Sub        string   `json:"sub"`
-	AppID      string   `json:"app_id"`
-	InstanceID string   `json:"instance_id,omitempty"`
-	SPIFFEID   string   `json:"spiffe_id,omitempty"`
-	AgentName  string   `json:"agent_name"`
-	EnvProfile string   `json:"env_profile"`
-	Scopes     []string `json:"scopes"`
-	Exp        int64    `json:"exp"`
+	GrantID       string   `json:"jti"`
+	Sub           string   `json:"sub"`
+	AppID         string   `json:"app_id"`
+	InstanceID    string   `json:"instance_id,omitempty"`
+	SPIFFEID      string   `json:"spiffe_id,omitempty"`
+	AgentName     string   `json:"agent_name"`
+	EnvProfile    string   `json:"env_profile"`
+	SessionID     string   `json:"session_id,omitempty"`
+	Action        string   `json:"action,omitempty"`
+	Resource      string   `json:"resource,omitempty"`
+	PolicyVersion string   `json:"policy_version,omitempty"`
+	Scopes        []string `json:"scopes"`
+	Exp           int64    `json:"exp"`
 }
 
 func main() {
@@ -113,6 +121,27 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// BAP-411: PEP derives authoritative action and resource strictly from HTTP request method and path,
+// deliberately ignoring any client-provided action hints (e.g. X-Agent-Action headers).
+func deriveOperation(method, path string) (action, resource string) {
+	cleanPath := strings.TrimRight(path, "/")
+	if strings.HasPrefix(cleanPath, "/api/v1/financial-records") {
+		if method == http.MethodGet {
+			return "financial.records.read", "/api/v1/financial-records"
+		}
+		return "financial.records.write", "/api/v1/financial-records"
+	}
+	if strings.HasPrefix(cleanPath, "/api/v1/core-banking") {
+		if method == http.MethodGet {
+			return "core_banking.read", cleanPath
+		} else if method == http.MethodPost {
+			return "core_banking.transfer", cleanPath
+		}
+		return "core_banking.write", cleanPath
+	}
+	return strings.ToLower(method) + ":" + cleanPath, cleanPath
+}
+
 // pepGuard enforces BAP Grant authentication on every incoming request.
 // If the caller is a rogue agent (no BAP grant or invalid/consumed token), it drops the request with 401/403.
 func pepGuard(cfg GatewayConfig, next http.HandlerFunc) http.HandlerFunc {
@@ -149,8 +178,12 @@ func pepGuard(cfg GatewayConfig, next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// 2. Grant Validation & Atomic Consumption
-		valid, claims, err := validateGrant(cfg, token, r.URL.Path)
+		// BAP-411: PEP derives actual operation from trusted request characteristics, ignoring agent headers
+		action, resource := deriveOperation(r.Method, r.URL.Path)
+		sessID := r.Header.Get("X-BAP-Session-ID")
+
+		// 2. Grant Validation & Atomic Consumption (BAP-412 & BAP-417)
+		valid, claims, err := validateGrantWithDetails(cfg, token, action, resource, sessID)
 		durationMs := time.Since(start).Milliseconds()
 
 		if !valid || err != nil {
@@ -161,7 +194,7 @@ func pepGuard(cfg GatewayConfig, next http.HandlerFunc) http.HandlerFunc {
 			log.Printf("[BAP-GATEWAY-PEP] [BLOCKED FORBIDDEN] 403 Forbidden | Path: %s | Source: %s | Latency: %dms | Reason: %s",
 				r.URL.Path, r.RemoteAddr, durationMs, reason)
 
-			emitGatewayAudit(cfg, "", "unauthorized-agent", "unknown", r.URL.Path, r.Method, "deny", "BLOCKED FORBIDDEN: "+reason+" (HTTP 403)", durationMs, 403)
+			emitGatewayAudit(cfg, sessID, "unauthorized-agent", "unknown", r.URL.Path, r.Method, "deny", "BLOCKED FORBIDDEN: "+reason+" (HTTP 403)", durationMs, 403)
 
 			writeJSON(w, http.StatusForbidden, map[string]any{
 				"error":         "Forbidden",
@@ -177,11 +210,17 @@ func pepGuard(cfg GatewayConfig, next http.HandlerFunc) http.HandlerFunc {
 		log.Printf("[BAP-GATEWAY-PEP] [PERMIT GOVERNED] 200 OK | Path: %s | Workload: %s | App: %s | Latency: %dms",
 			r.URL.Path, claims.Sub, claims.AppID, durationMs)
 
-		sessID := r.Header.Get("X-BAP-Session-ID")
 		emitGatewayAudit(cfg, sessID, claims.Sub, claims.AppID, r.URL.Path, r.Method, "allow", "GATEWAY PEP: Verified BAP Grant for "+claims.Sub+" (HTTP 200)", durationMs, 200)
 
 		r.Header.Set("X-BAP-Verified-Workload", claims.Sub)
 		r.Header.Set("X-BAP-Verified-App", claims.AppID)
+		r.Header.Set("X-BAP-Verified-Grant", claims.GrantID)
+		if claims.Action != "" {
+			r.Header.Set("X-BAP-Verified-Action", claims.Action)
+		}
+		if claims.Resource != "" {
+			r.Header.Set("X-BAP-Verified-Resource", claims.Resource)
+		}
 
 		next(w, r)
 	}
@@ -223,11 +262,17 @@ func emitGatewayAudit(cfg GatewayConfig, sessionID, agentID, appID, path, method
 }
 
 func validateGrant(cfg GatewayConfig, token, resource string) (bool, *TokenClaims, error) {
+	return validateGrantWithDetails(cfg, token, "", resource, "")
+}
+
+func validateGrantWithDetails(cfg GatewayConfig, token, action, resource, sessionID string) (bool, *TokenClaims, error) {
 	// Mode A: Central Control Plane Atomic Consumption (/api/v1/grants/consume)
 	if cfg.UseConsume {
 		payload := map[string]string{
-			"token":    token,
-			"resource": resource,
+			"token":      token,
+			"action":     action,
+			"resource":   resource,
+			"session_id": sessionID,
 		}
 		body, _ := json.Marshal(payload)
 		url := fmt.Sprintf("%s/api/v1/grants/consume", cfg.ControlPlane)
@@ -240,11 +285,15 @@ func validateGrant(cfg GatewayConfig, token, resource string) (bool, *TokenClaim
 				var consumeResp ConsumeResponse
 				if err := json.NewDecoder(resp.Body).Decode(&consumeResp); err == nil && consumeResp.Consumed {
 					claims := &TokenClaims{
-						GrantID: consumeResp.GrantID,
-						Sub:     consumeResp.AgentID,
-						AppID:   consumeResp.AppID,
-						Scopes:  consumeResp.Scopes,
-						Exp:     consumeResp.ExpiresAt,
+						GrantID:       consumeResp.GrantID,
+						Sub:           consumeResp.AgentID,
+						AppID:         consumeResp.AppID,
+						SessionID:     consumeResp.SessionID,
+						Action:        consumeResp.Action,
+						Resource:      consumeResp.Resource,
+						PolicyVersion: consumeResp.PolicyVersion,
+						Scopes:        consumeResp.Scopes,
+						Exp:           consumeResp.ExpiresAt,
 					}
 					return true, claims, nil
 				}
@@ -253,7 +302,7 @@ func validateGrant(cfg GatewayConfig, token, resource string) (bool, *TokenClaim
 				return false, nil, fmt.Errorf("control plane rejected grant (HTTP %d): %s", resp.StatusCode, string(respBody))
 			}
 		}
- return false, nil, fmt.Errorf("central grant consumption unavailable or returned an invalid response; access denied")
+		return false, nil, fmt.Errorf("central grant consumption unavailable or returned an invalid response; access denied")
 	}
 
 	// Mode B: Local Cryptographic Fallback (Decentralized HMAC verification)
@@ -283,6 +332,17 @@ func validateGrant(cfg GatewayConfig, token, resource string) (bool, *TokenClaim
 
 	if time.Now().Unix() >= claims.Exp {
 		return false, nil, fmt.Errorf("BAP grant expired at %s", time.Unix(claims.Exp, 0).Format(time.RFC3339))
+	}
+
+	// BAP-412: Operation matching checks
+	if claims.SessionID != "" && sessionID != "" && !strings.EqualFold(claims.SessionID, sessionID) {
+		return false, nil, fmt.Errorf("session mismatch: grant bound to %s, caller presented %s", claims.SessionID, sessionID)
+	}
+	if claims.Action != "" && action != "" && claims.Action != "*" && !strings.EqualFold(claims.Action, action) {
+		return false, nil, fmt.Errorf("action mismatch: grant authorized %s, requested %s", claims.Action, action)
+	}
+	if claims.Resource != "" && resource != "" && claims.Resource != "*" && !strings.EqualFold(claims.Resource, resource) {
+		return false, nil, fmt.Errorf("resource mismatch: grant authorized %s, requested %s", claims.Resource, resource)
 	}
 
 	return true, &claims, nil

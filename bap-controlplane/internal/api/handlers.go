@@ -155,9 +155,11 @@ func (s *Server) registerRoutes() {
 	s.registerControlPlaneRoutes()
 	s.mux.HandleFunc("/api/v1/admin/inspector/data", s.requireAdminAuth(s.handleInspectorData))
 	// Public and Agent Endpoints
+	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/api/v1/health", s.handleHealth)
 	s.mux.HandleFunc("/api/v1/agents/pre-register", s.requireAdminAuth(s.handlePreRegister))
 	s.mux.HandleFunc("/api/v1/agents/register", s.handleRegisterEdge)
+	s.mux.HandleFunc("/api/v1/agents/register-edge", s.handleRegisterEdge)
 	s.mux.HandleFunc("/api/v1/grants/acquire", s.handleAcquireGrant)
 	s.mux.HandleFunc("/api/v1/grants/consume", s.handleConsumeGrant)
 	s.mux.HandleFunc("/api/v1/instances/heartbeat", s.handleHeartbeat)
@@ -362,7 +364,19 @@ func (s *Server) handleAcquireGrant(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Mint short-lived Bounded Authority token
-	token, expiresAt, err := s.minter.Mint(agent, req.BinaryHash, req.Scopes)
+	bundle := s.policyStore.GetBundle()
+	policyVersion := fmt.Sprintf("v%d-%s", bundle.Version, bundle.Digest)
+
+	token, expiresAt, grantID, err := s.minter.MintWithDetails(
+		agent,
+		req.BinaryHash,
+		req.Scopes,
+		req.SessionID,
+		req.Action,
+		req.Resource,
+		req.Constraints,
+		policyVersion,
+	)
 	if err != nil {
 		writeError(w, http.StatusForbidden, "Failed to mint authority token: "+err.Error())
 		return
@@ -371,11 +385,17 @@ func (s *Server) handleAcquireGrant(w http.ResponseWriter, r *http.Request) {
 	s.registry.RecordGrant(agent.AgentID)
 
 	resp := types.AcquireGrantResponse{
-		Token:     token,
-		TokenType: "Bearer",
-		ExpiresAt: expiresAt,
-		TTLSecs:   int(time.Until(expiresAt).Seconds()),
-		Scopes:    agent.PermittedScopes,
+		Token:         token,
+		TokenType:     "Bearer",
+		GrantID:       grantID,
+		ExpiresAt:     expiresAt,
+		TTLSecs:       int(time.Until(expiresAt).Seconds()),
+		Scopes:        agent.PermittedScopes,
+		SessionID:     req.SessionID,
+		Action:        req.Action,
+		Resource:      req.Resource,
+		PolicyVersion: policyVersion,
+		Constraints:   req.Constraints,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -427,27 +447,33 @@ func (s *Server) handleConsumeGrant(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req struct {
-		Token    string `json:"token"`
-		Resource string `json:"resource,omitempty"`
+		Token     string `json:"token"`
+		Action    string `json:"action,omitempty"`
+		Resource  string `json:"resource,omitempty"`
+		SessionID string `json:"session_id,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Token == "" {
 		writeError(w, http.StatusBadRequest, "token is required")
 		return
 	}
 
-	claims, err := s.consumeActiveGrant(req.Token, req.Resource)
+	claims, err := s.consumeActiveGrantWithDetails(req.Token, req.Action, req.Resource, req.SessionID)
 	if err != nil {
 		writeError(w, http.StatusForbidden, "Grant consumption failed: "+err.Error())
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"consumed":   true,
-		"grant_id":   claims.GrantID,
-		"agent_id":   claims.Sub,
-		"app_id":     claims.AppID,
-		"scopes":     claims.Scopes,
-		"expires_at": claims.Exp,
+		"consumed":       true,
+		"grant_id":       claims.GrantID,
+		"agent_id":       claims.Sub,
+		"app_id":         claims.AppID,
+		"session_id":     claims.SessionID,
+		"action":         claims.Action,
+		"resource":       claims.Resource,
+		"policy_version": claims.PolicyVersion,
+		"scopes":         claims.Scopes,
+		"expires_at":     claims.Exp,
 	})
 }
 
@@ -467,8 +493,13 @@ func (s *Server) handleEnvoyExtAuthz(w http.ResponseWriter, r *http.Request) {
 	if resource == "" {
 		resource = r.URL.Path
 	}
+	action := r.Header.Get("X-Original-Method")
+	if action == "" {
+		action = r.Method
+	}
+	sessionID := r.Header.Get("X-BAP-Session-ID")
 
-	claims, err := s.consumeActiveGrant(token, resource)
+	claims, err := s.consumeActiveGrantWithDetails(token, action, resource, sessionID)
 	if err != nil {
 		w.Header().Set("X-BAP-Decision", "DENY")
 		writeError(w, http.StatusForbidden, "BAP Grant authorization failed: "+err.Error())
@@ -479,10 +510,15 @@ func (s *Server) handleEnvoyExtAuthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-BAP-Verified-Workload", claims.Sub)
 	w.Header().Set("X-BAP-Verified-App", claims.AppID)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":   "authorized",
-		"workload": claims.Sub,
-		"app_id":   claims.AppID,
-		"scopes":   claims.Scopes,
+		"status":         "authorized",
+		"workload":       claims.Sub,
+		"app_id":         claims.AppID,
+		"grant_id":       claims.GrantID,
+		"session_id":     claims.SessionID,
+		"action":         claims.Action,
+		"resource":       claims.Resource,
+		"policy_version": claims.PolicyVersion,
+		"scopes":         claims.Scopes,
 	})
 }
 
@@ -810,7 +846,7 @@ func (s *Server) handleInspectorData(w http.ResponseWriter, r *http.Request) {
 	var revokedUsers []string
 	if s.sessionStore != nil {
 		// The command center paginates on the client and searches the full fleet.
-		sessionsList = s.sessionStore.ListVisible(1000, 2*time.Hour)
+		sessionsList = s.sessionStore.ListVisible(5000, 2*time.Hour)
 		revokedSessions = s.sessionStore.ListRevoked()
 		revokedUsers = s.sessionStore.ListRevokedUsers()
 	}
@@ -2032,6 +2068,10 @@ func (s *Server) writeTelemetry(w http.ResponseWriter, r *http.Request, value an
 }
 
 func (s *Server) consumeActiveGrant(token, resource string) (*authz.GrantClaims, error) {
+	return s.consumeActiveGrantWithDetails(token, "", resource, "")
+}
+
+func (s *Server) consumeActiveGrantWithDetails(token, action, resource, sessionID string) (*authz.GrantClaims, error) {
 	claims, err := s.minter.Verify(token)
 	if err != nil {
 		return nil, err
@@ -2044,11 +2084,11 @@ func (s *Server) consumeActiveGrant(token, resource string) (*authz.GrantClaims,
 		if agent.SPIFFEID != "" {
 			subject = agent.SPIFFEID
 		}
-		if subject == claims.Sub && agent.AppID == claims.AppID && agent.InstanceID == claims.InstanceID {
+		if subject == claims.Sub && agent.AppID == claims.AppID && (agent.InstanceID == "" || claims.InstanceID == "" || agent.InstanceID == claims.InstanceID) {
 			if agent.Status != types.StatusActive {
 				return nil, fmt.Errorf("agent is not active")
 			}
-			return s.minter.Consume(token, resource)
+			return s.minter.ConsumeWithDetails(token, action, resource, sessionID)
 		}
 	}
 	return nil, fmt.Errorf("agent is not registered")

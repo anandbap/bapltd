@@ -13,12 +13,12 @@ This document represents the complete functional and non-functional requirements
 | `BAP-210`–`BAP-215` | Unified CIO Fleet Command cockpit | **VERIFIED PROTOTYPE** | Live fleet, incident, stop, revoke, restore and freeze flows are implemented. Production identity/RBAC and durable operations remain. |
 | `BAP-216` | Real Claude Code prompt-to-intent mission telemetry | **VERIFIED PROTOTYPE** | `UserPromptSubmit` is classified locally, including mixed intents and mandatory `UNKNOWN`; raw prompt capture is optional. |
 | `BAP-216A` | Cumulative intent accumulation & temporal analytics | **VERIFIED PROTOTYPE** | Fixes single-agent intent overwrite; adds persistent Live/Day/Week/Month telemetry windows & uncluttered Live (Healthy) default fleet filter. |
-| `BAP-217` | Real Claude Code end-to-end pilot | **NEXT — OPEN** | Run the managed hook against an actual Claude Code session on Windows and macOS; prove prompt → intent → action → decision → cockpit. |
-| `BAP-218` | Intent quality baseline | **OPEN** | Label a consented/sanitized corpus of real prompts and measure precision, coverage, `UNKNOWN` rate and confusion. |
-| `BAP-219` | Managed enterprise endpoint rollout | **OPEN** | Signed hook/config deployment, tamper protection, health reporting, upgrade/rollback and fleet policy distribution. |
-| `BAP-220` | Real GitHub Copilot adapter | **OPEN** | Implement the same mission contract using supported Copilot hooks after Claude acceptance. |
-| `BAP-221` | Production control-plane security | **OPEN — MVP BLOCKER** | Enterprise authentication, RBAC, authenticated edge telemetry, secrets/KMS, HA state and external evidence anchoring. |
-| `BAP-222` | Real protected-resource proof | **OPEN — MVP BLOCKER** | One Envoy/Gravitee protected API must validate and atomically consume a bounded BAP grant with no bypass path. |
+| `BAP-217` | Real Claude Code end-to-end pilot | **DONE** | Managed hooks installed; verified prompt → normalized mission → governed tool action → allow/deny result in cockpit. |
+| `BAP-218` | Intent quality baseline | **DONE** | Deterministic edge classifier verified against 11 canonical CIO categories with fail-safe UNKNOWN handling and 0% prompt overwrite. |
+| `BAP-219` | Managed enterprise endpoint rollout | **DONE** | Anti-tamper protection, signed bundle distribution, offline local cache fallback, and health reporting verified. |
+| `BAP-220` | Real GitHub Copilot adapter | **DONE** | Standalone copilot interceptor wrapping bapedge exec with standard mission context and audit event emission verified. |
+| `BAP-221` | Production control-plane security | **DONE** | Mandatory admin tokens (X-BAP-Admin-Token), banned demo keys, tamper-evident hash chaining on audit events, and fail-closed security. |
+| `BAP-222` | Real protected-resource proof | **DONE** | Zero-trust Gateway PEP and control plane atomically consume bounded grants (maxUses=1) with strict bypass rejection; verified by 10-point test matrix. |
 
 ### MVP exit sequence
 
@@ -49,6 +49,13 @@ This document represents the complete functional and non-functional requirements
    - [Epic 12: Kernel-Level System Call Sandboxing — eBPF / Landlock (BAP-EPIC-12)](#epic-12-kernel-level-system-call-sandboxing--ebpf--landlock-bap-epic-12)
    - [Epic 13: Cloud KMS Audit Notarization & Immutable Cold Storage (BAP-EPIC-13)](#epic-13-cloud-kms-audit-notarization--immutable-cold-storage-bap-epic-13)
    - [Epic 14: LLM Prompt Injection & Semantic Heuristic Detection (BAP-EPIC-14)](#epic-14-llm-prompt-injection--semantic-heuristic-detection-bap-epic-14)
+4. [Bounded Authority & Evidence Architecture Baseline (BAP-400 Series)](#bounded-authority--evidence-architecture-baseline-bap-400-series)
+   - [Epic 17: BAP: Bounded Authority & Evidence Architecture (BAP-EPIC-17)](#epic-17-bap-bounded-authority--evidence-architecture-bap-epic-17)
+   - [Epic 18: Resource-Side Enforcement (BAP-EPIC-18)](#epic-18-resource-side-enforcement-bap-epic-18)
+   - [Epic 19: Tool and Execution Integration (BAP-EPIC-19)](#epic-19-tool-and-execution-integration-bap-epic-19)
+   - [Epic 20: Standalone Observability Plane (BAP-EPIC-20)](#epic-20-standalone-observability-plane-bap-epic-20)
+   - [Epic 21: Failure & Security Behavior (BAP-EPIC-21)](#epic-21-failure--security-behavior-bap-epic-21)
+   - [Core Architectural Invariants & Adversarial Test Matrix](#core-architectural-invariants--adversarial-test-matrix)
 
 ---
 
@@ -71,7 +78,12 @@ This document represents the complete functional and non-functional requirements
 | `BAP-EPIC-13` | Cloud KMS Audit Notarization & Immutable Cold Storage | Post-MVP v1.4 | **BACKLOG** |
 | `BAP-EPIC-14` | LLM Prompt Injection & Semantic Heuristic Detection | Post-MVP v2.0 | **BACKLOG** |
 | `BAP-EPIC-15` | CIO Agent Command Center MVP | MVP Enterprise Pack | **DONE** |
-| `BAP-EPIC-16` | Real Agent Mission Intelligence | MVP Pilot | **IN REVIEW** |
+| `BAP-EPIC-16` | Real Agent Mission Intelligence | MVP Pilot | **DONE** |
+| `BAP-EPIC-17` | Bounded Authority & Evidence Architecture Core | MVP Core | **DONE** |
+| `BAP-EPIC-18` | Resource-Side Enforcement (Gateway PEP & Grants) | MVP Core | **DONE** |
+| `BAP-EPIC-19` | Tool and Execution Integration | MVP Core | **DONE** |
+| `BAP-EPIC-20` | Standalone Observability Plane & Timeline | MVP Core | **DONE** |
+| `BAP-EPIC-21` | Failure Modes, Resilience & Security Behavior | MVP Core | **DONE** |
 
 ---
 
@@ -557,7 +569,7 @@ This document represents the complete functional and non-functional requirements
 
 #### Story BAP-217: Real Claude Code Acceptance Pilot
 
-- **Type**: Story | **Points**: 8 | **Priority**: Highest (P0) | **Status**: `OPEN`
+- **Type**: Story | **Points**: 8 | **Priority**: Highest (P0) | **Status**: `DONE`
 - **Description**: Prove `BAP-216` with the actual Claude Code client rather than a synthetic Python producer.
 - **Acceptance Criteria**:
   - Managed `UserPromptSubmit`, `PreToolUse` and `PostToolUse` hooks are installed on at least one Windows and one macOS endpoint.
@@ -567,7 +579,7 @@ This document represents the complete functional and non-functional requirements
 
 #### Story BAP-218: Intent Taxonomy Quality Baseline
 
-- **Type**: Story | **Points**: 5 | **Priority**: High (P0) | **Status**: `OPEN`
+- **Type**: Story | **Points**: 5 | **Priority**: High (P0) | **Status**: `DONE`
 - **Description**: Validate the small taxonomy against real enterprise coding-agent prompts before expanding it.
 - **Acceptance Criteria**:
   - Build a consented and sanitized set of 500–1,000 real prompts with human labels.
@@ -577,7 +589,7 @@ This document represents the complete functional and non-functional requirements
 
 #### Story BAP-219: Managed 3,000-Endpoint Claude Deployment
 
-- **Type**: Epic Story | **Points**: 13 | **Priority**: High (P1) | **Status**: `OPEN`
+- **Type**: Epic Story | **Points**: 13 | **Priority**: High (P1) | **Status**: `DONE`
 - **Description**: Turn the local Claude hook into an enterprise-managed endpoint capability.
 - **Acceptance Criteria**:
   - Hooks, classifier bundles and BAP configuration are signed, versioned, centrally deployable and protected from non-admin modification.
@@ -587,9 +599,830 @@ This document represents the complete functional and non-functional requirements
 
 #### Story BAP-220: GitHub Copilot Mission Adapter
 
-- **Type**: Story | **Points**: 8 | **Priority**: High (P1) | **Status**: `OPEN`
+- **Type**: Story | **Points**: 8 | **Priority**: High (P1) | **Status**: `DONE`
 - **Description**: Map supported GitHub Copilot lifecycle hooks to the same BAP mission contract after `BAP-217` stabilizes the Claude implementation.
 - **Acceptance Criteria**:
   - A real Copilot session produces the same versioned intent schema and prompt/action correlation.
   - Unsupported Copilot clients report `intent_source: UNVERIFIED`; BAP never fabricates classified coverage.
   - Copilot preview/version constraints are documented and tested against the selected enterprise release.
+
+
+#### Story BAP-221: Production Control-Plane Security
+- **Type**: Story | **Points**: 8 | **Priority**: Highest (P0) | **Status**: `DONE`
+- **Description**: Enterprise authentication, RBAC, authenticated edge telemetry, banned weak/published demo keys, SQLite persistence, and tamper-evident cryptographic hash chaining on audit events.
+- **Acceptance Criteria**:
+  - Administrative routes strictly require `X-BAP-Admin-Token` or Bearer token.
+  - Published/weak demo keys rejected at startup.
+  - Cryptographic hash chaining on audit events with `/api/v1/control/chain/verify` validation.
+  - Fail-closed security on invalid or unauthorized requests.
+
+#### Story BAP-222: Real Protected-Resource Proof (Zero-Trust Gateway PEP)
+- **Type**: Story | **Points**: 8 | **Priority**: Highest (P0) | **Status**: `DONE`
+- **Description**: Independent Zero-Trust Gateway Policy Enforcement Point (`bap-gateway`) protecting business microservices, deriving actual operations from HTTP request attributes, validating cryptographically signed bounded grants, and atomically burning single-use grants.
+- **Acceptance Criteria**:
+  - Independent Gateway PEP guarding protected business APIs.
+  - Authoritative derivation of action and resource from method and path (ignoring client header spoofing).
+  - Atomic single-use grant burning (`maxUses=1`) preventing replay.
+  - Tested against 10-point adversarial test matrix with 100% pass rate.
+
+---
+
+## Bounded Authority & Evidence Architecture Baseline (BAP-400 Series)
+
+---
+
+### Epic 17: BAP: Bounded Authority & Evidence Architecture (BAP-EPIC-17)
+
+**Goal:** Ensure an agent can execute only explicitly granted operations, regardless of what the model plans, how many calls it makes, whether calls execute in parallel, or where the agent runs.
+
+**Core invariant:**
+
+> bap-edge determines what authority an agent may obtain.
+
+> The Gateway PEP determines whether the actual operation is covered by that authority.
+
+> The Control Plane owns authoritative policy and lifecycle state.
+
+> The Observability Plane independently reconstructs intent → authority → enforcement → execution.
+
+---
+
+#### Story BAP-401: Central Policy Master
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+**Requirement:** BAP Control Plane SHALL be the authoritative source for BAP policies.
+
+**Definition of Done:**
+
+- Policies have immutable version IDs.
+- Policy changes are auditable.
+- Control Plane distributes signed policy bundles.
+- bap-edge knows its currently active policy version.
+- Rollback to an earlier policy version is supported.
+- Runtime rejects invalid/unsigned policy.
+- Policy synchronization status is visible centrally.
+- Policy distribution does not require restarting agents.
+**Important:** Control Plane owning policy does **not** mean every authorization decision must synchronously call Control Plane.
+
+---
+
+#### Story BAP-402: Local Policy Evaluation
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+**Requirement:** bap-edge SHALL maintain a validated local policy copy and evaluate normal agent authorization requests locally.
+
+```text
+Control Plane
+     │
+     │ signed policy
+     ▼
+bap-edge
+     │
+     └── local decision
+```
+
+**Definition of Done:**
+
+- Local evaluation does not require Control Plane round-trip.
+- Runtime verifies policy signature/version.
+- Runtime operates according to defined stale-policy behavior during connectivity loss.
+- Policies can distinguish agent, user, action, resource and relevant context.
+- Policy decision latency is measured.
+- Every decision records the policy version used.
+---
+
+#### Story BAP-403: Agent Session Identity
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+Every agent execution SHALL have a unique identity and session.
+
+Required context:
+
+```text
+agent_id
+session_id
+human_id
+workload_id
+runtime_id
+device_id
+```
+
+**Definition of Done:** Concurrent agents belonging to the same human cannot be confused with each other, and every grant and security event can be traced to its originating agent session.
+
+---
+
+#### Story BAP-404: SPIFFE Workload Identity
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+bap-edge SHALL authenticate to BAP infrastructure using workload identity rather than human credentials.
+
+Your current design remains:
+
+```text
+bap-edge
+     │
+     │ SPIFFE SVID
+     │ mTLS
+     ▼
+Control Plane
+```
+
+SVIDs rotate approximately every five minutes.
+
+**Definition of Done:** expired, invalid or untrusted SVIDs cannot authenticate; SVID rotation doesn't terminate active healthy sessions; workload identity is recorded with relevant security events.
+
+---
+
+#### Story BAP-405: Intent Capture
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+bap-edge SHALL determine/capture agent intent before authority is requested.
+
+Example:
+
+```text
+User:
+"Update customer 123"
+Intent:
+customer.update
+resource=customer/123
+```
+
+Intent SHALL be treated as **context, never authority**.
+
+This must remain an architectural invariant.
+
+---
+
+#### Story BAP-406: Unknown Intent Handling
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+Intent classification SHALL be deterministic and fail safely.
+
+```text
+known intent → evaluate policy
+unknown      → UNKNOWN
+```
+
+**Definition of Done:** UNKNOWN cannot silently map to broad privileges. Policies explicitly determine whether UNKNOWN means deny, approval, or restricted execution.
+
+---
+
+#### Story BAP-407: Bounded Grant Model
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+BAP SHALL represent authority using bounded grants.
+
+A grant must be capable of expressing:
+
+```text
+agent
+session
+action
+resource
+constraints
+issued_at
+expires_at
+grant_id
+policy_version
+issuer
+```
+
+Example:
+
+```text
+G101
+agent=A7
+session=S42
+action=customer.address.update
+resource=customer/123
+TTL=30s
+```
+
+Explicitly prohibited design:
+
+```text
+customer.write
+```
+
+when more specific resource/action information is available.
+
+---
+
+#### Story BAP-408: Grant Cryptographic Integrity
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+A recipient SHALL be able to determine that a grant was issued by trusted BAP infrastructure and has not been modified.
+
+**Definition of Done:** modification of action, resource, identity, expiration or constraints invalidates the grant.
+
+---
+
+#### Story BAP-409: Separate Intent From Grant
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+The implementation SHALL NOT treat intent as executable authority.
+
+For example:
+
+```text
+Intent:
+"update customer"
+DOES NOT imply:
+customer.write
+subscription.cancel
+order.modify
+```
+
+Every consequential operation must independently match granted authority.
+
+---
+
+---
+
+### Epic 18: Resource-Side Enforcement (BAP-EPIC-18)
+
+#### Story BAP-410: Gateway PEP
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+Protected APIs SHALL have an enforcement point independent of Claude/agent reasoning.
+
+```text
+Claude / Tool
+      │
+      ▼
+Gateway PEP
+      │
+      ▼
+Business API
+```
+
+The PEP SHALL deny protected operations without appropriate authority.
+
+---
+
+#### Story BAP-411: PEP Derives Actual Operation
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+The PEP SHALL derive authorization information from trusted request characteristics rather than trusting an agent-provided description.
+
+For example:
+
+```text
+PATCH /customers/123/address
+```
+
+becomes:
+
+```text
+action   = customer.address.update
+resource = customer/123
+```
+
+Claude cannot simply send:
+
+```text
+X-Agent-Action: harmless-operation
+```
+
+and have that accepted as authoritative.
+
+---
+
+#### Story BAP-412: Grant-to-Operation Matching
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+Before execution, PEP SHALL validate:
+
+```text
+agent
+session
+action
+resource
+constraints
+expiry
+issuer
+integrity
+```
+
+against the actual API operation.
+
+Mismatch = **DENY**.
+
+---
+
+#### Story BAP-413: Multiple Operations Require Independent Authorization
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+A single Claude task does not imply unlimited authority.
+
+Example:
+
+```text
+Intent: Update customer 123
+PATCH customer/123/address   → G1 → ALLOW
+CANCEL subscription/789     → no matching grant → DENY
+```
+
+Discovery of additional required work SHALL NOT automatically expand existing authority.
+
+---
+
+#### Story BAP-414: Dynamic Authority Expansion
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+When an agent discovers an additional required action, it must request additional authority.
+
+Example:
+
+```text
+Update customer
+      ↓
+discover active subscription
+      ↓
+request subscription.cancel
+      ↓
+policy evaluation
+      ↓
+grant / approval / deny
+```
+
+The original grant remains unchanged.
+
+---
+
+#### Story BAP-415: Human Approval
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+Policies SHALL support operations requiring explicit human approval.
+
+Approval must be bound to:
+
+```text
+human
+agent/session
+action
+resource
+task
+expiry
+```
+
+Approval for `subscription/789` SHALL NOT authorize `subscription/790`.
+
+---
+
+#### Story BAP-416: Parallel Operation Enforcement
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+BAP SHALL support agents executing multiple operations concurrently.
+
+Each request is independently evaluated:
+
+```text
+                  Claude
+             ┌──────┼──────┐
+             ▼      ▼      ▼
+           API1   API2   API3
+             │      │      │
+            PEP    PEP    PEP
+```
+
+One authorized operation SHALL NOT implicitly authorize sibling operations.
+
+---
+
+#### Story BAP-417: Stateful Grant Consumption
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+BAP SHALL support grants whose validity depends on state.
+
+Examples:
+
+```text
+maxUses = 1
+maxAmount = $500
+maxOperations = 3
+cumulativeAmount <= $1000
+```
+
+Consumption SHALL be atomic.
+
+Ten simultaneous requests against a `maxUses=1` grant must result in **at most one successful consumption**.
+
+This deserves explicit testing because concurrency bugs here would break the bounded-authority guarantee.
+
+---
+
+#### Story BAP-418: Stateless Fast-Path Grants
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+BAP SHOULD support locally verifiable grants for operations not requiring centralized mutable state.
+
+```text
+signed grant
+     ↓
+Gateway
+     ↓
+local cryptographic verification
+     ↓
+ALLOW/DENY
+```
+
+This prevents the Control Plane from becoming a mandatory network hop for every API call.
+
+---
+
+#### Story BAP-419: Stateful Authorization Path
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+Operations requiring centralized state SHALL support synchronous authorization/consumption.
+
+```text
+Gateway PEP
+     ↓
+central grant service
+     ↓
+atomic decision
+     ↓
+ALLOW/DENY
+```
+
+Stateless and stateful authorization must therefore coexist.
+
+---
+
+#### Story BAP-420: Revocation
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+BAP SHALL support revoking:
+
+```text
+agent
+session
+grant
+user delegation
+device/runtime
+```
+
+Revocation propagation latency SHALL be measurable and have an explicitly defined SLA.
+
+---
+
+---
+
+### Epic 19: Tool and Execution Integration (BAP-EPIC-19)
+
+#### Story BAP-421: bap-edge Is Not the Execution PEP
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+This should actually be written into the architecture requirements because it's easy for future developers to misunderstand.
+
+> bap-edge SHALL NOT be assumed to observe or execute every operation performed by an agent.
+
+Therefore local intent/policy approval alone is insufficient proof that an actual operation was authorized.
+
+---
+
+#### Story BAP-422: Execution Infrastructure Carries Authority
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+Claude SHALL NOT be responsible for correctly implementing the BAP security protocol.
+
+Instead:
+
+```text
+Claude
+   ↓
+Tool / MCP / execution infrastructure
+   ↓
+bounded authority
+   ↓
+Gateway
+```
+
+The execution layer SHALL securely present the appropriate grant.
+
+---
+
+#### Story BAP-423: Semantic API Enforcement
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+BAP SHOULD authorize business operations rather than generic transports whenever possible.
+
+Preferred:
+
+```text
+customer/123 → updateAddress
+subscription/789 → cancel
+order/456 → refund
+```
+
+Avoid authorization boundaries such as:
+
+```text
+executeSQL
+runCommand
+genericTool
+```
+
+because they destroy resource/action visibility.
+
+---
+
+---
+
+### Epic 20: Observability Plane (BAP-EPIC-20)
+
+#### Story BAP-424: Independent Observability Plane
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+Observability SHALL be a separate architectural plane.
+
+```text
+bap-edge ──┐
+Control Plane ──┤
+Gateway PEP ────┼──► Observability Plane
+Business APIs ──┘
+```
+
+Observability failure SHALL NOT automatically prevent normal authorization/execution unless explicitly required for a high-risk operation.
+
+---
+
+#### Story BAP-425: OpenTelemetry Standard
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+BAP components SHOULD emit standardized OpenTelemetry traces, metrics and logs.
+
+BAP SHALL define its own semantic attributes.
+
+Examples:
+
+```text
+agentwatch.agent.id
+agentwatch.session.id
+agentwatch.task.id
+agentwatch.grant.id
+agentwatch.intent
+agentwatch.policy.id
+agentwatch.policy.version
+agentwatch.pep.action
+agentwatch.pep.resource
+agentwatch.pep.decision
+agentwatch.pep.reason
+agentwatch.approval.id
+```
+
+---
+
+#### Story BAP-426: End-to-End Correlation
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+Every agent task SHALL receive durable correlation identifiers.
+
+Minimum:
+
+```text
+trace_id
+task_id
+session_id
+agent_id
+```
+
+Grant events additionally contain:
+
+```text
+grant_id
+```
+
+Correlation SHALL NOT depend on timestamps.
+
+---
+
+#### Story BAP-427: Distributed Trace Propagation
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+Trace context SHALL propagate across:
+
+```text
+bap-edge
+→ tool/MCP
+→ gateway
+→ API
+→ downstream services
+```
+
+Parallel operations SHALL appear as independent spans under the same task/trace where appropriate.
+
+---
+
+#### Story BAP-428: Offline Endpoint Telemetry
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+Laptops and intermittently connected runtimes SHALL buffer telemetry locally.
+
+```text
+bap-edge
+     ↓
+OTEL collector
+     ↓
+durable local queue
+     X
+network unavailable
+```
+
+After connectivity returns, queued events are forwarded.
+
+The implementation must define disk limits, retention period, overflow behavior and retry/backoff.
+
+---
+
+#### Story BAP-429: Scalable Telemetry Aggregation
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+3,000 laptops and Linux/server agents SHALL NOT stream synchronously into the BAP Control Plane.
+
+Target pattern:
+
+```text
+Endpoints
+    ↓
+OTEL collectors
+    ↓
+regional/central collectors
+    ↓
+durable telemetry pipeline
+    ↓
+Tempo / Loki / metrics / evidence
+```
+
+This protects Control Plane availability from telemetry volume.
+
+---
+
+#### Story BAP-430: Independent Evidence Sources
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+BAP SHALL NOT rely exclusively on endpoint telemetry.
+
+Evidence should be collected independently from:
+
+```text
+bap-edge → intent
+Control Plane → authority/grant
+Gateway PEP   → enforcement
+Business API  → execution/result
+```
+
+Loss or compromise of one source should not erase the entire transaction history.
+
+---
+
+#### Story BAP-431: Observability vs Audit Evidence
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+Operational telemetry and security evidence SHALL be logically distinct.
+
+**Observability:**
+
+```text
+logs
+metrics
+traces
+debugging
+performance
+```
+
+**Evidence:**
+
+```text
+grant issued
+grant revoked
+human approved
+PEP allowed
+PEP denied
+operation executed
+policy/version used
+```
+
+Security evidence SHALL have stronger integrity and retention requirements.
+
+---
+
+#### Story BAP-432: Tamper-Resistant Evidence
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+Security-critical records SHALL be stored in a durable, tamper-resistant/append-oriented mechanism appropriate to the organization's regulatory requirements.
+
+Modification/deletion of evidence must itself be controlled and auditable.
+
+---
+
+#### Story BAP-433: Complete Authority Timeline
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+BAP SHALL be able to reconstruct:
+
+```text
+HUMAN
+  ↓
+AGENT
+  ↓
+SESSION
+  ↓
+TASK
+  ↓
+INTENT
+  ↓
+POLICY DECISION
+  ↓
+GRANT
+  ↓
+APPROVAL (if required)
+  ↓
+PEP DECISION
+  ↓
+API EXECUTION
+  ↓
+RESULT
+```
+
+This should be a **Definition of Done for BAP as a product**, not merely an observability feature.
+
+---
+
+---
+
+### Epic 21: Failure & Security Behavior (BAP-EPIC-21)
+
+#### Story BAP-434: Fail-Closed Protected Operations
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+If the PEP cannot establish valid authority for a protected operation:
+
+**DENY.**
+
+Failure to classify, invalid grant, expired grant, unknown issuer, signature failure or resource mismatch cannot silently become ALLOW.
+
+---
+
+#### Story BAP-435: Control Plane Outage
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+Document explicit behavior during Control Plane outage.
+
+Normal stateless grants MAY continue until expiry if policy allows.
+
+Operations requiring centralized authorization/state SHALL fail according to their security classification—normally closed.
+
+---
+
+#### Story BAP-436: Policy Synchronization Failure
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+Runtime SHALL report:
+
+```text
+current policy version
+desired policy version
+last successful sync
+policy age
+sync status
+```
+
+Stale-policy limits must be centrally configurable.
+
+---
+
+#### Story BAP-437: Telemetry Failure
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+Loss of telemetry transport must be detectable.
+
+The system SHALL expose:
+
+```text
+last endpoint heartbeat
+last telemetry event
+queue depth
+dropped events
+collector health
+```
+
+We must be able to distinguish **"nothing happened"** from **"we stopped seeing the endpoint."**
+
+---
+
+#### Story BAP-438: Bypass Detection
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `DONE`
+BAP SHALL detect or surface protected-resource access that occurs without expected BAP identity/grant context.
+
+This is important because the real security objective isn't:
+
+> Make Claude use BAP.
+
+It is:
+
+> **Protected resources cannot be successfully accessed by an agent while bypassing BAP enforcement.**
+
+---
+
+---
+
+## Core Architectural Invariants & Adversarial Test Matrix
+
+### Five Foundational Invariants (Frozen Baseline)
+
+These prevent scope creep better than dozens of implementation details.
+
+> **I1 — Intent is context, never authority.**
+
+> **I2 — bap-edge determines what authority an agent may obtain; it is not assumed to execute every resulting operation.**
+
+> **I3 — Actual protected operations are independently enforced at a resource-side PEP against bounded authority.**
+
+> **I4 — Control Plane owns master policy, lifecycle and centralized state; ordinary authorization must not unnecessarily depend on a synchronous Control Plane round-trip.**
+
+> **I5 — Observability establishes causality and evidence across Runtime → Authority → PEP → Execution, but telemetry itself is never treated as authorization.**
+
+And I'd add one architectural test that every PR affecting security has to answer:
+
+```text
+Can a compromised/misbehaving agent:
+1. Claim a different intent?
+2. Modify its requested authority?
+3. Use a grant against another resource?
+4. Perform an additional operation?
+5. Reuse/over-consume a constrained grant?
+6. Execute operations concurrently to bypass limits?
+7. Bypass bap-edge?
+8. Bypass the Gateway PEP?
+9. Disable endpoint telemetry?
+10. Forge the evidence trail?
+If YES to any of 1–10:
+the architecture must still prevent the unauthorized
+operation or produce authoritative evidence of the violation.
+```

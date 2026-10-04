@@ -79,18 +79,33 @@ type RegisterEdgeResponse struct {
 	SessionToken string    `json:"session_token"`
 }
 
+type GrantConstraints struct {
+	MaxUses   int `json:"max_uses,omitempty"`
+	MaxAmount int `json:"max_amount,omitempty"`
+}
+
 type AcquireGrantRequest struct {
-	AgentID    string   `json:"agent_id"`
-	BinaryHash string   `json:"binary_hash"`
-	Signature  string   `json:"signature,omitempty"`
-	Timestamp  int64    `json:"timestamp"`
-	Scopes     []string `json:"scopes,omitempty"`
+	AgentID     string            `json:"agent_id"`
+	BinaryHash  string            `json:"binary_hash"`
+	Signature   string            `json:"signature,omitempty"`
+	Timestamp   int64             `json:"timestamp"`
+	SessionID   string            `json:"session_id,omitempty"`
+	Action      string            `json:"action,omitempty"`
+	Resource    string            `json:"resource,omitempty"`
+	Constraints *GrantConstraints `json:"constraints,omitempty"`
+	Scopes      []string          `json:"scopes,omitempty"`
 }
 
 type AcquireGrantResponse struct {
-	Token     string    `json:"token"`
-	TokenType string    `json:"token_type"`
-	ExpiresAt time.Time `json:"expires_at"`
-	TTLSecs   int       `json:"expires_in"`
-	Scopes    []string  `json:"scopes"`
+	Token         string            `json:"token"`
+	TokenType     string            `json:"token_type"`
+	GrantID       string            `json:"grant_id,omitempty"`
+	ExpiresAt     time.Time         `json:"expires_at"`
+	TTLSecs       int               `json:"expires_in"`
+	Scopes        []string          `json:"scopes"`
+	SessionID     string            `json:"session_id,omitempty"`
+	Action        string            `json:"action,omitempty"`
+	Resource      string            `json:"resource,omitempty"`
+	PolicyVersion string            `json:"policy_version,omitempty"`
+	Constraints   *GrantConstraints `json:"constraints,omitempty"`
 }
