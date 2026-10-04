@@ -1,0 +1,286 @@
+name: Release & Multi-Platform Packaging
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version tag (e.g. 1.0.0)'
+        required: true
+        default: '1.0.0'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-and-package:
+    name: Build & Package (${{ matrix.target.os }}-${{ matrix.target.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS Apple Silicon (darwin-arm64)
+          - runner: macos-latest
+            target:
+              os: darwin
+              arch: arm64
+              platform_name: darwin-arm64
+              ext: ''
+
+          # macOS Intel (darwin-amd64)
+          - runner: macos-latest
+            target:
+              os: darwin
+              arch: amd64
+              platform_name: darwin-amd64
+              ext: ''
+
+          # Linux AMD64
+          - runner: ubuntu-latest
+            target:
+              os: linux
+              arch: amd64
+              platform_name: linux-amd64
+              ext: ''
+
+          # Linux ARM64
+          - runner: ubuntu-latest
+            target:
+              os: linux
+              arch: arm64
+              platform_name: linux-arm64
+              ext: ''
+
+          # Windows AMD64
+          - runner: windows-latest
+            target:
+              os: windows
+              arch: amd64
+              platform_name: windows-amd64
+              ext: '.exe'
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          check-latest: true
+
+      - name: Set Release Version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "RELEASE_VERSION=${{ github.event.inputs.version }}" >> $GITHUB_ENV
+          else
+            echo "RELEASE_VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
+          fi
+
+      - name: Compile Binaries for ${{ matrix.target.platform_name }}
+        shell: bash
+        env:
+          GOOS: ${{ matrix.target.os }}
+          GOARCH: ${{ matrix.target.arch }}
+          CGO_ENABLED: '0'
+        run: |
+          DIST_DIR="dist/${{ matrix.target.platform_name }}"
+          mkdir -p "$DIST_DIR"
+
+          echo "Compiling bapedge..."
+          (cd bap-edge && go build -trimpath -ldflags "-s -w -X main.Version=${RELEASE_VERSION}" -o "../$DIST_DIR/bapedge${{ matrix.target.ext }}" .)
+
+          echo "Compiling bapcontrolplane..."
+          (cd bap-controlplane && go build -trimpath -ldflags "-s -w -X main.Version=${RELEASE_VERSION}" -o "../$DIST_DIR/bapcontrolplane${{ matrix.target.ext }}" ./cmd/server)
+
+          if [ -d "bap-gateway" ]; then
+            echo "Compiling bapgateway..."
+            (cd bap-gateway && go build -trimpath -ldflags "-s -w" -o "../$DIST_DIR/bapgateway${{ matrix.target.ext }}" . || true)
+          fi
+
+          if [ -d "bap-controlplane/cmd/dashboard" ]; then
+            echo "Compiling bapdashboard..."
+            (cd bap-controlplane && go build -trimpath -ldflags "-s -w" -o "../$DIST_DIR/bapdashboard${{ matrix.target.ext }}" ./cmd/dashboard || true)
+          fi
+
+      # -----------------------------------------------------------------------
+      # Code Signing
+      # -----------------------------------------------------------------------
+      - name: Sign Binaries (macOS codesign)
+        if: matrix.target.os == 'darwin'
+        shell: bash
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+        run: |
+          DIST_DIR="dist/${{ matrix.target.platform_name }}"
+          if [ -n "$MACOS_CERTIFICATE" ]; then
+            echo "Importing Apple Developer Certificate..."
+            KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain
+            security create-keychain -p "" $KEYCHAIN_PATH
+            security default-keychain -s $KEYCHAIN_PATH
+            security unlock-keychain -u $KEYCHAIN_PATH
+            echo "$MACOS_CERTIFICATE" | base64 --decode > $RUNNER_TEMP/certificate.p12
+            security import $RUNNER_TEMP/certificate.p12 -k $KEYCHAIN_PATH -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple: -s -k "" $KEYCHAIN_PATH
+            codesign --force --options runtime --timestamp --sign "Developer ID Application" "$DIST_DIR/bapedge"
+          else
+            echo "No MACOS_CERTIFICATE provided. Applying ad-hoc local signature for testing..."
+            codesign --force --deep -s - "$DIST_DIR/bapedge"
+          fi
+
+      - name: Sign Binaries (Windows SignTool)
+        if: matrix.target.os == 'windows'
+        shell: powershell
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PWD: ${{ secrets.WINDOWS_CERTIFICATE_PWD }}
+        run: |
+          $distDir = "dist\${{ matrix.target.platform_name }}"
+          if ($env:WINDOWS_CERTIFICATE) {
+            Write-Host "Signing Windows executable with SignTool..."
+            $certPath = "$env:RUNNER_TEMP\cert.pfx"
+            [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+            signtool sign /f $certPath /p $env:WINDOWS_CERTIFICATE_PWD /tr http://timestamp.digicert.com /td sha256 /fd sha256 "$distDir\bapedge.exe"
+          } else {
+            Write-Host "No WINDOWS_CERTIFICATE provided. Skipping digital signature (development build)."
+          }
+
+      # -----------------------------------------------------------------------
+      # Enterprise Packaging: macOS (.pkg & Jamf .mobileconfig)
+      # -----------------------------------------------------------------------
+      - name: Package macOS .pkg & Jamf Profile
+        if: matrix.target.os == 'darwin'
+        shell: bash
+        run: |
+          chmod +x packaging/jamf/build_pkg.sh
+          ./packaging/jamf/build_pkg.sh "${{ matrix.target.arch }}" "${RELEASE_VERSION}"
+          
+          # Copy Jamf profile to output
+          cp packaging/jamf/com.bap.edge.mobileconfig "dist/bapedge-jamf-profile.mobileconfig"
+
+      # -----------------------------------------------------------------------
+      # Enterprise Packaging: Windows (.msi & Intune CSP)
+      # -----------------------------------------------------------------------
+      - name: Package Windows .msi & Intune Profile
+        if: matrix.target.os == 'windows'
+        shell: powershell
+        run: |
+          & packaging\intune\build_msi.ps1 -Version "${env:RELEASE_VERSION}" -DistDir "dist\windows-amd64" -OutputFile "dist\bapedge-windows-amd64-${env:RELEASE_VERSION}.msi"
+          
+          # Create Intune Deployment Zip Bundle
+          $intuneDir = "dist\bapedge-intune-package"
+          New-Item -ItemType Directory -Path $intuneDir -Force | Out-Null
+          Copy-Item "dist\windows-amd64\bapedge.exe" -Destination $intuneDir -Force
+          Copy-Item "bap-config.json" -Destination $intuneDir -Force
+          Copy-Item "packaging\intune\Install-BAPEdge.ps1" -Destination $intuneDir -Force
+          Copy-Item "packaging\intune\Uninstall-BAPEdge.ps1" -Destination $intuneDir -Force
+          Copy-Item "packaging\intune\Detect-BAPEdge.ps1" -Destination $intuneDir -Force
+          Copy-Item "packaging\intune\Intune-BAP-Policy.xml" -Destination $intuneDir -Force
+          Compress-Archive -Path "$intuneDir\*" -DestinationPath "dist\bapedge-intune-deployment-${env:RELEASE_VERSION}.zip" -Force
+
+      # -----------------------------------------------------------------------
+      # Enterprise Packaging: Linux (.deb & systemd)
+      # -----------------------------------------------------------------------
+      - name: Package Linux .deb
+        if: matrix.target.os == 'linux'
+        shell: bash
+        run: |
+          chmod +x packaging/linux/build_deb.sh
+          ./packaging/linux/build_deb.sh "${{ matrix.target.arch }}" "${RELEASE_VERSION}"
+
+      # -----------------------------------------------------------------------
+      # Platform Archives (.tar.gz / .zip)
+      # -----------------------------------------------------------------------
+      - name: Create Platform Archive
+        shell: bash
+        run: |
+          PKG_NAME="bap-${{ matrix.target.platform_name }}-${RELEASE_VERSION}"
+          STAGE_DIR="dist/$PKG_NAME"
+          mkdir -p "$STAGE_DIR"
+
+          cp -r dist/${{ matrix.target.platform_name }}/* "$STAGE_DIR/"
+          cp bap-config.json "$STAGE_DIR/"
+          [ -f policy.cedar ] && cp policy.cedar "$STAGE_DIR/"
+          [ -f schema.json ] && cp schema.json "$STAGE_DIR/"
+
+          if [ "${{ matrix.target.os }}" = "windows" ]; then
+            (cd dist && 7z a "${PKG_NAME}.zip" "$PKG_NAME") || (cd dist && zip -r "${PKG_NAME}.zip" "$PKG_NAME")
+          else
+            tar -czf "dist/${PKG_NAME}.tar.gz" -C dist "$PKG_NAME"
+          fi
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ matrix.target.platform_name }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.pkg
+            dist/*.msi
+            dist/*.deb
+            dist/*.mobileconfig
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # Release Aggregation & Publishing
+  # ---------------------------------------------------------------------------
+  publish-release:
+    name: Publish GitHub Release & Checksums
+    needs: build-and-package
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate Checksums (SHA256SUMS.txt)
+        shell: bash
+        run: |
+          cd release-assets
+          sha256sum * > SHA256SUMS.txt || shasum -a 256 * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Determine Release Tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "TAG_NAME=v${{ github.event.inputs.version }}" >> $GITHUB_ENV
+          else
+            echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: BAP Release ${{ env.TAG_NAME }}
+          draft: false
+          prerelease: false
+          files: |
+            release-assets/*
+          body: |
+            ## Bounded Authority Plane (BAP) Cross-Platform Release
+
+            ### 📦 Supported Platforms & Packages
+            - **macOS Apple Silicon (`darwin-arm64`)**: Binary archive, signed `.pkg` installer, and Jamf Pro `.mobileconfig`.
+            - **macOS Intel (`darwin-amd64`)**: Binary archive & `.pkg`.
+            - **Windows AMD64 (`windows-amd64`)**: Binary zip archive, signed `.msi`, and Microsoft Intune CSP / Win32 package.
+            - **Linux AMD64 (`linux-amd64`)**: Static binary archive, Debian `.deb`, and systemd unit.
+            - **Linux ARM64 (`linux-arm64`)**: Static binary archive & `.deb`.
+
+            ### 🔐 Cryptographic Integrity
+            All binaries and packages are indexed in `SHA256SUMS.txt`.

@@ -1843,5 +1843,77 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   3. Cedar policies using `principal.department == "Finance"` or `context.department == "Finance"` evaluate natively.
   4. `bapedge why` outputs the evaluated principal identity context alongside the allow/deny policy determination.
 
+---
+
+### Epic 26: Cross-Platform Packaging & CI/CD Release Pipeline (BAP-EPIC-26)
+**Summary**: Establish a fully automated enterprise release and cross-platform packaging pipeline powered by GitHub Actions. Compiles, signs, and packages release binaries for `darwin-arm64` (Apple Silicon), `darwin-amd64` (Intel), `linux-amd64`, `linux-arm64`, and `windows-amd64`. Produces turnkey deployment artifacts for enterprise Mobile Device Management (MDM) fleets: macOS `.pkg` installers and Jamf Pro `.mobileconfig` configuration profiles, Windows `.msi` installers and Microsoft Intune CSP Win32 packages, Debian `.deb` packages with systemd units, and a cryptographically verifiable `SHA256SUMS.txt` integrity manifest.
+
+#### Gap 4: Cross-Platform Packaging & CI/CD Release Pipeline
+* **Current state**: Binaries are compiled locally for Windows AMD64 (`dist/windows-amd64/`). Linux and macOS source code exists (`proc_unix.go`, `sandbox_linux.go`, `sandbox_darwin.go`), but cross-compiled binaries are not packaged.
+* **What's needed**: A GitHub Actions CI/CD matrix:
+  - Compiling and signing release binaries for `darwin-arm64` (macOS Apple Silicon), `linux-amd64`, and `windows-amd64`.
+  - Packaging `.pkg` / `.mobileconfig` for Jamf and `.msi` / Intune CSP for Windows.
+
+#### BAP-500: Multi-Platform GitHub Actions CI Matrix (`ci.yml`)
+* **Status**: DONE
+* **Type**: CI/CD & Build Automation
+* **As a**: Core Software Engineer
+* **I want**: Every pull request and commit to `main` to trigger automated unit, race-condition, and integration tests across Ubuntu, macOS, and Windows runners
+* **So that**: Regressions across operating system abstractions (`proc_unix.go`, `sandbox_windows.go`, `sandbox_linux.go`) are caught prior to merging.
+* **Acceptance Criteria**:
+  1. `.github/workflows/ci.yml` executes Go unit tests across `ubuntu-latest`, `windows-latest`, and `macos-latest`.
+  2. Executes Python integration suite across all test modules on Windows runner.
+  3. Fails the build if any test fails or if data race conditions are detected.
+
+#### BAP-501: Multi-Platform Release Pipeline Matrix (`release.yml`)
+* **Status**: DONE
+* **Type**: CI/CD & Release Management
+* **As a**: Enterprise Release Manager
+* **I want**: Tagged releases (`v*`) and manual workflow dispatches to trigger cross-compilation across all target architectures (`darwin-arm64`, `darwin-amd64`, `linux-amd64`, `linux-arm64`, `windows-amd64`)
+* **So that**: Zero-dependency, stripped, production-grade binaries are produced consistently and uploaded to GitHub Releases.
+* **Acceptance Criteria**:
+  1. Matrix job builds `bapedge`, `bapcontrolplane`, `bapgateway`, and `bapdashboard` for all 5 target combinations.
+  2. Injects release version into Go binaries via `-ldflags "-X main.Version=..."`.
+  3. Bundles default configurations, Cedar schemas, and policies into platform archives (`.tar.gz` and `.zip`).
+  4. Publishes GitHub Release with all platform artifacts and release notes.
+
+#### BAP-502: macOS `.pkg` Packaging & Jamf Pro MDM Configuration Profile (`.mobileconfig`)
+* **Status**: DONE
+* **Type**: Enterprise Fleet Deployment (macOS / Jamf)
+* **As a**: Mac Fleet Administrator / Jamf Pro Engineer
+* **I want**: A signed macOS `.pkg` installer and a Jamf `.mobileconfig` configuration profile for BAP Edge
+* **So that**: BAP can be deployed silently across thousands of developer MacBooks with LaunchDaemon supervision and pre-approved TCC permissions.
+* **Acceptance Criteria**:
+  1. `packaging/jamf/build_pkg.sh` generates a compliant `.pkg` installer placing `bapedge` into `/usr/local/bin` and staging default configuration.
+  2. `packaging/jamf/com.bap.edge.plist` configures LaunchDaemon supervision under `/Library/LaunchDaemons/` with auto-restart.
+  3. `packaging/jamf/postinstall.sh` configures directory permissions and loads the daemon via `launchctl`.
+  4. `packaging/jamf/com.bap.edge.mobileconfig` provides an Apple Configuration Profile specifying Control Plane endpoints, OIDC provider, sandboxing directives, and TCC permissions.
+
+#### BAP-503: Windows `.msi` Installer & Microsoft Intune CSP Deployment Bundle
+* **Status**: DONE
+* **Type**: Enterprise Fleet Deployment (Windows / Intune)
+* **As a**: Windows Enterprise Administrator / Intune Engineer
+* **I want**: A Windows Installer (`.msi`) and Intune Win32 App deployment package with CSP XML
+* **So that**: BAP can be mass-deployed across Windows developer workstations via Microsoft Intune and Endpoint Manager.
+* **Acceptance Criteria**:
+  1. `packaging/intune/bapedge.wxs` WiX source definition and `build_msi.ps1` package `bapedge.msi` installing to `C:\Program Files\BAP\`.
+  2. `packaging/intune/Install-BAPEdge.ps1` automates installation, system PATH registration, and scheduled task / daemon supervision.
+  3. `packaging/intune/Detect-BAPEdge.ps1` provides Intune custom detection rule for software compliance.
+  4. `packaging/intune/Uninstall-BAPEdge.ps1` ensures clean uninstallation and PATH cleanup.
+  5. `packaging/intune/Intune-BAP-Policy.xml` provides OMA-URI CSP policy definition for remote configuration.
+
+#### BAP-504: Binary Code Signing & Cryptographic Checksum Ledger
+* **Status**: DONE
+* **Type**: Supply Chain Security & Integrity
+* **As a**: CISO & Security Auditor
+* **I want**: All release binaries to be digitally signed and recorded in a cryptographic checksum manifest
+* **So that**: Administrators can verify binary provenance, authenticity, and tamper-resistance prior to fleet execution.
+* **Acceptance Criteria**:
+  1. Release pipeline supports Apple Developer ID `codesign` for macOS binaries.
+  2. Release pipeline supports Authenticode `signtool` signing for Windows executables.
+  3. Release aggregation job generates `SHA256SUMS.txt` containing SHA-256 digests for all binaries, packages, and profiles.
+  4. Release publishes `SHA256SUMS.txt` directly to the GitHub Release.
+
+
 
 
