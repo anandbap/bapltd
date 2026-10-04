@@ -29,6 +29,11 @@ This document is the complete REST API specification for **`bapcontrolplane`**, 
 | `GET` | `/api/v1/sessions` | List recent agent execution sessions with stats | None |
 | `GET` | `/api/v1/sessions/{id}` | Retrieve details and stats for a specific session | None |
 | `GET` | `/api/v1/inspector/data` | Unified polling endpoint for Inspector UI | None |
+| `POST` | `/api/v1/auth/otc/dev-request` | Auto-mint OTC for local developers (dev mode only) | None (Dev Only, 403 in Prod) |
+| `GET` | `/api/v1/auth/oidc/config` | Public OIDC provider configuration & discovery | None |
+| `POST` | `/api/v1/auth/oidc/device-code` | Initiate RFC 8628 Device Authorization Flow | None |
+| `POST` | `/api/v1/auth/oidc/device-token` | Poll for RFC 8628 device token authorization | Device Code |
+| `POST` | `/api/v1/auth/oidc/device-verify` | Verify & approve device session with corporate IdP claims | MFA / Corporate User |
 
 ---
 
@@ -42,16 +47,26 @@ go build -o bapcontrolplane.exe ./cmd/server
 
 ### Standard HTTP (Development / Internal Mesh)
 ```cmd
-.\bapcontrolplane.exe -port 8080 -ttl 30 -trust-domain bap.internal
+# Development mode (self-service OTC permitted):
+.\bapcontrolplane.exe -port 8080 -mode dev -trust-domain bap.internal
 ```
 
-### Secure HTTPS / TLS (Production or Automated Dev TLS)
+### Secure HTTPS / TLS (Production Mode with OIDC Federation)
 ```cmd
-# Automatic self-signed TLS generation (exports controlplane-cert.pem for clients):
-.\bapcontrolplane.exe -port 8443 -tls-auto -trust-domain bap.internal
+# Production mode with Microsoft Entra ID or Okta IdP federation:
+.\bapcontrolplane.exe -port 8443 -mode prod \
+  -tls -tls-cert /path/to/cert.pem -tls-key /path/to/key.pem \
+  -oidc-provider entra \
+  -oidc-issuer https://login.microsoftonline.com/your-tenant-id/v2.0 \
+  -oidc-client-id your-entra-client-id \
+  -oidc-tenant-id your-tenant-id \
+  -oidc-allowed-domains "company.com,subsidiary.com" \
+  -trust-domain bap.internal
 
-# Custom production certificates:
-.\bapcontrolplane.exe -port 8443 -tls -tls-cert /path/to/cert.pem -tls-key /path/to/key.pem -trust-domain bap.internal
+# In production mode:
+# - Self-service OTC endpoint (/api/v1/auth/otc/dev-request) returns HTTP 403 Forbidden.
+# - Out-of-band admin pre-registration requires X-BAP-Admin-Token header.
+# - Interactive engineers enroll via RFC 8628 OIDC device flow (MFA authenticated).
 ```
 
 ---
@@ -609,6 +624,134 @@ The current repository validates the hook contract but does not yet cryptographi
 
 ---
 
+### 3.12. Enterprise Identity Provider Federation & OIDC Device Flow
+
+BAP natively federates with enterprise Identity Providers (Okta, Microsoft Entra ID, Ping, Google Workspace) via RFC 8628 OAuth 2.0 Device Authorization Grant.
+
+#### 3.12.1. Dev Mode One-Time Code Auto-Mint
+In `dev` mode (`-mode dev`), allows local developers to bootstrap an OTC without manual admin intervention. In `prod` mode (`-mode prod`), this endpoint strictly returns `403 Forbidden`.
+- **Method**: `POST`
+- **Path**: `/api/v1/auth/otc/dev-request`
+- **Request Body**:
+  ```json
+  {
+    "app_id": "claude-code-dev",
+    "agent_name": "LocalDeveloperAgent",
+    "owner_email": "developer@local.internal"
+  }
+  ```
+- **Example Response (`200 OK` in Dev Mode)**:
+  ```json
+  {
+    "code": "LTD-OTC-A1B2-C3D4",
+    "app_id": "claude-code-dev",
+    "expires_at": "2026-10-04T18:00:00Z"
+  }
+  ```
+- **Example Response (`403 Forbidden` in Prod Mode)**:
+  ```json
+  {
+    "error": "dev-request is disabled in production mode; offline admin registration or OIDC login required"
+  }
+  ```
+
+#### 3.12.2. Public OIDC Configuration Discovery
+Clients query the active IdP federation configuration and RFC 8628 device flow endpoints. Client secrets are never exposed.
+- **Method**: `GET`
+- **Path**: `/api/v1/auth/oidc/config`
+- **Example Response (`200 OK`)**:
+  ```json
+  {
+    "enabled": true,
+    "provider": "entra",
+    "issuer": "https://login.microsoftonline.com/tenant-id/v2.0",
+    "client_id": "00000000-0000-0000-0000-000000000000",
+    "device_auth_endpoint": "https://controlplane.company.internal/api/v1/auth/oidc/device-code",
+    "token_endpoint": "https://controlplane.company.internal/api/v1/auth/oidc/device-token",
+    "allowed_domains": ["company.com", "partner.org"],
+    "claim_mappings": {
+      "department": "department",
+      "email": "user_email",
+      "groups": "groups"
+    }
+  }
+  ```
+
+#### 3.12.3. Initiate RFC 8628 Device Authorization
+Initializes an interactive MFA login flow for the developer's CLI agent workstation.
+- **Method**: `POST`
+- **Path**: `/api/v1/auth/oidc/device-code`
+- **Request Body**:
+  ```json
+  {
+    "client_id": "bapedge-cli",
+    "scope": "openid profile email department"
+  }
+  ```
+- **Example Response (`200 OK`)**:
+  ```json
+  {
+    "device_code": "devcode-a83f9c0e48a17d23",
+    "user_code": "WDJB-MJHT",
+    "verification_uri": "https://controlplane.company.internal/device",
+    "verification_uri_complete": "https://controlplane.company.internal/device?user_code=WDJB-MJHT",
+    "expires_in": 900,
+    "interval": 5
+  }
+  ```
+
+#### 3.12.4. Poll Device Token
+The edge daemon polls this endpoint while the engineer completes browser MFA authentication.
+- **Method**: `POST`
+- **Path**: `/api/v1/auth/oidc/device-token`
+- **Request Body**:
+  ```json
+  {
+    "device_code": "devcode-a83f9c0e48a17d23",
+    "grant_type": "urn:ietf:params:oauth:grant-type:device_code"
+  }
+  ```
+- **Pending Response (`400 Bad Request` per RFC 8628 §3.5)**:
+  ```json
+  {
+    "error": "authorization_pending"
+  }
+  ```
+- **Success Response (`200 OK` once user completes MFA)**:
+  ```json
+  {
+    "access_token": "bap_idp_tok_89f02c4819d...",
+    "token_type": "Bearer",
+    "expires_in": 3600,
+    "user_email": "alice@company.com",
+    "department": "Finance",
+    "groups": ["ai-developers", "finance-reconcilers"]
+  }
+  ```
+
+#### 3.12.5. Approve Device Verification (IdP Callback / MFA Approval)
+Internal or IdP callback endpoint verifying the developer's corporate identity and passing validated directory claims into the active session.
+- **Method**: `POST`
+- **Path**: `/api/v1/auth/oidc/device-verify`
+- **Request Body**:
+  ```json
+  {
+    "user_code": "WDJB-MJHT",
+    "user_email": "alice@company.com",
+    "department": "Finance",
+    "groups": ["ai-developers", "finance-reconcilers"]
+  }
+  ```
+- **Example Response (`200 OK`)**:
+  ```json
+  {
+    "status": "approved",
+    "user_email": "alice@company.com"
+  }
+  ```
+
+---
+
 ## 4. `bapedge` (LTD) CLI Reference & Offline Operation
 
 The edge daemon (`bapedge.exe`, backwards-compatible alias: `ltd-agent.exe`) provides direct CLI interfaces for enrollment, remote synchronization, zero-trust execution, and attestation.
@@ -617,10 +760,14 @@ The edge daemon (`bapedge.exe`, backwards-compatible alias: `ltd-agent.exe`) pro
 Computes the local executable's SHA-256 hash, submits hardware and OS telemetry alongside the One-Time Code or Fleet Token, enrolls the SPIFFE workload identity, and caches the initial Cedar policy bundle.
 ```bash
 bapedge register --server <url> --code <OTC_OR_FLEET_TOKEN> [--instance-id <id>] [--ca-cert <path>] [--insecure]
+
+# In development mode, auto-mint OTC on the fly:
+bapedge register --server <url> --dev [--insecure]
 ```
 - **Options**:
   - `--server` (string, required): Central `bapcontrolplane` URL (e.g. `https://controlplane.company.internal:8443` or `http://localhost:8080`).
-  - `--code` (string, required): Registration token received during pre-registration (`LTD-OTC-XXXX-XXXX` for single agent, or `BAP-FLEET-XXXX-XXXX` for quota-based fleet).
+  - `--code` (string, optional if `--dev`): Registration token received during pre-registration (`LTD-OTC-XXXX-XXXX` for single agent, or `BAP-FLEET-XXXX-XXXX` for quota-based fleet).
+  - `--dev` (bool, optional): Auto-request a single-use dev OTC from control plane (only supported when control plane runs in `-mode dev`).
   - `--instance-id` (string, optional): Explicit instance identifier (e.g. `worker-prod-01`). Defaults to `<hostname>-<random_hex>`.
   - `--ca-cert` (string, optional): Path to custom CA certificate PEM file to establish TLS trust for `bapcontrolplane`.
   - `--insecure` (bool, optional): Skip TLS verification (development/test environments only).
@@ -644,7 +791,31 @@ bapedge register --server <url> --code <OTC_OR_FLEET_TOKEN> [--instance-id <id>]
   - `0`: Registration successful, SPIFFE ID assigned, policy bundle cached.
   - `1`: Network failure, expired token, fleet quota exceeded, replay attempt, or binary hash mismatch.
 
-### 4.2. Central Policy Synchronization (`bapedge sync`)
+### 4.2. Interactive Corporate Identity Login (`bapedge login`)
+Initiates the RFC 8628 OAuth 2.0 Device Authorization Grant. Engineers authenticate via Okta, Microsoft Entra ID, or corporate MFA in the browser. The agent inherits the verified user email, department, and group claims.
+```bash
+bapedge login --server <url> [--insecure]
+```
+- **Terminal Flow**:
+  ```text
+  ==================================================
+    BAP Enterprise Identity Login (OIDC Device Flow)
+  ==================================================
+  To authenticate this agent session:
+  1. Open: https://controlplane.company.internal/device
+  2. Enter code: WDJB-MJHT
+
+  Waiting for corporate browser authentication...
+  [+] Successfully authenticated as alice@company.com!
+  [+] Department: Finance
+  [+] Groups:     ai-developers, finance-reconcilers
+  [+] Authority grants now evaluated against your enterprise identity.
+  ```
+- **Exit Codes**:
+  - `0`: Authentication succeeded; credentials and identity claims cached in `~/.ltd/credentials.json`.
+  - `1`: Timeout, authorization declined, or network error.
+
+### 4.3. Central Policy Synchronization (`bapedge sync`)
 Synchronizes the local Cedar rules and schema with `bapcontrolplane`.
 ```bash
 bapedge sync --server <url> [--policy-dir <path>]
@@ -653,7 +824,7 @@ bapedge sync --server <url> [--policy-dir <path>]
 - **Offline Behavior (Control Plane Outage)**: If `bapcontrolplane` is unreachable, `bapedge` detects the network partition, prints `[!] OFFLINE RESILIENCE ACTIVE`, and exits `0` with the prior cached settings intact.
 - **Persistent Emergency Lock**: If the server returns directive `KILL_SWITCH`, `bapedge` marks `kill_switch: true` in `policy-state.json`.
 
-### 4.3. Zero-Trust Command Execution (`bapedge exec`)
+### 4.4. Zero-Trust Command Execution (`bapedge exec`)
 Evaluates and executes commands through in-process Cedar authorization and sandboxing, appending to local audit logs and streaming telemetry to the control plane.
 ```bash
 bapedge exec --raw "<command_string>" [--session-id <id>] [--server <url>] [--policy <file>] [--schema <file>]
@@ -668,7 +839,7 @@ bapedge exec --raw "<command_string>" [--session-id <id>] [--server <url>] [--po
   - `0`: Authorized command executed successfully.
   - `1`: Command denied by Cedar policy, emergency kill-switch active, or execution failure.
 
-### 4.4. Attestation Server & Client (`bapedge serve` / `bapedge attest`)
+### 4.5. Attestation Server & Client (`bapedge serve` / `bapedge attest`)
 Used for local peer process verification on Linux/Unix domain sockets (`SO_PEERCRED`):
 ```bash
 # Start attestation server
@@ -678,7 +849,7 @@ bapedge serve --socket /tmp/ltd.sock [--allowed-hash <sha256>]
 bapedge attest --socket /tmp/ltd.sock
 ```
 
-### 4.5. Local Audit Log Verification & Anti-Tamper Check (`bapedge verify-log`)
+### 4.6. Local Audit Log Verification & Anti-Tamper Check (`bapedge verify-log`)
 Validates the cryptographic sequential SHA-256 hash-chain of the local audit log file, detecting any content tampering, line modifications, or retroactive deletions:
 ```bash
 bapedge verify-log [--file <path>]

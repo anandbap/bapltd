@@ -16,6 +16,7 @@ Usage:
 
 Available Commands:
   config    View or update central control plane and gateway host URLs
+  login     Authenticate developer identity via enterprise OIDC/OAuth2 device flow (Okta/Entra)
   register  Enroll edge LTD with central BAP Control Plane using one-time code (OTC)
   setup     1-click workstation onboarding for Claude Code & AI agents (BAP-471)
   status    Inspect local active sessions, Cedar policy cache, layers, and spool backlog (BAP-472)
@@ -81,6 +82,11 @@ func main() {
 	case "sweep", "clean-sweep":
 		if err := cmd.RunSweep(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error running clean sweep: %v\n", err)
+			os.Exit(1)
+		}
+	case "login":
+		if err := cmd.RunLogin(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error authenticating: %v\n", err)
 			os.Exit(1)
 		}
 	case "register":

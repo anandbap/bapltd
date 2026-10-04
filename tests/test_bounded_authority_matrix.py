@@ -53,24 +53,29 @@ def http_req(url, method="GET", data=None, headers=None):
         else:
             body_bytes = data
 
-    req = urllib.request.Request(url, data=body_bytes, headers=hdrs, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            raw = resp.read()
+    for attempt in range(3):
+        req = urllib.request.Request(url, data=body_bytes, headers=hdrs, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                raw = resp.read()
+                parsed = {}
+                try:
+                    parsed = json.loads(raw.decode("utf-8"))
+                except Exception:
+                    pass
+                return resp.status, parsed, raw
+        except urllib.error.HTTPError as e:
+            raw = e.read()
             parsed = {}
             try:
                 parsed = json.loads(raw.decode("utf-8"))
             except Exception:
                 pass
-            return resp.status, parsed, raw
-    except urllib.error.HTTPError as e:
-        raw = e.read()
-        parsed = {}
-        try:
-            parsed = json.loads(raw.decode("utf-8"))
-        except Exception:
-            pass
-        return e.code, parsed, raw
+            return e.code, parsed, raw
+        except (ConnectionResetError, ConnectionRefusedError, urllib.error.URLError, OSError):
+            if attempt == 2:
+                raise
+            time.sleep(0.1)
 
 
 class TestBoundedAuthorityMatrix(unittest.TestCase):

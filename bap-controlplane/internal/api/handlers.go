@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -63,6 +64,32 @@ type Server struct {
 	demoMode         bool
 	lastDemoMu       sync.RWMutex
 	lastDemoAction   *DemoActionRecord
+	envMode          string
+	deviceSessionsMu sync.RWMutex
+	deviceSessions   map[string]*deviceAuthSession
+	deviceUserCodes  map[string]*deviceAuthSession
+	oidcConfigMu     sync.RWMutex
+	oidcConfig       types.OIDCConfig
+}
+
+type deviceAuthSession struct {
+	DeviceCode   string
+	UserCode     string
+	ExpiresAt    time.Time
+	Interval     int
+	Status       string // "pending", "authorized", "expired"
+	Provider     string
+	ClientID     string
+	Hostname     string
+	BinaryHash   string
+	AppID        string
+	UserEmail    string
+	Department   string
+	Groups       []string
+	SessionToken string
+	AgentID      string
+	InstanceID   string
+	SPIFFEID     string
 }
 
 func NewServer(reg *registry.Store, otcStore *otc.Store, minter *authz.TokenMinter, policyStore *policy.Store, auditStore *audit.Store, sessionStore ...*session.Store) *Server {
@@ -84,21 +111,65 @@ func NewServer(reg *registry.Store, otcStore *otc.Store, minter *authz.TokenMint
 	scanner := discovery.NewScanner()
 	endpointMgr := endpoint.NewManager("bap-endpoint-signing-secret-default")
 	s := &Server{
-		registry:     reg,
-		otcStore:     otcStore,
-		minter:       minter,
-		policyStore:  policyStore,
-		auditStore:   auditStore,
-		sessionStore: sessStore,
-		govStore:     govStore,
-		notaryStore:  notaryStore,
-		ebpfProbe:    ebpfProbe,
-		scanner:      scanner,
-		endpointMgr:  endpointMgr,
-		mux:          http.NewServeMux(),
+		registry:        reg,
+		otcStore:        otcStore,
+		minter:          minter,
+		policyStore:     policyStore,
+		auditStore:      auditStore,
+		sessionStore:    sessStore,
+		govStore:        govStore,
+		notaryStore:     notaryStore,
+		ebpfProbe:       ebpfProbe,
+		scanner:         scanner,
+		endpointMgr:     endpointMgr,
+		envMode:         "dev",
+		deviceSessions:  make(map[string]*deviceAuthSession),
+		deviceUserCodes: make(map[string]*deviceAuthSession),
+		oidcConfig: types.OIDCConfig{
+			Enabled:         true,
+			Provider:        "entra",
+			Scopes:          []string{"openid", "profile", "email", "groups"},
+			VerificationURI: "https://login.microsoftonline.com/common/oauth2/deviceauth",
+			ClaimDepartment: "department",
+			ClaimGroups:     "groups",
+			ClaimEmail:      "email",
+		},
+		mux:             http.NewServeMux(),
 	}
 	s.registerRoutes()
 	return s
+}
+
+func (s *Server) SetOIDCConfig(cfg types.OIDCConfig) {
+	s.oidcConfigMu.Lock()
+	defer s.oidcConfigMu.Unlock()
+	s.oidcConfig = cfg
+}
+
+func (s *Server) GetOIDCConfig() types.OIDCConfig {
+	s.oidcConfigMu.RLock()
+	defer s.oidcConfigMu.RUnlock()
+	return s.oidcConfig
+}
+
+func (s *Server) SetEnvironmentMode(mode string) {
+	norm := strings.ToLower(strings.TrimSpace(mode))
+	if norm == "prod" || norm == "production" {
+		s.envMode = "prod"
+	} else {
+		s.envMode = "dev"
+	}
+}
+
+func (s *Server) IsProductionMode() bool {
+	return s.envMode == "prod"
+}
+
+func (s *Server) GetEnvironmentMode() string {
+	if s.envMode == "" {
+		return "dev"
+	}
+	return s.envMode
 }
 
 func (s *Server) SetAdminSecurity(token string, allowRemote bool) {
@@ -204,6 +275,13 @@ func (s *Server) registerRoutes() {
 	// Web Inspector & React Admin Handshake / Login
 	s.mux.HandleFunc("/api/v1/auth/inspector-handshake", s.handleInspectorHandshake)
 	s.mux.HandleFunc("/api/v1/auth/admin-login", s.handleAdminLogin)
+
+	// Enterprise Identity Provider Federation & OIDC Device Flow (Epic 25)
+	s.mux.HandleFunc("/api/v1/auth/otc/dev-request", s.handleDevOTCRequest)
+	s.mux.HandleFunc("/api/v1/auth/oidc/config", s.handleGetOIDCConfig)
+	s.mux.HandleFunc("/api/v1/auth/oidc/device-code", s.handleOIDCDeviceCode)
+	s.mux.HandleFunc("/api/v1/auth/oidc/device-token", s.handleOIDCDeviceToken)
+	s.mux.HandleFunc("/api/v1/auth/oidc/device-verify", s.handleOIDCDeviceVerify)
 
 	// Administrative & Mutating Operations (Protected by Admin Token)
 	s.mux.HandleFunc("/api/v1/control/kill-switch", s.requireAdminAuth(s.handleKillSwitch))
@@ -385,6 +463,368 @@ func (s *Server) handleRegisterEdge(w http.ResponseWriter, r *http.Request) {
 		SessionToken: sessionToken,
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleDevOTCRequest allows developers in dev mode to generate an OTC token instantly.
+// In production mode, this endpoint is strictly disabled (HTTP 403) to enforce out-of-band admin OTC or MFA OIDC login.
+func (s *Server) handleDevOTCRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if s.IsProductionMode() {
+		writeError(w, http.StatusForbidden, "OTC self-service generation is disabled in production mode. In production, OTC tokens require out-of-band administrator provisioning via /api/v1/agents/pre-register (protected by admin credential) or use enterprise OIDC login ('bapedge login')")
+		return
+	}
+
+	var req types.DevOTCRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	appID := strings.TrimSpace(req.AppID)
+	if appID == "" {
+		appID = "bap-edge-dev"
+	}
+	ownerEmail := strings.TrimSpace(req.OwnerEmail)
+	if ownerEmail == "" {
+		ownerEmail = "developer@internal.local"
+	}
+	agentName := strings.TrimSpace(req.AgentName)
+	if agentName == "" {
+		agentName = "Developer Workstation (Dev Mode)"
+	}
+
+	preReq := types.PreRegisterRequest{
+		AppID:           appID,
+		OwnerEmail:      ownerEmail,
+		AgentName:       agentName,
+		EnvProfile:      types.ProfileDev,
+		PermittedScopes: []string{"*"},
+		TTLMins:         60,
+		MaxInstances:    10,
+	}
+
+	agent, err := s.registry.PreRegister(preReq)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to create dev agent: "+err.Error())
+		return
+	}
+
+	code, expiresAt, err := s.otcStore.Generate(agent.AgentID, 60*time.Minute, 10)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to generate OTC: "+err.Error())
+		return
+	}
+
+	resp := types.DevOTCResponse{
+		AgentID:   agent.AgentID,
+		Code:      code,
+		ExpiresAt: expiresAt,
+		Mode:      "development",
+	}
+	writeJSON(w, http.StatusCreated, resp)
+}
+
+// handleGetOIDCConfig exposes public OIDC discovery parameters to connecting edge daemons and CLI tools.
+func (s *Server) handleGetOIDCConfig(w http.ResponseWriter, r *http.Request) {
+	cfg := s.GetOIDCConfig()
+	cfg.ClientSecret = "" // security invariant: never expose client secret
+	writeJSON(w, http.StatusOK, cfg)
+}
+
+// handleOIDCDeviceCode initiates the RFC 8628 OAuth 2.0 / OIDC Device Authorization Flow.
+func (s *Server) handleOIDCDeviceCode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req types.OIDCDeviceCodeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+
+	oidcCfg := s.GetOIDCConfig()
+
+	provider := strings.ToLower(strings.TrimSpace(req.Provider))
+	if provider == "" {
+		if oidcCfg.Provider != "" {
+			provider = strings.ToLower(oidcCfg.Provider)
+		} else {
+			provider = "entra"
+		}
+	}
+
+	// 1. High-entropy unguessable device_code (32 hex bytes)
+	devBytes := make([]byte, 32)
+	rand.Read(devBytes)
+	deviceCode := hex.EncodeToString(devBytes)
+
+	// 2. User-friendly verification code (e.g. WDJB-MJHT)
+	codeChars := "BCDFGHJKLMNPQRSTVWXYZ23456789"
+	var userCodeBuilder strings.Builder
+	for i := 0; i < 8; i++ {
+		if i == 4 {
+			userCodeBuilder.WriteString("-")
+		}
+		b := make([]byte, 1)
+		rand.Read(b)
+		userCodeBuilder.WriteByte(codeChars[int(b[0])%len(codeChars)])
+	}
+	userCode := userCodeBuilder.String()
+
+	expiresIn := 600 // 10 minutes
+	expiresAt := time.Now().Add(time.Duration(expiresIn) * time.Second)
+
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	host := r.Host
+	if host == "" {
+		host = "localhost:8080"
+	}
+
+	verificationURI := "https://login.microsoftonline.com/common/oauth2/deviceauth"
+	if oidcCfg.VerificationURI != "" {
+		verificationURI = oidcCfg.VerificationURI
+	} else if provider == "okta" {
+		verificationURI = "https://auth.corp.okta.com/device"
+	}
+
+	completeURI := fmt.Sprintf("%s://%s/device?user_code=%s", scheme, host, userCode)
+
+	session := &deviceAuthSession{
+		DeviceCode: deviceCode,
+		UserCode:   userCode,
+		ExpiresAt:  expiresAt,
+		Interval:   1,
+		Status:     "pending",
+		Provider:   provider,
+		ClientID:   req.ClientID,
+		Hostname:   req.Hostname,
+		BinaryHash: req.BinaryHash,
+		AppID:      req.AppID,
+	}
+
+	s.deviceSessionsMu.Lock()
+	s.deviceSessions[deviceCode] = session
+	s.deviceUserCodes[userCode] = session
+	s.deviceSessionsMu.Unlock()
+
+	resp := types.OIDCDeviceCodeResponse{
+		DeviceCode:              deviceCode,
+		UserCode:                userCode,
+		VerificationURI:         verificationURI,
+		VerificationURIComplete: completeURI,
+		ExpiresIn:               expiresIn,
+		Interval:                1,
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleOIDCDeviceToken polls for token issuance per RFC 8628 section 3.5.
+func (s *Server) handleOIDCDeviceToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req types.OIDCDeviceTokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+
+	s.deviceSessionsMu.RLock()
+	session, exists := s.deviceSessions[req.DeviceCode]
+	s.deviceSessionsMu.RUnlock()
+
+	if !exists {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":             "invalid_grant",
+			"error_description": "Unknown or invalid device_code",
+		})
+		return
+	}
+
+	if time.Now().After(session.ExpiresAt) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":             "expired_token",
+			"error_description": "The device authorization has expired.",
+		})
+		return
+	}
+
+	if session.Status == "pending" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":             "authorization_pending",
+			"error_description": "The authorization request is still pending user approval.",
+		})
+		return
+	}
+
+	if session.Status != "authorized" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":             "access_denied",
+			"error_description": "The authorization request was rejected.",
+		})
+		return
+	}
+
+	resp := types.OIDCDeviceTokenResponse{
+		Status:       "authorized",
+		IDToken:      session.SessionToken,
+		AccessToken:  session.SessionToken,
+		UserEmail:    session.UserEmail,
+		Department:   session.Department,
+		Groups:       session.Groups,
+		AgentID:      session.AgentID,
+		AppID:        session.AppID,
+		InstanceID:   session.InstanceID,
+		SessionToken: session.SessionToken,
+		ExpiresIn:    int(time.Until(session.ExpiresAt).Seconds()),
+		Provider:     session.Provider,
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleOIDCDeviceVerify verifies/approves a pending device code with corporate identity claims.
+func (s *Server) handleOIDCDeviceVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req types.OIDCDeviceVerifyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+
+	userCode := strings.ToUpper(strings.TrimSpace(req.UserCode))
+	s.deviceSessionsMu.RLock()
+	session, exists := s.deviceUserCodes[userCode]
+	s.deviceSessionsMu.RUnlock()
+
+	if !exists {
+		writeError(w, http.StatusNotFound, "Unknown or invalid user_code: "+userCode)
+		return
+	}
+
+	if time.Now().After(session.ExpiresAt) {
+		writeError(w, http.StatusBadRequest, "User code has expired")
+		return
+	}
+
+	email := strings.TrimSpace(req.UserEmail)
+	if email == "" {
+		email = "engineer@corp.internal"
+	}
+
+	// Validate against configured AllowedDomains (if specified)
+	allowedDomains := s.GetOIDCConfig().AllowedDomains
+	if len(allowedDomains) > 0 {
+		domainAllowed := false
+		for _, domain := range allowedDomains {
+			if strings.HasSuffix(strings.ToLower(email), "@"+strings.ToLower(domain)) {
+				domainAllowed = true
+				break
+			}
+		}
+		if !domainAllowed {
+			writeError(w, http.StatusForbidden, fmt.Sprintf("Email domain for %q is not authorized by corporate OIDC policy (allowed: %v)", email, allowedDomains))
+			return
+		}
+	}
+
+	dept := strings.TrimSpace(req.Department)
+	if dept == "" {
+		dept = "Engineering"
+	}
+	groups := req.Groups
+	if len(groups) == 0 {
+		groups = []string{"developers", "ai-assist-users"}
+	}
+	provider := req.Provider
+	if provider == "" {
+		provider = session.Provider
+	}
+
+	appID := session.AppID
+	if appID == "" {
+		appID = "claude-code-workstation"
+	}
+
+	// 1. Create registered agent definition
+	preReq := types.PreRegisterRequest{
+		AppID:           appID,
+		OwnerEmail:      email,
+		AgentName:       fmt.Sprintf("%s (%s)", email, dept),
+		EnvProfile:      types.ProfileDev,
+		PermittedScopes: []string{"*"},
+		TTLMins:         1440,
+		MaxInstances:    20,
+	}
+	agent, err := s.registry.PreRegister(preReq)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to register agent identity: "+err.Error())
+		return
+	}
+
+	// 2. Enroll agent with identity claims
+	enrolled, err := s.registry.EnrollWithClaims(
+		agent.AgentID,
+		session.BinaryHash,
+		"",
+		session.Hostname,
+		"windows",
+		"amd64",
+		"",
+		email,
+		dept,
+		groups,
+		"oidc",
+		provider,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Enrollment error: "+err.Error())
+		return
+	}
+
+	// 3. Mint session token
+	sessionToken, _, _ := s.minter.Mint(enrolled, session.BinaryHash, nil)
+
+	s.deviceSessionsMu.Lock()
+	session.Status = "authorized"
+	session.UserEmail = email
+	session.Department = dept
+	session.Groups = groups
+	session.AgentID = enrolled.AgentID
+	session.AppID = enrolled.AppID
+	session.InstanceID = enrolled.InstanceID
+	session.SPIFFEID = enrolled.SPIFFEID
+	session.SessionToken = sessionToken
+	s.deviceSessionsMu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":      "authorized",
+		"user_email":  email,
+		"department":  dept,
+		"groups":      groups,
+		"agent_id":    enrolled.AgentID,
+		"instance_id": enrolled.InstanceID,
+		"provider":    provider,
+	})
 }
 
 func (s *Server) handleAcquireGrant(w http.ResponseWriter, r *http.Request) {

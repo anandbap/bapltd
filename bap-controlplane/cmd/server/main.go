@@ -21,6 +21,7 @@ import (
 	"bap-controlplane/internal/registry"
 	"bap-controlplane/internal/session"
 	"bap-controlplane/internal/tlsutil"
+	"bap-controlplane/pkg/types"
 )
 
 func main() {
@@ -40,9 +41,36 @@ func main() {
 	dbPath := flag.String("db", "", "Path to SQLite database file for state persistence (default: bap-controlplane.db, 'memory' for in-memory)")
 	allowedOrigins := flag.String("allowed-origins", os.Getenv("BAP_ALLOWED_ORIGINS"), "Comma-separated exact browser origins; same-origin only by default")
 	demoMode := flag.Bool("demo-mode", false, "Enable destructive synthetic demo endpoints (or set BAP_DEMO_MODE=true)")
+	mode := flag.String("mode", "dev", "Control plane environment mode: 'dev' (open self-service OTC token request) or 'prod' (strictly locked offline OTC, enterprise OIDC required)")
+	oidcProvider := flag.String("oidc-provider", "entra", "Enterprise OIDC provider: 'entra', 'okta', or 'generic'")
+	oidcIssuer := flag.String("oidc-issuer", "", "OIDC issuer / discovery URL")
+	oidcClientID := flag.String("oidc-client-id", "", "OIDC application client ID")
+	oidcTenantID := flag.String("oidc-tenant-id", "", "Microsoft Entra tenant ID or Okta org")
+	oidcAllowedDomains := flag.String("oidc-allowed-domains", "", "Comma-separated corporate email domains permitted (e.g. corp.com,internal.org)")
 	flag.Parse()
 	if envDemo := strings.TrimSpace(os.Getenv("BAP_DEMO_MODE")); envDemo != "" {
 		*demoMode = envDemo == "1" || strings.EqualFold(envDemo, "true")
+	}
+	if envMode := strings.TrimSpace(os.Getenv("BAP_MODE")); envMode != "" && *mode == "dev" {
+		*mode = envMode
+	}
+	if envMode := strings.TrimSpace(os.Getenv("BAP_ENVIRONMENT")); envMode != "" && *mode == "dev" {
+		*mode = envMode
+	}
+	if envProvider := strings.TrimSpace(os.Getenv("BAP_OIDC_PROVIDER")); envProvider != "" {
+		*oidcProvider = envProvider
+	}
+	if envIssuer := strings.TrimSpace(os.Getenv("BAP_OIDC_ISSUER_URL")); envIssuer != "" {
+		*oidcIssuer = envIssuer
+	}
+	if envClientID := strings.TrimSpace(os.Getenv("BAP_OIDC_CLIENT_ID")); envClientID != "" {
+		*oidcClientID = envClientID
+	}
+	if envTenant := strings.TrimSpace(os.Getenv("BAP_OIDC_TENANT_ID")); envTenant != "" {
+		*oidcTenantID = envTenant
+	}
+	if envDomains := strings.TrimSpace(os.Getenv("BAP_OIDC_ALLOWED_DOMAINS")); envDomains != "" {
+		*oidcAllowedDomains = envDomains
 	}
 	if (*certPath == "") != (*keyPath == "") {
 		log.Fatal("Both -tls-cert and -tls-key are required")
@@ -160,6 +188,29 @@ func main() {
 	server := api.NewServer(regStore, otcStore, minter, policyStore, auditStore, sessionStore)
 	server.SetAdminSecurity(*adminToken, *allowRemoteAdmin)
 	server.SetDemoMode(*demoMode)
+	server.SetEnvironmentMode(*mode)
+
+	oidcCfg := types.OIDCConfig{
+		Enabled:         true,
+		Provider:        *oidcProvider,
+		IssuerURL:       *oidcIssuer,
+		ClientID:        *oidcClientID,
+		TenantID:        *oidcTenantID,
+		Scopes:          []string{"openid", "profile", "email", "groups"},
+		ClaimDepartment: "department",
+		ClaimGroups:     "groups",
+		ClaimEmail:      "email",
+	}
+	if *oidcAllowedDomains != "" {
+		for _, domain := range strings.Split(*oidcAllowedDomains, ",") {
+			trimmed := strings.TrimSpace(domain)
+			if trimmed != "" {
+				oidcCfg.AllowedDomains = append(oidcCfg.AllowedDomains, trimmed)
+			}
+		}
+	}
+	server.SetOIDCConfig(oidcCfg)
+
 	if err := server.SetAllowedOrigins(strings.Split(*allowedOrigins, ",")); err != nil {
 		log.Fatal(err)
 	}
@@ -169,7 +220,7 @@ func main() {
 	if *useTLS || *autoTLS || *httpsFlag {
 		proto = "https"
 	}
-	log.Printf("[bapcontrolplane] Central Control Plane for Bounded Authority Plane starting on %s://%s (Alias: ltd-service)", proto, addr)
+	log.Printf("[bapcontrolplane] Central Control Plane for Bounded Authority Plane starting on %s://%s (Mode: %s)", proto, addr, strings.ToUpper(*mode))
 	log.Printf("[bapcontrolplane] Trust Domain: %s (SPIFFE format: spiffe://%s/app/{app_id}/instance/{instance_id})", *trustDomain, *trustDomain)
 	log.Printf("[bapcontrolplane] Features: Agent Registry, Multi-Instance Quotas, Binary Hash Attestation, Dynamic Policy Sync, Audit Ingestion, Session Lifecycle")
 

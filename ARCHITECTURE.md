@@ -642,5 +642,127 @@ Execution events generated while offline are preserved in `ltd-audit.jsonl` main
 3. Control Plane ingests batch (`/api/v1/audit/ingest`) and returns a cryptographic `HandshakeAck` (`chain_valid: true`, `receipt_hash: ...`).
 4. `bapedge` safely removes transmitted entries locally, relieving edge disk burden while guaranteeing end-to-end auditability.
 
+---
+
+## 10. Enterprise Identity Provider Federation (Okta / Entra / OIDC Device Flow)
+
+Enterprise organizations require autonomous agent execution to be attributable to verified corporate identities with Multi-Factor Authentication (MFA), rather than relying on unauthenticated developer tokens. BAP integrates directly with Microsoft Entra ID, Okta Workforce Identity Cloud, and standard OpenID Connect providers via the **RFC 8628 OAuth 2.0 Device Authorization Flow**.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Dev as Human Engineer
+    participant Edge as bapedge CLI
+    participant CP as Control Plane
+    participant IdP as Enterprise IdP (Okta / Entra ID)
+    participant Cedar as Cedar Policy Engine
+
+    Note over Dev,Edge: 1. Initiate Corporate Identity Login
+    Dev->>Edge: bapedge login --provider=entra
+    Edge->>CP: GET /api/v1/auth/oidc/config (Discover IdP endpoints & scopes)
+    CP-->>Edge: HTTP 200 {provider: "entra", verification_uri: "https://login.microsoftonline.com/...", scopes: [...]}
+    Edge->>CP: POST /api/v1/auth/oidc/device-code {client_id, hostname, binary_hash}
+    CP-->>Edge: HTTP 200 {device_code: "...", user_code: "WDJB-MJHT", verification_uri: "..."}
+    Edge-->>Dev: Display login instructions: "Visit https://... & enter code: WDJB-MJHT"
+
+    Note over Dev,IdP: 2. Browser MFA Authorization
+    Dev->>IdP: Authenticate with Corporate SSO & FIDO2/MFA
+    IdP-->>Dev: MFA Verification Approved
+    IdP->>CP: POST /api/v1/auth/oidc/device-verify {user_code: "WDJB-MJHT", email: "alice@corp.com", dept: "Finance", groups: [...]}
+    CP->>CP: Validate AllowedDomains & Enroll Agent with Identity Claims
+
+    Note over Edge,CP: 3. Token Issuance & Credential Binding
+    loop Poll Every 1s (RFC 8628 §3.5)
+        Edge->>CP: POST /api/v1/auth/oidc/device-token {device_code}
+        alt Pending
+            CP-->>Edge: HTTP 400 {error: "authorization_pending"}
+        else Approved
+            CP-->>Edge: HTTP 200 {status: "authorized", user_email: "alice@corp.com", dept: "Finance", session_token: "..."}
+        end
+    end
+    Edge->>Edge: Save to ~/.ltd/credentials.json (auth_mode: "oidc", department: "Finance")
+    Edge-->>Dev: [✓] Authenticated as alice@corp.com (Finance). Agent session bound!
+
+    Note over Edge,Cedar: 4. Native Policy Evaluation with Identity Claims
+    Dev->>Edge: bapedge exec "billing-tool --report"
+    Edge->>Cedar: Evaluate(principal.department="Finance", context.executable="billing-tool")
+    Cedar-->>Edge: ALLOWED (Permitted by Finance department rule)
+```
+
+### 10.1. Dual-Mode Environment Security Model (Dev vs Prod)
+
+To prevent security misconfigurations while maintaining fast local development velocity, BAP enforces an explicit environment security boundary:
+
+| Feature / Behavior | Development Mode (`mode: dev`) | Production Mode (`mode: prod`) |
+|---|---|---|
+| **Self-Service OTC Token API (`/dev-request`)** | **Enabled:** Any local developer can request an instant OTC code without credentials. | **Disabled (`403 Forbidden`):** Unauthenticated OTC requests are rejected. |
+| **One-Time Code (OTC) Generation** | Instant self-service via `POST /api/v1/auth/otc/dev-request` or `bapedge register --dev`. | Strictly an **offline / out-of-band administrative process** (`POST /api/v1/agents/pre-register` with `X-BAP-Admin-Token`). |
+| **Interactive Developer Authentication** | Optional OIDC login or local OTC code. | **Mandatory OIDC Device Flow (`bapedge login`):** Engineers must authenticate through corporate MFA (Okta / Entra). |
+| **Headless CI/CD / Build Pipeline Enrollment** | Supported via OTC codes (`bapedge register --code <OTC>`). | Supported via pre-provisioned offline admin OTC codes. |
+| **Security Rationale** | Zero friction for onboarding & rapid prototyping. | Hardened zero-trust: no unauthenticated caller can create valid execution credentials. |
+
+### 10.2. Configurable Enterprise IdP Parameters
+
+All OIDC parameters are fully configurable across configuration files, environment variables, and CLI arguments:
+
+```json
+{
+  "controlplane_url": "https://bap.corp.internal:8080",
+  "gateway_url": "https://gateway.corp.internal:9090",
+  "environment": "production",
+  "oidc": {
+    "enabled": true,
+    "provider": "entra",
+    "issuer_url": "https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/v2.0",
+    "client_id": "bap-edge-agent-client-id",
+    "verification_uri": "https://login.microsoftonline.com/common/oauth2/deviceauth",
+    "scopes": ["openid", "profile", "email", "groups"],
+    "tenant_id": "72f988bf-86f1-41af-91ab-2d7cd011db47",
+    "allowed_domains": ["corp.internal", "enterprise.com"],
+    "claim_department": "department",
+    "claim_groups": "groups",
+    "claim_email": "email"
+  }
+}
+```
+
+- **Environment Overrides:** `BAP_OIDC_PROVIDER`, `BAP_OIDC_CLIENT_ID`, `BAP_OIDC_ISSUER_URL`, `BAP_OIDC_TENANT_ID`, `BAP_OIDC_ALLOWED_DOMAINS`.
+- **Public Discovery:** Edge clients automatically query `GET /api/v1/auth/oidc/config` to resolve provider verification endpoints dynamically without hardcoding URLs.
+- **Client Secret Safety:** Secrets are never sent to edge clients or exposed over discovery APIs.
+
+### 10.3. Native Cedar Policy Claims Propagation
+
+When evaluating local or centralized Cedar policies, `bapedge` and `bapcontrolplane` inject authenticated corporate identity attributes onto the Cedar `Principal` entity and `Context` record:
+
+```cedar
+// 1. Role-Based Access: Only Finance team members can invoke financial CLI tools
+permit (
+    principal == Agent::"Local",
+    action == Action::"Execute",
+    resource == Command::"CLI"
+) when {
+    principal.department == "Finance" &&
+    ["billing-tool", "invoice-sync", "git"].contains(context.executable)
+};
+
+// 2. Strict Boundary: Block production deployment tools unless member of prod-deployers group
+forbid (
+    principal == Agent::"Local",
+    action == Action::"Execute",
+    resource == Command::"CLI"
+) when {
+    !principal.groups.contains("prod-deployers") &&
+    context.full_command like "*deploy-prod*"
+};
+```
+
+### 10.4. Coexistence of OTC & OIDC on Edge Workstations
+
+To ensure headless servers and automated CI/CD runners can operate without interactive browser sessions:
+- `bapedge register --code <OTC>` remains fully functional for headless server provisioning and automated integration test pipelines.
+- `bapedge login` provides seamless, interactive SSO/MFA authentication for software developers using Claude Code, GitHub Copilot, and Cursor.
+- `bapedge status` displays the active enrollment method, corporate identity, department, and group memberships.
+
+
 
 

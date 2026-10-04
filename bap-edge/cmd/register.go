@@ -49,6 +49,11 @@ type StoredCredentials struct {
 	Status       string    `json:"status"`
 	BinaryHash   string    `json:"binary_hash"`
 	SessionToken string    `json:"session_token"`
+	AuthMode     string    `json:"auth_mode,omitempty"`
+	UserEmail    string    `json:"user_email,omitempty"`
+	Department   string    `json:"department,omitempty"`
+	Groups       []string  `json:"groups,omitempty"`
+	IdPProvider  string    `json:"idp_provider,omitempty"`
 	EnrolledAt   time.Time `json:"enrolled_at"`
 }
 
@@ -67,6 +72,7 @@ func RunRegister(args []string) error {
 	epCfg := config.ResolveEndpoints()
 	serverURL := fs.String("server", epCfg.ControlPlaneURL, "bap-controlplane URL")
 	code := fs.String("code", "", "One-time registration code (e.g. LTD-OTC-XXXX or BAP-FLEET-XXXX)")
+	devMode := fs.Bool("dev", false, "In development environments, automatically request a dev OTC token from control plane")
 	configPath := fs.String("config", DefaultCredentialsPath(), "Path to store enrolled credentials")
 	customInstanceID := fs.String("instance-id", "", "Custom instance identifier (optional)")
 	caCertPath := fs.String("ca-cert", os.Getenv("BAP_CA_CERT"), "Path to custom CA certificate for HTTPS verification")
@@ -76,8 +82,37 @@ func RunRegister(args []string) error {
 		return err
 	}
 
+	// In dev mode, if no OTC was explicitly supplied, auto-request one from control plane
+	if *code == "" && *devMode {
+		devOTCUrl := fmt.Sprintf("%s/api/v1/auth/otc/dev-request", *serverURL)
+		reqBody, _ := json.Marshal(map[string]string{
+			"app_id":      "bap-edge-dev",
+			"owner_email": "dev@internal.local",
+			"agent_name":  "Developer Workstation (Dev Mode)",
+		})
+		resp, err := http.Post(devOTCUrl, "application/json", bytes.NewReader(reqBody))
+		if err != nil {
+			return fmt.Errorf("failed to request dev OTC from %s: %w", devOTCUrl, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusForbidden {
+			return fmt.Errorf("dev OTC self-service is disabled in production mode; obtain an offline admin OTC or use 'bapedge login'")
+		}
+		if resp.StatusCode != http.StatusCreated {
+			return fmt.Errorf("control plane returned status %d on dev OTC request", resp.StatusCode)
+		}
+		var devResp struct {
+			Code string `json:"one_time_code"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&devResp); err != nil || devResp.Code == "" {
+			return fmt.Errorf("failed to parse dev OTC response: %w", err)
+		}
+		*code = devResp.Code
+		fmt.Printf("[+] Auto-acquired development OTC: %s\n", *code)
+	}
+
 	if *code == "" {
-		return fmt.Errorf("missing required --code flag (e.g. --code LTD-OTC-XXXX or BAP-FLEET-XXXX)")
+		return fmt.Errorf("missing required --code flag (e.g. --code LTD-OTC-XXXX or pass --dev for local development)")
 	}
 
 	// 1. Identify running binary and compute SHA-256 hash for attestation

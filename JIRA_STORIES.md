@@ -87,6 +87,7 @@ This document represents the complete functional and non-functional requirements
 | `BAP-EPIC-22` | Operations & Governance Extension (BAP-450–BAP-459) | MVP Enterprise Pack | **DONE** |
 | `BAP-EPIC-23` | Layered Endpoint Enforcement & Workstation Hardening (BAP-460–BAP-463) | MVP Enterprise Pack | **DONE** |
 | `BAP-EPIC-24` | Operational Resilience, Crash Sweeps & Developer CLI Tooling (BAP-470–BAP-473) | MVP Enterprise Pack | **DONE** |
+| `BAP-EPIC-25` | Enterprise Identity Provider Federation (Okta / Entra / OIDC) (BAP-480–BAP-483) | MVP Enterprise Pack | **DONE** |
 
 ---
 
@@ -1779,5 +1780,68 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   2. Background heartbeat monitor in `bapedge watch` periodically triggers `audit.FlushOfflineAudit` upon successful reconnection.
   3. Batch ingestion verifies server `HandshakeAck` (`chain_valid: true`, `ingested > 0`), safely purging local entries to prevent edge storage bloat.
   4. Manual flushing supported via `bapedge sweep`.
+
+---
+
+### Epic 25: Enterprise Identity Provider Federation — Okta / Entra / OIDC (BAP-EPIC-25)
+**Summary**: Federate workstation AI agent execution with enterprise identity providers (Microsoft Entra ID, Okta Workforce Identity Cloud, Keycloak) using the RFC 8628 OAuth 2.0 Device Authorization Flow. Binds agent sessions to authenticated engineers, propagates corporate claims (`user_email`, `department`, `groups`) into Cedar policies natively, and enforces a strict environment security model: Dev mode allows open self-service OTC generation, whereas Prod mode closes the self-service API, delegates headless OTCs to out-of-band administrative workflows, and mandates MFA OIDC login for developer workstations.
+
+#### Gap 3: Enterprise Identity Provider Federation (Okta / Entra / OIDC)
+* **Current state**: Agents enroll via One-Time Codes (`bapedge register --code ...`) or SPIFFE SVIDs.
+* **What's needed**: OIDC/OAuth2 device flow integration (`bapedge login`):
+  - Binds the local agent session to the engineer's authenticated corporate identity in Okta or Microsoft Entra ID.
+  - Passes claims (`user_email`, `department`, `groups`) into the Cedar policy engine so rules like `when { principal.department == "Finance" }` evaluate natively.
+  - Edge keeps OTC enrollment (`bapedge register --code ...`) alongside OIDC for headless CI/CD and offline pipelines.
+  - Control plane in Dev mode is open to anyone asking for a token (`/api/v1/auth/otc/dev-request`), but when in Prod mode OTC self-service token generation is closed (`403 Forbidden`) and OTC tokens require an offline out-of-band administrative process (`/api/v1/agents/pre-register` with admin credentials), while OIDC is enabled as the MFA method to authenticate. Bottom line: everything is secure.
+
+#### BAP-480: Control Plane Dev vs Prod Environment Modes & OTC Lockdown
+* **Status**: DONE
+* **Type**: Enterprise Security & Environment Isolation
+* **As a**: Enterprise CISO
+* **I want**: The BAP Control Plane to support configurable environment modes (`dev` vs `prod`)
+* **So that**: Development environments remain frictionless with self-service OTC generation, while production environments strictly disable public OTC minting and enforce out-of-band admin OTCs or MFA OIDC authentication.
+* **Acceptance Criteria**:
+  1. Server supports `--mode=dev|prod`, `BAP_MODE=prod`, and `BAP_ENVIRONMENT=production`.
+  2. In `dev` mode: `POST /api/v1/auth/otc/dev-request` allows unauthenticated callers to acquire a valid OTC immediately.
+  3. In `prod` mode: `POST /api/v1/auth/otc/dev-request` returns HTTP 403 Forbidden with clear diagnostic message.
+  4. In `prod` mode: OTC generation is restricted to `POST /api/v1/agents/pre-register` requiring the administrative credential (`X-BAP-Admin-Token`).
+
+#### BAP-481: RFC 8628 OIDC / OAuth 2.0 Device Authorization Flow
+* **Status**: DONE
+* **Type**: Identity Federation & Protocol Implementation
+* **As a**: Software Engineer with Corporate SSO
+* **I want**: To authenticate my edge agent CLI via a browser-friendly device code flow
+* **So that**: I can log in using my existing corporate credentials and hardware MFA (FIDO2 / Authenticator app) without embedding standing passwords or secrets into workstation config files.
+* **Acceptance Criteria**:
+  1. `POST /api/v1/auth/oidc/device-code` generates high-entropy `device_code`, human-readable `user_code` (e.g. `XXXX-YYYY`), and verification URIs.
+  2. `POST /api/v1/auth/oidc/device-token` implements RFC 8628 section 3.5 polling, returning `authorization_pending` until approved.
+  3. `POST /api/v1/auth/oidc/device-verify` completes verification with verified claims (`user_email`, `department`, `groups`, `provider`).
+  4. `GET /api/v1/auth/oidc/config` exposes public discovery parameters (issuer, verification URI, allowed domains) while strictly never leaking client secrets.
+
+#### BAP-482: `bapedge login` CLI Command & Session Identity Binding
+* **Status**: DONE
+* **Type**: Developer Experience & CLI Tooling
+* **As a**: Developer using Claude Code, Copilot, or Cursor
+* **I want**: To run `bapedge login` in my terminal and have my agent session bound to my corporate identity
+* **So that**: All downstream tool calls and API access are attributable directly to my enterprise user account.
+* **Acceptance Criteria**:
+  1. CLI command `bapedge login` initiates the device authorization flow and renders clear browser instructions and user code in the terminal.
+  2. Polls control plane until approval is received or timeout expires.
+  3. Saves credentials in `~/.ltd/credentials.json` with `auth_mode: "oidc"`, `user_email`, `department`, `groups`, and `idp_provider`.
+  4. `bapedge register --code <OTC>` and `bapedge register --dev` remain fully functional alongside `bapedge login`.
+  5. `bapedge status` displays authentication mode, corporate user email, department, and IdP group memberships.
+
+#### BAP-483: Cedar Policy Native Evaluation of Principal Identity Claims
+* **Status**: DONE
+* **Type**: Authorization Engine & Policy Expressiveness
+* **As a**: Security Policy Administrator
+* **I want**: Cedar policies to natively evaluate principal identity claims such as `principal.department == "Finance"` and `principal.groups`
+* **So that**: Fine-grained authorization boundaries can be enforced based on organizational role and team membership.
+* **Acceptance Criteria**:
+  1. `bapedge` Cedar authorizer injects `department`, `email`, and `groups` attributes onto the `Principal` entity and `Context` record.
+  2. Schema (`schema.json`) declares optional `department`, `email`, and `groups` attributes on `Agent` entity and `context`.
+  3. Cedar policies using `principal.department == "Finance"` or `context.department == "Finance"` evaluate natively.
+  4. `bapedge why` outputs the evaluated principal identity context alongside the allow/deny policy determination.
+
 
 

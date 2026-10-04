@@ -8,15 +8,28 @@ import (
 	"strings"
 )
 
+// OIDCConfig defines client-side and discovered Enterprise IdP parameters.
+type OIDCConfig struct {
+	Enabled         bool     `json:"enabled"`
+	Provider        string   `json:"provider,omitempty"`
+	IssuerURL       string   `json:"issuer_url,omitempty"`
+	ClientID        string   `json:"client_id,omitempty"`
+	VerificationURI string   `json:"verification_uri,omitempty"`
+	Scopes          []string `json:"scopes,omitempty"`
+	TenantID        string   `json:"tenant_id,omitempty"`
+	AllowedDomains  []string `json:"allowed_domains,omitempty"`
+}
+
 // EndpointsConfig holds central host and endpoint URLs for BAP services.
 type EndpointsConfig struct {
-	ControlPlaneURL string `json:"controlplane_url"`
-	GatewayURL      string `json:"gateway_url"`
-	EnvoyURL        string `json:"envoy_url"`
-	TrustDomain     string `json:"trust_domain"`
-	Environment     string `json:"environment,omitempty"`
-	EnforcementMode string `json:"enforcement_mode,omitempty"`
-	ConfigSource    string `json:"config_source,omitempty"`
+	ControlPlaneURL string     `json:"controlplane_url"`
+	GatewayURL      string     `json:"gateway_url"`
+	EnvoyURL        string     `json:"envoy_url"`
+	TrustDomain     string     `json:"trust_domain"`
+	Environment     string     `json:"environment,omitempty"`
+	EnforcementMode string     `json:"enforcement_mode,omitempty"`
+	ConfigSource    string     `json:"config_source,omitempty"`
+	OIDC            OIDCConfig `json:"oidc,omitempty"`
 }
 
 const (
@@ -97,6 +110,20 @@ func ResolveEndpoints() EndpointsConfig {
 	}
 	if envMode := getFirstEnv("BAP_ENFORCEMENT_MODE", "BAP_MODE"); envMode != "" {
 		cfg.EnforcementMode = strings.ToLower(strings.TrimSpace(envMode))
+	}
+	if envOIDCProvider := getFirstEnv("BAP_OIDC_PROVIDER"); envOIDCProvider != "" {
+		cfg.OIDC.Provider = envOIDCProvider
+		cfg.OIDC.Enabled = true
+	}
+	if envOIDCClient := getFirstEnv("BAP_OIDC_CLIENT_ID"); envOIDCClient != "" {
+		cfg.OIDC.ClientID = envOIDCClient
+		cfg.OIDC.Enabled = true
+	}
+	if envOIDCTenant := getFirstEnv("BAP_OIDC_TENANT_ID"); envOIDCTenant != "" {
+		cfg.OIDC.TenantID = envOIDCTenant
+	}
+	if envOIDCIssuer := getFirstEnv("BAP_OIDC_ISSUER_URL"); envOIDCIssuer != "" {
+		cfg.OIDC.IssuerURL = envOIDCIssuer
 	}
 	if cfg.EnforcementMode == "" {
 		cfg.EnforcementMode = "enforce"

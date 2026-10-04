@@ -1,4 +1,4 @@
-﻿package cmd
+package cmd
 
 import (
 	"bytes"
@@ -155,6 +155,36 @@ func RunStatus(args []string) error {
 	fmt.Printf("  User:             %s\n", username)
 	fmt.Printf("  Control Plane:    %s\n", serverURL)
 	fmt.Printf("  Workspace Root:   %s\n", authz.GetWorkspaceRoot())
+
+	// Enrolled Identity & Authentication Status
+	if credsData, err := os.ReadFile(DefaultCredentialsPath()); err == nil {
+		var creds StoredCredentials
+		if json.Unmarshal(credsData, &creds) == nil && creds.AgentID != "" {
+			authModeLabel := "One-Time Code (OTC)"
+			if creds.AuthMode == "oidc" {
+				idp := "Microsoft Entra ID"
+				if strings.EqualFold(creds.IdPProvider, "okta") {
+					idp = "Okta Workforce Identity"
+				} else if creds.IdPProvider != "" {
+					idp = creds.IdPProvider
+				}
+				authModeLabel = fmt.Sprintf("OIDC Federated (%s, MFA Enforced)", idp)
+			}
+			fmt.Printf("  Auth Mode:        %s\n", authModeLabel)
+			if creds.UserEmail != "" {
+				fmt.Printf("  Corporate User:   %s\n", creds.UserEmail)
+			}
+			if creds.Department != "" {
+				fmt.Printf("  Department:       %s\n", creds.Department)
+			}
+			if len(creds.Groups) > 0 {
+				fmt.Printf("  IdP Groups:       %v\n", creds.Groups)
+			}
+			fmt.Printf("  Agent Workload:   %s (App: %s)\n", creds.AgentID, creds.AppID)
+		}
+	} else {
+		fmt.Printf("  Enrollment:       Unenrolled (run 'bapedge login' or 'bapedge register')\n")
+	}
 	fmt.Println("--------------------------------------------------------------------------------")
 
 	// 1. Inspect Active Sessions
@@ -295,6 +325,10 @@ func RunWhy(args []string) error {
 	fmt.Printf("  Command Arguments:  %s\n", cmdArgs)
 	fmt.Printf("  Workspace Root:     %s\n", workspaceRoot)
 	fmt.Printf("  Escapes Workspace:  %v\n", escapesWorkspace)
+	identity := authorizer.GetIdentity()
+	if identity.UserEmail != "" {
+		fmt.Printf("  Principal Identity: %s (Dept: %s, Groups: %v)\n", identity.UserEmail, identity.Department, identity.Groups)
+	}
 	fmt.Println("--------------------------------------------------------------------------------")
 
 	if evalErr != nil {

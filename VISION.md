@@ -200,6 +200,7 @@ BAP operationalizes its vision through 10 concrete, testable architectural pilla
 │  8. Live CIO Fleet Command Cockpit & Forensic Blast Graph                   │
 │  9. 3-Tier Layered Endpoint Enforcement & Biometric Step-Up (Epic 23)       │
 │ 10. Operational Resilience, Crash Sweeps & Developer CLI Tooling (Epic 24)  │
+│ 11. Enterprise Identity Provider Federation & OIDC Device Flow (Epic 25)    │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -242,6 +243,15 @@ Designed for real-world enterprise operations:
 - **1-Click Developer Onboarding:** `bapedge setup --app=claude-code` provisions hooks, config files, and verification checks in a single idempotent command.
 - **In-Terminal Policy Explanations:** `bapedge why <action> <resource>` and `bapedge status` provide instant sub-second Cedar policy attribution and daemon health diagnostics directly in the developer's terminal.
 - **Resilient Spooling:** Edge audit logs spool locally in SQLite and flush to the central Merkle store upon reconnection, guaranteeing zero audit loss during transient outages.
+
+### Pillar 11: Enterprise Identity Provider Federation & OIDC Device Flow (Epic 25)
+Integrates developer agent sessions directly with enterprise identity providers:
+- **RFC 8628 OIDC Device Flow:** Developers run `bapedge login` in their terminal to authenticate via corporate MFA in Microsoft Entra ID or Okta Workforce Identity Cloud without storing standing developer passwords or static API keys.
+- **Native Cedar Claim Propagation:** BAP automatically passes verified corporate claims (`user_email`, `department`, `groups`) into the Cedar policy engine so organizational rules like `when { principal.department == "Finance" }` evaluate natively.
+- **Dual-Mode Environment Security Model:**
+  - **Dev Mode:** Control Plane supports self-service OTC generation (`/api/v1/auth/otc/dev-request`) allowing developers to spin up local agents with zero administrative overhead.
+  - **Prod Mode:** Public self-service OTC creation is strictly blocked (`403 Forbidden`), reserving OTC issuance to authenticated out-of-band administrative provisioning (`/api/v1/agents/pre-register` with `X-BAP-Admin-Token`), and enforcing MFA OIDC login for interactive developer workstations.
+- **Coexistence of OTC & OIDC:** The edge daemon preserves both `bapedge register --code <OTC>` for headless CI/CD runners and offline build nodes alongside `bapedge login` for interactive developer workstations.
 
 ---
 
@@ -361,6 +371,11 @@ The BAP platform has advanced through aggressive implementation phases, progress
   - 1-click idempotent developer onboarding (`bapedge setup --app=claude-code`).
   - In-terminal policy inspection (`bapedge status` & `bapedge why <action> <resource>`).
   - Resilient offline SQLite audit spooling and Merkle reconnection flush.
+- [x] **Enterprise Identity Provider Federation & OIDC Device Flow (Epic 25):**
+  - RFC 8628 OAuth 2.0 / OIDC device authorization flow (`bapedge login`) integrating Microsoft Entra ID and Okta.
+  - Native Cedar policy principal attribute evaluation (`principal.department`, `groups`, `email`).
+  - Dual environment security model: open self-service OTC token generation in dev mode, strict lockdown to offline admin OTC and MFA OIDC login in prod mode.
+  - Coexistence of OTC (`bapedge register`) and OIDC (`bapedge login`) on edge workstations.
 
 ### Future Horizons
 - [ ] **Linux eBPF TC/cgroups Kernel Filter Driver:** Native in-kernel socket enforcement bypassing userspace proxy configuration.

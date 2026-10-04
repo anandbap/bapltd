@@ -69,6 +69,11 @@ type GrantClaims struct {
 	Constraints   *types.GrantConstraints `json:"constraints,omitempty"`
 	PolicyVersion string                  `json:"policy_version,omitempty"`
 	Scopes        []string                `json:"scopes"`
+	UserEmail     string                  `json:"user_email,omitempty"`
+	Department    string                  `json:"department,omitempty"`
+	Groups        []string                `json:"groups,omitempty"`
+	AuthMode      string                  `json:"auth_mode,omitempty"`
+	IdPProvider   string                  `json:"idp_provider,omitempty"`
 	Iss           string                  `json:"iss"`
 	Aud           string                  `json:"aud"`
 	Iat           int64                   `json:"iat"`
@@ -148,6 +153,11 @@ func (tm *TokenMinter) MintWithDetails(
 		Constraints:   constraints,
 		PolicyVersion: policyVersion,
 		Scopes:        scopes,
+		UserEmail:     agent.UserEmail,
+		Department:    agent.Department,
+		Groups:        agent.Groups,
+		AuthMode:      agent.AuthMode,
+		IdPProvider:   agent.IdPProvider,
 		Iss:           "bap-controlplane",
 		Aud:           "bap-edge-broker",
 		Iat:           now.Unix(),

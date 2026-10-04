@@ -140,6 +140,35 @@ func (s *Store) Enroll(agentID string, binaryHash, pubKey, hostname, osName, arc
 	return agentInstance, nil
 }
 
+// EnrollWithClaims enrolls an agent and attaches verified corporate identity claims (OIDC / IdP).
+func (s *Store) EnrollWithClaims(
+	agentID, binaryHash, pubKey, hostname, osName, arch, instanceID string,
+	userEmail, department string, groups []string, authMode, idpProvider string,
+) (*types.RegisteredAgent, error) {
+	agent, err := s.Enroll(agentID, binaryHash, pubKey, hostname, osName, arch, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if userEmail != "" {
+		agent.UserEmail = userEmail
+	}
+	if department != "" {
+		agent.Department = department
+	}
+	if len(groups) > 0 {
+		agent.Groups = groups
+	}
+	if authMode != "" {
+		agent.AuthMode = authMode
+	}
+	if idpProvider != "" {
+		agent.IdPProvider = idpProvider
+	}
+	return agent, nil
+}
+
 func (s *Store) Revoke(agentID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

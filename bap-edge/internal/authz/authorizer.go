@@ -12,10 +12,30 @@ import (
 	"github.com/cedar-policy/cedar-go/x/exp/schema"
 )
 
+// PrincipalIdentity encapsulates the authenticated corporate identity (OIDC / Entra / Okta or OTC).
+type PrincipalIdentity struct {
+	UserEmail  string   `json:"user_email"`
+	Department string   `json:"department"`
+	Groups     []string `json:"groups"`
+	AgentID    string   `json:"agent_id"`
+	AuthMode   string   `json:"auth_mode"`
+}
+
 // Authorizer evaluates execution requests against Cedar policies and schemas.
 type Authorizer struct {
 	policySet *cedar.PolicySet
 	schema    *schema.Schema
+	identity  PrincipalIdentity
+}
+
+// SetIdentity explicitly sets the authenticated engineer's corporate identity.
+func (a *Authorizer) SetIdentity(identity PrincipalIdentity) {
+	a.identity = identity
+}
+
+// GetIdentity returns the current authenticated corporate identity.
+func (a *Authorizer) GetIdentity() PrincipalIdentity {
+	return a.identity
 }
 
 // NewAuthorizer loads the Cedar policy and optional schema from specified or standard locations.
@@ -55,6 +75,29 @@ func NewAuthorizer(policyPath string) (*Authorizer, error) {
 	}
 
 	authz := &Authorizer{policySet: ps}
+
+	// Load authenticated corporate identity from ~/.ltd/credentials.json if enrolled
+	if home, err := os.UserHomeDir(); err == nil {
+		credsCandidate := filepath.Join(home, ".ltd", "credentials.json")
+		if data, err := os.ReadFile(credsCandidate); err == nil {
+			var creds struct {
+				UserEmail  string   `json:"user_email"`
+				Department string   `json:"department"`
+				Groups     []string `json:"groups"`
+				AgentID    string   `json:"agent_id"`
+				AuthMode   string   `json:"auth_mode"`
+			}
+			if json.Unmarshal(data, &creds) == nil {
+				authz.identity = PrincipalIdentity{
+					UserEmail:  creds.UserEmail,
+					Department: creds.Department,
+					Groups:     creds.Groups,
+					AgentID:    creds.AgentID,
+					AuthMode:   creds.AuthMode,
+				}
+			}
+		}
+	}
 
 	// Try loading schema.json from the same directory or standard locations
 	schemaPathCandidate := filepath.Join(policyDir, "schema.json")
@@ -100,19 +143,46 @@ func (a *Authorizer) EvaluateWithWorkspace(executable, fullCommand, args, worksp
 		escapesWorkspace = CheckCommandWorkspaceEscape(workspaceRoot, fullCommand)
 	}
 
-	req := cedar.Request{
-		Principal: cedar.NewEntityUID("Agent", "Local"),
-		Action:    cedar.NewEntityUID("Action", "Execute"),
-		Resource:  cedar.NewEntityUID("Command", "CLI"),
-		Context: cedar.NewRecord(cedar.RecordMap{
-			cedar.String("executable"):        cedar.String(normalizedExec),
-			cedar.String("full_command"):      cedar.String(normalizedFull),
-			cedar.String("args"):              cedar.String(normalizedArgs),
-			cedar.String("escapes_workspace"): cedar.Boolean(escapesWorkspace),
-		}),
+	principalUID := cedar.NewEntityUID("Agent", "Local")
+
+	// Construct Principal attributes record including authenticated corporate identity claims
+	principalAttrs := cedar.RecordMap{
+		cedar.String("department"): cedar.String(a.identity.Department),
+		cedar.String("email"):      cedar.String(a.identity.UserEmail),
+	}
+	if len(a.identity.Groups) > 0 {
+		var groupVals []types.Value
+		for _, g := range a.identity.Groups {
+			groupVals = append(groupVals, cedar.String(g))
+		}
+		principalAttrs[cedar.String("groups")] = cedar.NewSet(groupVals...)
+	} else {
+		principalAttrs[cedar.String("groups")] = cedar.NewSet()
 	}
 
-	entities := types.EntityMap{}
+	entities := types.EntityMap{
+		principalUID: types.Entity{
+			UID:        principalUID,
+			Attributes: cedar.NewRecord(principalAttrs),
+		},
+	}
+
+	contextMap := cedar.RecordMap{
+		cedar.String("executable"):        cedar.String(normalizedExec),
+		cedar.String("full_command"):      cedar.String(normalizedFull),
+		cedar.String("args"):              cedar.String(normalizedArgs),
+		cedar.String("escapes_workspace"): cedar.Boolean(escapesWorkspace),
+		cedar.String("department"):        cedar.String(a.identity.Department),
+		cedar.String("user_email"):        cedar.String(a.identity.UserEmail),
+	}
+
+	req := cedar.Request{
+		Principal: principalUID,
+		Action:    cedar.NewEntityUID("Action", "Execute"),
+		Resource:  cedar.NewEntityUID("Command", "CLI"),
+		Context:   cedar.NewRecord(contextMap),
+	}
+
 	decision, diag := cedar.Authorize(a.policySet, entities, req)
 
 	if decision == cedar.Allow {
