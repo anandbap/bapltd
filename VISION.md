@@ -376,9 +376,16 @@ The BAP platform has advanced through aggressive implementation phases, progress
   - Native Cedar policy principal attribute evaluation (`principal.department`, `groups`, `email`).
   - Dual environment security model: open self-service OTC token generation in dev mode, strict lockdown to offline admin OTC and MFA OIDC login in prod mode.
   - Coexistence of OTC (`bapedge register`) and OIDC (`bapedge login`) on edge workstations.
+- [x] **Cross-Platform Packaging & CI/CD Release Pipeline (Epic 26):**
+  - GitHub Actions matrix compiling and signing release binaries for `darwin-arm64` (Apple Silicon), `darwin-amd64`, `linux-amd64`, `linux-arm64`, and `windows-amd64`.
+  - macOS installer package (`.pkg`) with LaunchDaemon plist and Jamf Pro `.mobileconfig` configuration profile.
+  - Windows Installer (`.msi`) with Microsoft Intune CSP / Win32 App deployment bundle.
+  - Debian (`.deb`) package with systemd unit.
+  - Cryptographic release ledger and manifest (`SHA256SUMS.txt`).
 
 ### Future Horizons
 - [ ] **Linux eBPF TC/cgroups Kernel Filter Driver:** Native in-kernel socket enforcement bypassing userspace proxy configuration.
 - [ ] **Windows Filtering Platform (WFP) Callout Driver:** Kernel-mode network egress firewall driver pinning for locked enterprise Windows endpoints.
 - [ ] **Multi-Tenant Cross-Organizational Delegation Mesh:** Cross-enterprise BAP grant federation for B2B multi-agent autonomous collaboration.
+
 

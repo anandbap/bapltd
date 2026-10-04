@@ -763,6 +763,56 @@ To ensure headless servers and automated CI/CD runners can operate without inter
 - `bapedge login` provides seamless, interactive SSO/MFA authentication for software developers using Claude Code, GitHub Copilot, and Cursor.
 - `bapedge status` displays the active enrollment method, corporate identity, department, and group memberships.
 
+---
+
+## 11. Cross-Platform Packaging & CI/CD Release Pipeline Architecture (Epic 26)
+
+### 11.1. Release Pipeline Flow & GitHub Actions Matrix
+
+BAP uses an automated GitHub Actions release matrix (`.github/workflows/release.yml`) and testing matrix (`.github/workflows/ci.yml`) to compile, sign, package, and publish release artifacts across all major operating systems and chip architectures:
+
+```mermaid
+flowchart TD
+    Tag["Git Release Tag (v*) / Workflow Dispatch"] --> Matrix["GitHub Actions Build Matrix"]
+    
+    subgraph BuildTargets ["Compilation & Code Signing"]
+        Matrix --> M1["macOS Apple Silicon (darwin-arm64)\n• go build -ldflags\n• Apple Developer ID codesign"]
+        Matrix --> M2["macOS Intel (darwin-amd64)\n• go build -ldflags\n• Apple Developer ID codesign"]
+        Matrix --> M3["Linux x86_64 (linux-amd64)\n• go build CGO=0 static\n• sha256 checksums"]
+        Matrix --> M4["Linux ARM64 (linux-arm64)\n• go build CGO=0 static\n• sha256 checksums"]
+        Matrix --> M5["Windows AMD64 (windows-amd64)\n• go build -ldflags\n• Authenticode signtool"]
+    end
+
+    subgraph MDMPackaging ["Enterprise MDM Packaging"]
+        M1 & M2 --> PKG["macOS .pkg Installer\n+ Jamf com.bap.edge.mobileconfig\n+ LaunchDaemon plist"]
+        M3 & M4 --> DEB["Debian .deb Package\n+ Linux systemd Unit\n+ Standalone .tar.gz"]
+        M5 --> MSI["Windows .msi Installer\n+ Intune-BAP-Policy.xml CSP\n+ Win32 Install-BAPEdge.ps1"]
+    end
+
+    PKG & DEB & MSI --> Release["GitHub Release Publisher\n• SHA256SUMS.txt Manifest\n• Signed Binaries & MDM Profiles"]
+```
+
+### 11.2. Enterprise MDM Distribution Artifacts
+
+| Platform / MDM Target | Primary Installer | Configuration / Policy Payload | Daemon Supervision | Permissions / TCC |
+| :--- | :--- | :--- | :--- | :--- |
+| **macOS (Jamf Pro / Kandji)** | `bapedge-darwin-arm64.pkg` | `com.bap.edge.mobileconfig` | LaunchDaemon (`/Library/LaunchDaemons/com.bap.edge.plist`) | Apple TCC Full Disk Access profile for `/usr/local/bin/bapedge` |
+| **Windows (Microsoft Intune)** | `bapedge-windows-amd64.msi` | `Intune-BAP-Policy.xml` (OMA-URI CSP) | Windows Service / Scheduled Task (`BAPEdgeDaemon`) | System-level execution & PATH registration in `C:\Program Files\BAP\` |
+| **Linux (Ansible / Chef)** | `bapedge-linux-amd64.deb` | `/etc/bap/bap-config.json` | systemd unit (`bapedge.service`) | POSIX root execution with Landlock LSM / eBPF |
+
+### 11.3. Cryptographic Code Signing & Supply Chain Integrity
+
+1. **macOS Gatekeeper & Notarization:**
+   - Apple Developer ID certificates sign binaries with the hardened runtime (`--options runtime`).
+   - Binaries pass macOS Gatekeeper with zero warning prompts during Jamf enterprise deployment.
+2. **Windows SmartScreen & Authenticode:**
+   - Signed via Microsoft Authenticode `signtool.exe` with RFC 3161 Digicert timestamping (`/tr http://timestamp.digicert.com`).
+   - Prevents Microsoft Defender SmartScreen untrusted binary warnings.
+3. **Cryptographic Checksum Ledger:**
+   - The release job calculates SHA-256 digests across all compiled packages and produces `SHA256SUMS.txt`.
+   - Security teams can independently verify binary digests against the signed manifest before pushing to workstation fleets.
+
+
 
 
 
