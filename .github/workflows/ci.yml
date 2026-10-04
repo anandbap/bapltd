@@ -56,18 +56,26 @@ jobs:
 
       - name: Build Windows amd64 Binaries
         run: |
-          mkdir -p dist/windows-amd64
+          mkdir -p dist/windows-amd64/controlplane
+          mkdir -p dist/windows-amd64/claude-client
           cd bap-controlplane
           go build -o ../dist/windows-amd64/bapcontrolplane.exe ./cmd/server
+          go build -o ../dist/windows-amd64/controlplane/bapcontrolplane.exe ./cmd/server
           go build -o ../bapcontrolplane.exe ./cmd/server
           go build -o ../dist/windows-amd64/bapdashboard.exe ./cmd/dashboard
           go build -o ../bapdashboard.exe ./cmd/dashboard
           cd ../bap-edge
           go build -o ../dist/windows-amd64/bapedge.exe .
+          go build -o ../dist/windows-amd64/claude-client/bapedge.exe .
           go build -o ../bapedge.exe .
+          go build -o ../bapmcp.exe .
           cd ../bap-gateway
           go build -o ../dist/windows-amd64/bapgateway.exe .
           go build -o ../bapgateway.exe .
+          cd ../cchook
+          go build -o interceptor.exe interceptor.go
+          cp interceptor.exe ../dist/windows-amd64/interceptor.exe
+          cp interceptor.exe ../dist/windows-amd64/claude-client/interceptor.exe
           cd ..
 
       - name: Run Full Python Test Suite (100+ Tests)
