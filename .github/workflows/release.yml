@@ -82,6 +82,20 @@ jobs:
             echo "RELEASE_VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
           fi
 
+      - name: Inject Private Root CA (Optional from Secret)
+        shell: bash
+        env:
+          BAP_ROOT_CA_CERT: ${{ secrets.BAP_ROOT_CA_CERT }}
+        run: |
+          if [ -n "$BAP_ROOT_CA_CERT" ]; then
+            echo "Injecting private BAP Root CA certificate into build packages..."
+            echo "$BAP_ROOT_CA_CERT" > bap-edge/internal/httptransport/certs/embedded_ca.crt
+            echo "$BAP_ROOT_CA_CERT" > bap-gateway/internal/httptransport/certs/embedded_ca.crt
+            echo "$BAP_ROOT_CA_CERT" > cchook/certs/embedded_ca.crt
+          else
+            echo "No BAP_ROOT_CA_CERT secret provided; proceeding with system trust store and runtime cert configuration."
+          fi
+
       - name: Compile Binaries for ${{ matrix.target.platform_name }}
         shell: bash
         env:
