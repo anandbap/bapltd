@@ -3,18 +3,18 @@ package httptransport
 import (
 	"crypto/tls"
 	"crypto/x509"
-	_ "embed"
+	"embed"
 	"net/http"
 	"os"
 	"sync"
 	"time"
 )
 
-//go:embed embedded_ca.crt
-var embeddedCACert []byte
+//go:embed certs
+var certsFS embed.FS
 
 // New shares the BAP_CA_CERT trust setting across every request in a process.
-// It loads the embedded BAP Root CA, system certificates, and optional runtime BAP_CA_CERT.
+// It loads optional embedded certificates, system certificates, environment PEM secrets, and runtime paths.
 func New(timeout time.Duration) *http.Client {
 	return &http.Client{Timeout: timeout, Transport: &caTransport{}}
 }
@@ -34,9 +34,14 @@ func (t *caTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 			roots = x509.NewCertPool()
 		}
 
-		// 1. Append the compiled-in BAP Root CA (packaged inside binary)
-		if len(embeddedCACert) > 0 {
-			roots.AppendCertsFromPEM(embeddedCACert)
+		// 1. Append optional compiled-in Root CA if provided in private build (certs/embedded_ca.crt)
+		if caData, err := certsFS.ReadFile("certs/embedded_ca.crt"); err == nil && len(caData) > 0 {
+			roots.AppendCertsFromPEM(caData)
+		}
+
+		// 2. Append CA certificate from raw environment secret string (e.g. GitHub Secret / Vault / Intune)
+		if pemStr := os.Getenv("BAP_CA_CERT_PEM"); pemStr != "" {
+			roots.AppendCertsFromPEM([]byte(pemStr))
 		}
 
 		// 2. Also check runtime BAP_CA_CERT or local files if provided

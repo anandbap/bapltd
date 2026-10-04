@@ -1,0 +1,8 @@
+# BAP Certificates Directory
+This directory is reserved for optional build-time embedded CA certificates.
+In public repositories, actual private certificates are omitted for security.
+Private root CA certificates can be supplied via:
+1. Environment variable: BAP_CA_CERT_PEM (inline PEM string from GitHub Secrets / Vault)
+2. Environment variable: BAP_CA_CERT (path to CA certificate on disk)
+3. System Certificate Store (managed by Jamf / Intune MDM)
+4. Placing an optional embedded_ca.crt in this folder prior to enterprise builds.

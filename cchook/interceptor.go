@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
-	_ "embed"
+	"embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -204,16 +204,19 @@ func writeSessionPrompt(sessionID, prompt string) {
 	}
 }
 
-//go:embed embedded_ca.crt
-var embeddedCACert []byte
+//go:embed certs
+var certsFS embed.FS
 
 func getHTTPClient() *http.Client {
 	roots, err := x509.SystemCertPool()
 	if err != nil || roots == nil {
 		roots = x509.NewCertPool()
 	}
-	if len(embeddedCACert) > 0 {
-		roots.AppendCertsFromPEM(embeddedCACert)
+	if caData, err := certsFS.ReadFile("certs/embedded_ca.crt"); err == nil && len(caData) > 0 {
+		roots.AppendCertsFromPEM(caData)
+	}
+	if pemStr := os.Getenv("BAP_CA_CERT_PEM"); pemStr != "" {
+		roots.AppendCertsFromPEM([]byte(pemStr))
 	}
 	path := os.Getenv("BAP_CA_CERT")
 	if path == "" {

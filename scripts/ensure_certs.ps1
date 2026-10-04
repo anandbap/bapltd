@@ -136,11 +136,11 @@ IP.2 = ::1
     Write-Host "[+] BAP Root CA and Control Plane TLS certificate successfully created!" -ForegroundColor Green
 }
 
-# 3. Synchronize Root CA into Go packages for binary embedding
+# 3. Synchronize Root CA into Go packages for binary embedding (optional local dev)
 $embedTargets = @(
-    (Join-Path $rootDir "bap-edge\internal\httptransport\embedded_ca.crt"),
-    (Join-Path $rootDir "bap-gateway\internal\httptransport\embedded_ca.crt"),
-    (Join-Path $rootDir "cchook\embedded_ca.crt")
+    (Join-Path $rootDir "bap-edge\internal\httptransport\certs\embedded_ca.crt"),
+    (Join-Path $rootDir "bap-gateway\internal\httptransport\certs\embedded_ca.crt"),
+    (Join-Path $rootDir "cchook\certs\embedded_ca.crt")
 )
 
 foreach ($target in $embedTargets) {
