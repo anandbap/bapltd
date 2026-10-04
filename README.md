@@ -121,16 +121,25 @@ flowchart LR
 
 ## ⚡ Quickstart & Interactive Testing
 
-### Option 1: Automated Regression Suites
+### Option 1: Automated Regression & End-to-End Suites
 ```powershell
-# Run 10-point adversarial test matrix
+# Run complete test discovery across all 79 unit, integration & E2E tests
+python -m unittest discover tests
+
+# Run 10-stage End-to-End (E2E) Full Mission Lifecycle Suite
+python -m unittest tests/test_e2e_full_lifecycle.py -v
+
+# Run End-to-End (E2E) Adversarial & Negative Security Hardening Suite
+python -m unittest tests/test_e2e_adversarial_hardening.py -v
+
+# Run 10-point architectural adversarial test matrix
 python -m unittest tests/test_bounded_authority_matrix.py -v
+
+# Run Cedar Policy Studio & "What-If" historical replay suite
+python -m unittest tests/test_cedar_policy_studio.py -v
 
 # Run full sole-executor & process containment suite
 python -m unittest tests/test_bap200_sole_executor.py -v
-
-# Run Go microservice unit tests
-go test ./... (in bap-controlplane, bap-gateway, bap-edge, cchook, copilot)
 ```
 
 ### Option 2: Live Gateway PEP & Atomic Single-Use Testing

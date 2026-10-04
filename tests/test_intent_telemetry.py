@@ -49,6 +49,17 @@ class TestIntentTelemetry(unittest.TestCase):
     def setUpClass(cls):
         cls.server_url = get_control_plane_url()
         cls.admin_token = read_admin_token()
+        try:
+            req = urllib.request.Request(f"{cls.server_url}/health", method="GET")
+            with urllib.request.urlopen(req, context=ssl_ctx, timeout=2):
+                pass
+        except Exception:
+            try:
+                req = urllib.request.Request(f"{cls.server_url}/api/v1/inspector/data", method="GET")
+                with urllib.request.urlopen(req, context=ssl_ctx, timeout=2):
+                    pass
+            except Exception as e:
+                raise unittest.SkipTest(f"Live control plane not reachable at {cls.server_url}: {e}")
 
     def api_request(self, method: str, path: str, payload: dict = None) -> tuple[int, dict]:
         url = f"{self.server_url}{path}"

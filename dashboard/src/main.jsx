@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { elapsed, presence } from './presence.js';
+import PolicyStudio from './PolicyStudio.jsx';
+import ShadowITView from './ShadowITView.jsx';
+import GatewayPEPView from './GatewayPEPView.jsx';
 import './style.css';
 
 const API = '/api/v1';
@@ -51,8 +54,8 @@ function intentLabel(value = 'UNKNOWN') {
 function riskFor(agent) {
   if (agent.status === 'revoked') return 'REVOKED';
   if (agent.status === 'stopped' || agent.status === 'closed') return 'STOPPED';
-  if (agent.deniedCount >= 2 || agent.hasTamper) return 'CRITICAL';
-  if (agent.deniedCount === 1) return 'ELEVATED';
+  if (agent.isHighRisk || agent.promptRiskLevel === 'CRITICAL' || agent.deniedCount >= 2 || agent.hasTamper) return 'CRITICAL';
+  if (agent.promptRiskLevel === 'ELEVATED' || agent.deniedCount === 1) return 'ELEVATED';
   return 'HEALTHY';
 }
 
@@ -120,6 +123,10 @@ function normalizeFleet(data, sensitive, now, localStatus) {
       allowedCount: session.allowed_count || next.allowedCount || 0,
       deniedCount: session.denied_count || next.deniedCount || 0,
       totalEvents: session.total_events || next.totalEvents || 0,
+      promptRiskScore: session.prompt_risk_score || mission.prompt_risk_score || 0,
+      promptRiskLevel: session.prompt_risk_level || mission.prompt_risk_level || 'LOW',
+      injectionSignals: session.injection_signals || mission.injection_signals || [],
+      isHighRisk: session.is_high_risk || mission.is_high_risk || false,
     });
   });
 
@@ -162,6 +169,7 @@ function App() {
   const [filter, setFilter] = useState('HEALTHY');
   const [intentWindow, setIntentWindow] = useState('live');
   const [sortMode, setSortMode] = useState('RISK');
+  const [activeView, setActiveView] = useState('fleet');
   const [page, setPage] = useState(0);
   const [selectedId, setSelectedId] = useState('');
   const [expandedEvent, setExpandedEvent] = useState('');
@@ -328,6 +336,40 @@ function App() {
     <header className="topbar">
       <div className="brand-lockup"><span className="brand-mark"><Icon name="shield" size={19}/></span><div><strong>BAP</strong><span>Fleet Command</span></div></div>
       <div className="environment"><span>{runtime.environment.toUpperCase()}</span><b>{runtime.demo_mode ? 'Isolated demonstration control plane' : 'Enterprise control plane'}</b></div>
+      <nav className="view-switcher" role="tablist" aria-label="Command Views">
+        <button
+          role="tab"
+          aria-selected={activeView === 'fleet'}
+          className={`view-tab ${activeView === 'fleet' ? 'active' : ''}`}
+          onClick={() => setActiveView('fleet')}
+        >
+          <Icon name="shield" size={14}/> Fleet Operations
+        </button>
+        <button
+          role="tab"
+          aria-selected={activeView === 'policies'}
+          className={`view-tab ${activeView === 'policies' ? 'active' : ''}`}
+          onClick={() => setActiveView('policies')}
+        >
+          <Icon name="command" size={14}/> Cedar Policy Studio
+        </button>
+        <button
+          role="tab"
+          aria-selected={activeView === 'shadow_it'}
+          className={`view-tab ${activeView === 'shadow_it' ? 'active' : ''}`}
+          onClick={() => setActiveView('shadow_it')}
+        >
+          <Icon name="search" size={14}/> Shadow IT Discovery
+        </button>
+        <button
+          role="tab"
+          aria-selected={activeView === 'pep'}
+          className={`view-tab ${activeView === 'pep' ? 'active' : ''}`}
+          onClick={() => setActiveView('pep')}
+        >
+          <Icon name="lock" size={14}/> Gateway PEP Guard
+        </button>
+      </nav>
       <div className="topbar-actions">
         <div className={`connection ${connected ? 'online' : ''}`}><i/>{connected ? 'Live telemetry' : 'Reconnecting'}<small>{lastRefresh ? elapsed(now - lastRefresh) : 'waiting'}</small></div>
         <button className={sensitive ? 'session-active' : 'quiet'} onClick={() => sensitive ? (setSensitive(null), setAdminToken(''), setPrivilegedUntil(0)) : openAction('REVEAL')}><Icon name={sensitive ? 'unlock' : 'lock'}/>{sensitive ? `Privileged · ${Math.max(0, Math.ceil((privilegedUntil - now) / 1000))}s` : 'Unlock prompts'}</button>
@@ -338,7 +380,18 @@ function App() {
     {notice && <div className="toast" role="status"><Icon name="check"/><span>{notice}</span><button aria-label="Dismiss notification" onClick={() => setNotice('')}>×</button></div>}
 
     <main>
-      <section className="overview" aria-labelledby="agent-operations-heading">
+      {activeView === 'policies' && (
+        <PolicyStudio adminToken={adminToken} onNotify={(msg) => setNotice(msg)}/>
+      )}
+      {activeView === 'shadow_it' && (
+        <ShadowITView adminToken={adminToken} onNotify={(msg) => setNotice(msg)}/>
+      )}
+      {activeView === 'pep' && (
+        <GatewayPEPView adminToken={adminToken} onNotify={(msg) => setNotice(msg)}/>
+      )}
+      {activeView === 'fleet' && (
+        <>
+          <section className="overview" aria-labelledby="agent-operations-heading">
         <div className="overview-title"><p className="eyebrow">Autonomous operations</p><h1 id="agent-operations-heading">Agent operations</h1><p>Live command and containment across the enterprise fleet</p></div>
         <div className="metric current"><span>Operating now</span><strong>{activeCount}</strong><small><i/> {currentActions} executing actions</small></div>
         <div className="metric"><span>Incident queue</span><strong className={incidents.length ? 'warn' : ''}>{incidents.length}</strong><small>{incidents.filter((agent) => agent.risk === 'CRITICAL').length} critical · {incidents.filter((agent) => agent.risk === 'ELEVATED').length} elevated</small></div>
@@ -443,6 +496,8 @@ function App() {
       </section>
 
       {runtime.demo_mode && <section className="demo-bar"><div><span className="demo-kicker">DEMO CONTROL</span><p>Deterministic orchestration backed by control-plane telemetry</p></div><div className="demo-actions"><button onClick={() => openAction('START')}><Icon name="play"/>Start Demo</button><button className="incident-trigger" onClick={() => openAction('INCIDENT')}><Icon name="alert"/>Trigger Incident</button><button onClick={() => openAction('RESET')}><Icon name="reset"/>Reset</button><button onClick={() => openAction('CLEANUP')}><Icon name="trash"/>Cleanup</button></div></section>}
+        </>
+      )}
     </main>
 
     <dialog ref={modalRef} className="action-dialog" onClose={() => setModal(null)}><form onSubmit={runAction}><div className={`dialog-icon ${['FREEZE', 'REVOKE', 'INCIDENT'].includes(modal?.type) ? 'danger' : ''}`}><Icon name={['FREEZE', 'STOP'].includes(modal?.type) ? 'stop' : modal?.type === 'REVOKE' ? 'ban' : modal?.type === 'INCIDENT' ? 'alert' : 'shield'} size={21}/></div><p className="eyebrow">Administrative confirmation</p><h2>{modal?.title}</h2><p>{modal?.detail}</p>{!adminToken && <label>Admin credential<input ref={tokenRef} aria-label="Admin credential" type="password" autoComplete="off" value={tokenInput} onChange={(event) => setTokenInput(event.target.value)} placeholder="Enter control-plane token" required/></label>}<div className="dialog-actions"><button type="button" onClick={closeModal}>Cancel</button><button className={['FREEZE', 'STOP', 'REVOKE', 'INCIDENT', 'CLEANUP'].includes(modal?.type) ? 'danger' : 'primary'} type="submit" disabled={pending || (!adminToken && !tokenInput)}>{pending ? 'Working…' : modal?.confirm || 'Confirm action'}</button></div></form></dialog>

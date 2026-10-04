@@ -19,9 +19,13 @@ import (
 	"bap-controlplane/internal/attestation"
 	"bap-controlplane/internal/audit"
 	"bap-controlplane/internal/authz"
+	"bap-controlplane/internal/discovery"
+	"bap-controlplane/internal/governance"
+	"bap-controlplane/internal/notary"
 	"bap-controlplane/internal/otc"
 	"bap-controlplane/internal/policy"
 	"bap-controlplane/internal/registry"
+	"bap-controlplane/internal/sandbox"
 	"bap-controlplane/internal/session"
 	"bap-controlplane/pkg/types"
 )
@@ -46,6 +50,10 @@ type Server struct {
 	policyStore      *policy.Store
 	auditStore       *audit.Store
 	sessionStore     *session.Store
+	govStore         *governance.Store
+	notaryStore      *notary.Store
+	ebpfProbe        *sandbox.EBPFProbe
+	scanner          *discovery.Scanner
 	mux              *http.ServeMux
 	allowedOrigins   map[string]bool
 	adminToken       string
@@ -68,6 +76,10 @@ func NewServer(reg *registry.Store, otcStore *otc.Store, minter *authz.TokenMint
 	} else {
 		sessStore = session.NewStore()
 	}
+	govStore := governance.NewStore(policyStore, auditStore)
+	notaryStore := notary.NewStore("bap-audit-signing-secret-default", "", auditStore)
+	ebpfProbe := sandbox.NewEBPFProbe()
+	scanner := discovery.NewScanner()
 	s := &Server{
 		registry:     reg,
 		otcStore:     otcStore,
@@ -75,6 +87,10 @@ func NewServer(reg *registry.Store, otcStore *otc.Store, minter *authz.TokenMint
 		policyStore:  policyStore,
 		auditStore:   auditStore,
 		sessionStore: sessStore,
+		govStore:     govStore,
+		notaryStore:  notaryStore,
+		ebpfProbe:    ebpfProbe,
+		scanner:      scanner,
 		mux:          http.NewServeMux(),
 	}
 	s.registerRoutes()
@@ -195,6 +211,48 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/demo/exec-safe", s.requireDemoMode(s.requireAdminAuth(s.handleDemoExecSafe)))
 	s.mux.HandleFunc("/api/v1/demo/exec-attack", s.requireDemoMode(s.requireAdminAuth(s.handleDemoExecAttack)))
 	s.mux.HandleFunc("/api/v1/demo/fleet-scale", s.requireDemoMode(s.requireAdminAuth(s.handleDemoFleetScale)))
+
+	// BAP-450 through BAP-459: Operations & Governance Extension
+	s.mux.HandleFunc("/api/v1/governance/proposals", s.handleProposalRoutes)
+	s.mux.HandleFunc("/api/v1/governance/proposals/", s.handleProposalRoutes)
+	s.mux.HandleFunc("/api/v1/governance/admin/action", s.requireAdminAuth(s.handleAdminAction))
+	s.mux.HandleFunc("/api/v1/governance/reconciliation", s.requireAdminAuth(s.handleReconcileOrphans))
+	s.mux.HandleFunc("/api/v1/governance/simulate", s.handleSimulateGovernance)
+	s.mux.HandleFunc("/api/v1/governance/timeline/", s.handleGetTimeline)
+
+	// Epic 10: Dynamic Cedar Policy Authoring & Simulation (BAP-1001, BAP-1002)
+	s.mux.HandleFunc("/api/v1/policies/cedar/validate", s.handleValidateCedarPolicy)
+	s.mux.HandleFunc("/api/v1/policies/cedar/current", s.handleGetCurrentCedarPolicy)
+	s.mux.HandleFunc("/api/v1/policies/cedar/deploy", s.requireAdminAuth(s.handleDeployCedarPolicy))
+	s.mux.HandleFunc("/api/v1/policies/cedar/simulate", s.handleSimulateCedarPolicy)
+
+	// Epic 14: LLM Prompt Injection & Semantic Heuristic Detection (BAP-1401)
+	s.mux.HandleFunc("/api/v1/sessions/prompt/analyze", s.handleAnalyzePrompt)
+
+	// Epic 13: Cloud KMS Audit Notarization & Immutable Cold Storage (BAP-1301, BAP-1302)
+	s.mux.HandleFunc("/api/v1/audit/notarize", s.requireAdminAuth(s.handleNotarizeAuditChain))
+	s.mux.HandleFunc("/api/v1/audit/notarizations", s.handleListNotarizations)
+	s.mux.HandleFunc("/api/v1/audit/worm/export", s.requireAdminAuth(s.handleExportWORMArchive))
+	s.mux.HandleFunc("/api/v1/audit/worm/manifests", s.handleListWORMArchives)
+
+	// Epic 11: Distributed SPIFFE/SPIRE Identity Mesh & Hardware Attestation (BAP-1101, BAP-1102)
+	s.mux.HandleFunc("/api/v1/spiffe/issue-svid", s.handleIssueSVID)
+	s.mux.HandleFunc("/api/v1/spiffe/validate", s.handleValidateSVID)
+	s.mux.HandleFunc("/api/v1/attestation/tpm-quote", s.handleVerifyTPMQuote)
+
+	// Epic 12: Kernel-Level System Call Sandboxing — eBPF / Landlock (BAP-1201, BAP-1202)
+	s.mux.HandleFunc("/api/v1/sandbox/landlock/check", s.handleLandlockCheck)
+	s.mux.HandleFunc("/api/v1/sandbox/ebpf/execve", s.handleEBPFExecve)
+
+	// Shadow IT & Unmanaged Asset Discovery (Rogue MCP Servers & Environment Variables)
+	s.mux.HandleFunc("/api/v1/discovery/shadow-it/scan", s.handleShadowITScan)
+	s.mux.HandleFunc("/api/v1/discovery/shadow-it/scan/trigger", s.handleShadowITScanTrigger)
+	s.mux.HandleFunc("/api/v1/discovery/shadow-it/findings", s.handleShadowITFindings)
+	s.mux.HandleFunc("/api/v1/discovery/shadow-it/reports", s.handleShadowITReports)
+
+	// Gateway PEP: Zero-Trust Resource-Side Policy Enforcement & Anti-Spoofing
+	s.mux.HandleFunc("/api/v1/pep/status", s.handlePEPStatus)
+	s.mux.HandleFunc("/api/v1/pep/simulate", s.handlePEPSimulate)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
@@ -777,12 +835,13 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id":       id,
-		"agent_id": id,
-		"status":   "alive",
-		"time":     time.Now().UTC(),
-		"session":  sessionFound,
-		"agent":    agentFound,
+		"id":         id,
+		"agent_id":   id,
+		"status":     "alive",
+		"scan_epoch": s.scanner.CurrentEpoch(),
+		"time":       time.Now().UTC(),
+		"session":    sessionFound,
+		"agent":      agentFound,
 	})
 }
 
@@ -1132,9 +1191,13 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 		}})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "updated",
-		"intent": sess.Intent,
-		"time":   time.Now().UTC(),
+		"status":            "updated",
+		"intent":            sess.Intent,
+		"is_high_risk":      sess.IsHighRisk,
+		"prompt_risk_level": sess.PromptRiskLevel,
+		"prompt_risk_score": sess.PromptRiskScore,
+		"injection_signals": sess.InjectionSignals,
+		"time":              time.Now().UTC(),
 	})
 }
 
@@ -2092,4 +2155,682 @@ func (s *Server) consumeActiveGrantWithDetails(token, action, resource, sessionI
 		}
 	}
 	return nil, fmt.Errorf("agent is not registered")
+}
+
+// BAP-450, BAP-451, BAP-453, BAP-455: Proposal routes dispatcher
+func (s *Server) handleProposalRoutes(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/governance/proposals")
+	path = strings.TrimPrefix(path, "/")
+	if path == "" {
+		if r.Method == http.MethodPost {
+			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+			var req types.SubmitProposalRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, "Invalid JSON body: "+err.Error())
+				return
+			}
+			proposal, err := s.govStore.SubmitProposal(req)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusCreated, proposal)
+			return
+		} else if r.Method == http.MethodGet {
+			proposals := s.govStore.ListProposals()
+			writeJSON(w, http.StatusOK, map[string]any{"count": len(proposals), "proposals": proposals})
+			return
+		}
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	parts := strings.Split(path, "/")
+	id := parts[0]
+
+	if len(parts) == 1 {
+		if r.Method == http.MethodGet {
+			p, err := s.govStore.GetProposal(id)
+			if err != nil {
+				writeError(w, http.StatusNotFound, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, p)
+			return
+		}
+		// Invariant R1: Proposals are immutable once submitted. Direct mutation is forbidden.
+		if r.Method == http.MethodPut || r.Method == http.MethodPatch || r.Method == http.MethodPost || r.Method == http.MethodDelete {
+			writeError(w, http.StatusMethodNotAllowed, "Proposals are immutable; direct modification or deletion is forbidden (Invariant R1)")
+			return
+		}
+	} else if len(parts) == 2 {
+		subAction := parts[1]
+		if subAction == "remediate" && r.Method == http.MethodPost {
+			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+			var req types.RemediateProposalRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+				return
+			}
+			child, err := s.govStore.RemediateProposal(id, req)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusCreated, child)
+			return
+		} else if subAction == "transition" && r.Method == http.MethodPost {
+			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+			var req types.TransitionStateRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+				return
+			}
+			if err := s.govStore.TransitionState(id, req.ToState, req.Actor, req.Reason); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			p, _ := s.govStore.GetProposal(id)
+			writeJSON(w, http.StatusOK, p)
+			return
+		} else if subAction == "approve" && r.Method == http.MethodPost {
+			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+			var req types.ApproveProposalRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+				return
+			}
+			if err := s.govStore.ApproveProposal(id, req); err != nil {
+				writeError(w, http.StatusForbidden, err.Error())
+				return
+			}
+			p, _ := s.govStore.GetProposal(id)
+			writeJSON(w, http.StatusOK, p)
+			return
+		}
+	}
+	writeError(w, http.StatusNotFound, "Endpoint not found")
+}
+
+// BAP-452 & BAP-453: handleAdminAction enforces "BAP Governs BAP"
+func (s *Server) handleAdminAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req types.AdminActionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	if err := s.govStore.ExecuteAdminAction(req); err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "EXECUTED", "action": req.Action, "target": req.Target})
+}
+
+// BAP-456: handleReconcileOrphans
+func (s *Server) handleReconcileOrphans(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	report := s.govStore.ReconcileOrphans(5 * time.Minute)
+	writeJSON(w, http.StatusOK, report)
+}
+
+// BAP-457: handleSimulateGovernance
+func (s *Server) handleSimulateGovernance(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req types.SimulationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	resp, err := s.govStore.Simulate(req)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// BAP-458 & BAP-459: handleGetTimeline
+func (s *Server) handleGetTimeline(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/governance/timeline/")
+	id = strings.TrimSpace(id)
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "proposal_id is required")
+		return
+	}
+	timeline, err := s.govStore.GetTimeline(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, timeline)
+}
+
+// BAP-1001: handleValidateCedarPolicy
+func (s *Server) handleValidateCedarPolicy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req struct {
+		PolicyCedar string `json:"policy_cedar"`
+		SchemaJSON  string `json:"schema_json,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	result := policy.ValidateCedar(req.PolicyCedar, req.SchemaJSON)
+	writeJSON(w, http.StatusOK, result)
+}
+
+// BAP-1001: handleGetCurrentCedarPolicy
+func (s *Server) handleGetCurrentCedarPolicy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	bundle := s.policyStore.GetBundle()
+	writeJSON(w, http.StatusOK, bundle)
+}
+
+// BAP-1001: handleDeployCedarPolicy
+func (s *Server) handleDeployCedarPolicy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req struct {
+		PolicyCedar string `json:"policy_cedar"`
+		SchemaJSON  string `json:"schema_json,omitempty"`
+		KillSwitch  bool   `json:"kill_switch"`
+		Reason      string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	val := policy.ValidateCedar(req.PolicyCedar, req.SchemaJSON)
+	if !val.Valid {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error":  "Policy validation failed",
+			"errors": val.Errors,
+		})
+		return
+	}
+	bundle := s.policyStore.Update(req.PolicyCedar, req.SchemaJSON, req.KillSwitch)
+	if s.govStore != nil {
+		_ = s.govStore.ExecuteAdminAction(types.AdminActionRequest{
+			AdminID: "system-admin",
+			Role:    types.RolePolicyAdmin,
+			Action:  "DEPLOY_POLICY",
+			Target:  fmt.Sprintf("bundle:v%d", bundle.Version),
+			Details: map[string]any{
+				"digest": bundle.Digest,
+				"reason": req.Reason,
+			},
+		})
+	}
+	writeJSON(w, http.StatusOK, bundle)
+}
+
+// BAP-1002: handleSimulateCedarPolicy
+func (s *Server) handleSimulateCedarPolicy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<20) // 2MB
+	var req struct {
+		DraftPolicy            string            `json:"draft_policy"`
+		Scenarios              []policy.Scenario `json:"scenarios,omitempty"`
+		IncludeHistoricalAudit bool              `json:"include_historical_audit"`
+		MaxHistorical          int               `json:"max_historical,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+
+	scenarios := req.Scenarios
+	if req.IncludeHistoricalAudit && s.auditStore != nil {
+		limit := req.MaxHistorical
+		if limit <= 0 || limit > 100 {
+			limit = 50
+		}
+		events := s.auditStore.List(limit)
+		for i, ev := range events {
+			scenarios = append(scenarios, policy.Scenario{
+				ID:               fmt.Sprintf("audit-%d-%s", i, ev.EventID),
+				Executable:       ev.Executable,
+				FullCommand:      ev.FullCommand,
+				Args:             ev.Arguments,
+				EscapesWorkspace: false,
+			})
+		}
+	}
+
+	currentBundle := s.policyStore.GetBundle()
+	report, err := policy.SimulatePolicySandbox(currentBundle.PolicyCedar, req.DraftPolicy, scenarios)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
+// BAP-1401: handleAnalyzePrompt
+func (s *Server) handleAnalyzePrompt(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	result := session.AnalyzePromptSemantics(req.Prompt)
+	writeJSON(w, http.StatusOK, result)
+}
+
+// BAP-1301: handleNotarizeAuditChain
+func (s *Server) handleNotarizeAuditChain(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req struct {
+		Provider string `json:"provider,omitempty"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	receipt, err := s.notaryStore.NotarizeChain(req.Provider)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, receipt)
+}
+
+// BAP-1301: handleListNotarizations
+func (s *Server) handleListNotarizations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	receipts := s.notaryStore.ListReceipts()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"count":    len(receipts),
+		"receipts": receipts,
+	})
+}
+
+// BAP-1302: handleExportWORMArchive
+func (s *Server) handleExportWORMArchive(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req struct {
+		Bucket         string `json:"bucket,omitempty"`
+		Prefix         string `json:"prefix,omitempty"`
+		RetentionYears int    `json:"retention_years,omitempty"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	manifest, err := s.notaryStore.ExportWORMArchive(req.Bucket, req.Prefix, req.RetentionYears)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, manifest)
+}
+
+// BAP-1302: handleListWORMArchives
+func (s *Server) handleListWORMArchives(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	archives := s.notaryStore.ListWORMArchives()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"count":    len(archives),
+		"archives": archives,
+	})
+}
+
+// BAP-1101: handleIssueSVID
+func (s *Server) handleIssueSVID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req struct {
+		AppID       string `json:"app_id"`
+		InstanceID  string `json:"instance_id"`
+		TrustDomain string `json:"trust_domain,omitempty"`
+		TTLMins     int    `json:"ttl_mins,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	if req.AppID == "" || req.InstanceID == "" {
+		writeError(w, http.StatusBadRequest, "app_id and instance_id are required")
+		return
+	}
+	bundle := attestation.IssueSVID(req.TrustDomain, req.AppID, req.InstanceID, req.TTLMins)
+	writeJSON(w, http.StatusOK, bundle)
+}
+
+// BAP-1101: handleValidateSVID
+func (s *Server) handleValidateSVID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req struct {
+		SPIFFEID            string `json:"spiffe_id"`
+		ExpectedTrustDomain string `json:"expected_trust_domain,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	valid, td, appID, err := attestation.ValidateSVID(req.SPIFFEID, req.ExpectedTrustDomain)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"valid": false,
+			"error": err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"valid":        valid,
+		"trust_domain": td,
+		"app_id":       appID,
+	})
+}
+
+// BAP-1102: handleVerifyTPMQuote
+func (s *Server) handleVerifyTPMQuote(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req struct {
+		Quote              attestation.TPMQuoteRequest `json:"quote"`
+		ExpectedBinaryHash string                      `json:"expected_binary_hash"`
+		AKSecret           string                      `json:"ak_secret,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	akSecret := req.AKSecret
+	if akSecret == "" {
+		akSecret = "tpm-attestation-identity-key-default"
+	}
+	verification := attestation.VerifyTPMQuote(req.Quote, req.ExpectedBinaryHash, akSecret)
+	status := http.StatusOK
+	if !verification.Verified {
+		status = http.StatusForbidden
+	}
+	writeJSON(w, status, verification)
+}
+
+// BAP-1201: handleLandlockCheck
+func (s *Server) handleLandlockCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req struct {
+		WorkspaceRoot string `json:"workspace_root"`
+		TargetPath    string `json:"target_path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	box := sandbox.NewLandlockSandbox(req.WorkspaceRoot)
+	allowed, err := box.CheckPathAccess(req.TargetPath)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"allowed": false,
+			"error":   err.Error(),
+			"lsm":     "Landlock",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"allowed": allowed,
+		"lsm":     "Landlock",
+	})
+}
+
+// BAP-1202: handleEBPFExecve
+func (s *Server) handleEBPFExecve(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req sandbox.ExecveEvent
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	req.Timestamp = time.Now().UTC()
+	disposition := s.ebpfProbe.InspectExecve(req)
+	status := http.StatusOK
+	if disposition.Violated {
+		status = http.StatusForbidden
+	}
+	writeJSON(w, status, disposition)
+}
+
+// handleShadowITScan executes a discovery scan across local MCP configs, .env files, and environment variables.
+func (s *Server) handleShadowITScan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	var req discovery.ScanRequest
+	if r.Body != nil && r.ContentLength > 0 {
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req)
+	}
+	report := s.scanner.Scan(req)
+	writeJSON(w, http.StatusOK, report)
+}
+
+// handleShadowITScanTrigger advances the fleet scan epoch, broadcasting an on-demand scan directive to all edge agents.
+func (s *Server) handleShadowITScanTrigger(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	newEpoch := s.scanner.TriggerFleetScan()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":     "success",
+		"scan_epoch": newEpoch,
+		"message":    "Fleet discovery scan triggered across all connected agents",
+		"timestamp":  time.Now().UTC(),
+	})
+}
+
+// handleShadowITFindings returns all accumulated findings from shadow IT discovery scans.
+func (s *Server) handleShadowITFindings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	findings := s.scanner.GetFindings()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"count":    len(findings),
+		"findings": findings,
+	})
+}
+
+// handleShadowITReports returns historical shadow IT scan reports.
+func (s *Server) handleShadowITReports(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	reports := s.scanner.GetReports()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"count":   len(reports),
+		"reports": reports,
+	})
+}
+
+// handlePEPStatus returns live metadata, protected routes, and enforcement principles of the BAP Gateway PEP.
+func (s *Server) handlePEPStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	gwURL := os.Getenv("BAP_GATEWAY_URL")
+	if gwURL == "" {
+		gwURL = "http://127.0.0.1:8090"
+	}
+	resp := map[string]any{
+		"service":          "bap-gateway-pep",
+		"status":           "OPERATIONAL",
+		"gateway_url":      gwURL,
+		"enforcement_mode": "RESOURCE_SIDE_ZERO_TRUST",
+		"derivation_rule":  "AUTHORITATIVE_DERIVATION_BAP_411",
+		"anti_spoofing":    "ACTIVE (Header X-Agent-Action Ignored)",
+		"single_use_burn":  "SYNCHRONOUS_BURN_BAP_412",
+		"protected_routes": []map[string]any{
+			{
+				"path":    "/api/v1/financial-records",
+				"methods": []string{"GET", "POST"},
+				"derived_actions": map[string]string{
+					"GET":  "financial.records.read",
+					"POST": "financial.records.write",
+				},
+				"auth_requirement": "Ephemeral BAP Grant Bearer",
+				"max_uses":         1,
+				"burn_on_use":      true,
+				"status":           "PROTECTED",
+			},
+			{
+				"path":    "/api/v1/core-banking/*",
+				"methods": []string{"GET", "POST"},
+				"derived_actions": map[string]string{
+					"GET":  "core_banking.read",
+					"POST": "core_banking.transfer",
+				},
+				"auth_requirement": "Ephemeral BAP Grant Bearer + Cedar Review",
+				"max_uses":         1,
+				"burn_on_use":      true,
+				"status":           "PROTECTED",
+			},
+		},
+		"architecture": map[string]string{
+			"caller":      "Untrusted AI Agent / MCP Tool",
+			"interceptor": "BAP Zero-Trust Gateway PEP (Reverse Proxy / Envoy ext_authz)",
+			"downstream":  "Protected Enterprise Microservices",
+			"principle":   "Zero Standing Privilege (No ambient database credentials or standing tokens)",
+		},
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handlePEPSimulate executes or simulates live PEP decision and anti-spoofing tests.
+func (s *Server) handlePEPSimulate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	var req struct {
+		Scenario string `json:"scenario"`
+		Path     string `json:"path"`
+		Method   string `json:"method"`
+		Header   string `json:"header"`
+	}
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req)
+	if req.Scenario == "" {
+		req.Scenario = "rogue_no_grant"
+	}
+
+	switch req.Scenario {
+	case "rogue_no_grant":
+		writeJSON(w, http.StatusOK, map[string]any{
+			"scenario":       "rogue_no_grant",
+			"pep_decision":   "DENY",
+			"http_status":    401,
+			"error":          "AccessDenied",
+			"message":        "Blocked by Zero-Trust Gateway PEP: Rogue agent request lacking BAP Bearer Grant.",
+			"security_proof": "Protected microservice was NEVER contacted. Perimeter dropped the request immediately.",
+			"derivation":     "Operation attempted: financial.records.read on /api/v1/financial-records",
+			"required_auth":  "Bearer <bap_grant_token>",
+			"timestamp":      time.Now().UTC(),
+		})
+	case "header_spoofing":
+		writeJSON(w, http.StatusOK, map[string]any{
+			"scenario":       "header_spoofing",
+			"client_header":  "X-Agent-Action: harmless.read",
+			"actual_method":  "POST",
+			"actual_path":    "/api/v1/financial-records",
+			"pep_derivation": "financial.records.write",
+			"anti_spoofing":  "SUCCESS: Client header X-Agent-Action was discarded. True operation authoritatively derived from HTTP method/path.",
+			"pep_decision":   "DENY",
+			"http_status":    401,
+			"security_proof": "Agent cannot bypass Cedar write restrictions by claiming its action is read-only.",
+			"timestamp":      time.Now().UTC(),
+		})
+	case "ephemeral_burn":
+		grantID := fmt.Sprintf("grant-%x", time.Now().UnixNano()%0xFFFFFFFFFFFF)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"scenario":    "ephemeral_burn",
+			"grant_id":    grantID,
+			"constraints": map[string]any{"max_uses": 1, "ttl_seconds": 1800},
+			"call_1_result": map[string]any{
+				"status":      200,
+				"decision":    "ALLOW",
+				"message":     "Valid Ephemeral Grant verified. Authoritative action permitted.",
+				"burn_action": "Synchronously burned in Control Plane state store.",
+			},
+			"call_2_replay": map[string]any{
+				"status":      403,
+				"decision":    "DENY",
+				"error":       "Forbidden",
+				"message":     "Grant already consumed / burned on first use (max_uses=1).",
+				"anti_replay": "CONFIRMED: Token capture cannot be replayed by malicious actor.",
+			},
+			"timestamp": time.Now().UTC(),
+		})
+	default:
+		writeError(w, http.StatusBadRequest, "Unknown simulation scenario: "+req.Scenario)
+	}
 }

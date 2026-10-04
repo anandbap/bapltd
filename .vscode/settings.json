@@ -1,10 +1,11 @@
-﻿{
-  " terminal.integrated.profiles.windows\: {
- \CopilotZeroTrust\: {
- \path\: \\\copilot\\copilot-wrap.bat\,
- \args\: [],
- \overrideName\: true
- }
- },
- \terminal.integrated.defaultProfile.windows\: \CopilotZeroTrust\
+{
+  "terminal.integrated.profiles.windows": {
+    "CopilotZeroTrust": {
+      "path": "copilot\\copilot-wrap.bat",
+      "args": [],
+      "overrideName": true
+    }
+  },
+  "terminal.integrated.defaultProfile.windows": "CopilotZeroTrust",
+  "files.autoSave": "off"
 }

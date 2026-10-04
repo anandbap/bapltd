@@ -32,13 +32,17 @@ type Session struct {
 	Hostname      string        `json:"hostname,omitempty"`
 	TotalEvents   int           `json:"total_events"`
 	AllowedCount  int           `json:"allowed_count"`
-	DeniedCount   int           `json:"denied_count"`
-	CloseReason   string        `json:"close_reason,omitempty"`
-	UserPrompt    string        `json:"user_prompt,omitempty"`
-	Intent        IntentContext `json:"intent"`
-	IntentHistory []string      `json:"intent_history,omitempty"`
-	PromptCount   int           `json:"prompt_count,omitempty"`
-	Events        []audit.Event `json:"events,omitempty"`
+	DeniedCount      int           `json:"denied_count"`
+	CloseReason      string        `json:"close_reason,omitempty"`
+	UserPrompt       string        `json:"user_prompt,omitempty"`
+	PromptRiskScore  float64       `json:"prompt_risk_score,omitempty"`
+	PromptRiskLevel  string        `json:"prompt_risk_level,omitempty"`
+	InjectionSignals []string      `json:"injection_signals,omitempty"`
+	IsHighRisk       bool          `json:"is_high_risk,omitempty"`
+	Intent           IntentContext `json:"intent"`
+	IntentHistory    []string      `json:"intent_history,omitempty"`
+	PromptCount      int           `json:"prompt_count,omitempty"`
+	Events           []audit.Event `json:"events,omitempty"`
 }
 
 // IntentContext is mission context produced deterministically at BAP Edge.
@@ -53,6 +57,10 @@ type IntentContext struct {
 	Evidence          []string `json:"evidence,omitempty"`
 	PromptHash        string   `json:"prompt_hash,omitempty"`
 	PromptCaptured    bool     `json:"prompt_captured"`
+	PromptRiskScore   float64  `json:"prompt_risk_score,omitempty"`
+	PromptRiskLevel   string   `json:"prompt_risk_level,omitempty"`
+	InjectionSignals  []string `json:"injection_signals,omitempty"`
+	IsHighRisk        bool     `json:"is_high_risk,omitempty"`
 }
 
 // SessionStartRequest contains fields to initiate a session.
@@ -229,6 +237,16 @@ func normalizeIntent(intent IntentContext, prompt ...string) IntentContext {
 			intent = classified
 		}
 	}
+	if len(prompt) > 0 && strings.TrimSpace(prompt[0]) != "" {
+		analysis := AnalyzePromptSemantics(prompt[0])
+		intent.PromptRiskScore = analysis.RiskScore
+		intent.PromptRiskLevel = analysis.RiskLevel
+		intent.InjectionSignals = analysis.Signals
+		intent.IsHighRisk = analysis.IsHighRisk
+		if len(analysis.Evidence) > 0 {
+			intent.Evidence = append(intent.Evidence, analysis.Evidence...)
+		}
+	}
 	if intent.Primary == "" {
 		intent.Primary = "UNKNOWN"
 	}
@@ -346,11 +364,15 @@ func (s *Store) Start(req SessionStartRequest) (*Session, error) {
 		TotalEvents:   0,
 		AllowedCount:  0,
 		DeniedCount:   0,
-		Events:        make([]audit.Event, 0),
-		UserPrompt:    req.UserPrompt,
-		Intent:        normIntent,
-		IntentHistory: hist,
-		PromptCount:   promptCount,
+		Events:           make([]audit.Event, 0),
+		UserPrompt:       req.UserPrompt,
+		PromptRiskScore:  normIntent.PromptRiskScore,
+		PromptRiskLevel:  normIntent.PromptRiskLevel,
+		InjectionSignals: normIntent.InjectionSignals,
+		IsHighRisk:       normIntent.IsHighRisk,
+		Intent:           normIntent,
+		IntentHistory:    hist,
+		PromptCount:      promptCount,
 	}
 
 	s.sessions[sessionID] = sess
@@ -718,6 +740,10 @@ func (s *Store) SetPromptAndIntent(sessionID, prompt string, intent IntentContex
 	now := time.Now().UTC()
 	sess.UserPrompt = prompt
 	sess.Intent = normalizeIntent(intent, prompt)
+	sess.PromptRiskScore = sess.Intent.PromptRiskScore
+	sess.PromptRiskLevel = sess.Intent.PromptRiskLevel
+	sess.InjectionSignals = sess.Intent.InjectionSignals
+	sess.IsHighRisk = sess.Intent.IsHighRisk
 	sess.IntentHistory = append(sess.IntentHistory, sess.Intent.Primary)
 	sess.PromptCount++
 	s.recordIntentLocked(sessionID, sess.Intent.Primary, now)

@@ -13,10 +13,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"bap-edge/internal/config"
 )
+
+var isLocalScanRunning atomic.Bool
+
 
 // RunSessionStart executes a zero-trust pre-flight check and starts the session.
 // If the user or session is revoked, prints an alert and exits with code 2.
@@ -55,6 +59,9 @@ func RunSessionStart(args []string) error {
 	if sessionID == "" {
 		sessionID = fmt.Sprintf("sess-%s-%d", *appFlag, watchPID)
 	}
+
+	// Purge dead session markers from previous crashed/killed sessions
+	cleanupStaleSessionMarkers()
 
 	username := os.Getenv("USERNAME")
 	if username == "" {
@@ -334,6 +341,40 @@ func cleanupSessionMarker(sessionID string, watchPID int) {
 			}
 		}
 	}
+	// Purge dead session markers to prevent local state residue
+	cleanupStaleSessionMarkers()
+}
+
+// cleanupStaleSessionMarkers scans .bap/sessions/ and removes orphaned markers for dead processes.
+func cleanupStaleSessionMarkers() {
+	sessionsDir := filepath.Join(".bap", "sessions")
+	entries, err := os.ReadDir(sessionsDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(sessionsDir, entry.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var marker struct {
+			PID       int       `json:"pid"`
+			SessionID string    `json:"session_id"`
+			StartedAt time.Time `json:"started_at"`
+		}
+		if err := json.Unmarshal(data, &marker); err == nil {
+			if marker.PID > 0 && !isProcessAlive(marker.PID) {
+				_ = os.Remove(path)
+				if marker.SessionID != "" {
+					_ = os.Remove(sessionMarkerPath(marker.SessionID))
+				}
+			}
+		}
+	}
 }
 
 func runWatchLoop(watchPID int, serverURL, sessionID, appID string) {
@@ -365,6 +406,7 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string) {
 
 	deadCheckCount := 0
 	sessionFile := sessionMarkerPath(sessionID)
+	var lastScannedEpoch int64
 
 	for range ticker.C {
 		// If watchPID was not specified at launch, look for it in local session marker
@@ -419,7 +461,16 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string) {
 		}
 
 		// Keep alive & pulse heartbeat continuously
-		statusHB, reasonHB := pulseHeartbeat(serverURL, sessionID)
+		statusHB, reasonHB, scanEpoch := pulseHeartbeat(serverURL, sessionID)
+		if scanEpoch > 0 && scanEpoch != lastScannedEpoch {
+			lastScannedEpoch = scanEpoch
+			if isLocalScanRunning.CompareAndSwap(false, true) {
+				go func() {
+					defer isLocalScanRunning.Store(false)
+					performLocalClientShadowScan(serverURL, sessionID, appID, hostname)
+				}()
+			}
+		}
 		if statusHB == "closed" {
 			if watchPID > 0 {
 				fmt.Fprintf(os.Stderr, "[bapedge watch] 🛑 Session %s STOPPED: Terminating workload (PID: %d)...\n", sessionID, watchPID)
@@ -514,44 +565,191 @@ func isSessionRevokedInState(sessionID string) bool {
 	return false
 }
 
-func pulseHeartbeat(serverURL, sessionID string) (string, string) {
+func pulseHeartbeat(serverURL, sessionID string) (string, string, int64) {
 	body, err := json.Marshal(map[string]any{"session_id": sessionID})
 	if err != nil {
-		return "", ""
+		return "", "", 0
 	}
 	client := httptransport.New(2 * time.Second)
-	resp, err := client.Post(serverURL+"/api/v1/sessions/heartbeat", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return "", ""
+	var resp *http.Response
+	for attempt := 0; attempt < 2; attempt++ {
+		r, err := client.Post(serverURL+"/api/v1/sessions/heartbeat", "application/json", bytes.NewReader(body))
+		if err == nil {
+			resp = r
+			break
+		}
+		if attempt == 0 {
+			time.Sleep(150 * time.Millisecond)
+		}
+	}
+	if resp == nil {
+		return "", "", 0
 	}
 	defer resp.Body.Close()
 	var res struct {
-		Status string `json:"status"`
-		Action string `json:"action"`
-		Reason string `json:"reason"`
+		Status    string `json:"status"`
+		Action    string `json:"action"`
+		Reason    string `json:"reason"`
+		ScanEpoch int64  `json:"scan_epoch"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&res); err == nil {
 		if res.Status == "closed" {
-			return "closed", res.Reason
+			return "closed", res.Reason, res.ScanEpoch
 		}
 		if res.Status == "revoked" || res.Action == "terminate" {
-			return "revoked", res.Reason
+			return "revoked", res.Reason, res.ScanEpoch
 		}
+		return "ok", "", res.ScanEpoch
 	}
-	return "ok", ""
+	return "ok", "", 0
 }
 
 func postJSONQuick(url string, payload any) error {
+	return postJSONWithRetry(url, payload, 3, 200*time.Millisecond)
+}
+
+func postJSONWithRetry(url string, payload any, maxAttempts int, initialBackoff time.Duration) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	client := httptransport.New(2 * time.Second)
-	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[bapedge watch] Error posting to %s: %v\n", url, err)
-		return err
+	client := httptransport.New(3 * time.Second)
+	var lastErr error
+	backoff := initialBackoff
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		resp, err := client.Post(url, "application/json", bytes.NewReader(body))
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				return nil
+			}
+			lastErr = fmt.Errorf("HTTP status %d", resp.StatusCode)
+		} else {
+			lastErr = err
+		}
+		if attempt < maxAttempts {
+			time.Sleep(backoff)
+			backoff *= 2
+		}
 	}
-	_ = resp.Body.Close()
-	return nil
+	fmt.Fprintf(os.Stderr, "[bapedge watch] Error posting to %s after %d attempts: %v\n", url, maxAttempts, lastErr)
+	return lastErr
+}
+
+// performLocalClientShadowScan scans the local developer workstation and reports unmanaged assets up to control plane.
+func performLocalClientShadowScan(serverURL, sessionID, appID, hostname string) {
+	cwd, _ := os.Getwd()
+	findings := make([]map[string]any, 0)
+
+	// 1. Scan Local Environment Variables for Standing Secrets
+	sensitiveVars := map[string]string{
+		"AWS_SECRET_ACCESS_KEY": "AWS Standing Secret",
+		"AWS_SESSION_TOKEN":     "AWS Session Token",
+		"OPENAI_API_KEY":        "LLM Provider API Key",
+		"ANTHROPIC_API_KEY":     "LLM Provider API Key",
+		"DATABASE_URL":          "Database Connection String",
+		"POSTGRES_PASSWORD":     "Database Password",
+		"GITHUB_TOKEN":          "Source Control Token",
+	}
+	for envKey, category := range sensitiveVars {
+		if val := os.Getenv(envKey); strings.TrimSpace(val) != "" {
+			masked := "***"
+			if len(val) > 6 {
+				masked = val[:4] + "...***"
+			}
+			findings = append(findings, map[string]any{
+				"id":                fmt.Sprintf("laptop-env-%s-%d", strings.ToLower(envKey), time.Now().UnixNano()),
+				"type":              "UNMANAGED_ENV_VARIABLE",
+				"name":              fmt.Sprintf("Local Developer Secret: %s (%s)", envKey, category),
+				"target":            envKey,
+				"risk_level":        "CRITICAL",
+				"risk_score":        0.95,
+				"details":           fmt.Sprintf("Laptop environment variable %s contains plaintext credentials (%s). This bypasses BAP's Zero Standing Privilege invariant.", envKey, masked),
+				"remediation":       "Migrate to BAP Ephemeral Bounded Grants; remove standing credentials from developer environment.",
+				"agent_id":          sessionID,
+				"hostname":          hostname,
+				"is_managed_by_bap": false,
+			})
+		}
+	}
+
+	// 2. Scan Workspace .env Files
+	for _, envName := range []string{".env", ".env.local", ".env.production"} {
+		targetFile := filepath.Join(cwd, envName)
+		if fi, err := os.Stat(targetFile); err == nil && !fi.IsDir() {
+			findings = append(findings, map[string]any{
+				"id":                fmt.Sprintf("laptop-file-%s-%d", envName, time.Now().UnixNano()),
+				"type":              "UNPROTECTED_ENV_FILE",
+				"name":              fmt.Sprintf("Unprotected Secrets File: %s", envName),
+				"target":            targetFile,
+				"risk_level":        "HIGH",
+				"risk_score":        0.75,
+				"details":           fmt.Sprintf("Local environment file %s found on developer disk (%d bytes). Plaintext secrets are vulnerable to unauthorized agent reading.", targetFile, fi.Size()),
+				"remediation":       "Move secrets to corporate Vault/KMS and ensure file is listed in .gitignore.",
+				"agent_id":          sessionID,
+				"hostname":          hostname,
+				"is_managed_by_bap": false,
+			})
+		}
+	}
+
+	// 3. Scan Local Claude Desktop & Cursor MCP Configs
+	mcpPaths := make([]string, 0)
+	if appData := os.Getenv("APPDATA"); appData != "" {
+		mcpPaths = append(mcpPaths, filepath.Join(appData, "Claude", "claude_desktop_config.json"))
+	}
+	if home := os.Getenv("USERPROFILE"); home != "" {
+		mcpPaths = append(mcpPaths, filepath.Join(home, ".cursor", "mcp.json"))
+	}
+	if home := os.Getenv("HOME"); home != "" {
+		mcpPaths = append(mcpPaths,
+			filepath.Join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json"),
+			filepath.Join(home, ".cursor", "mcp.json"),
+		)
+	}
+	mcpPaths = append(mcpPaths, filepath.Join(cwd, ".cursor", "mcp.json"), filepath.Join(cwd, ".vscode", "mcp.json"))
+
+	for _, p := range mcpPaths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var cfg struct {
+			MCPServers map[string]struct {
+				Command string   `json:"command"`
+				Args    []string `json:"args"`
+			} `json:"mcpServers"`
+		}
+		if json.Unmarshal(data, &cfg) == nil {
+			for srvName, srvDef := range cfg.MCPServers {
+				cmdLine := srvDef.Command + " " + strings.Join(srvDef.Args, " ")
+				if !strings.Contains(strings.ToLower(cmdLine), "bapedge") && !strings.Contains(strings.ToLower(cmdLine), "bapmcp") {
+					findings = append(findings, map[string]any{
+						"id":                fmt.Sprintf("laptop-mcp-%s-%d", srvName, time.Now().UnixNano()),
+						"type":              "UNMANAGED_LOCAL_MCP_SERVER",
+						"name":              fmt.Sprintf("Shadow MCP Server: %s", srvName),
+						"target":            p,
+						"risk_level":        "HIGH",
+						"risk_score":        0.75,
+						"details":           fmt.Sprintf("Local developer MCP server %q executes command %q outside BAP policy governance.", srvName, cmdLine),
+						"remediation":       fmt.Sprintf("Wrap %q command with 'bapedge mcp' or register in BAP fleet catalog.", srvName),
+						"agent_id":          sessionID,
+						"hostname":          hostname,
+						"is_managed_by_bap": false,
+					})
+				}
+			}
+		}
+	}
+
+	if len(findings) > 0 {
+		payload := map[string]any{
+			"agent_id":         sessionID,
+			"hostname":         hostname,
+			"workspace_root":   cwd,
+			"client_findings": findings,
+		}
+		_ = postJSONQuick(serverURL+"/api/v1/discovery/shadow-it/scan", payload)
+		fmt.Fprintf(os.Stderr, "[bapedge watch] 🛡️ Completed local shadow IT sweep: %d unmanaged assets reported to control plane\n", len(findings))
+	}
 }
