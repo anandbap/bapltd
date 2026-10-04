@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.bap.edge</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/bapedge</string>
+        <string>watch</string>
+        <string>--config</string>
+        <string>/etc/bap/bap-config.json</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/var/log/bap/edge.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/bap/edge.stderr.log</string>
+    <key>WorkingDirectory</key>
+    <string>/etc/bap</string>
+</dict>
+</plist>

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="BAP Edge Daemon" Language="1033" Version="1.0.0.0" Manufacturer="BAP Security Inc." UpgradeCode="E1F2A3B4-5C6D-7E8F-9A0B-1C2D3E4F5A6B">
+    <Package InstallerVersion="300" Compressed="yes" InstallScope="perMachine" />
+    <MediaTemplate EmbedCab="yes" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of BAP Edge is already installed." />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFilesFolder">
+        <Directory Id="INSTALLFOLDER" Name="BAP">
+          <Component Id="BAPEdgeBinary" Guid="F1A2B3C4-D5E6-4A7B-8C9D-0E1F2A3B4C5D">
+            <File Id="bapedge.exe" Source="..\..\dist\windows-amd64\bapedge.exe" KeyPath="yes" />
+            <Environment Id="PATH" Name="PATH" Value="[INSTALLFOLDER]" Permanent="no" Part="last" Action="set" System="yes" />
+          </Component>
+          <Component Id="BAPConfig" Guid="A1B2C3D4-E5F6-7A8B-9C0D-1E2F3A4B5C6D">
+            <File Id="bap_config.json" Source="..\..\bap-config.json" KeyPath="yes" />
+          </Component>
+          <Component Id="BAPPolicy" Guid="B1C2D3E4-F5A6-7B8C-9D0E-1F2A3B4C5D6E">
+            <File Id="policy.cedar" Source="..\..\policy.cedar" KeyPath="yes" />
+          </Component>
+          <Component Id="BAPSchema" Guid="C1D2E3F4-A5B6-7C8D-9E0F-1A2B3C4D5E6F">
+            <File Id="schema.json" Source="..\..\schema.json" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <Feature Id="ProductFeature" Title="BAP Edge" Level="1">
+      <ComponentRef Id="BAPEdgeBinary" />
+      <ComponentRef Id="BAPConfig" />
+      <ComponentRef Id="BAPPolicy" />
+      <ComponentRef Id="BAPSchema" />
+    </Feature>
+  </Product>
+</Wix>

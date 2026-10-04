@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+        <!-- BAP Edge Configuration -->
+        <dict>
+            <key>PayloadDescription</key>
+            <string>Configures BAP Edge Daemon endpoints, OIDC provider, and TLS certificates</string>
+            <key>PayloadDisplayName</key>
+            <string>BAP Edge Configuration</string>
+            <key>PayloadIdentifier</key>
+            <string>com.bap.edge.settings</string>
+            <key>PayloadType</key>
+            <string>com.bap.edge</string>
+            <key>PayloadUUID</key>
+            <string>7D4B6A41-9F22-4B1C-8A90-5421B8407D81</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>ControlPlaneURL</key>
+            <string>https://controlplane.company.internal:8443</string>
+            <key>TrustDomain</key>
+            <string>bap.internal</string>
+            <key>OIDCProvider</key>
+            <string>entra</string>
+            <key>OIDCClientID</key>
+            <string>00000000-0000-0000-0000-000000000000</string>
+            <key>OIDCTenantID</key>
+            <string>common</string>
+            <key>HeartbeatIntervalSeconds</key>
+            <integer>15</integer>
+            <key>AuditTamperProtection</key>
+            <true/>
+            <key>EnforceSandboxing</key>
+            <true/>
+        </dict>
+        <!-- TCC & Accessibility / Full Disk Access Permissions for Jamf -->
+        <dict>
+            <key>PayloadDescription</key>
+            <string>Authorizes BAP Edge Daemon for process execution telemetry</string>
+            <key>PayloadDisplayName</key>
+            <string>BAP Privacy &amp; System Policy</string>
+            <key>PayloadIdentifier</key>
+            <string>com.bap.edge.tcc</string>
+            <key>PayloadType</key>
+            <string>com.apple.TCC.configuration-profile-policy</string>
+            <key>PayloadUUID</key>
+            <string>9F82A1B4-3C81-4322-B1C8-6019A814B29E</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>Services</key>
+            <dict>
+                <key>SystemPolicyAllFiles</key>
+                <array>
+                    <dict>
+                        <key>Identifier</key>
+                        <string>/usr/local/bin/bapedge</string>
+                        <key>IdentifierType</key>
+                        <string>path</string>
+                        <key>Allowed</key>
+                        <true/>
+                        <key>CodeRequirement</key>
+                        <string>anchor apple generic and identifier "com.bap.edge"</string>
+                    </dict>
+                </array>
+            </dict>
+        </dict>
+    </array>
+    <key>PayloadDescription</key>
+    <string>Enterprise configuration profile for Bounded Authority Plane (BAP) Edge on macOS</string>
+    <key>PayloadDisplayName</key>
+    <string>BAP Zero-Trust Agent Governance</string>
+    <key>PayloadIdentifier</key>
+    <string>com.bap.edge.profile</string>
+    <key>PayloadOrganization</key>
+    <string>BAP Security Inc.</string>
+    <key>PayloadRemovalDisallowed</key>
+    <true/>
+    <key>PayloadScope</key>
+    <string>System</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>3A42F7B0-9C18-49A1-9721-7A39B06450A2</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+</dict>
+</plist>

@@ -1,0 +1,20 @@
+[Unit]
+Description=Bounded Authority Plane (BAP) Edge Execution Broker
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/etc/bap
+ExecStart=/usr/local/bin/bapedge watch --config /etc/bap/bap-config.json
+Restart=always
+RestartSec=3s
+LimitNOFILE=65536
+KillMode=process
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

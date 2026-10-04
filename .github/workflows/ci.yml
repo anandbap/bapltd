@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-go:
+    name: Go Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          check-latest: true
+
+      - name: Test BAP Edge
+        run: |
+          cd bap-edge
+          go test -v -race ./...
+
+      - name: Test BAP Control Plane
+        run: |
+          cd bap-controlplane
+          go test -v -race ./...
+
+  test-python:
+    name: Python Integration & E2E Suites
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build Windows amd64 Binaries
+        run: |
+          mkdir -p dist/windows-amd64
+          cd bap-controlplane
+          go build -o ../dist/windows-amd64/bapcontrolplane.exe ./cmd/server
+          cd ../bap-edge
+          go build -o ../dist/windows-amd64/bapedge.exe .
+          cd ..
+
+      - name: Run Full Python Test Suite (100+ Tests)
+        run: |
+          python -m unittest discover tests

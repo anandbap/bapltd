@@ -1,0 +1,97 @@
+<SyncML xmlns="SYNCML:SYNCML1.2">
+  <SyncBody>
+    <!-- BAP Microsoft Intune CSP / Custom Configuration Profile -->
+    
+    <!-- 1. BAP Control Plane Server URL -->
+    <Add>
+      <CmdID>1</CmdID>
+      <Item>
+        <Target>
+          <LocURI>./Device/Vendor/MSFT/Policy/Config/BAP~Policy~BAPEdge/ControlPlaneURL</LocURI>
+        </Target>
+        <Meta>
+          <Format xmlns="syncml:metinf">chr</Format>
+          <Type>text/plain</Type>
+        </Meta>
+        <Data>https://controlplane.company.internal:8443</Data>
+      </Item>
+    </Add>
+
+    <!-- 2. BAP Trust Domain -->
+    <Add>
+      <CmdID>2</CmdID>
+      <Item>
+        <Target>
+          <LocURI>./Device/Vendor/MSFT/Policy/Config/BAP~Policy~BAPEdge/TrustDomain</LocURI>
+        </Target>
+        <Meta>
+          <Format xmlns="syncml:metinf">chr</Format>
+          <Type>text/plain</Type>
+        </Meta>
+        <Data>bap.internal</Data>
+      </Item>
+    </Add>
+
+    <!-- 3. Enterprise Identity Provider (Microsoft Entra ID) -->
+    <Add>
+      <CmdID>3</CmdID>
+      <Item>
+        <Target>
+          <LocURI>./Device/Vendor/MSFT/Policy/Config/BAP~Policy~BAPEdge/OIDCProvider</LocURI>
+        </Target>
+        <Meta>
+          <Format xmlns="syncml:metinf">chr</Format>
+          <Type>text/plain</Type>
+        </Meta>
+        <Data>entra</Data>
+      </Item>
+    </Add>
+
+    <!-- 4. OIDC Client ID -->
+    <Add>
+      <CmdID>4</CmdID>
+      <Item>
+        <Target>
+          <LocURI>./Device/Vendor/MSFT/Policy/Config/BAP~Policy~BAPEdge/OIDCClientID</LocURI>
+        </Target>
+        <Meta>
+          <Format xmlns="syncml:metinf">chr</Format>
+          <Type>text/plain</Type>
+        </Meta>
+        <Data>00000000-0000-0000-0000-000000000000</Data>
+      </Item>
+    </Add>
+
+    <!-- 5. Enforce Process Sandboxing & Zero-Trust Boundary -->
+    <Add>
+      <CmdID>5</CmdID>
+      <Item>
+        <Target>
+          <LocURI>./Device/Vendor/MSFT/Policy/Config/BAP~Policy~BAPEdge/EnforceSandboxing</LocURI>
+        </Target>
+        <Meta>
+          <Format xmlns="syncml:metinf">int</Format>
+          <Type>text/plain</Type>
+        </Meta>
+        <Data>1</Data>
+      </Item>
+    </Add>
+
+    <!-- 6. Audit Anti-Tamper Chaining -->
+    <Add>
+      <CmdID>6</CmdID>
+      <Item>
+        <Target>
+          <LocURI>./Device/Vendor/MSFT/Policy/Config/BAP~Policy~BAPEdge/AuditTamperProtection</LocURI>
+        </Target>
+        <Meta>
+          <Format xmlns="syncml:metinf">int</Format>
+          <Type>text/plain</Type>
+        </Meta>
+        <Data>1</Data>
+      </Item>
+    </Add>
+    
+    <Final/>
+  </SyncBody>
+</SyncML>
