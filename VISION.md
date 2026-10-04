@@ -153,12 +153,15 @@ flowchart LR
 - **Centralized Mutable State Store:** Maintains atomic counters for single-use grants (`max_uses=1`) under strict concurrency locks.
 - **Enterprise Revocation & Fleet Kill-Switch:** Provides immediate fleet-wide freeze, single-session burning, or user-level revocation propagating to edge daemons in $<100\text{ms}$.
 
-### Plane 2: Edge Execution Plane (`bapedge` / Interceptors)
+#### Plane 2: Edge Execution Plane (`bapedge` / Interceptors)
 - **Sole Executor Pattern:** Agents are stripped of raw shell execution rights. `bapedge` serves as the sole trusted broker, evaluating Cedar policies locally in $<1.5\text{ms}$.
-- **Lifecycle Hook Interceptors:**
-  - `cchook/interceptor.exe`: Managed hooks for Claude Code (`SessionStart`, `UserPromptSubmit`, `PreToolUse`).
-  - `copilot/copilot_interceptor.exe`: Adapter for GitHub Copilot CLI wrapping command execution.
-- **Deterministic Intent Classification:** Analyzes user prompts locally across 11 canonical CIO categories (`BUG_FIX`, `DATABASE_CHANGE`, `FEATURE_ENHANCEMENT`, `INFRA_CHANGE`, `MIGRATION`, etc.). Ambiguous or unmatched inputs fail safely to `UNKNOWN` with confidence $0.0$, requiring human sign-off.
+- **3-Tier Layered Endpoint Enforcement (Epic 23):**
+  - **Layer A (Application / CLI Hooks):** Claude Code (`SessionStart`, `UserPromptSubmit`, `PreToolUse`), Copilot CLI interceptors intercepting intent and proposals at the prompt/tool level.
+  - **Layer B (OS Kernel & Filesystem Sandbox):** OS-level containment isolating filesystem and process boundaries (macOS Seatbelt/sandbox-exec, Linux Landlock/Bubblewrap, Windows AppContainer).
+  - **Layer C (Deterministic Network Egress Pinning):** Egress filtering and localhost proxy routing (`HTTP_PROXY`/`HTTPS_PROXY`) preventing direct socket bypass to intranet and cloud APIs.
+- **Biometric Elevation & Step-Up Verification:** Integrated platform authentication (Windows Hello, macOS Touch ID, FIDO2/WebAuthn) for high-impact actions (`DEPLOY_PROD`, `DROP_DB`, `SECRET_EXPORT`).
+- **Deterministic Intent Classification:** Analyzes user prompts locally across canonical CIO categories (`BUG_FIX`, `DATABASE_CHANGE`, `FEATURE_ENHANCEMENT`, `INFRA_CHANGE`, `MIGRATION`, etc.). Ambiguous or unmatched inputs fail safely to `UNKNOWN` with confidence $0.0$, requiring human sign-off.
+- **Enterprise MDM Delivery:** Enterprise-grade Intune and Jamf configuration profiles (`bapedge mdm-profile`) enforcing managed daemon launch daemons, locked policy directories, and non-bypassable proxy environment variables.
 - **Tamper Resistance:** Prevents agents from reading `.env` secrets, deleting logs, modifying `.bap-session.json`, or altering `policy.cedar`.
 
 ### Plane 3: Resource Enforcement Plane (`bapgateway`)
@@ -174,11 +177,75 @@ flowchart LR
 - **Causal Reconstruction:** Answers the fundamental SOC question: *“Why did the agent invoke this API?”* by linking:
   $$\text{User Prompt} \longrightarrow \text{Intent Classification} \longrightarrow \text{Grant Issuance} \longrightarrow \text{PEP Decision} \longrightarrow \text{Execution Output}$$
 - **Cryptographic Merkle Hash Chaining:** Every audit event includes a SHA-256 hash of the preceding event, ensuring total tamper evidence. Altering a past log entry invalidates the chain head immediately.
+- **RFC 3161 Cloud KMS Notarization:** Periodically seals Merkle root hashes against cloud cryptographic key stores (AWS KMS, Azure Key Vault, GCP Cloud KMS) for legal non-repudiation.
 - **CIO Fleet Command Cockpit:** Unified single-pane-of-glass dashboard displaying 3,000+ live agents, temporal analytics windows (Live, 24h, 7d, 30d), incident isolation, and one-click fleet freeze.
 
 ---
 
-## 4. The Bounded Grant Lifecycle
+## 4. The 10 Strategic Architecture Pillars of BAP Zero Trust
+
+BAP operationalizes its vision through 10 concrete, testable architectural pillars verified via automated end-to-end harnesses:
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    THE 10 PILLARS OF BAP ARCHITECTURE                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  1. Workload Identity & Hardware Attestation (SPIFFE SVID + TPM 2.0 PCR)    │
+│  2. Semantic Prompt Injection Defense (Invariant I1: Context vs Authority)  │
+│  3. Resource-Side Gateway PEP (Authoritative Derivation & Header Rejection) │
+│  4. Atomic Single-Use Grant Burning (Anti-Replay & Double-Spend Defense)    │
+│  5. Immutable Action Proposals & Operator Lineage (Rules R1 - R4)           │
+│  6. Shadow IT & Unmanaged Tool Discovery (Local MCP & Secret Scanners)      │
+│  7. Tamper-Evident Merkle Provenance & Cloud KMS Notarization (RFC 3161)    │
+│  8. Live CIO Fleet Command Cockpit & Forensic Blast Graph                   │
+│  9. 3-Tier Layered Endpoint Enforcement & Biometric Step-Up (Epic 23)       │
+│ 10. Operational Resilience, Crash Sweeps & Developer CLI Tooling (Epic 24)  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Pillar 1: Workload Identity & Hardware Attestation
+Every agent runtime is provisioned with a cryptographic SPIFFE Verifiable Identity Document (SVID) bound to a hardware root of trust (TPM 2.0 PCR quote / Secure Enclave). Standing developer tokens are never shared with autonomous models.
+
+### Pillar 2: Semantic Prompt Injection Defense (`I1`)
+User requests and LLM prompt classifications provide forensic telemetry but **zero execution authority**. Regardless of the agent's stated plan or prompt injection attack payload, privileges are granted solely through explicit, cryptographically signed Cedar policy rules.
+
+### Pillar 3: Resource-Side Gateway PEP (`I2` & `I3`)
+Downstream services reject direct execution requests lacking a bounded BAP grant. The resource-side PEP independently derives the target action and resource path from the raw HTTP protocol, completely neutralizing client-controlled headers.
+
+### Pillar 4: Atomic Single-Use Grant Burning (`I4`)
+Grants issued by the Control Plane are bounded by strict single-use (`maxUses=1`) semantics and sub-second TTLs. When presented to a Gateway PEP, they are atomically burned in centralized state, eliminating replay, double-spend, and race-condition attacks.
+
+### Pillar 5: Immutable Proposals & Lineage Remediation (`R1`–`R4`)
+Execution proposals are strictly immutable. If human operators or supervisors remediate parameters (e.g. correcting a target customer ID), remediation creates a lineage record (`parent_proposal_id`), forcing the corrected proposal back through complete policy governance.
+
+### Pillar 6: Shadow IT & Unmanaged Tool Discovery
+Edge daemons continuously inspect local agent environments for unmanaged MCP servers, rogue local tools, and exposed `.env` credential files, auto-quarantining unvetted execution pathways before damage occurs.
+
+### Pillar 7: Tamper-Evident Merkle Provenance & RFC 3161 Notarization (`I5`)
+All lifecycle events (prompt $\rightarrow$ proposal $\rightarrow$ grant $\rightarrow$ execution $\rightarrow$ evidence) form a tamper-evident SHA-256 Merkle chain. Periodic root hashes are anchored against RFC 3161 timestamp authorities and Cloud KMS keys, providing immutable forensic evidence for auditors.
+
+### Pillar 8: Live CIO Fleet Command Cockpit & Emergency Freeze
+Security operations maintain real-time visibility across thousands of active developer workstations and cloud agents. Operators can pinpoint runaway token spending or prompt anomalies and execute sub-100ms fleet-wide or session-scoped kill-switch freezes.
+
+### Pillar 9: 3-Tier Layered Endpoint Enforcement & Biometric Step-Up (Epic 23)
+Local agent processes are governed through defense-in-depth:
+- **Layer A:** Application-level lifecycle interceptors (`cchook`, Copilot CLI wrapper).
+- **Layer B:** OS-level kernel sandboxing (Seatbelt, Landlock, AppContainer) restricting filesystem and command execution.
+- **Layer C:** Localhost egress proxy pinning enforcing that all outbound agent traffic routes through BAP verification.
+- **Biometric Step-Up:** High-risk actions require real-time human biometric elevation (Windows Hello / Touch ID / FIDO2).
+- **Scoped Offline Degradation:** If network connectivity to the Control Plane drops, safe local read/dev commands continue under local Cedar policy cache, while cloud and protected API egress fails closed.
+- **Enterprise MDM:** Packaged Intune & Jamf profiles enforce daemon registration and tamper resistance across corporate fleets.
+
+### Pillar 10: Operational Resilience, Crash Sweeps & Developer CLI Tooling (Epic 24)
+Designed for real-world enterprise operations:
+- **Clean Sweep Crash Recovery:** Idempotent sweep reconciler (`bapedge sweep` and `/api/v1/control/sweep`) purges zombie tokens, orphaned sessions, and temp locks after ungraceful terminations, enabling seamless fleet rejoin.
+- **1-Click Developer Onboarding:** `bapedge setup --app=claude-code` provisions hooks, config files, and verification checks in a single idempotent command.
+- **In-Terminal Policy Explanations:** `bapedge why <action> <resource>` and `bapedge status` provide instant sub-second Cedar policy attribution and daemon health diagnostics directly in the developer's terminal.
+- **Resilient Spooling:** Edge audit logs spool locally in SQLite and flush to the central Merkle store upon reconnection, guaranteeing zero audit loss during transient outages.
+
+---
+
+## 5. The Bounded Grant Lifecycle
 
 Unlike static OAuth bearer tokens or long-lived API keys, BAP grants are tightly bounded, ephemeral, and non-fungible:
 
@@ -225,7 +292,7 @@ sequenceDiagram
 
 ---
 
-## 5. The 10-Point Architectural Adversarial Matrix
+## 6. The 10-Point Architectural Adversarial Matrix
 
 BAP is verified against 10 explicit adversarial scenarios. Any architecture unable to pass this matrix cannot guarantee bounded authority:
 
@@ -244,7 +311,7 @@ BAP is verified against 10 explicit adversarial scenarios. Any architecture unab
 
 ---
 
-## 6. Strategic Business Value: Why Enterprise CIOs & CISOs Choose BAP
+## 7. Strategic Business Value: Why Enterprise CIOs & CISOs Choose BAP
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -265,16 +332,38 @@ BAP is verified against 10 explicit adversarial scenarios. Any architecture unab
 │ 4. Fleet-Scale Command & Emergency Response:                                │
 │    Instantaneous global kill-switch empowers security operations to freeze  │
 │    3,000+ active agents within 100ms during an active incident.             │
+│                                                                             │
+│ 5. Operational Resilience & Zero Friction:                                  │
+│    Automated crash recovery sweeps, 1-click CLI onboarding, and transparent │
+│    policy diagnostics eliminate developer resistance and operational drift. │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 7. Strategic Roadmap & Future Milestones
+## 8. Strategic Roadmap & Production Milestones
 
-- **v1.0 (Current MVP Baseline):** Dual-PEP architecture, in-process Cedar engine, Claude Code lifecycle hooks, Copilot adapter, 10-point adversarial test matrix, and SQLite hash-chained audit store.
-- **v1.1:** Cedar Visual Policy Authoring Studio and sandbox dry-run simulator.
-- **v1.2:** Hardware TPM attestation and distributed SPIFFE/SPIRE production mesh.
-- **v1.3:** Kernel-level process containment via Linux eBPF / Landlock and Windows AppContainer.
-- **v1.4:** Cloud KMS audit notarization with immutable S3 Object Lock cold storage.
-- **v2.0:** Multi-agent autonomous delegation mesh with cross-organizational boundary contracts.
+The BAP platform has advanced through aggressive implementation phases, progressing from core protocol specification to production enterprise readiness:
+
+### Completed Milestones (Production Baseline)
+- [x] **Core Dual-PEP Engine (Epics 1–6):** Edge broker (`bapedge`), in-process Cedar evaluation engine, resource-side gateway PEP (`bapgateway`), and atomic single-use grant burning (`maxUses=1`).
+- [x] **Agent Runtime Integrations (Epics 7–8):** Claude Code lifecycle hooks (`cchook`), GitHub Copilot CLI adapter, and OpenAI Operator proxying.
+- [x] **Cryptographic Observability (Epics 9–13):** Merkle-chained audit ledger, RFC 3161 Cloud KMS notarization, and forensic causal graph.
+- [x] **Enterprise Identity & Secretless Delegation (Epics 14–18):** SPIFFE SVID workload identity, Okta/Entra IdP federation, and dynamic credential brokering.
+- [x] **CIO Fleet Command Cockpit (Epics 19–22):** Real-time web cockpit, fleet kill-switch propagation ($<100\text{ms}$), shadow IT & unmanaged MCP discovery.
+- [x] **3-Tier Layered Endpoint Enforcement & Biometric Step-Up (Epic 23):** 
+  - Layer A (interceptor hooks), Layer B (OS kernel/filesystem sandbox), Layer C (deterministic network egress proxy pinning).
+  - Intune & Jamf enterprise MDM configuration profiles.
+  - Windows Hello, Touch ID, and FIDO2 biometric elevation challenges.
+  - Scoped offline degradation policy (Tier 1 safe local dev vs Tier 2 cloud egress).
+- [x] **Operational Resilience & Developer CLI Tooling (Epic 24):**
+  - Clean sweep crash recovery reconciler (`bapedge sweep` & `/api/v1/control/sweep`).
+  - 1-click idempotent developer onboarding (`bapedge setup --app=claude-code`).
+  - In-terminal policy inspection (`bapedge status` & `bapedge why <action> <resource>`).
+  - Resilient offline SQLite audit spooling and Merkle reconnection flush.
+
+### Future Horizons
+- [ ] **Linux eBPF TC/cgroups Kernel Filter Driver:** Native in-kernel socket enforcement bypassing userspace proxy configuration.
+- [ ] **Windows Filtering Platform (WFP) Callout Driver:** Kernel-mode network egress firewall driver pinning for locked enterprise Windows endpoints.
+- [ ] **Multi-Tenant Cross-Organizational Delegation Mesh:** Cross-enterprise BAP grant federation for B2B multi-agent autonomous collaboration.
+
