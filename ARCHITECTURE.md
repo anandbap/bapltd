@@ -505,3 +505,81 @@ In distributed architectures, authorization does not guarantee execution. If a n
 2. **Investigation Timeline:**
    The operations cockpit reconstructs both serial workflows and concurrent parallel tool invocations using explicit correlation IDs (`trace_id`, `proposal_id`, `task_id`), accurately displaying multi-agent branching.
 
+---
+
+## 8. Layered Endpoint Enforcement & Workstation Hardening (Epic 23)
+
+### 8.1. Defense-in-Depth: The Three Enforcement Layers
+
+To eliminate reliance on user-space agent cooperativeness, BAP models workstation defense across three decoupled layers:
+
+```mermaid
+graph TD
+    subgraph LayerA ["Layer A: Cooperative Agent Hooks (User Space)"]
+        H1["PreToolUse Lifecycle Hooks"]
+        H2["Cursor / MCP Proxy Wrappers"]
+        H3["User-Immutable managed-settings.json"]
+        H1 --- H2 --- H3
+    end
+
+    subgraph LayerB ["Layer B: OS Execution & Boundary Control (Kernel / Hypervisor)"]
+        K1["Windows: Restricted Tokens (LUA) & Job Objects"]
+        K2["Linux: Landlock LSM & eBPF sys_enter_execve Probes"]
+        K3["macOS: Endpoint Security Framework (AUTH_EXEC, AUTH_OPEN)"]
+        K1 --- K2 --- K3
+    end
+
+    subgraph LayerC ["Layer C: Network Egress Pinning (Perimeter Enforcement)"]
+        N1["Windows: Windows Filtering Platform (WFP)"]
+        N2["Linux: eBPF cgroup Socket Filters"]
+        N3["macOS: NetworkExtension Content Filters"]
+        N4["Gateway PEP: ext_authz Reverse Proxy (Mandatory Backstop)"]
+        N1 --- N2 --- N3 --- N4
+    end
+
+    LayerA -->|If Bypassed via Jailbreak| LayerB
+    LayerB -->|If Rogue Traffic Spawns| LayerC
+```
+
+* **Layer A (Cooperative Hooks):** Fast user-space interception for optimal developer experience (<1ms evaluation). Enforces `dangerouslySkipPermissions: false`.
+* **Layer B (OS Execution Control):** Kernel-enforced hard containment. Denies unauthorized process spawns, traps hidden subshells (`npm` lifecycle scripts), and blocks access to standing secrets (`~/.aws/credentials`, `~/.ssh/id_rsa`, `.env`).
+* **Layer C (Network Egress Pinning):** Forces agent network connections through the local proxy broker; direct network calls to protected cloud microservices are dropped at the packet filter or Gateway PEP.
+
+---
+
+### 8.2. Platform Primitive Matrix
+
+| Control Point | macOS (Sequoia / Sonoma) | Linux (Ubuntu 22.04+ / RHEL 9+) | Windows 11 Enterprise |
+| :--- | :--- | :--- | :--- |
+| **Execution & Filesystem** | Endpoint Security (`AUTH_EXEC`, `AUTH_OPEN`) + Seatbelt | Landlock LSM + eBPF (`sys_enter_execve`, `bprm_check_security`) | Restricted Tokens (LUA) + Windows Job Objects (Kill-on-Close) |
+| **Network Egress** | NetworkExtension Content Filter | eBPF cgroup socket filter | Windows Filtering Platform (WFP) |
+| **Agent Sandbox** | Seatbelt sandbox profile | Bubblewrap + seccomp-bpf | AppContainer Isolation |
+| **MDM Packaging** | Jamf Pro / Kandji (`.mobileconfig`) | Ansible / Puppet / Intune Linux | Microsoft Intune (OMA-URI / Custom CSP) |
+
+---
+
+### 8.3. Enterprise MDM Deployment Profiles
+
+BAP automatically generates ready-to-deploy configuration profiles:
+* **Microsoft Intune (Windows):** Enforces `C:\ProgramData\Claude\managed-settings.json` with `dangerouslySkipPermissions: false`, activates Restricted Token launch wrappers, and configures WFP redirection.
+* **Jamf Pro (macOS):** Deploys `/Library/Application Support/Claude/managed-settings.json` and pre-approves system extension and Full Disk Access permissions with zero developer popups.
+
+---
+
+### 8.4. Interactive Biometric Step-Up Approvals (BAP-462)
+
+High-risk operations (e.g. database schema migrations, production secrets access, large financial transactions) do not force blanket denials or rely on ambient agent authority:
+1. The Control Plane mints a cryptographically nonced **Step-Up Challenge** (`/api/v1/endpoint/stepup/challenge`).
+2. The workstation prompts the human engineer for biometric authentication (`WINDOWS_HELLO`, `TOUCH_ID`, or `FIDO2_HARDWARE_KEY`).
+3. Upon physical confirmation, BAP verifies the attestation signature (`/api/v1/endpoint/stepup/verify`) and mints an ephemeral, single-use, HMAC-signed `StepUpToken` (5-minute TTL).
+4. The token is burned synchronously upon execution, preventing capture and replay attacks.
+
+---
+
+### 8.5. Scoped Offline Degradation (BAP-463)
+
+To ensure zero-trust controls do not cause developer lockouts on flights or during network outages:
+* **Tier 1 (Safe Local Development):** Compiling source code, running unit tests (`cargo test`, `pytest`, `go test`), code formatting, and git status evaluate locally against the cached Cedar policy bundle indefinitely offline.
+* **Tier 2 (Protected Enterprise Egress):** Operations targeting corporate microservices, remote databases, or cloud APIs require online signed grants and fail closed when the 15-minute grant TTL expires.
+
+

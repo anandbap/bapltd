@@ -173,6 +173,132 @@ echo '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_pa
 
 ---
 
+## 🛡️ Epic 23: Layered Endpoint Enforcement & Workstation Hardening
+
+BAP enforces defense-in-depth across developer workstations using an explicit 3-layer security model:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│  LAYER A: Cooperative Agent Hooks (User Space)                         │
+│  - Claude Code PreToolUse hooks, Cursor MCP proxy                      │
+│  - MDM locks: managed-settings.json (dangerouslySkipPermissions: false)│
+│  - UX benefit: Sub-millisecond evaluation (<1ms), native in-CLI hints  │
+└──────────────────────────────────┬─────────────────────────────────────┘
+                                   │ (Jailbreak / Rogue Subshell Containment)
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│  LAYER B: OS Execution & Boundary Control (Kernel / Hypervisor)        │
+│  - Windows Restricted Tokens (LUA) + Job Objects (Kill-on-Close)       │
+│  - Linux Landlock LSM (Filesystem Jail) + eBPF sys_enter_execve probe  │
+│  - macOS Endpoint Security (AUTH_EXEC, AUTH_OPEN) + Seatbelt profiles  │
+│  - Blocks hidden child subshells and theft of .env / id_rsa secrets    │
+└──────────────────────────────────┬─────────────────────────────────────┘
+                                   │ (Direct Bypass / Network Redirection)
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│  LAYER C: Network Egress Pinning (Perimeter PEP)                       │
+│  - Windows WFP / Linux cgroup socket filter / macOS NetworkExtension   │
+│  - Direct egress to cloud microservices dropped                        │
+│  - All API calls must present verified Ephemeral BAP Bearer Grants     │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### 📋 Step-by-Step Endpoint Testing Guide
+
+You can test and verify all Layered Endpoint Hardening features step by step using any of the three methods below:
+
+#### Option 1: Automated Integration Test Suite (Fastest)
+Run the dedicated Epic 23 test suite to validate all 7 verification gates:
+```powershell
+python -m unittest tests/test_endpoint_layered_enforcement.py
+```
+**Verification Evidence:**
+- `test_01_endpoint_layers_reference`: Verifies Layer A, B, and C primitive mappings across Windows, macOS, and Linux.
+- `test_02_endpoint_compliance_managed_clean`: Verifies managed laptop with all 3 layers achieves `COMPLIANT` status.
+- `test_03_endpoint_compliance_managed_quarantine`: Verifies missing Layer B (Kernel Control) immediately triggers `QUARANTINED`.
+- `test_04_endpoint_compliance_byod_cooperative`: Verifies unmanaged BYOD operates in `COOPERATIVE_BYOD` with Gateway PEP backstop.
+- `test_05_mdm_profile_generation_intune_and_jamf`: Validates Intune CSP and Jamf mobileconfig payloads.
+- `test_06_biometric_step_up_challenge_and_verification`: Initiates challenge, verifies biometric attestation, mints signed `StepUpToken`, and verifies replay rejection.
+- `test_07_offline_capability_classification`: Verifies Tier 1 (Safe Local Dev) is permitted offline while Tier 2 (Cloud Egress) fails closed.
+
+---
+
+#### Option 2: Step-by-Step Verification via REST API (`curl.exe`)
+
+Start the Control Plane in Terminal 1:
+```powershell
+.\dist\windows-amd64\bapcontrolplane.exe -port 8080 -admin-token "test-admin-token-12345" -allow-remote-admin
+```
+
+In Terminal 2, run each step-by-step verification:
+
+**Step 2.1: Inspect 3-Layer Mappings per OS:**
+```powershell
+curl.exe -s http://127.0.0.1:8080/api/v1/endpoint/layers?os=windows | ConvertFrom-Json
+curl.exe -s http://127.0.0.1:8080/api/v1/endpoint/layers?os=darwin | ConvertFrom-Json
+curl.exe -s http://127.0.0.1:8080/api/v1/endpoint/layers?os=linux | ConvertFrom-Json
+```
+
+**Step 2.2: Evaluate Managed Device Compliance & Quarantine:**
+```powershell
+# Non-compliant device (Missing Layer B Kernel Control):
+curl.exe -s -X POST http://127.0.0.1:8080/api/v1/endpoint/compliance `
+  -H "Content-Type: application/json" `
+  -d '{"hostname":"rogue-laptop","agent_id":"agent-1","is_managed_fleet":true,"layers":[{"layer_id":"LAYER_A_COOPERATIVE_HOOKS","active":true,"enforcing":true},{"layer_id":"LAYER_B_KERNEL_EXECUTION_CONTROL","active":false,"enforcing":false},{"layer_id":"LAYER_C_NETWORK_EGRESS_PINNING","active":true,"enforcing":true}]}'
+# Result: "compliance_state": "QUARANTINED"
+```
+
+**Step 2.3: Generate Enterprise MDM Profiles (Intune & Jamf):**
+```powershell
+# Microsoft Intune (Windows CSP / JSON payload):
+curl.exe -s http://127.0.0.1:8080/api/v1/endpoint/mdm/profile?platform=windows | ConvertFrom-Json
+
+# Jamf Pro (macOS configuration profile):
+curl.exe -s http://127.0.0.1:8080/api/v1/endpoint/mdm/profile?platform=macos | ConvertFrom-Json
+```
+
+**Step 2.4: Test Interactive Biometric Step-Up Elevation:**
+```powershell
+# 1. Request Step-Up challenge for high-risk action:
+$chal = curl.exe -s -X POST http://127.0.0.1:8080/api/v1/endpoint/stepup/challenge `
+  -H "Content-Type: application/json" `
+  -d '{"agent_id":"agent-007","operation":"database.schema_migration","risk_score":0.85}' | ConvertFrom-Json
+
+# 2. Verify biometric signature and mint StepUpToken:
+curl.exe -s -X POST http://127.0.0.1:8080/api/v1/endpoint/stepup/verify `
+  -H "Content-Type: application/json" `
+  -d "{`"challenge_id`":`"$($chal.challenge_id)`",`"method`":`"WINDOWS_HELLO`",`"biometric_signature`":`"valid-fingerprint-sig`"}"
+```
+
+**Step 2.5: Test Scoped Offline Capability Classification:**
+```powershell
+# Safe local command -> Tier 1 (Allowed offline):
+curl.exe -s -X POST http://127.0.0.1:8080/api/v1/endpoint/offline/classify `
+  -H "Content-Type: application/json" `
+  -d '{"operation":"pytest tests/unit"}'
+
+# Enterprise microservice egress -> Tier 2 (Fails closed offline):
+curl.exe -s -X POST http://127.0.0.1:8080/api/v1/endpoint/offline/classify `
+  -H "Content-Type: application/json" `
+  -d '{"operation":"POST /api/v1/core-banking/transfer"}'
+```
+
+---
+
+#### Option 3: Visual Verification in Web Dashboard Cockpit
+1. Launch the interactive cockpit:
+   ```powershell
+   .\run_vision_demo.bat --interactive
+   ```
+2. Navigate to **`http://127.0.0.1:8080/dashboard`** in your browser.
+3. Click the **"Endpoint Hardening"** tab:
+   - **3-Layer Architecture**: Switch OS between Windows, macOS, and Linux to see active primitives.
+   - **MDM Configuration Packaging**: Toggle between Microsoft Intune and Jamf Pro to inspect deployment payloads.
+   - **Biometric Step-Up Sandbox**: Click **"Initiate Biometric Challenge"** and then **"Touch Biometric Authenticator"** to observe live HMAC token minting and replay rejection.
+   - **Scoped Offline Degradation**: Enter any command (`cargo test`, `pytest`, `POST /api/v1/transfer`) to view the instant Tier 1 vs Tier 2 policy verdict.
+
+---
+
 ## 📂 Repository Structure
 
 | Path | Purpose & Capabilities |
