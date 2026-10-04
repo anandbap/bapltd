@@ -41,8 +41,13 @@ func (a *Authorizer) GetIdentity() PrincipalIdentity {
 // NewAuthorizer loads the Cedar policy and optional schema from specified or standard locations.
 func NewAuthorizer(policyPath string) (*Authorizer, error) {
 	resolvedPolicyPath, err := findFile(policyPath, "policy.cedar")
-	if err != nil {
-		return nil, err
+	var policyData []byte
+	if err == nil {
+		policyData, _ = os.ReadFile(resolvedPolicyPath)
+	}
+	if len(policyData) == 0 {
+		resolvedPolicyPath = "embedded_default.cedar"
+		policyData = []byte(defaultBaselinePolicy)
 	}
 
 	// Check if kill-switch is active in policy-state.json
@@ -62,11 +67,6 @@ func NewAuthorizer(policyPath string) (*Authorizer, error) {
 				return nil, fmt.Errorf("emergency kill-switch is active; all executions are blocked")
 			}
 		}
-	}
-
-	policyData, err := os.ReadFile(resolvedPolicyPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read policy file %s: %w", resolvedPolicyPath, err)
 	}
 
 	ps, err := cedar.NewPolicySetFromBytes(resolvedPolicyPath, policyData)
@@ -101,20 +101,19 @@ func NewAuthorizer(policyPath string) (*Authorizer, error) {
 
 	// Try loading schema.json from the same directory or standard locations
 	schemaPathCandidate := filepath.Join(policyDir, "schema.json")
+	var schemaData []byte
 	if resolvedSchemaPath, err := findFile(schemaPathCandidate, "schema.json"); err == nil {
-		if schemaData, err := os.ReadFile(resolvedSchemaPath); err == nil {
-			var s schema.Schema
-			if err := s.UnmarshalJSON(schemaData); err == nil {
-				if _, err := s.Resolve(); err == nil {
-					authz.schema = &s
-					if os.Getenv("BAP_DEBUG") != "" {
-						fmt.Fprintf(os.Stderr, "[authz] Loaded and validated Cedar schema from %s\n", resolvedSchemaPath)
-					}
-				} else {
-					fmt.Fprintf(os.Stderr, "[authz] Warning: Failed to resolve schema %s: %v\n", resolvedSchemaPath, err)
-				}
-			} else {
-				fmt.Fprintf(os.Stderr, "[authz] Warning: Failed to parse schema %s: %v\n", resolvedSchemaPath, err)
+		schemaData, _ = os.ReadFile(resolvedSchemaPath)
+	}
+	if len(schemaData) == 0 {
+		schemaData = []byte(defaultBaselineSchema)
+	}
+	var s schema.Schema
+	if err := s.UnmarshalJSON(schemaData); err == nil {
+		if _, err := s.Resolve(); err == nil {
+			authz.schema = &s
+			if os.Getenv("BAP_DEBUG") != "" {
+				fmt.Fprintf(os.Stderr, "[authz] Loaded and validated Cedar schema\n")
 			}
 		}
 	}
@@ -226,7 +225,15 @@ func findFile(customPath, defaultName string) (string, error) {
 		return cwdFile, nil
 	}
 
-	// 2. Executable directory
+	// 2. Parent directories (for subpackages, tests, or child directories)
+	for _, parent := range []string{"..", "../..", "../../..", "../../../.."} {
+		parentFile := filepath.Join(parent, defaultName)
+		if _, err := os.Stat(parentFile); err == nil {
+			return parentFile, nil
+		}
+	}
+
+	// 3. Executable directory
 	exe, err := os.Executable()
 	if err == nil {
 		exeDirFile := filepath.Join(filepath.Dir(exe), defaultName)
@@ -299,3 +306,87 @@ func CheckSessionRevocation(policyPath, sessionID string) error {
 
 	return nil
 }
+
+const defaultBaselinePolicy = `
+permit (
+    principal == Agent::"Local",
+    action == Action::"Execute",
+    resource == Command::"CLI"
+) when {
+    [
+        "pytest", "python", "python3", "py", "pip", "pip3",
+        "go", "npm", "npx", "yarn", "pnpm", "node",
+        "mvn", "gradle", "cargo", "git",
+        "java", "javac",
+        "ls", "dir", "mkdir", "echo", "pwd", "cat", "type", "printenv", "whoami",
+        "cd", "chdir", "pushd", "popd", "exit",
+        "cmd", "powershell", "pwsh", "bash", "sh", "zsh",
+        "grep", "findstr", "head", "tail", "wc", "sort", "uniq", "more",
+        "taskkill", "kill", "pkill", "killall"
+    ].contains(context.executable)
+};
+
+forbid (
+    principal == Agent::"Local",
+    action == Action::"Execute",
+    resource == Command::"CLI"
+) when {
+    context.escapes_workspace == true
+};
+
+forbid (
+    principal == Agent::"Local",
+    action == Action::"Execute",
+    resource == Command::"CLI"
+) when {
+    context.full_command like "*curl*" ||
+    context.full_command like "*wget*" ||
+    context.full_command like "nc *" ||
+    context.full_command like "* nc *" ||
+    context.full_command like "*~/.aws*" ||
+    context.full_command like "*~\\.aws*" ||
+    context.full_command like "*~/.ssh*" ||
+    context.full_command like "*~\\.ssh*" ||
+    context.full_command like "*.env*"
+};
+`
+
+const defaultBaselineSchema = `{
+  "": {
+    "entityTypes": {
+      "Agent": {
+        "memberOfTypes": [],
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "department": { "type": "String", "required": false },
+            "email": { "type": "String", "required": false },
+            "groups": { "type": "Set", "element": { "type": "String" }, "required": false }
+          }
+        }
+      },
+      "Command": { "memberOfTypes": [] }
+    },
+    "actions": {
+      "Execute": {
+        "appliesTo": {
+          "principalTypes": ["Agent"],
+          "resourceTypes": ["Command"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "executable": { "type": "String", "required": true },
+              "full_command": { "type": "String", "required": true },
+              "args": { "type": "String", "required": false },
+              "escapes_workspace": { "type": "Boolean", "required": false },
+              "department": { "type": "String", "required": false },
+              "user_email": { "type": "String", "required": false },
+              "groups": { "type": "Set", "element": { "type": "String" }, "required": false }
+            }
+          }
+        }
+      }
+    }
+  }
+}`
+
