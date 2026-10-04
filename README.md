@@ -299,6 +299,72 @@ curl.exe -s -X POST http://127.0.0.1:8080/api/v1/endpoint/offline/classify `
 
 ---
 
+### 9. Operational Resilience, Crash Sweeps & Developer CLI Tooling (Epic 24)
+
+Epic 24 introduces four practical operational capabilities for developer workstations and fleet recovery:
+
+#### 1. 1-Click Developer Setup (`bapedge setup`)
+Idempotently configures local agent settings, sets `dangerouslySkipPermissions: false`, and wires the `PreToolUse` hook directly to `bapedge exec`:
+```powershell
+.\dist\windows-amd64\bapedge.exe setup --app claude-code
+```
+**Output:**
+```text
+  [✓] Configured .claude\managed-settings.json
+      - dangerouslySkipPermissions: FALSE (Hardened by BAP)
+      - pre_tool_use hook:          bapedge exec
+  [✓] Configured .bap\config.json
+  ✅ Workstation setup complete! Agent execution is bound to Zero-Trust Policy.
+```
+
+#### 2. In-Terminal Workstation Inspection (`bapedge status`)
+Inspects active local sessions, cached Cedar policy version, 3-tier layer compliance, and offline audit spool backlog:
+```powershell
+.\dist\windows-amd64\bapedge.exe status
+```
+**Output:**
+```text
+  Host:             DESKTOP (windows/amd64)
+  Control Plane:    https://localhost:8443
+  POLICY BUNDLE & ZERO-TRUST CACHE:
+    • Version:        v1
+    • Rules Digest:   d70701d094...
+    • Kill Switch:    false
+  3-TIER LAYER COMPLIANCE STATUS:
+    • Layer A (Process Interception Hooks):    COMPLIANT (bapedge exec PreToolUse hook wired)
+    • Layer B (OS Kernel Boundary Sandbox):    COMPLIANT (Windows Job Objects & Restricted Tokens)
+    • Layer C (Network Egress Pinning):        COMPLIANT (Gateway PEP perimeter backstop active)
+  OFFLINE AUDIT STORE & RESILIENCE:
+    • Spool Backlog:  0 pending entries (All audit logs ingested by Control Plane)
+```
+
+#### 3. In-Terminal Policy Decision Debugging (`bapedge why`)
+Directly explains why any command is allowed or denied under local Cedar policy:
+```powershell
+# Safe developer action:
+.\dist\windows-amd64\bapedge.exe why "git status"
+# -> ✅ ALLOWED (Permitted within local workspace development boundaries)
+
+# Dangerous action:
+.\dist\windows-amd64\bapedge.exe why "rm -rf /"
+# -> ⛔ DENIED (Blocked by Cedar Policy: Default deny invariant)
+```
+
+#### 4. Clean Sweep & Crash Recovery Reconciler (`bapedge sweep`)
+Recovers from sudden laptop shutoffs, terminal force-kills, or power loss by purging orphaned process markers, releasing stale locks, flushing un-ingested offline audit batches, and synchronizing with the control plane (`/api/v1/control/sweep`):
+```powershell
+.\dist\windows-amd64\bapedge.exe sweep
+```
+**Output:**
+```text
+  [✓] Swept 2 orphaned/crashed local session markers
+  [✓] Flushed 0 offline audit records to central tamper-evident ledger
+  [✓] Central Control Plane reconciled: 2 idle sessions closed, 1 stale grant expired
+  [✓] Workstation successfully rejoined fleet with clean state.
+```
+
+---
+
 ## 📂 Repository Structure
 
 | Path | Purpose & Capabilities |

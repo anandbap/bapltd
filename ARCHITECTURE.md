@@ -582,4 +582,65 @@ To ensure zero-trust controls do not cause developer lockouts on flights or duri
 * **Tier 1 (Safe Local Development):** Compiling source code, running unit tests (`cargo test`, `pytest`, `go test`), code formatting, and git status evaluate locally against the cached Cedar policy bundle indefinitely offline.
 * **Tier 2 (Protected Enterprise Egress):** Operations targeting corporate microservices, remote databases, or cloud APIs require online signed grants and fail closed when the 15-minute grant TTL expires.
 
+---
+
+## 9. Operational Resilience, Crash Sweeps & Developer Tooling Architecture (Epic 24)
+
+### 9.1. Clean Sweep & Crash Recovery Reconciler (BAP-470)
+
+In enterprise deployments, developer laptops abruptly sleep, battery dies, processes are force-killed, or terminals close without executing graceful shutdown hooks. BAP solves state desynchronization via automatic and manual clean sweep routines:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Dev as Developer / CLI
+    participant Edge as bapedge Broker
+    participant Local as .bap/sessions Cache
+    participant CP as Central Control Plane
+
+    Note over Dev,Edge: Workstation crashes or abruptly shuts down
+    Dev->>Edge: bapedge sweep (or startup session-start)
+    Edge->>Local: Scan .bap/sessions/*.json
+    Local-->>Edge: Return stored PIDs & Session IDs
+    loop For Each Marker
+        Edge->>Edge: Check isProcessAlive(PID)
+        alt PID is Dead (Crash Residue)
+            Edge->>Local: Delete orphaned marker & release lockfiles
+            Edge->>CP: POST /api/v1/control/sweep {session_id, reason: "orphaned_crash_detected"}
+        end
+    end
+    Edge->>CP: POST /api/v1/control/sweep {stale_idle_seconds: 300}
+    CP->>CP: PurgeStale() & ReconcileOrphans() (expire unpresented grants)
+    CP-->>Edge: HTTP 200 {status: "reconciled", swept_sessions, reconciled_grants}
+    Edge-->>Dev: Print clean sweep confirmation & rejoin fleet
+```
+
+### 9.2. Developer CLI Tooling Architecture (BAP-471, BAP-472)
+
+To minimize friction and prevent developers from bypassing controls, BAP embeds native operational commands into `bapedge`:
+
+1. **`bapedge setup --app=claude-code` (BAP-471):**
+   - Idempotently writes `.claude/managed-settings.json`.
+   - Strictly enforces `"dangerouslySkipPermissions": false`.
+   - Registers `"pre_tool_use": "bapedge exec"`.
+   - Configures central control plane connectivity in `.bap/config.json`.
+2. **`bapedge status` (BAP-472):**
+   - Real-time terminal inspection of active vs stale sessions.
+   - Cedar policy bundle version, rules SHA-256 digest, and kill-switch state.
+   - 3-Tier Layer Compliance (Layer A: Hooks, Layer B: Kernel Sandbox, Layer C: Network PEP).
+   - Offline spool backlog count.
+3. **`bapedge why "<command>"` (BAP-472):**
+   - In-terminal Cedar policy evaluation with zero browser round-trips.
+   - Explains decisions (`ALLOWED` vs `DENIED`).
+   - Identifies specific Cedar rule IDs and context attributes (executable, workspace escape status).
+
+### 9.3. Offline Audit Store & Reconnection Flush (BAP-473)
+
+Execution events generated while offline are preserved in `ltd-audit.jsonl` maintaining SHA-256 Merkle chain integrity. Upon network reconnection:
+1. `bapedge watch` heartbeat pulse detects active control plane connectivity.
+2. Background routine calls `audit.FlushOfflineAudit(serverURL, logPath)`.
+3. Control Plane ingests batch (`/api/v1/audit/ingest`) and returns a cryptographic `HandshakeAck` (`chain_valid: true`, `receipt_hash: ...`).
+4. `bapedge` safely removes transmitted entries locally, relieving edge disk burden while guaranteeing end-to-end auditability.
+
+
 
