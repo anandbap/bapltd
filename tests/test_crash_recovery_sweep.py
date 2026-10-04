@@ -1,4 +1,4 @@
-"""
+﻿"""
 Epic 24: Operational Resilience, Crash Sweeps & Developer CLI Tooling Test Suite
 ================================================================================
 Validates BAP-470, BAP-471, BAP-472, and BAP-473:
