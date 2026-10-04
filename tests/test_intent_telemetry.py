@@ -12,7 +12,9 @@ import hashlib
 import json
 import os
 import ssl
+import subprocess
 import sys
+import time
 import unittest
 import urllib.request
 
@@ -45,21 +47,67 @@ def read_admin_token() -> str:
 
 
 class TestIntentTelemetry(unittest.TestCase):
+    _spawned_server = None
+
     @classmethod
     def setUpClass(cls):
         cls.server_url = get_control_plane_url()
         cls.admin_token = read_admin_token()
+        healthy = False
         try:
             req = urllib.request.Request(f"{cls.server_url}/health", method="GET")
-            with urllib.request.urlopen(req, context=ssl_ctx, timeout=2):
-                pass
+            with urllib.request.urlopen(req, context=ssl_ctx, timeout=2) as resp:
+                if resp.status == 200:
+                    healthy = True
         except Exception:
+            pass
+
+        if not healthy:
+            cp_candidates = [
+                os.path.join(WORKSPACE_ROOT, "dist", "windows-amd64", "bapcontrolplane.exe"),
+                os.path.join(WORKSPACE_ROOT, "bapcontrolplane.exe"),
+                os.path.join(WORKSPACE_ROOT, "bap-controlplane", "dist", "windows-amd64", "bapcontrolplane.exe"),
+            ]
+            cp_bin = next((p for p in cp_candidates if os.path.exists(p)), None)
+            if cp_bin:
+                cls.server_url = "http://127.0.0.1:18445"
+                cls.admin_token = "intent-telemetry-test-token"
+                cls._spawned_server = subprocess.Popen(
+                    [
+                        cp_bin,
+                        "-port", "18445",
+                        "-admin-token", cls.admin_token,
+                        "-allow-remote-admin",
+                        "-demo-mode",
+                    ],
+                    cwd=WORKSPACE_ROOT,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                for _ in range(30):
+                    time.sleep(0.2)
+                    try:
+                        req = urllib.request.Request(f"{cls.server_url}/health", method="GET")
+                        with urllib.request.urlopen(req, context=ssl_ctx, timeout=1) as resp:
+                            if resp.status == 200:
+                                healthy = True
+                                break
+                    except Exception:
+                        pass
+            if not healthy:
+                raise unittest.SkipTest(f"Live control plane not reachable: {cls.server_url}")
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls._spawned_server:
             try:
-                req = urllib.request.Request(f"{cls.server_url}/api/v1/inspector/data", method="GET")
-                with urllib.request.urlopen(req, context=ssl_ctx, timeout=2):
+                cls._spawned_server.terminate()
+                cls._spawned_server.wait(timeout=3)
+            except Exception:
+                try:
+                    cls._spawned_server.kill()
+                except Exception:
                     pass
-            except Exception as e:
-                raise unittest.SkipTest(f"Live control plane not reachable at {cls.server_url}: {e}")
 
     def api_request(self, method: str, path: str, payload: dict = None) -> tuple[int, dict]:
         url = f"{self.server_url}{path}"

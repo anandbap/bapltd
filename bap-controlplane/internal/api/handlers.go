@@ -20,6 +20,7 @@ import (
 	"bap-controlplane/internal/audit"
 	"bap-controlplane/internal/authz"
 	"bap-controlplane/internal/discovery"
+	"bap-controlplane/internal/endpoint"
 	"bap-controlplane/internal/governance"
 	"bap-controlplane/internal/notary"
 	"bap-controlplane/internal/otc"
@@ -54,6 +55,7 @@ type Server struct {
 	notaryStore      *notary.Store
 	ebpfProbe        *sandbox.EBPFProbe
 	scanner          *discovery.Scanner
+	endpointMgr      *endpoint.Manager
 	mux              *http.ServeMux
 	allowedOrigins   map[string]bool
 	adminToken       string
@@ -80,6 +82,7 @@ func NewServer(reg *registry.Store, otcStore *otc.Store, minter *authz.TokenMint
 	notaryStore := notary.NewStore("bap-audit-signing-secret-default", "", auditStore)
 	ebpfProbe := sandbox.NewEBPFProbe()
 	scanner := discovery.NewScanner()
+	endpointMgr := endpoint.NewManager("bap-endpoint-signing-secret-default")
 	s := &Server{
 		registry:     reg,
 		otcStore:     otcStore,
@@ -91,6 +94,7 @@ func NewServer(reg *registry.Store, otcStore *otc.Store, minter *authz.TokenMint
 		notaryStore:  notaryStore,
 		ebpfProbe:    ebpfProbe,
 		scanner:      scanner,
+		endpointMgr:  endpointMgr,
 		mux:          http.NewServeMux(),
 	}
 	s.registerRoutes()
@@ -253,6 +257,14 @@ func (s *Server) registerRoutes() {
 	// Gateway PEP: Zero-Trust Resource-Side Policy Enforcement & Anti-Spoofing
 	s.mux.HandleFunc("/api/v1/pep/status", s.handlePEPStatus)
 	s.mux.HandleFunc("/api/v1/pep/simulate", s.handlePEPSimulate)
+
+	// Epic 23: Layered Endpoint Enforcement, MDM Profiles, Biometric Step-Up & Offline Capabilities
+	s.mux.HandleFunc("/api/v1/endpoint/layers", s.handleEndpointLayers)
+	s.mux.HandleFunc("/api/v1/endpoint/compliance", s.handleEndpointCompliance)
+	s.mux.HandleFunc("/api/v1/endpoint/mdm/profile", s.handleEndpointMDMProfile)
+	s.mux.HandleFunc("/api/v1/endpoint/stepup/challenge", s.handleEndpointStepUpChallenge)
+	s.mux.HandleFunc("/api/v1/endpoint/stepup/verify", s.handleEndpointStepUpVerify)
+	s.mux.HandleFunc("/api/v1/endpoint/offline/classify", s.handleEndpointOfflineClassify)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
@@ -2834,3 +2846,122 @@ func (s *Server) handlePEPSimulate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Unknown simulation scenario: "+req.Scenario)
 	}
 }
+
+// handleEndpointLayers returns the 3-tier endpoint enforcement architecture definitions.
+func (s *Server) handleEndpointLayers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	osName := r.URL.Query().Get("os")
+	if osName == "" {
+		osName = runtime.GOOS
+	}
+	layers := s.endpointMgr.GetLayersReference(osName)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"target_os": osName,
+		"layers":    layers,
+		"architecture": map[string]string{
+			"layer_a": "Cooperative Hooks (Agent-Native: PreToolUse, managed-settings.json)",
+			"layer_b": "Kernel Execution Control (OS boundaries: Restricted Tokens, Landlock, Endpoint Security)",
+			"layer_c": "Network Egress Pinning (Local proxy redirection + Gateway PEP backstop)",
+		},
+	})
+}
+
+// handleEndpointCompliance evaluates workstation compliance across Layers A, B, and C.
+func (s *Server) handleEndpointCompliance(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	var report endpoint.EndpointReport
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&report); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	evaluated := s.endpointMgr.EvaluateCompliance(report)
+	writeJSON(w, http.StatusOK, evaluated)
+}
+
+// handleEndpointMDMProfile generates deployment configuration profiles for Intune or Jamf.
+func (s *Server) handleEndpointMDMProfile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	platform := r.URL.Query().Get("platform")
+	if platform == "" {
+		platform = runtime.GOOS
+	}
+	profile := s.endpointMgr.GenerateMDMProfile(platform)
+	writeJSON(w, http.StatusOK, profile)
+}
+
+// handleEndpointStepUpChallenge initiates an interactive biometric elevation challenge.
+func (s *Server) handleEndpointStepUpChallenge(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	var req struct {
+		AgentID   string  `json:"agent_id"`
+		Operation string  `json:"operation"`
+		RiskScore float64 `json:"risk_score"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	if req.AgentID == "" || req.Operation == "" {
+		writeError(w, http.StatusBadRequest, "agent_id and operation are required")
+		return
+	}
+	challenge := s.endpointMgr.RequestStepUp(req.AgentID, req.Operation, req.RiskScore)
+	writeJSON(w, http.StatusOK, challenge)
+}
+
+// handleEndpointStepUpVerify validates biometric attestation and mints a single-use StepUpToken.
+func (s *Server) handleEndpointStepUpVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	var req struct {
+		ChallengeID        string `json:"challenge_id"`
+		Method             string `json:"method"`
+		BiometricSignature string `json:"biometric_signature"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	token, err := s.endpointMgr.VerifyStepUp(req.ChallengeID, req.Method, req.BiometricSignature)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Step-Up verification failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, token)
+}
+
+// handleEndpointOfflineClassify categorizes an action as Tier 1 (safe local dev) vs Tier 2 (cloud egress).
+func (s *Server) handleEndpointOfflineClassify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	var req struct {
+		Operation string `json:"operation"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	if req.Operation == "" {
+		writeError(w, http.StatusBadRequest, "operation is required")
+		return
+	}
+	eval := s.endpointMgr.ClassifyCapability(req.Operation)
+	writeJSON(w, http.StatusOK, eval)
+}
+

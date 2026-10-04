@@ -1652,3 +1652,68 @@ If YES to any of 1–10:
 the architecture must still prevent the unauthorized
 operation or produce authoritative evidence of the violation.
 ```
+
+---
+
+## Epic 23: Layered Endpoint Enforcement & Workstation Hardening (BAP-EPIC-23)
+
+### Executive Summary
+Enforces defense-in-depth on developer workstations using an explicit 3-layer architecture:
+- **Layer A**: Cooperative Agent Lifecycle Hooks (PreToolUse hooks, Cursor MCP wrappers, user-immutable `managed-settings.json` blocking `--dangerously-skip-permissions`).
+- **Layer B**: OS Process & Boundary Control (Windows Job Objects/Restricted Tokens, Linux Landlock LSM/eBPF `bprm_check_security`, macOS Endpoint Security AUTH_EXEC).
+- **Layer C**: Network Egress Pinning (Local proxy redirection + Gateway PEP backstop).
+
+Includes enterprise MDM compliance gating (Intune/Jamf profile packaging), FIDO2/Windows Hello/Touch ID biometric step-up challenges for high-risk operations, and scoped offline degradation that keeps local compilation/tests functional while failing closed on protected enterprise resource egress.
+
+---
+
+### Stories
+
+#### BAP-460: 3-Tier Layered Endpoint Enforcement Architecture
+* **Status**: DONE
+* **Type**: Technical Architecture & Core Enforcement
+* **As a**: Chief Information Security Officer (CISO)
+* **I want**: AI agent operations to be bounded across three independent layers (cooperative hooks, OS execution boundaries, and network egress pinning)
+* **So that**: Even if a jailbroken agent or adversarial tool bypasses user-space hooks (Layer A), the OS kernel (Layer B) blocks unauthorized process execution and file reading, and network pinning (Layer C) blocks unauthorized egress.
+* **Acceptance Criteria**:
+  1. System models and tracks enforcement status across Layer A, Layer B, and Layer C per connected workstation.
+  2. Managed endpoints must have all 3 layers active to achieve COMPLIANT status; missing Layer B or C triggers QUARANTINE.
+  3. Unmanaged/BYOD endpoints run in cooperative mode with Gateway PEP as the immutable perimeter backstop.
+  4. Platform primitives mapped per OS (macOS ES/NetworkExtension, Linux Landlock/eBPF-LSM, Windows Restricted Tokens/Job Objects/WFP).
+
+#### BAP-461: Enterprise MDM Packaging & Compliance Quarantine
+* **Status**: DONE
+* **Type**: Enterprise Systems Integration
+* **As a**: Fleet Administrator / IT Operations Engineer
+* **I want**: To silently deploy user-immutable BAP settings via Microsoft Intune or Jamf Pro
+* **So that**: Developers cannot disable security controls like `--dangerously-skip-permissions` or uninstall interception hooks.
+* **Acceptance Criteria**:
+  1. Control Plane generates MDM deployment profiles for Intune (Windows CSP/JSON) and Jamf (macOS mobileconfig).
+  2. Profile enforces `managed-settings.json` with `dangerouslySkipPermissions: false` and mandatory PreToolUse hooks.
+  3. Pre-approves Full Disk Access and system extension permissions with zero developer popups.
+  4. Compliance validation endpoint (`/api/v1/endpoint/compliance`) checks signature trust anchors and quarantines non-compliant machines.
+
+#### BAP-462: Interactive Biometric Step-Up Approvals
+* **Status**: DONE
+* **Type**: User Experience & High-Risk Authorization
+* **As a**: Developer and Platform Security Engineer
+* **I want**: High-risk operations (e.g. database schema migrations, production secrets access, large financial batch operations) to trigger an interactive biometric elevation challenge (Windows Hello, Touch ID, FIDO2 hardware key)
+* **So that**: High-impact agent actions require explicit human biometric sign-off without forcing blanket denials or disrupting benign daily workflows.
+* **Acceptance Criteria**:
+  1. Control Plane exposes `/api/v1/endpoint/stepup/challenge` generating cryptographically bound elevation challenges.
+  2. Verification endpoint `/api/v1/endpoint/stepup/verify` validates biometric attestation and mints a short-lived (5-min TTL), single-use `StepUpToken`.
+  3. Supports `WINDOWS_HELLO`, `TOUCH_ID`, and `FIDO2` authenticators with signed cryptographic proofs.
+  4. Elevation decision is recorded in the tamper-evident audit log with operator biometric evidence.
+
+#### BAP-463: Scoped Offline Degradation (Safe Local vs Zero Standing Production Egress)
+* **Status**: DONE
+* **Type**: High Availability & Operational Resiliency
+* **As a**: Software Engineer working offline (e.g. on flights or during network outages)
+* **I want**: Local development operations (compiling code, running unit tests, formatting, linting) to continue functioning from cached Cedar policies without getting locked out
+* **So that**: The zero-trust agent daemon does not destroy developer velocity during travel, while enterprise cloud microservices remain strictly protected.
+* **Acceptance Criteria**:
+  1. Classifies operations into **Tier 1 (Safe Local Development)** and **Tier 2 (Protected Enterprise Egress)**.
+  2. Tier 1 commands (tests, builds, formatting) evaluate locally against the cached Cedar bundle indefinitely offline.
+  3. Tier 2 requests (reaching corporate microservices or databases) enforce strict 15-minute TTLs and fail closed when offline grants expire.
+  4. Automatic reconciliation occurs upon reconnection, transmitting offline audit batches and verifying chain integrity.
+
