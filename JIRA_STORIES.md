@@ -55,6 +55,7 @@ This document represents the complete functional and non-functional requirements
    - [Epic 19: Tool and Execution Integration (BAP-EPIC-19)](#epic-19-tool-and-execution-integration-bap-epic-19)
    - [Epic 20: Standalone Observability Plane (BAP-EPIC-20)](#epic-20-standalone-observability-plane-bap-epic-20)
    - [Epic 21: Failure & Security Behavior (BAP-EPIC-21)](#epic-21-failure--security-behavior-bap-epic-21)
+   - [Epic 22: Operations & Governance Extension (BAP-EPIC-22)](#epic-22-operations--governance-extension-bap-epic-22)
    - [Core Architectural Invariants & Adversarial Test Matrix](#core-architectural-invariants--adversarial-test-matrix)
 
 ---
@@ -84,6 +85,7 @@ This document represents the complete functional and non-functional requirements
 | `BAP-EPIC-19` | Tool and Execution Integration | MVP Core | **DONE** |
 | `BAP-EPIC-20` | Standalone Observability Plane & Timeline | MVP Core | **DONE** |
 | `BAP-EPIC-21` | Failure Modes, Resilience & Security Behavior | MVP Core | **DONE** |
+| `BAP-EPIC-22` | Operations & Governance Extension (BAP-450–BAP-459) | MVP Enterprise Pack | **BACKLOG** |
 
 ---
 
@@ -1390,13 +1392,207 @@ It is:
 
 ---
 
+### Epic 22: Operations & Governance Extension (BAP-EPIC-22)
+
+**Goal:** Provide enterprise operational controls, immutable action proposal lifecycles, administrative governance ("BAP governs BAP"), separation of duties, reconciliation, and audit timelines without placing management UIs on the critical execution path.
+
+**Extended Governance Chain:**
+```text
+Task → Intent → Action Proposal → Decision → Grant → PEP → Execution → Evidence
+```
+
+---
+
+#### Story BAP-450: Immutable Action Proposal
+- **Type**: Story | **Points**: 5 | **Priority**: High (P1) | **Status**: `BACKLOG`
+- **Description**: As BAP, I need every consequential agent action represented as an immutable Action Proposal so that what was evaluated can never be silently changed after authorization.
+- **Definition of Done**:
+  - Generate globally unique `proposal_id`.
+  - Proposal captures `agent_id`, `session_id`, `task_id`, `human_id`, action, resource, parameters, intent, timestamp, and trace ID.
+  - Proposal becomes immutable once submitted for evaluation.
+  - Policy decision references exact `proposal_id`.
+  - Grant references exact `proposal_id`.
+  - Material modification creates a new proposal rather than modifying the existing one.
+  - Original proposal remains available as evidence.
+
+---
+
+#### Story BAP-451: Proposal Lineage & Remediation
+- **Type**: Story | **Points**: 5 | **Priority**: High (P1) | **Status**: `BACKLOG`
+- **Description**: As an operator, I need incorrect/denied proposals to be corrected without overriding the original authorization decision.
+- **Example**:
+  ```text
+  P100: customer=124
+     ↓
+  DENY
+     ↓
+  operator correction
+     ↓
+  P101: customer=123 (parent=P100)
+     ↓
+  FULL POLICY EVALUATION
+  ```
+- **Definition of Done**:
+  - Remediation never changes an existing proposal.
+  - New proposal contains `parent_proposal_id`.
+  - Original decision remains immutable.
+  - New proposal undergoes complete policy evaluation.
+  - Previous grants cannot automatically transfer.
+  - UI displays proposal lineage.
+  - Evidence records who performed the remediation and why.
+  - **Invariant**: Operators modify **proposals, never authorization results**.
+
+---
+
+#### Story BAP-452: Govern BAP Administrative Actions
+- **Type**: Story | **Points**: 8 | **Priority**: Highest (P0) | **Status**: `BACKLOG`
+- **Description**: As a security owner, I need BAP administrative operations themselves governed so that administrators do not become an uncontrolled privileged bypass.
+- **Scope**: Govern policy changes, grant revocations, agent terminations, session terminations, approvals, configuration changes, identity/registry changes, and emergency actions.
+- **Definition of Done**:
+  - Administrator is strongly authenticated (`X-BAP-Admin-Token` / mTLS / corporate IdP).
+  - Every admin operation is authorized.
+  - Resource and action are explicitly identified.
+  - High-risk actions can require additional dual-custody approval.
+  - Administrative action generates immutable evidence.
+  - Admin actions carry trace/correlation IDs.
+  - No administrator obtains unrestricted authority merely by accessing the UI.
+  - **Principle**: **BAP governs BAP.**
+
+---
+
+#### Story BAP-453: Operations RBAC & Separation of Duties
+- **Type**: Story | **Points**: 5 | **Priority**: High (P1) | **Status**: `BACKLOG`
+- **Description**: As a security owner, I need operational capabilities separated by role so that visibility does not automatically provide intervention authority.
+- **Capability Matrix**:
+  | Capability | Observer | Operator | Approver | Policy Admin |
+  |---|:---:|:---:|:---:|:---:|
+  | View trace | ✓ | ✓ | ✓ | ✓ |
+  | Investigate | ✓ | ✓ | ✓ | ✓ |
+  | Remediate proposal | — | ✓ | — | — |
+  | Approve sensitive action | — | — | ✓ | — |
+  | Change policy | — | — | — | ✓ |
+- **Definition of Done**:
+  - Observation and intervention permissions are distinct.
+  - Approval and policy administration can be separated.
+  - Roles are centrally controlled.
+  - Every privileged operation identifies the human performing it.
+  - Separation-of-duty policies prevent self-approval.
+
+---
+
+#### Story BAP-454: Management UI Outside Execution Path
+- **Type**: Story | **Points**: 5 | **Priority**: Highest (P0) | **Status**: `BACKLOG`
+- **Description**: As a platform owner, I need the BAP Operations UI completely outside the agent execution path so UI outages cannot stop normal authorized agent operations.
+- **Required Architecture**:
+  ```text
+  Operations UI
+        X DOWN
+
+  Control Plane
+       │
+  Runtime → Grant → PEP → API
+                      ↑
+                STILL WORKS
+  ```
+- **Definition of Done**:
+  - Runtime does not depend on UI availability.
+  - PEP does not depend on UI availability.
+  - Existing valid grants remain enforceable according to policy.
+  - Control Plane services expose APIs independently from UI.
+  - UI restart does not affect active sessions.
+  - UI cannot directly modify execution state without going through governed Control Plane APIs.
+
+---
+
+#### Story BAP-455: Governed Action Lifecycle State Machine
+- **Type**: Story | **Points**: 8 | **Priority**: High (P1) | **Status**: `BACKLOG`
+- **Description**: As BAP, I need every consequential action to have an explicit lifecycle so its exact governance and execution state can always be determined.
+- **Baseline State Transition**:
+  ```text
+  PROPOSED → EVALUATING → AUTHORIZED → GRANTED → PRESENTED → PEP_ALLOWED → EXECUTING → COMMITTED → COMPLETED
+  ```
+  Terminal/Exception States: `DENIED`, `FAILED`, `EXPIRED`, `REVOKED`, `INTERRUPTED`, `UNKNOWN`.
+- **Definition of Done**:
+  - Valid state transitions are formally defined.
+  - Illegal transitions are rejected.
+  - Every transition records timestamp, source, and reason.
+  - State changes are idempotent where required.
+  - Parallel actions maintain independent lifecycle state.
+  - Current state can be queried using `proposal_id`.
+
+---
+
+#### Story BAP-456: Execution Reconciliation & Orphan Detection
+- **Type**: Story | **Points**: 8 | **Priority**: High (P1) | **Status**: `BACKLOG`
+- **Description**: As an operator, I need BAP to identify operations whose final execution state is uncertain so that authorization is never incorrectly interpreted as successful execution.
+- **Definition of Done**:
+  - Detect `AUTHORIZED` but never presented grants.
+  - Detect `PEP_ALLOWED` with no downstream execution evidence.
+  - Detect execution without completion evidence.
+  - Mark uncertain operations `UNKNOWN` rather than assuming failure or success.
+  - Reconciliation process attempts to determine actual backend state.
+  - Reconciliation does not automatically repeat a consequential operation.
+  - Operator can investigate unresolved actions.
+  - Resolution produces auditable evidence.
+
+---
+
+#### Story BAP-457: Governance Test/Simulation Framework
+- **Type**: Story | **Points**: 8 | **Priority**: Medium (P2) | **Status**: `BACKLOG`
+- **Description**: As a security engineer, I need to test BAP governance using realistic scenarios without manually executing production actions.
+- **Definition of Done**:
+  - Test creates realistic governance input.
+  - Production policy evaluation logic is reused.
+  - Expected result is not injected into the decision engine.
+  - Actual result is compared with expected result afterward.
+  - Tests can validate allow/deny/approval/grant behavior.
+  - Test activity is clearly distinguishable from production activity (`test_mode: true`).
+  - Test results record policy version.
+  - Regression suites run automatically after policy changes.
+
+---
+
+#### Story BAP-458: Cryptographically Linked Governance Evidence
+- **Type**: Story | **Points**: 8 | **Priority**: Highest (P0) | **Status**: `BACKLOG`
+- **Description**: As an auditor/security investigator, I need authoritative governance events linked together so the complete history of an agent action can be reconstructed and tampering detected.
+- **Required Chain**:
+  ```text
+  TASK T1 → PROPOSAL P1 → POLICY V47 → DECISION D1 → APPROVAL A1 → GRANT G1 → PEP DECISION E1 → EXECUTION X1 → RESULT R1
+  ```
+- **Definition of Done**:
+  - Each object has an immutable unique ID.
+  - Relationships are explicitly recorded.
+  - Relevant object digests/signatures verify integrity.
+  - Evidence includes policy version.
+  - Evidence identifies human, agent, and workload identities.
+  - Evidence survives loss of endpoint telemetry.
+  - Evidence is stored separately from ordinary operational logging where appropriate.
+  - Complete chain can be queried by `task_id`, `proposal_id`, `grant_id`, or `trace_id`.
+
+---
+
+#### Story BAP-459: Operations Investigation Timeline
+- **Type**: Story | **Points**: 5 | **Priority**: High (P1) | **Status**: `BACKLOG`
+- **Description**: As an authorized operator, I need one view of an agent transaction so I can understand what happened, why it happened, and what governed intervention is available.
+- **Definition of Done**:
+  - Timeline combines Runtime, Control Plane, PEP, and application evidence.
+  - Parallel operations display as parallel branches rather than incorrect sequential events.
+  - Correlation uses IDs, not timestamp inference.
+  - Shows policy/version responsible for each decision.
+  - Shows grant constraints and allow/deny reason.
+  - Shows approvals and administrator actions.
+  - Clearly identifies incomplete/unknown operations.
+  - Operator actions available from the screen remain governed by BAP-452/BAP-453.
+
+---
+
 ---
 
 ## Core Architectural Invariants & Adversarial Test Matrix
 
 ### Five Foundational Invariants (Frozen Baseline)
 
-These prevent scope creep better than dozens of implementation details.
+These prevent scope creep better than dozens of implementation details:
 
 > **I1 — Intent is context, never authority.**
 
@@ -1408,7 +1604,37 @@ These prevent scope creep better than dozens of implementation details.
 
 > **I5 — Observability establishes causality and evidence across Runtime → Authority → PEP → Execution, but telemetry itself is never treated as authorization.**
 
-And I'd add one architectural test that every PR affecting security has to answer:
+---
+
+### Four Frozen Architecture Rules (Operations & Governance Baseline)
+
+These four rules govern operational interventions, action lifecycles, and administrative actions:
+
+> **R1 — Proposals are immutable.**  
+> Correction creates lineage (`parent_proposal_id`), never mutation of existing proposals.
+
+> **R2 — Humans may remediate inputs but cannot manually convert DENY into ALLOW.**  
+> Changed input goes through full policy governance again. No human operator overrides authorization outcomes directly.
+
+> **R3 — Authorization does not prove execution.**  
+> PEP authorization and actual backend completion are separately evidenced. If network failure occurs post-authorization, state is marked `UNKNOWN` and reconciled; authorization is never assumed to be execution.
+
+> **R4 — Operating the governance system is itself governed.**  
+> Administrative privilege must never become the back door around bounded authority. BAP governs BAP.
+
+---
+
+### Extended Causal Governance Chain
+
+```text
+Task → Intent → Action Proposal → Decision → Grant → PEP → Execution → Evidence
+```
+
+---
+
+### 10-Point Architectural Adversarial Matrix
+
+Every PR affecting security must answer whether a compromised/misbehaving agent can:
 
 ```text
 Can a compromised/misbehaving agent:

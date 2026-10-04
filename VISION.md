@@ -1,0 +1,280 @@
+# 🌟 Bounded Authority Plane (BAP) — Vision & Strategic Architecture
+
+> **"The human requested the work. The agent performed the action. The enterprise must be able to independently prove both, bound the blast radius to zero, and guarantee that intent is never mistaken for authority."**
+
+---
+
+## 1. Executive Summary: The Autonomous Agent Crisis
+
+Enterprise engineering is experiencing an unprecedented paradigm shift: **from AI assistants that suggest text to autonomous AI agents that execute actions.** 
+
+Today, agents like Claude Code, GitHub Copilot CLI, OpenAI Operator, and custom LangChain/AutoGen/CrewAI workers run directly on developer workstations and cloud infrastructure. They compile code, invoke shell binaries, query production databases, call cloud APIs, and manipulate internal microservices.
+
+### The Fatal Flaws of Traditional Security Models
+
+Traditional enterprise security models (IAM, RBAC, OAuth2, and API gateways) were designed for **humans** or **static background services**. When applied to non-deterministic, probabilistic AI agents, they break down completely:
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      THE CURRENT ENTERPRISE AI CRISIS                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 1. Identity Conflation:                                                     │
+│    Agents execute using developer credentials (SSH keys, AWS tokens, npm).  │
+│    The enterprise cannot distinguish Alice's actions from an agent's bugs.  │
+│                                                                             │
+│ 2. The Standing Privilege Trap:                                             │
+│    To be useful, agents are handed permanent API keys or admin privileges.  │
+│    A single prompt injection or hallucination exposes the entire boundary.  │
+│                                                                             │
+│ 3. Intent as Authority Fallacy:                                             │
+│    Existing agent frameworks trust LLM reasoning or prompt classification.  │
+│    If Claude claims "I will inspect customer 123", the system naively grants│
+│    permission, only for the model to cascade into deleting subscriptions.   │
+│                                                                             │
+│ 4. Autonomous Scope Creep & Cascading Tool Calls:                           │
+│    An agent tasked with "Investigate latency" finds a memory leak, drops a  │
+│    database index, modifies firewall rules, and commits code to main.       │
+│                                                                             │
+│ 5. The Local Enforcement Blindspot:                                         │
+│    Relying solely on on-device agent hooks fails because the agent or code   │
+│    can bypass local shims and hit internal network endpoints directly.      │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+The **Bounded Authority Plane (BAP)** is the industry's first open reference architecture purpose-built to solve this crisis. BAP establishes **Zero Standing Privilege (ZSP)**, **Cryptographic Bounded Authority**, and **Dual Policy Enforcement Points (PEP)** for AI agent workforces.
+
+---
+
+## 2. Core Security Thesis & Foundational Invariants
+
+BAP is architected around **Five Inviolable Security Invariants**:
+
+```mermaid
+flowchart TD
+    subgraph InvariantCore ["The Five Foundational Invariants"]
+        I1["<b>I1: Intent is Context, Never Authority</b><br/>Prompt classification provides telemetry; it NEVER grants execution rights."]
+        I2["<b>I2: Edge Broker is Not the Sole PEP</b><br/>bap-edge gates local execution; it cannot be assumed to observe every network call."]
+        I3["<b>I3: Resource-Side Gateway PEP Enforcement</b><br/>Business APIs enforce bounded grants at the network edge, deriving actions independently."]
+        I4["<b>I4: Central Policy Master with Local Sub-2ms Eval</b><br/>Control Plane distributes signed Cedar policies; edge evaluates locally without round-trips."]
+        I5["<b>I5: Causal Observability Plane</b><br/>Independently links Intent → Grant → PEP → Execution in a tamper-evident Merkle chain."]
+    end
+```
+
+### The Invariants Defined
+
+1. **`I1` — Intent is context, never authority:**  
+   When a user inputs *"Investigate billing bug in customer 123"*, BAP deterministically extracts the intent (`INVESTIGATION`). This classification provides forensic context and telemetry for the enterprise SOC/CIO, but **it confers zero execution privileges**. Authority is granted solely through explicit, fine-grained policy evaluation.
+
+2. **`I2` — `bap-edge` determines what authority an agent may obtain; it is not assumed to execute every resulting operation:**  
+   `bap-edge` supervises local process creation. However, enterprise architecture must assume that a rogue agent could spawn a raw socket, invoke an unmonitored Python script, or bypass local hooks. Therefore, local approval alone is **never** accepted downstream as proof of authorization.
+
+3. **`I3` — Actual protected operations are independently enforced at a resource-side PEP:**  
+   Protected business services and cloud microservices are guarded by a Zero-Trust Gateway PEP (`bapgateway` or Envoy `ext_authz`). The Gateway PEP derives the actual action and target resource directly from the HTTP request line (e.g. `PATCH /customers/123/address` $\rightarrow$ `action: customer.address.update`, `resource: customer/123`), completely ignoring any agent-provided header claims.
+
+4. **`I4` — Control Plane owns master policy, lifecycle, and centralized state; ordinary authorization must not depend on a synchronous round-trip:**  
+   The Control Plane signs and distributes immutable Cedar policy bundles. Developers maintain uninterrupted local flow with **sub-2ms local evaluation** using cached bundles. The Control Plane is only contacted synchronously when mutable centralized state is required (such as atomic single-use grant burning or enrollment).
+
+5. **`I5` — Observability establishes causality and evidence across Runtime → Authority → PEP → Execution:**  
+   Every prompt, grant issuance, PEP decision, and command execution is cryptographically linked with SHA-256 Merkle hash chaining. If telemetry fails, the system fails closed; telemetry itself is never treated as authorization.
+
+---
+
+### The Four Frozen Architecture Rules (Operations & Governance)
+
+Alongside the invariants, four operational rules govern all interventions:
+
+> **R1 — Proposals are immutable.**  
+> Correction creates lineage (`parent_proposal_id`), never mutation of existing proposals.
+
+> **R2 — Humans remediate inputs, never override decisions.**  
+> An operator may correct parameters (e.g. `customer=123` instead of `124`), but the updated proposal must pass through full policy governance again. No human manually forces a `DENY` into an `ALLOW`.
+
+> **R3 — Authorization does not prove execution.**  
+> PEP authorization and downstream completion are evidenced separately. Network failures post-PEP result in `UNKNOWN` and reconciliation; authorization is never assumed to be execution.
+
+> **R4 — Operating the governance system is itself governed.**  
+> Administrative privilege must never become the back door around bounded authority. BAP governs BAP.
+
+---
+
+### Extended Causal Governance Chain
+
+$$\text{Task} \longrightarrow \text{Intent Context} \longrightarrow \text{Action Proposal} \longrightarrow \text{Policy Decision} \longrightarrow \text{Bounded Grant} \longrightarrow \text{Gateway PEP} \longrightarrow \text{Execution} \longrightarrow \text{Evidence}$$
+
+---
+
+## 3. The 4-Plane Enterprise Architecture
+
+BAP decomposes AI agent governance into four decoupled, resilient planes:
+
+```mermaid
+flowchart LR
+    subgraph HumanAgent ["Agent Runtime (Developer Laptop / Worker)"]
+        HUMAN["Human Developer"]
+        AGENT["AI Agent (Claude / Copilot / Python)"]
+        EDGE["bap-edge / cchook (Local PEP)"]
+        HUMAN -->|Prompt| AGENT
+        AGENT -->|Tool / Command| EDGE
+    end
+
+    subgraph ControlPlane ["Central Control Plane (bapcontrolplane)"]
+        REG["Agent Registry & SPIFFE"]
+        CEDAR["Authoritative Cedar Policies"]
+        MINTER["Cryptographic Grant Minter"]
+        STATE["Atomic Grant Burner (maxUses=1)"]
+    end
+
+    subgraph GatewayPlane ["Resource Enforcement (bapgateway)"]
+        PEP["Zero-Trust Gateway PEP"]
+        API["Internal Microservices / DB"]
+        PEP -->|Authorized Request| API
+    end
+
+    subgraph ObservabilityPlane ["Observability Plane (Audit Chain)"]
+        COCKPIT["CIO Fleet Command Cockpit"]
+        AUDIT["Tamper-Evident Merkle Hash Store"]
+        COCKPIT --> AUDIT
+    end
+
+    %% Interactions
+    EDGE <-->|Sub-2ms Local Policy Sync| CEDAR
+    EDGE <-->|Acquire Bounded Grant| MINTER
+    EDGE -->|Emit Intent & Tool Events| AUDIT
+    AGENT -->|HTTP with Grant Bearer| PEP
+    PEP <-->|Synchronous Atomic Consume| STATE
+    PEP -->|Emit PEP Decision Audit| AUDIT
+```
+
+### Plane 1: Control Plane (`bapcontrolplane`)
+- **Authoritative Policy Master:** Owns versioned, signed Cedar policies (`v1`, `v2`, ...). Supports instantaneous rollback and distribution without agent restarts.
+- **Agent Identity & SPIFFE SVID:** Issues cryptographically verified workload identities (`spiffe://bap.internal/agent/{id}`) rotated periodically via mTLS.
+- **Ephemeral Bounded Grant Minter:** Generates HMAC-SHA256 / Ed25519 tokens encapsulating:
+  $$\text{Grant} = \langle \text{AgentID}, \text{SessionID}, \text{HumanID}, \text{Action}, \text{Resource}, \text{Constraints}, \text{TTL}, \text{PolicyVersion} \rangle$$
+- **Centralized Mutable State Store:** Maintains atomic counters for single-use grants (`max_uses=1`) under strict concurrency locks.
+- **Enterprise Revocation & Fleet Kill-Switch:** Provides immediate fleet-wide freeze, single-session burning, or user-level revocation propagating to edge daemons in $<100\text{ms}$.
+
+### Plane 2: Edge Execution Plane (`bapedge` / Interceptors)
+- **Sole Executor Pattern:** Agents are stripped of raw shell execution rights. `bapedge` serves as the sole trusted broker, evaluating Cedar policies locally in $<1.5\text{ms}$.
+- **Lifecycle Hook Interceptors:**
+  - `cchook/interceptor.exe`: Managed hooks for Claude Code (`SessionStart`, `UserPromptSubmit`, `PreToolUse`).
+  - `copilot/copilot_interceptor.exe`: Adapter for GitHub Copilot CLI wrapping command execution.
+- **Deterministic Intent Classification:** Analyzes user prompts locally across 11 canonical CIO categories (`BUG_FIX`, `DATABASE_CHANGE`, `FEATURE_ENHANCEMENT`, `INFRA_CHANGE`, `MIGRATION`, etc.). Ambiguous or unmatched inputs fail safely to `UNKNOWN` with confidence $0.0$, requiring human sign-off.
+- **Tamper Resistance:** Prevents agents from reading `.env` secrets, deleting logs, modifying `.bap-session.json`, or altering `policy.cedar`.
+
+### Plane 3: Resource Enforcement Plane (`bapgateway`)
+- **Gateway PEP (Envoy / Istio `ext_authz` Semantics):** Sits in front of critical enterprise APIs (core banking, customer records, infrastructure services).
+- **Authoritative Operation Derivation (`deriveOperation`):** Derives required actions directly from trusted HTTP protocol attributes:
+  - `GET /api/v1/financial-records` $\longrightarrow$ `financial.records.read`
+  - `POST /api/v1/financial-records` $\longrightarrow$ `financial.records.write`
+  - `POST /api/v1/core-banking/{id}/transfer` $\longrightarrow$ `core_banking.transfer`
+- **Rejection of Client Header Spoofing:** Completely disregards client-injected headers such as `X-Agent-Action: harmless-read`.
+- **Atomic Grant Burning:** Verifies that grants have not expired, match the exact action and resource, and Burns them synchronously via `/api/v1/grants/consume` to prevent replay attacks.
+
+### Plane 4: Observability Plane & Forensic Timeline
+- **Causal Reconstruction:** Answers the fundamental SOC question: *“Why did the agent invoke this API?”* by linking:
+  $$\text{User Prompt} \longrightarrow \text{Intent Classification} \longrightarrow \text{Grant Issuance} \longrightarrow \text{PEP Decision} \longrightarrow \text{Execution Output}$$
+- **Cryptographic Merkle Hash Chaining:** Every audit event includes a SHA-256 hash of the preceding event, ensuring total tamper evidence. Altering a past log entry invalidates the chain head immediately.
+- **CIO Fleet Command Cockpit:** Unified single-pane-of-glass dashboard displaying 3,000+ live agents, temporal analytics windows (Live, 24h, 7d, 30d), incident isolation, and one-click fleet freeze.
+
+---
+
+## 4. The Bounded Grant Lifecycle
+
+Unlike static OAuth bearer tokens or long-lived API keys, BAP grants are tightly bounded, ephemeral, and non-fungible:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Developer as Human Developer
+    participant Claude as Claude Code Agent
+    participant Hook as bap-edge / cchook
+    participant CP as Control Plane
+    participant GW as Gateway PEP
+    participant API as Protected Backend
+
+    Developer->>Claude: "Update address for customer 123"
+    Claude->>Hook: UserPromptSubmit Hook
+    Hook->>Hook: Classify Intent -> "customer.update" (Telemetry only)
+    Claude->>Hook: Propose Action: PATCH /customers/123/address
+    Hook->>CP: Submit Immutable Proposal P101 (action="customer.address.update", resource="customer/123")
+    CP->>CP: Evaluate Cedar Policy on Proposal P101
+    alt Policy Denied
+        CP-->>Hook: 403 Denied by Policy
+        Hook-->>Claude: Rejection (Proposal P101 Denied)
+    else Policy Allowed
+        CP->>CP: Mint Bounded Grant G101 (bound to proposal_id=P101, maxUses=1)
+        CP-->>Hook: Return Signed Bounded JWT Grant G101
+        Hook-->>Claude: Inject Grant Bearer Token
+    end
+
+    Claude->>GW: HTTP PATCH /customers/123/address (Bearer Grant)
+    GW->>GW: deriveOperation(PATCH, /customers/123/address)
+    Note over GW: Derived: action=customer.address.update, resource=customer/123
+    GW->>GW: Cryptographic Signature & Scope Verification
+    GW->>CP: POST /api/v1/grants/consume (Atomic State Burning)
+    CP-->>GW: 200 OK (Grant Burned Successfully)
+    GW->>API: Forward Authorized Request
+    API-->>GW: HTTP 200 OK
+    GW-->>Claude: HTTP 200 OK
+
+    Claude->>GW: [REPLAY ATTACK] Repeat exact same PATCH request
+    GW->>CP: POST /api/v1/grants/consume
+    CP-->>GW: 403 Forbidden (Grant already consumed)
+    GW-->>Claude: HTTP 403 Forbidden (Replay Denied)
+```
+
+---
+
+## 5. The 10-Point Architectural Adversarial Matrix
+
+BAP is verified against 10 explicit adversarial scenarios. Any architecture unable to pass this matrix cannot guarantee bounded authority:
+
+| # | Attack Vector / Scenario | Attacker Action | BAP Defense Mechanism | Invariant Tested |
+|---|---|---|---|:---:|
+| **1** | **Intent Spoofing** | Agent claims harmless intent `customer.read` but requests `admin.drop_db`. | Intent is context only. Policy engine checks actual requested action against Cedar rules. | **`I1`** |
+| **2** | **Grant Tampering** | Agent edits JWT claims to expand resource scope or extend expiry. | Gateway PEP verifies cryptographic HMAC-SHA256 signature. Tampered tokens fail validation. | **`I3`** |
+| **3** | **Cross-Resource Token Reuse** | Agent acquires grant for `customer/123` and uses it on `subscription/789`. | Gateway PEP matches token resource against derived path. Mismatch results in `403 Forbidden`. | **`I3`** |
+| **4** | **Dynamic Scope Creep** | Agent sends `POST /financial-records` with `X-Agent-Action: harmless.ping`. | Gateway PEP derives required operation strictly from HTTP method and path, ignoring headers. | **`I3`** |
+| **5** | **Replay / Over-consumption** | Agent captures a valid grant and replays it after execution. | Control Plane atomically burns single-use grants (`maxUses=1`). Subsequent attempts return `403/409`. | **`I4`** |
+| **6** | **Concurrent Race Conditions** | Agent fires 10 simultaneous parallel requests using a `maxUses=1` grant. | Mutex-locked atomic consumption in state store ensures **at most one** succeeds; nine are rejected. | **`I4`** |
+| **7** | **Edge Broker Bypass** | Agent attempts to modify Cedar policies or delete audit logs on disk. | Hook interceptor detects attempts to touch protected BAP assets and rejects with security invariant violation. | **`I2`** |
+| **8** | **Direct Gateway Bypass** | Rogue script connects directly to protected API without going through BAP. | Gateway PEP drops all requests lacking a valid BAP Grant with `401 Unauthorized`. | **`I3`** |
+| **9** | **Silent Intent Exploitation** | Ambiguous, injection-laden prompt presented to classifier. | Classifier fails safely to `UNKNOWN` ($0.0$ confidence), never escalating privileges. | **`I1`** |
+| **10** | **Audit Trail Forgery** | Attacker tampers with historical JSONL audit records. | Tamper-evident SHA-256 Merkle hash chain detects broken link on `/api/v1/control/chain/verify`. | **`I5`** |
+
+---
+
+## 6. Strategic Business Value: Why Enterprise CIOs & CISOs Choose BAP
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       ENTERPRISE ROI & RISK REDUCTION                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 1. Instant Regulatory & Compliance Readiness:                               │
+│    Meets SOC 2 Type II, FedRAMP, and ISO 27001 requirements for AI workforce│
+│    non-repudiation, dual-custody authorization, and cryptographic logging.  │
+│                                                                             │
+│ 2. Uninhibited Developer Velocity:                                          │
+│    Sub-2ms edge policy evaluation means developers experience zero lag in   │
+│    Claude Code, Copilot, or Cursor IDE sessions.                            │
+│                                                                             │
+│ 3. Elimination of Catastrophic Blast Radius:                                │
+│    Even if an LLM is 100% jailbroken via prompt injection, it can execute   │
+│    only the exact single bounded operation pre-authorized by Cedar policy.  │
+│                                                                             │
+│ 4. Fleet-Scale Command & Emergency Response:                                │
+│    Instantaneous global kill-switch empowers security operations to freeze  │
+│    3,000+ active agents within 100ms during an active incident.             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 7. Strategic Roadmap & Future Milestones
+
+- **v1.0 (Current MVP Baseline):** Dual-PEP architecture, in-process Cedar engine, Claude Code lifecycle hooks, Copilot adapter, 10-point adversarial test matrix, and SQLite hash-chained audit store.
+- **v1.1:** Cedar Visual Policy Authoring Studio and sandbox dry-run simulator.
+- **v1.2:** Hardware TPM attestation and distributed SPIFFE/SPIRE production mesh.
+- **v1.3:** Kernel-level process containment via Linux eBPF / Landlock and Windows AppContainer.
+- **v1.4:** Cloud KMS audit notarization with immutable S3 Object Lock cold storage.
+- **v2.0:** Multi-agent autonomous delegation mesh with cross-organizational boundary contracts.

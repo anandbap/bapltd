@@ -1,258 +1,317 @@
 # Architecture & Technical Design: Bounded Authority Plane (BAP)
 
-This document specifies the technical architecture, security model, component design, and operational state machines of the **Bounded Authority Plane (BAP)**.
+This document specifies the technical architecture, security model, component design, cryptographic protocols, and operational state machines of the **Bounded Authority Plane (BAP)**.
 
 ---
 
-## 1. System Topology & Overview
+## 1. Executive Architecture & Invariants Core
 
 The Bounded Authority Plane (BAP) enforces zero-trust execution boundaries, cryptographic attestation, and least-privilege authority over AI developer agents (such as Claude Code, GitHub Copilot CLI, and autonomous worker agents).
 
-The architecture consists of two primary operational pillars:
-1. **`bapedge` (Local Trusted Daemon / LTD)**: A lightweight, sub-2ms latency zero-trust execution broker and Policy Enforcement Point (PEP) residing directly on developer machines or containerized worker nodes.
-2. **`bapcontrolplane`**: A centralized, strictly API-driven control plane responsible for agent identity, cryptographic binary attestation, ephemeral on-behalf-of (OBO) authority grants, central Cedar policy distribution, tamper-evident audit log aggregation, and fleet-wide kill-switch coordination.
+### 1.1. The Five Foundational Invariants (Frozen Baseline)
+
+The entire BAP architecture is anchored on five inviolable architectural invariants:
+
+> **I1 — Intent is context, never authority.**  
+> An agent declaring intent to "update customer 123" does not grant executable privilege to write, cancel, or modify resources. Intent provides context for policy evaluation and audit evidence, never executable permission.
+
+> **I2 — `bap-edge` determines what authority an agent may obtain; it is not assumed to execute every resulting operation.**  
+> `bap-edge` evaluates local policy and brokers requests, but cannot be assumed to observe or execute every downstream HTTP/RPC call. Local intent or policy approval alone is never proof that an actual operation was authorized.
+
+> **I3 — Actual protected operations are independently enforced at a resource-side PEP against bounded authority.**  
+> Business APIs and microservices are protected by gateway Policy Enforcement Points (PEP) that derive actual actions from trusted request characteristics (HTTP method, route, parameters), validating bounded cryptographically signed grants.
+
+> **I4 — Control Plane owns master policy, lifecycle, and centralized state; ordinary authorization must not unnecessarily depend on a synchronous Control Plane round-trip.**  
+> The Control Plane distributes signed, immutable policy bundles. High-throughput edge decisions evaluate locally cached policies in sub-2ms; only operations requiring mutable state (e.g. single-use atomic consumption) hit central state.
+
+> **I5 — Observability establishes causality and evidence across Runtime → Authority → PEP → Execution, but telemetry itself is never treated as authorization.**  
+> The Observability Plane reconstructs the end-to-end timeline for forensic integrity, but telemetry reporting or health signals never substitute for cryptographic authorization tokens.
+
+---
+
+## 2. System Topology: The Four Operating Planes
+
+BAP is architected into four decoupled, resilient operational planes:
 
 ```mermaid
 graph TD
-    subgraph Central_Governance ["Central Infrastructure (bapcontrolplane)"]
-        CP["bapcontrolplane Daemon"]
-        REG["Agent Registry & OTC Engine"]
+    subgraph Central_Control ["1. Control Plane (bapcontrolplane)"]
+        CP["bapcontrolplane Core"]
+        REG["Agent Registry & SPIFFE SVID Engine"]
         ATTEST["Binary Hash Attestation Store"]
-        MINTER["OBO JWT Grant Minter"]
-        BUNDLE["Cedar Policy Store & Sync"]
-        AUDIT_CHAIN["Tamper-Evident Audit Chain (SHA-256)"]
-        SESS["Agent Session Engine & Live Radar"]
+        MINTER["Cryptographic Grant Minter (HMAC-SHA256)"]
+        BUNDLE["Authoritative Cedar Policy Store & Sync"]
+        BURNER["Atomic Grant Burner (max_uses=1)"]
+        AUDIT_CHAIN["Tamper-Evident Merkle Hash Chain (SHA-256)"]
+        SESS["Session Lifecycle & Live Radar"]
         
         CP --> REG
         CP --> ATTEST
         CP --> MINTER
         CP --> BUNDLE
+        CP --> BURNER
         CP --> AUDIT_CHAIN
         CP --> SESS
     end
 
-    subgraph Edge_Environment ["Edge Developer Machine / Container (bapedge)"]
+    subgraph Edge_Brokerage ["2. Edge Execution Plane (bapedge / Hooks)"]
         subgraph Agents ["AI Agent Runtimes"]
-            CLAUDE["Claude Code CLI (run_claude_ollama.bat)"]
+            CLAUDE["Claude Code CLI"]
             COPILOT["GitHub Copilot CLI"]
-            WORKER["Custom Autonomous Agent"]
+            WORKER["Autonomous Worker Agent (Python SDK)"]
         end
 
-        subgraph Interceptors ["Interception Layer"]
-            CCHOOK["cchook (PreToolUse)"]
-            COPSHIM["copilot-wrap (CLI Shim)"]
+        subgraph Interceptors ["Managed Interception Layer"]
+            CCHOOK["Claude Code Hook (cchook/interceptor.exe)"]
+            COPSHIM["Copilot Adapter (copilot_interceptor.exe)"]
         end
 
-        subgraph BAP_Edge ["bapedge - Local Trusted Daemon (LTD)"]
-            PEP["Policy Enforcement Point (PEP)"]
-            CEDAR["In-Process Cedar Engine (<2ms)"]
-            STORE["PolicyStore (~/.ltd/policy/)"]
-            AUDIT_LOCAL["Local Audit Logger (ltd-audit.jsonl)"]
-            TRANS["Telemetry Transmitter & Test Filter"]
-            SANDBOX["OS Sandbox Primitives (Landlock/Win32)"]
+        subgraph Edge_Daemon ["bapedge - Local Execution Broker (LTD)"]
+            EDGE_PEP["Local Policy Enforcement Point (PEP)"]
+            CEDAR_LOCAL["In-Process Cedar Engine (<2ms)"]
+            STORE_LOCAL["PolicyStore Cache (~/.ltd/policy/)"]
+            AUDIT_LOCAL["Append-Only Local Logger (ltd-audit.jsonl)"]
+            CLASSIFIER["Deterministic Intent Classifier (11 Rules)"]
         end
 
-        CLAUDE -->|PreToolUse JSON| CCHOOK
+        CLAUDE -->|PreToolUse / UserPromptSubmit| CCHOOK
         COPILOT -->|CLI Argument Intercept| COPSHIM
-        WORKER -->|CLI / API| PEP
+        WORKER -->|bap_sdk API| EDGE_PEP
 
-        CCHOOK --> PEP
-        COPSHIM --> PEP
-
-        PEP --> CEDAR
-        CEDAR --> STORE
-        PEP --> AUDIT_LOCAL
-        AUDIT_LOCAL --> TRANS
-        PEP --> SANDBOX
+        CCHOOK --> EDGE_PEP
+        COPSHIM --> EDGE_PEP
+        EDGE_PEP --> CEDAR_LOCAL
+        CEDAR_LOCAL --> STORE_LOCAL
+        EDGE_PEP --> AUDIT_LOCAL
+        CCHOOK --> CLASSIFIER
     end
 
-    subgraph Downstream ["Target Resources"]
-        TOOLCHAIN["Developer Toolchains (git, python, npm, go)"]
-        PROTECTED["Protected Resources (Secrets, .env, Cloud APIs)"]
+    subgraph Resource_PEP ["3. Resource Enforcement Plane (bapgateway)"]
+        GW_PEP["bapgateway (Zero-Trust Gateway PEP)"]
+        EXT_AUTHZ["Envoy / Istio ext_authz Proxy Semantics"]
+        DERIVE["Authoritative Operation Derivation (deriveOperation)"]
+        BACKEND_API["Protected Microservices (Financial Records, Banking, DB)"]
+
+        GW_PEP --> DERIVE
+        GW_PEP --> EXT_AUTHZ
+        EXT_AUTHZ -->|Verified 200 OK| BACKEND_API
     end
 
-    SANDBOX -->|Permitted Command| TOOLCHAIN
-    PEP -.->|Strictly Denied| PROTECTED
+    subgraph Observability_Plane ["4. Observability & Forensic Plane"]
+        COCKPIT["CIO Fleet Command Cockpit (Live Radar)"]
+        TIMELINE["Causal Evidence Reconstruction Engine"]
+        COLLECTOR["Audit Log Aggregator"]
+        
+        COCKPIT --> TIMELINE
+        TIMELINE --> COLLECTOR
+    end
 
-    %% Control Plane Comms
-    PEP <-->|Dynamic Sync & Directives| BUNDLE
-    TRANS -->|Real-Time Telemetry Stream| AUDIT_CHAIN
-    PEP <-->|OTC Enrollment & Attestation| REG
-    PEP <-->|Ephemeral Authority Grants| MINTER
-    Agents <-->|Session Start / End Lifecycle| SESS
+    %% Cross-Plane Comms
+    EDGE_PEP <-->|Sub-2ms Local Policy Sync| BUNDLE
+    EDGE_PEP -->|Ingest Prompt & Tool Events| AUDIT_CHAIN
+    EDGE_PEP <-->|Acquire Bounded Grant Token| MINTER
+    
+    Agents -->|HTTP Requests with Grant Bearer Token| GW_PEP
+    GW_PEP <-->|POST /api/v1/grants/consume (Atomic Burn)| BURNER
+    GW_PEP -->|Audit Decision Telemetry| AUDIT_CHAIN
+    AUDIT_CHAIN --> COLLECTOR
 ```
 
 ---
 
-## 2. Component Design
+## 3. Component Deep Dive
 
-### 2.1. `bapedge` — Local Trusted Daemon (LTD)
+### 3.1. Plane 1: Control Plane (`bapcontrolplane`)
 
-`bapedge` is the local gatekeeper. Every shell command, script, or tool invocation requested by an AI agent must be intercepted and evaluated by `bapedge` before process creation.
+`bapcontrolplane` is the authoritative root of trust for policy, identity, and lifecycle state:
 
-Key internals of `bapedge`:
-- **In-Process Cedar Engine**: Authored in pure Go, `bapedge` embeds the Cedar evaluation engine to eliminate inter-process latency. Policy decisions execute in under 2 milliseconds without blocking the developer workflow.
-- **Fail-Secure Architecture**: If neither central control plane nor local cache nor workspace policy is found, `bapedge` explicitly denies execution (`exit code 1`). It **never fails open**.
-- **Edge Policy Cache (`~/.ltd/policy/`)**:
-  - `policy.cedar`: Authoritative Cedar policies cached from the control plane.
-  - `schema.json`: Cedar schema definitions for principal, action, resource, and context.
-  - `policy-state.json`: Monotonically increasing version counter, SHA-256 digest, and persistent kill-switch flag.
-- **Offline Resilience**:
-  When `bapcontrolplane` is offline, degraded, or unreachable due to network partitions, `bapedge` seamlessly falls back to prior verified settings in `~/.ltd/policy/`. Permitted toolchains remain operable without latency penalty; forbidden actions remain strictly denied.
-- **Persistent Emergency Lock (Kill-Switch)**:
-  If a kill-switch directive was previously received or written to `policy-state.json`, `bapedge` persists `kill_switch: true`. Network disconnection **cannot bypass** an emergency lock.
-
-### 2.2. `bapcontrolplane` — Central Governance Service
-
-`bapcontrolplane` is a lightweight, zero-dependency REST API service designed for central security operations. It has **no UI** and is completely driven by declarative JSON APIs.
-
-Key subsystems of `bapcontrolplane`:
-- **Self-Service Agent Registry & OTC Minter**: Application owners pre-register agent instances via `POST /api/v1/agents/pre-register` to receive an ephemeral One-Time Code (`LTD-OTC-XXXX-XXXX`).
-- **Binary Attestation Whitelisting**:
-  - In `production` profiles: The agent's executable SHA-256 hash must strictly match a pre-registered hash whitelist. Impersonators or modified binaries are rejected with `403 Forbidden`.
-  - In `development` profiles: Provides Trust-On-First-Use (TOFU) or flexible hash updates to maximize developer iteration speed while maintaining auditability.
-- **Single-Use OTC Burning**: Once an OTC is submitted during enrollment (`POST /api/v1/agents/register`), it is burned immediately. Replay attempts are rejected with `401 Unauthorized`.
-- **Short-Lived Ephemeral Authority (OBO JWT)**:
-  - Authority is granted in short-lived JWTs (default TTL: 15–30 minutes) carrying bounded scopes (e.g., `["cli:exec"]`).
-  - Downstream Policy Enforcement Points (PEPs) or API gateways call `POST /api/v1/grants/consume` to validate and atomically mark a grant consumed, neutralizing token theft and replay attacks.
-- **Central Policy Distribution & Remote Sync**:
-  - Distributes Cedar policy bundles containing `policy_cedar`, `schema_json`, version, and cryptographic digest.
-  - Compares edge version/digest via `POST /api/v1/policy/sync` and responds with `CURRENT`, `UPDATE_REQUIRED`, or `KILL_SWITCH`.
-- **Tamper-Evident Audit Chain**:
-  - Central audit log ingestion (`POST /api/v1/audit/ingest`) cryptographically links incoming edge telemetry records into an immutable SHA-256 hash chain ($H_n = \text{SHA256}(H_{n-1} \parallel \text{EventData})$). Retroactive log tampering is immediately detectable.
-- **Agent Session Lifecycle Engine**:
-  - Manages discrete agent execution sessions (`POST /api/v1/sessions/start`, `POST /api/v1/sessions/end`, `GET /api/v1/sessions`).
-  - Correlates incoming audit events by `session_id`, dynamically calculating allow/deny ratios, durations, and active status for real-time presence detection on the Inspector Live Radar.
-
-### 2.3. Claude Mission Context at BAP Edge
-
-For Claude Code, the `UserPromptSubmit` lifecycle hook is the trusted capture point for mission context. The hook performs a deterministic, versioned classification locally before sending telemetry to the control plane.
-
-The mission contract contains:
-
-- one mandatory primary intent;
-- zero or more secondary intents for mixed work;
-- context tags such as `DATABASE`, `UI`, `PRODUCTION`, or `SECURITY`;
-- confidence, classifier version, matched-rule evidence, and a SHA-256 prompt hash;
-- an explicit flag stating whether raw prompt capture was enabled.
-
-`UNKNOWN` is a valid and required fallback. BAP does not force ambiguous natural language into a misleading category. Raw prompt persistence and transmission can be disabled with `capture_user_prompt: false` or `BAP_CAPTURE_USER_PROMPT=false`; classification still occurs in memory and normalized mission context is still sent.
-
-This path is deliberately separate from enforcement:
-
-```mermaid
-flowchart LR
-    Prompt["Claude UserPromptSubmit"] --> Classifier["BAP Edge intent classifier"]
-    Classifier --> Mission["Versioned mission context"]
-    Mission --> Cockpit["Control plane and CIO cockpit"]
-    Tool["Claude PreToolUse"] --> Operation["Normalized requested operation"]
-    Operation --> Policy["Cedar and sandbox enforcement"]
-    Mission -. "context and evidence only" .-> Policy
-```
-
-The classifier is a fast local rules engine and does not call an LLM. Its sub-millisecond budget applies only to local classification; telemetry delivery is measured separately. Authorization continues to evaluate the concrete operation, resource, identity, delegation, environment and policy—not the natural-language category.
-
-### 2.4. Edge Telemetry Streaming & Self-Test Isolation Filter
-
-`bapedge` bridges local execution with central fleet governance through a dedicated transmission subsystem (`internal/audit/transmitter.go`):
-- **Real-Time Synchronous Push (150ms Bounded)**: Whenever an execution event is logged locally, `bapedge` initiates a synchronous HTTP POST to `POST /api/v1/audit/ingest` with a strict 150ms timeout. If the control plane is reachable, the event is ingested immediately; if the network is partitioned or the server is down, the request silently drops without delaying the developer.
-- **Smart Self-Test Isolation**: Local unit tests, pytest runs, and batch verification scripts (`run_all_tests.bat`) generate hundreds of rapid synthetic test events. To prevent test runs from polluting the central audit chain:
-  - The transmitter inspects environment variables (`BAP_TEST_MODE=1`, `LTD_TEST=1`), source identifiers (matching `test`, `pytest`, `selftest`), and command strings (e.g. `pytest`, `test_leak.py`, `go test`).
-  - When a test execution is detected, the event is written exclusively to the local `ltd-audit.jsonl` file for automated test assertions, and network transmission to the control plane is cleanly suppressed.
+1. **Central Policy Master (BAP-401):**
+   - Authoritative source for all Cedar policies. Policies receive immutable version IDs (e.g. `v1-digest`, `v2-digest`).
+   - Distributes cryptographically signed bundles. Edge runtimes verify signatures and reject unauthenticated or tampered policy files.
+   - Supports zero-downtime policy distribution and instantaneous rollback without restarting agent processes.
+2. **Workload Identity & SPIFFE SVID (BAP-403, BAP-404):**
+   - Issues cryptographically verified SPIFFE IDs formatted as:
+     $$\text{spiffe://}\{\text{trust\_domain}\}/\text{app}/\{\text{app\_id}\}/\text{instance}/\{\text{instance\_id}\}$$
+   - Rotates credentials every 5 minutes over mutual TLS (mTLS). SVID rotation does not terminate active healthy sessions.
+3. **Cryptographic Bounded Grant Minter (BAP-407, BAP-408):**
+   - Issues short-lived, cryptographically bounded tokens encapsulating:
+     - `jti`: Unique UUID grant identifier.
+     - `sub`: Agent SPIFFE workload identity.
+     - `session_id`: Unique developer session identifier.
+     - `human_id`: Authenticated user email/ID on whose behalf the agent acts.
+     - `action`: Specific allowed operation (e.g. `customer.address.update`).
+     - `resource`: Specific canonical resource URI (e.g. `customer/123`).
+     - `constraints`: `max_uses: 1`, `max_amount`, cumulative limits.
+     - `exp`: Strict ephemeral TTL (default: 30–60 seconds for single actions).
+     - `policy_version`: Policy bundle hash active when granted.
+4. **Atomic Mutable State Burning (BAP-417, BAP-419):**
+   - Houses the centralized mutex-locked consumption store (`consumeActiveGrantWithDetails`).
+   - Guarantees that ten simultaneous parallel requests against a `max_uses=1` grant result in **at most one** successful consumption; nine requests are rejected.
+5. **Tamper-Evident Merkle Hash Chain (BAP-221, BAP-433):**
+   - Every ingested event is hashed with the prior block's hash:
+     $$H_n = \text{SHA256}(H_{n-1} \parallel \text{EventJSON})$$
+   - Any manual edit to historical database rows breaks the chain, causing `/api/v1/control/chain/verify` to report `valid: false`.
 
 ---
 
-## 3. Registration, Attestation, and Enrollment Flow
+### 3.2. Plane 2: Edge Execution Broker (`bapedge` & Hooks)
 
-The following sequence details how an edge agent transitions from an unauthenticated process to an attested, authorized node:
+`bapedge` enforces local execution boundaries directly on developer workstations or CI containers:
+
+1. **Sole Executor Pattern (BAP-200, BAP-421):**
+   - Agents are deprived of unmediated shell execution. Command execution occurs exclusively via broker-owned wrappers:
+     ```bash
+     bapedge exec --source claude-code --session-id <sess_id> --cmd-b64 <base64_payload>
+     ```
+   - Agent-authored lookalikes or direct process-spawning bypasses are strictly rejected.
+2. **In-Process Cedar Policy Engine (BAP-101, BAP-402):**
+   - Evaluates AWS Cedar policies in-process in **$<1.5\text{ms}$**, completely eliminating remote RPC latency during coding tasks.
+   - Evaluates principal, action, resource, and context locally using cached policy bundles.
+3. **Offline Fail-Secure Architecture (BAP-102, BAP-434):**
+   - If the Control Plane is offline or partitioned, `bapedge` continues enforcing verified cached policies in `~/.ltd/policy/`.
+   - If no valid policy cache exists, it fails secure (`exit code 1`). It **never fails open**.
+4. **Deterministic Intent Classifier (BAP-218, BAP-405, BAP-406):**
+   - Evaluates user prompts against 11 canonical CIO categories:
+     `BUG_FIX`, `DATABASE_CHANGE`, `FEATURE_ENHANCEMENT`, `INVESTIGATION`, `REFACTOR`, `TEST_VERIFICATION`, `DOCUMENTATION`, `MIGRATION`, `DEPLOYMENT_RELEASE`, `WORK_MANAGEMENT`, `SECURITY_REMEDIATION`.
+   - Ambiguous or unclassified prompts fail safely to `UNKNOWN` ($0.0$ confidence), which explicitly forces human approval or restricted execution rather than silent privilege escalation.
+5. **Anti-Tampering Asset Guard (BAP-200A, BAP-425):**
+   - Blocks any agent attempt to read credentials (`.env`, `.aws`, `.ssh`), tamper with BAP assets (`policy.cedar`, `bap-config.json`, `interceptor.exe`), or perform directory traversal outside the authorized workspace.
+
+---
+
+### 3.3. Plane 3: Resource Enforcement Plane (`bapgateway`)
+
+`bapgateway` acts as the independent Zero-Trust Policy Enforcement Point (PEP) guarding enterprise business APIs:
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor AppOwner as App Owner / CI Pipeline
+    actor Claude as Claude Code Agent
+    participant GW as bapgateway (Gateway PEP)
     participant CP as bapcontrolplane
-    participant Edge as bapedge (LTD)
+    participant API as Business Service (e.g. /customers)
+
+    Claude->>GW: PATCH /customers/123/address [Bearer Grant Token]
+    Note over GW: 1. Independent Derivation: deriveOperation(PATCH, /customers/123/address)<br/>Derived: action = customer.address.update, resource = customer/123
+    Note over GW: 2. Ignore client spoofed headers (X-Agent-Action: read)
     
-    AppOwner->>CP: POST /api/v1/agents/pre-register (app_id, binary_hashes, env_profile)
-    CP-->>AppOwner: 201 Created (agent_id, one_time_code: LTD-OTC-XXXX)
-    
-    Note over AppOwner,Edge: App Owner configures edge agent with LTD-OTC code
-    
-    Edge->>Edge: Compute local binary SHA-256 hash
-    Edge->>CP: POST /api/v1/agents/register (one_time_code, binary_hash, hostname, os)
-    
-    alt Binary Hash Mismatch (Production Profile)
-        CP-->>Edge: 403 Forbidden ("binary hash attestation failed")
-    else Code Already Consumed (Replay Attack)
-        CP-->>Edge: 401 Unauthorized ("one-time code has already been consumed")
-    else Valid Attestation & Valid OTC
-        CP->>CP: Burn One-Time Code (status = consumed)
-        CP->>CP: Register Agent Metadata & Issue Session JWT
-        CP-->>Edge: 200 OK (agent_id, session_token, status: active)
-        Edge->>CP: POST /api/v1/policy/sync (request initial bundle)
-        CP-->>Edge: 200 OK (bundle: cedar, schema, digest, version)
-        Edge->>Edge: Write cache to ~/.ltd/policy/ (policy.cedar, schema.json, policy-state.json)
+    GW->>GW: 3. Verify JWT Cryptographic HMAC Signature & Expiration
+    alt Signature Tampered or Expired
+        GW-->>Claude: 403 Forbidden ("cryptographic signature mismatch")
     end
+
+    GW->>CP: 4. POST /api/v1/grants/consume {token, action, resource, session_id}
+    alt Grant Mismatch (Grant for customer/123 used on customer/999)
+        CP-->>GW: 403 Forbidden ("action/resource mismatch")
+        GW-->>Claude: 403 Forbidden
+    else Already Burned (Replay Attack)
+        CP-->>GW: 409 Conflict ("grant has already been consumed")
+        GW-->>Claude: 403 Forbidden ("replayed grant")
+    else Valid & Active
+        CP->>CP: Atomically mark grant burned (max_uses -= 1)
+        CP-->>GW: 200 OK {consumed: true, agent_id, grant_id}
+        GW->>API: 5. Forward request with verified identity headers
+        API-->>GW: 200 OK {status: "address updated"}
+        GW-->>Claude: 200 OK
+    end
+```
+
+#### Key Gateway PEP Invariants:
+1. **Independent Operation Derivation (`deriveOperation`):**
+   The gateway inspects the HTTP verb and path to derive authoritative actions and resources:
+   ```go
+   func deriveOperation(method, path string) (action, resource string) {
+       cleanPath := strings.TrimRight(path, "/")
+       if strings.HasPrefix(cleanPath, "/api/v1/financial-records") {
+           if method == http.MethodGet {
+               return "financial.records.read", "/api/v1/financial-records"
+           }
+           return "financial.records.write", "/api/v1/financial-records"
+       }
+       if strings.HasPrefix(cleanPath, "/api/v1/core-banking") {
+           if method == http.MethodPost {
+               return "core_banking.transfer", cleanPath
+           }
+           return "core_banking.read", cleanPath
+       }
+       return strings.ToLower(method) + ":" + cleanPath, cleanPath
+   }
+   ```
+2. **Rejection of Client Header Spoofing (BAP-411):**
+   The PEP completely ignores client-injected headers such as `X-Agent-Action: harmless-query`.
+3. **Strict Grant-to-Operation Matching (BAP-412):**
+   Grants issued for `customer/123` cannot be used on `customer/999` or `subscription/789`. Any mismatch immediately triggers `403 Forbidden`.
+4. **Envoy / Istio `ext_authz` Emulation:**
+   `bapgateway` provides standard HTTP check endpoints allowing seamless deployment as an external authorization sidecar for Envoy, Istio, Traefik, or Kong API Gateways.
+
+---
+
+### 3.4. Plane 4: Observability Plane & Causal Reconstruction
+
+The Observability Plane answers the fundamental question: **"Why did the agent invoke this operation, under whose authority, and what was the result?"**
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       CAUSAL EVIDENCE RECONSTRUCTION                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 1. Runtime Intent Capture:                                                  │
+│    User Prompt: "Investigate latency in customer 123"                       │
+│    Classified Intent: INVESTIGATION (Telemetry Context)                     │
+│    Prompt SHA-256 Digest: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b9... │
+│                                  │                                          │
+│                                  ▼                                          │
+│ 2. Ephemeral Authority Grant:                                               │
+│    Grant ID: G-847294 (Single-use, max_uses=1, TTL=30s)                    │
+│    Action: customer.address.read | Resource: customer/123                   │
+│    Policy Version: v3-sha256:7f8a9b...                                      │
+│                                  │                                          │
+│                                  ▼                                          │
+│ 3. Gateway PEP Enforcement:                                                 │
+│    Derived Operation: GET /customers/123/address -> customer.address.read   │
+│    Token Consumption: Atomically Burned at Control Plane                    │
+│    Decision: ALLOW (200 OK) | Latency: 1.2ms                                │
+│                                  │                                          │
+│                                  ▼                                          │
+│ 4. Execution & Audit Ledger:                                                │
+│    Merkle Link: H_n = SHA-256(H_{n-1} || EventData)                         │
+│    Tamper Verification Status: 100% Cryptographically Valid                 │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 4. Execution Pipeline & Interceptor Cascades
+## 4. The 10-Point Architectural Adversarial Matrix
 
-AI agents attempt command execution through multiple vectors (interactive shell, subprocess spawning, MCP servers). `bapedge` integrates seamlessly via transparent interceptor layers:
+The BAP architecture is mathematically and programmatically verified against 10 adversarial attacks via [`tests/test_bounded_authority_matrix.py`](file:///c:/Users/User/pyprj/bapltd/tests/test_bounded_authority_matrix.py):
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant AI as AI Agent (Claude Code / Copilot)
-    participant Hook as Interceptor (cchook / copilot-wrap)
-    participant Edge as bapedge (LTD)
-    participant Cedar as Cedar Policy Evaluator
-    participant Cache as Policy Cache (~/.ltd/policy/)
-    participant Target as Target OS / Executable
-    participant Audit as Audit Log (ltd-audit.jsonl)
-
-    AI->>Hook: Tool Request / Command Invocation
-    Hook->>Edge: Execute Command via bapedge exec
-    Edge->>Cache: Read policy state & check kill-switch
-    alt Kill-Switch Active
-        Edge-->>Hook: Exit 1 (ErrKillSwitchActive)
-        Hook-->>AI: Rejection ("Emergency lock active")
-    else Kill-Switch Inactive
-        Edge->>Cedar: Evaluate Context {executable, full_command, args}
-        alt Forbid Rule Triggered OR No Permit Rule
-            Cedar-->>Edge: Deny Decision (reason: policy_id)
-            Edge->>Audit: Record Deny Event (timestamp, command, duration_ms, exit: 1)
-            Edge-->>Hook: Exit 1 (Denial)
-            Hook-->>AI: Blocked ("Action forbidden by security policy")
-        else Permit Rule Matched
-            Cedar-->>Edge: Allow Decision
-            Edge->>Target: Spawn Subprocess (isolated environment)
-            Target-->>Edge: Process Output & Exit Code
-            Edge->>Audit: Record Allow Event (timestamp, command, duration_ms, exit: 0)
-            Edge-->>Hook: Exit 0 (Output Stream)
-            Hook-->>AI: Execution Result
-        end
-    end
-```
+| # | Attack Scenario | Adversary Action | BAP Defense Implementation | Pass Criteria |
+|:---:|---|---|---|:---:|
+| **1** | **Intent Spoofing** | Claims benign intent `customer.read` but asks for `admin.drop_db`. | [BAP-405, 409](file:///c:/Users/User/pyprj/bapltd/JIRA_STORIES.md#L720): Intent is context, never authority. Evaluated strictly against Cedar rules. | Unearned authority rejected with `401/403`. |
+| **2** | **Grant Tampering** | Modifies JWT payload (expands resource or expiry) or signature. | [BAP-408](file:///c:/Users/User/pyprj/bapltd/JIRA_STORIES.md#L750): Gateway PEP verifies HMAC-SHA256 signature with private key. | Tampered token rejected with `403 Forbidden`. |
+| **3** | **Cross-Resource Token Reuse** | Uses grant for `customer/123` to access `/core-banking/account-123`. | [BAP-412](file:///c:/Users/User/pyprj/bapltd/JIRA_STORIES.md#L790): Gateway PEP derives resource from path and checks token resource claim. | Mismatched resource rejected with `403 Forbidden`. |
+| **4** | **Scope Creep / Header Spoofing** | Sends `POST /financial-records` with `X-Agent-Action: read`. | [BAP-411](file:///c:/Users/User/pyprj/bapltd/JIRA_STORIES.md#L780): Gateway derives `financial.records.write` from `POST`, ignoring headers. | Read grant rejected against write operation (`403`). |
+| **5** | **Atomic Replay Attack** | Captures valid single-use token and replays it after initial execution. | [BAP-417](file:///c:/Users/User/pyprj/bapltd/JIRA_STORIES.md#L840): Token is atomically burned on 1st use via `/api/v1/grants/consume`. | 1st call: `200 OK`. 2nd call: `403 Forbidden`. |
+| **6** | **Concurrent Race Conditions** | Sends 10 concurrent requests simultaneously using single-use grant. | [BAP-416, 417](file:///c:/Users/User/pyprj/bapltd/JIRA_STORIES.md#L830): Mutex-locked atomic counter decrement in Control Plane. | **Exactly 1 success (`200 OK`)**, 9 rejections (`403`). |
+| **7** | **Edge Broker Bypass** | Attempts to modify `policy.cedar` or delete audit logs on disk. | [BAP-200, 421](file:///c:/Users/User/pyprj/bapltd/JIRA_STORIES.md#L880): Interceptor detects writes to protected assets and denies execution. | `permissionDecision: "deny"`, security alert emitted. |
+| **8** | **Direct Gateway PEP Bypass** | Sends HTTP request directly to API without Authorization header. | [BAP-410, 438](file:///c:/Users/User/pyprj/bapltd/JIRA_STORIES.md#L770): Gateway PEP drops unauthenticated requests. | `401 Unauthorized`, internal API never contacted. |
+| **9** | **Unknown Intent Safe Failure** | Presents ambiguous prompt ("recite poem") to classifier. | [BAP-406](file:///c:/Users/User/pyprj/bapltd/JIRA_STORIES.md#L735): Classifier falls back to `UNKNOWN` ($0.0$ confidence) and requires approval. | Intent recorded as `UNKNOWN`, no privilege escalation. |
+| **10** | **Audit Trail Forgery** | Attacker modifies historical database row or event. | [BAP-221, 433](file:///c:/Users/User/pyprj/bapltd/JIRA_STORIES.md#L990): Cryptographic SHA-256 Merkle hash chain verification. | `/api/v1/control/chain/verify` detects broken link. |
 
 ---
 
-## 5. Offline Resilience & Fail-Secure State Machine
-
-One of the most critical operational requirements is that **edge agents must continue operating normally if `bapcontrolplane` experiences an outage or network disconnection**.
+## 5. Fail-Secure State Machine & Network Resilience
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Initialize
-    Initialize --> InspectLocalCache: bapedge starts or syncs
+    [*] --> Initialize: bapedge starts
+    Initialize --> InspectLocalCache: Load ~/.ltd/policy/
     
     state InspectLocalCache {
         [*] --> CheckKillSwitch
         CheckKillSwitch --> KillSwitchActive: policy-state.json has kill_switch=true
         CheckKillSwitch --> CheckCachedBundle: kill_switch=false
         CheckCachedBundle --> CacheValid: policy.cedar & schema.json exist
-        CheckCachedBundle --> CacheEmpty: No cached files found
+        CheckCachedBundle --> CacheEmpty: No cached bundle
     }
 
     KillSwitchActive --> HaltExecution: ErrKillSwitchActive (Exit 1)
@@ -260,228 +319,189 @@ stateDiagram-v2
     CacheEmpty --> AttemptControlPlaneSync
     state AttemptControlPlaneSync {
         [*] --> ContactServer: POST /api/v1/policy/sync
-        ContactServer --> SyncSuccess: Server responds 200
-        ContactServer --> ServerDown: Server unreachable / Connection Refused
+        ContactServer --> SyncSuccess: Server responds 200 OK
+        ContactServer --> ServerDown: Server unreachable
     }
 
-    ServerDown --> FailSecureDeny: No prior policy exists (Exit 1)
+    ServerDown --> FailSecureDeny: Exit 1 (Never Fails Open)
     SyncSuccess --> WriteCacheAndOperate: Save to ~/.ltd/policy/
     
     CacheValid --> CheckNetwork
     state CheckNetwork {
         [*] --> ProbeServer: Contact bapcontrolplane
         ProbeServer --> OnlineMode: 200 OK received
-        ProbeServer --> OfflineMode: Timeout / ConnRefused
+        ProbeServer --> OfflineMode: Connection Refused / Timeout
     }
 
-    OfflineMode --> EnforceCachedInvariants: Continue with cached Cedar rules (0ms latency)
+    OfflineMode --> EnforceCachedInvariants: Sub-2ms local Cedar evaluation
     OnlineMode --> ApplyServerDirectives: Update bundle or trigger kill-switch
     
-    EnforceCachedInvariants --> AllowPermittedCommands: git, python, npm, go allowed
+    EnforceCachedInvariants --> AllowPermittedCommands: git, python, npm permitted
     EnforceCachedInvariants --> DenyForbiddenCommands: cat .env, curl, ~/.aws blocked
 ```
 
-### Invariants of Offline Operation:
-1. **Zero Downtime for Developer Toolchains**: Standard developer operations (`git status`, `npm test`, `python build.py`) evaluate against the local cache in ~1ms without pinging the central server on every command.
-2. **Strict Retention of Security Invariants**: Forbid rules (blocking `cat .env`, secret exfiltration via `curl`/`wget`, credential theft from `~/.aws`, evasive renames like `ren .env`) are embedded in the cached Cedar bundle and remain **100% active and enforced offline**.
-3. **Fail-Secure Default**: If no cached policy bundle exists and the central control plane is unreachable, the execution broker returns `exit 1`. It never falls back to an unconstrained shell.
-4. **Persistent Kill-Switch Across Disconnections**: If `bapcontrolplane` revokes an agent or broadcasts a kill switch, the edge stores `kill_switch: true` in `policy-state.json`. Severing the machine from the network cannot bypass or undo the lock.
+---
+
+## 6. Enterprise Scale & High-Throughput Benchmarks
+
+- **Edge Evaluation Latency:** $<1.5\text{ms}$ per decision via in-process Cedar engine.
+- **Gateway PEP Ext-Authz Latency:** $<2.5\text{ms}$ for cryptographic verification and synchronous atomic grant burning.
+- **Central Control Plane Ingestion Throughput:** **35,620 events / second** benchmarked over 50,000 events (`tests/perf_test_50k.py`).
+- **Concurrent Scale:** Verified up to **3,000 concurrent stateful agent connections** with SQLite WAL and memory profiles.
+- **Audit Hash Verification Time:** 50,000 sequential events verified in **32.6 ms**.
 
 ---
 
-### 5.1. Watchdogs, Fault Recovery, & Process Supervision
+## 7. Operations & Governance Extension Architecture (BAP-450–BAP-459)
 
-A common area of operational confusion is distinguishing between the **Client Workspace Session Guard Watchdog** and **Control Plane Service Supervision**:
+The Operations & Governance Extension provides formal operational controls, administrative governance, separation of duties, and state reconciliation on top of the core Dual-PEP architecture.
 
-```
-+-------------------------------------------------------------------------------------------------------+
-|                                    BAP FAULT RECOVERY DOMAINS                                         |
-+-------------------------------------------------------------------------------------------------------+
-|  DOMAIN 1: Client Session Guard Watchdog             |  DOMAIN 2: Control Plane Service Lifecycle     |
-+------------------------------------------------------+------------------------------------------------+
-|  Target  : Claude Code CLI (claude.exe) & workspace   |  Target  : bapcontrolplane.exe                  |
-|  Trigger : Agent crashes, terminal killed, TaskMgr   |  Trigger : Admin kills backend server          |
-|  Scope   : Local repo .claude/settings.json          |  Scope   : Central REST API & telemetry        |
-|  Action  : Restores original developer settings &    |  Action  : Offline-First Zero-Trust continues; |
-|            registers session teardown on CP.         |            Auto-resurrects on next agent launch|
-|            Does NOT manage backend daemons.          |            (or auto-restarts via Supervisor)  |
-+-------------------------------------------------------------------------------------------------------+
-```
-
-#### 1. Client Session Guard Watchdog (`run_claude_bap.ps1 --bap-watchdog`)
-When a developer launches Claude Code through `run_claude_bap.bat`, BAP starts a detached background watchdog process (`Start-BapWatchdog`).
-- **What it monitors**: The active Claude Code session processes (the launcher PID and `claude.exe`) recorded in `.claude/.bap-recovery.json`.
-- **What it protects**: While Claude is running, BAP modifies `.claude/settings.json` to route command execution through `interceptor.exe`.
-- **Crash Recovery Action**: If Claude Code crashes, the developer abruptly closes their terminal window, or `claude.exe` is killed in Task Manager:
-  1. The watchdog detects that zero active sessions remain alive.
-  2. It immediately restores the original developer `.claude/settings.json` from the backup mirror.
-  3. It cleans up the workspace recovery manifest and notifies the Control Plane of session termination.
-  4. The developer's environment is cleanly restored so un-governed Claude or other tools are not broken.
-- **Important**: The Session Watchdog is strictly a **client workspace integrity guard**. It does not monitor or manage backend server executables like `bapcontrolplane.exe`.
-
-#### 2. Control Plane Process Lifecycle & Offline-First Resilience
-`bapcontrolplane.exe` is an independent backend server daemon (listening on port 8443 or 8080).
-- **When killed in Task Manager**:
-  In local development mode, `bapcontrolplane.exe` runs as a standalone detached background process. Like any standard OS process, if terminated via Task Manager, the OS does not automatically revive it unless an external supervisor or service manager is running.
-- **Why execution does not break (Offline-First Zero-Trust)**:
-  Killing `bapcontrolplane.exe` **does not stop Claude Code or compromise security**. `bapedge` continues enforcing all Zero-Trust Cedar policies locally using cached `policy.cedar` and `schema.json`. Forbidden commands remain blocked, allowed commands continue executing, and telemetry is buffered locally until the server returns.
-- **Next-Launch Auto-Recovery**:
-  The launcher (`run_claude_bap.bat`) performs a pre-flight TCP probe on port 8443 before starting Claude. If it discovers that `bapcontrolplane` is down or was killed, it **automatically relaunches** `bapcontrolplane.exe` in the background before attaching the session.
-
-#### 3. High-Availability Control Plane Supervisor (`start_controlplane_supervisor.bat`)
-For continuous development, automated integration test rigs, or long-running environments where operators want `bapcontrolplane.exe` to automatically restart within 1 second if killed:
-```batch
-# Launch BAP Control Plane under continuous process supervisor:
-start_controlplane_supervisor.bat
-```
-The supervisor (`scripts/supervise_controlplane.ps1`):
-1. Spawns `bapcontrolplane.exe` with configured TLS and port arguments.
-2. Continuously monitors the process handle.
-3. If the process is terminated in Task Manager or crashes, it logs `[!] WARNING: bapcontrolplane exited! Respawning in 1 second...` and automatically revives the service.
-4. Cleanly handles `Ctrl+C` to terminate both supervisor and server on demand.
-
----
-
-## 6. SPIFFE Workload Identity, Multi-Instance Fleets & TLS Transport Security
-
-### 6.1. SPIFFE Workload Identity Model
-To enable standard zero-trust service mesh and distributed microservice federation, `bapcontrolplane` assigns every enrolled agent an official **SPIFFE Workload Identity** formatted as:
-$$\text{spiffe://}\{\text{trust\_domain}\}/\text{app}/\{\text{app\_id}\}/\text{instance}/\{\text{instance\_id}\}$$
-
-- **Trust Domain**: Defaults to `bap.internal` (customizable via `-trust-domain` flag or `BAP_TRUST_DOMAIN` environment variable).
-- **App ID**: The application identity under which the agent executes (e.g. `payments-worker`, `code-review-bot`).
-- **Instance ID**: Unique per-machine/container identifier (e.g. `node-01-a1b2c3d4`).
-- **JWT-SVID Issuance**: Ephemeral authority grants issued by `bapcontrolplane` conform to the SPIFFE JWT-SVID specification:
-  - `sub`: Holds the full SPIFFE ID URI (`spiffe://bap.internal/app/payments-worker/instance/node-01-a1b2c3d4`).
-  - `spiffe_id`: Explicit claim containing the URI.
-  - `instance_id`: Scoped node instance identifier.
-  - `aud`: `"bap-edge-broker"`.
-  - `iss`: `"bap-controlplane"`.
-
-### 6.2. Multi-Instance Agent Fleets & Quota Management
-Modern workloads deploy fleets of identical worker agents (e.g., 50 CI runners or distributed worker containers) sharing one logical application profile. `bapcontrolplane` handles multi-instance fleets cleanly:
-
-1. **Fleet Enrollment Tokens (`BAP-FLEET-...`)**:
-   - When pre-registering an application with `max_instances > 1`, the control plane generates a multi-use quota token prefixed with `BAP-FLEET-`.
-   - The token tracks `max_instances` and `enrolled_count` atomically under mutex lock.
-   - Any registration attempt beyond the quota is rejected with `401 Unauthorized`.
-2. **Independent Per-Instance Attestation & Registration**:
-   - Each instance sends its own binary SHA-256 hash, hostname, OS, and unique `instance_id`.
-   - Each instance receives its own distinct record in the registry (`agent-{app_id}-{instance_id}`) and its own SPIFFE ID.
-3. **Instance Liveness & Heartbeats**:
-   - Edge instances send periodic heartbeats to `POST /api/v1/instances/heartbeat`.
-   - Unhealthy or dead instances can be identified and reclaimed.
-4. **Hierarchical Revocation (Instance vs Fleet Kill-Switch)**:
-   - **Per-Instance Revocation** (`POST /api/v1/agents/revoke`): Revokes a single compromised instance without affecting other healthy instances in the fleet.
-   - **Fleet-Wide Revocation** (`POST /api/v1/apps/revoke`): Emergency kill-switch that revokes **all** instances of an application across the entire infrastructure with a single API call.
+### 7.1. Extended Causal Governance Chain & Four Frozen Rules
 
 ```mermaid
-graph TD
-    APP["App Owner / CI Pipeline"] -->|Pre-Register max_instances=N| CP["bapcontrolplane"]
-    CP -->|Mints BAP-FLEET-Token| TOKEN["Fleet Enrollment Token (Quota: N)"]
-    
-    TOKEN -->|Enroll| INST1["Edge Instance 1 (spiffe://.../instance/node-1)"]
-    TOKEN -->|Enroll| INST2["Edge Instance 2 (spiffe://.../instance/node-2)"]
-    TOKEN -->|Enroll| INSTN["Edge Instance N (spiffe://.../instance/node-N)"]
-    
-    subgraph Control_Plane_Governance ["Control Plane Governance"]
-        HB["Liveness Heartbeats (/api/v1/instances/heartbeat)"]
-        REV_INST["Per-Instance Kill Switch (/api/v1/agents/revoke)"]
-        REV_FLEET["Fleet-Wide Kill Switch (/api/v1/apps/revoke)"]
-    end
-    
-    INST1 -.-> HB
-    INST2 -.-> HB
-    REV_INST -.->|Blocks Only| INST1
-    REV_FLEET -.->|Blocks Entire Fleet| INST1 & INST2 & INSTN
+flowchart LR
+    Task["1. Task"] --> Intent["2. Intent Context"]
+    Intent --> Proposal["3. Immutable Proposal (P)"]
+    Proposal --> Decision["4. Policy Decision (Cedar)"]
+    Decision --> Grant["5. Bounded Grant (G)"]
+    Grant --> PEP["6. Gateway PEP Enforcement"]
+    PEP --> Execution["7. Backend Execution"]
+    Execution --> Evidence["8. Merkle Audit Evidence"]
 ```
 
-### 6.3. HTTPS & TLS Mutual Security
-In production, all control plane communication runs over HTTPS:
-- **Server TLS Flags**:
-  - `-tls`: Enables HTTPS on `bapcontrolplane`.
-  - `-tls-cert` and `-tls-key`: Specifies authoritative corporate PKI certificates.
-  - `-tls-auto`: Automatically generates an in-memory or on-disk self-signed ECDSA certificate for development/staging, exporting `controlplane-cert.pem` for clients.
-- **Edge Client TLS Flags**:
-  - `--ca-cert`: Loads custom CA bundle into `x509.CertPool` to verify `bapcontrolplane`.
-  - `--insecure`: Bypasses TLS verification in development/test setups.
+Four foundational architecture rules govern all operational interventions:
 
-### 6.4. Agent Execution Session Engine & Live Presence Radar
-To transform isolated event logs into cohesive operational narratives, `bapcontrolplane` incorporates a stateful Session Engine:
-- **Session Lifecycle Hooks**:
-  - `POST /api/v1/sessions/start`: Invoked when an agent process starts (e.g. `run_claude_ollama.bat`). Captures `session_id`, source (`claude-code`, `copilot`), client PID, model identifier, and working directory.
-  - `POST /api/v1/sessions/end`: Invoked on agent exit. Records conclusion status (`completed`, `terminated`), calculates total session duration, and finalizes allow/deny counters.
-- **Correlation via `session_id`**:
-  - During execution, interceptors (`cchook`, `copilot_interceptor`) propagate `BAP_SESSION_ID` to `bapedge exec --session-id <id>`.
-  - When audit events are ingested at `/api/v1/audit/ingest`, the session store automatically increments event counts and allow/deny ratios for the linked session.
-- **Inspector Live Radar**:
-  - The Inspector web dashboard queries `/api/v1/inspector/data` to render active sessions as presence chips (`Claude Code [PID: ...]`, `Copilot CLI [PID: ...]`).
-  - Operators and executives can click any active presence chip to instantly filter the live topological event stream to that specific agent process.
+> **R1 — Proposals are immutable.**  
+> An Action Proposal cannot be mutated once submitted. Any operational correction generates a child proposal (`parent_proposal_id`) establishing auditable lineage.
+
+> **R2 — Humans remediate inputs, never override decisions.**  
+> An operator cannot click a button to manually force a `DENY` into an `ALLOW`. Remediated input must pass through the full policy evaluation pipeline.
+
+> **R3 — Authorization does not prove execution.**  
+> Gateway PEP authorization and downstream API completion are evidenced separately. If a network disruption occurs between PEP check and execution, the action is marked `UNKNOWN` and reconciled; authorization is never assumed to be execution.
+
+> **R4 — Operating the governance system is itself governed.**  
+> Administrators are subject to the same bounded authority principles. BAP administrative APIs require strong authentication, scoped RBAC, and immutable audit logging. **BAP governs BAP.**
 
 ---
 
-## 7. Threat Model & Mitigations
+### 7.2. Immutable Action Proposals & Remediation Lineage (BAP-450, BAP-451)
 
-| Threat ID | Threat Vector | Attacker Action | BAP Mitigation |
-| :--- | :--- | :--- | :--- |
-| **T1** | **Evasive Renaming & Secret Dumping** | Agent attempts `cat .env`, gets blocked, then tries `ren .env junk` or PowerShell `Move-Item .env` to bypass path filters. | Cedar forbid rules inspect regex/wildcard matches across both command line arguments and executable tokens (normalized to lowercase). All renames, moves, copies, or redirections (`.env > leak.txt`) are explicitly denied. |
-| **T2** | **Exfiltration Utilities & Casing Evasion** | Compromised agent executes `curl https://untrusted-test.internal` or `CURL https://untrusted-test.internal` to leak keys. | Egress binaries (`curl`, `wget`, `nc`, `ncat`, `ssh`, `socat`, `bitsadmin`, `certutil`) are forbidden at the Cedar layer. `bapedge` normalizes all tokens to lowercase before Cedar evaluation. On Linux, Landlock disables network sockets entirely. |
-| **T3** | **Rogue Agent Impersonation** | Malicious binary masquerades as a legitimate edge worker to obtain authority grants. | Control plane requires pre-registration, binary attestation, and SPIFFE identity. In `production` profiles, only whitelisted SHA-256 binary digests can enroll or acquire short-lived grants. |
-| **T4** | **Replay Attacks (OTC, Fleet Quota & Grants)** | Attacker intercepts an enrollment code (OTC) or an authority grant JWT from wire or logs. | 1. Single-use OTCs are burned atomically upon first enrollment (`status: consumed`). Replays return `401`.<br>2. Fleet tokens strictly enforce maximum instance quotas.<br>3. Grants are short-lived (15-30m) and atomically consumed at downstream PEPs via `/api/v1/grants/consume`. |
-| **T5** | **Control Plane Outage Exploitation** | Attacker cuts network connectivity to the control plane, hoping the edge fails open. | Edge defaults to fail-secure. If no cache exists, commands are denied. If cache exists, prior Cedar invariants are strictly enforced offline. |
-| **T6** | **Audit Log Tampering** | Attacker modifies local audit log files to erase evidence of denied unauthorized operations. | Audit records are streamed to `bapcontrolplane` and hashed into a sequential SHA-256 chain ($H_n = \text{SHA256}(H_{n-1} \parallel \text{Event})$). Any retroactive tampering breaks hash verification. |
-| **T7** | **Fleet Instance Impersonation & Rogue Scaling** | Attacker spins up unauthorized excess instances under an existing app ID. | Fleet OTC enforces strict quota limits (`max_instances`). Each instance undergoes independent binary attestation and receives an isolated SPIFFE workload identity. |
-| **T8** | **Synthetic Test Data Pollution** | High-frequency CI or pytest test suites flood central audit stores with fake test records. | `bapedge` inspects test environment flags (`BAP_TEST_MODE=1`) and command patterns, writing events to local `ltd-audit.jsonl` while completely suppressing network transmission to the server. |
-| **T9** | **Ghost / Unmonitored Agent Sessions** | Rogue or orphaned agent processes execute commands without administrative oversight. | The Session Lifecycle Engine tracks all active agent PIDs and durations, displaying live presence indicators on the Radar and alerting on unmonitored tool use. |
+Every consequential operation is encapsulated in a cryptographically identified, immutable proposal before policy evaluation:
+
+```json
+{
+  "proposal_id": "prop-8f92a1b4-7c3d",
+  "parent_proposal_id": "prop-7a81b2c3-6d2e",
+  "trace_id": "trace-991283",
+  "agent_id": "claude-worker-7",
+  "session_id": "sess-42",
+  "task_id": "task-customer-address-fix",
+  "human_id": "alice@company.com",
+  "intent": "BUG_FIX",
+  "action": "customer.address.update",
+  "resource": "customer/123",
+  "parameters": {"street": "456 Market St"},
+  "timestamp": "2026-10-04T12:00:00Z"
+}
+```
+
+```text
+Proposal P100 (customer=124)
+           ↓
+     DENIED by Policy
+           ↓
+Operator Corrects Input (customer=123)
+           ↓
+Proposal P101 (customer=123, parent=P100)
+           ↓
+Full Cedar Policy Evaluation
+           ↓
+    ALLOWED → Grant Issued
+```
 
 ---
 
-## 8. Database Architecture & High-Scale Ingestion Strategy
+### 7.3. Administrative Governance & RBAC: "BAP Governs BAP" (BAP-452, BAP-453)
 
-Enterprise agent deployments scale to hundreds of concurrent coding sessions generating thousands of tool invocations per minute. BAP implements a dual-tier storage and ingestion model designed for zero-latency edge execution and multi-thousand event/sec central ingestion:
+Administrative actions (policy edits, session revocations, emergency freeze, agent termination) cannot bypass governance:
 
-### 8.1. Performance Test (PT) Benchmark: 50,000 Events
-The central control plane ingestion pipeline was benchmarked using `tests/perf_test_50k.py`:
-- **Total Ingested Events**: 50,000 events streamed in 50 batches of 1,000 events.
-- **Ingestion Time**: **1.40 seconds** total execution time.
-- **Throughput**: **35,620 events / second**.
-- **Batch Latency**: Average of **60.5 ms** per 1,000-event batch.
-- **Cryptographic Hash Verification**: Sequential SHA-256 chain verification of all 50,000 records completed in **32.6 ms**.
+1. **Governed Operations:** Policy changes, grant revocations, agent terminations, session kills, approvals, configuration updates, and identity changes.
+2. **Separation of Duties Matrix:**
+   | Role | View Trace | Investigate | Remediate Proposal | Approve High-Risk | Change Policy |
+   |---|:---:|:---:|:---:|:---:|:---:|
+   | **Observer** | ✓ | ✓ | — | — | — |
+   | **Operator** | ✓ | ✓ | ✓ | — | — |
+   | **Approver** | ✓ | ✓ | — | ✓ | — |
+   | **Policy Admin** | ✓ | ✓ | — | — | ✓ |
+3. **Anti-Self-Approval:** The operator who submitted or remediated a proposal cannot be the approver for that same action.
 
-### 8.2. Dual-Tier Storage Architecture
+---
+
+### 7.4. Out-of-Band Management UI (BAP-454)
+
+The BAP Operations UI sits strictly outside the execution path. An outage or restart of the dashboard cannot degrade runtime agent operations:
+
+```text
+Operations Cockpit UI
+         X (DOWN / CRASHED / MAINTENANCE)
+
+Control Plane Core
+        │
+Runtime ──► Bounded Grant ──► Gateway PEP ──► Business API
+                                  ▲
+                             STILL 100% OPERATIONAL
+```
+
+---
+
+### 7.5. Governed Action Lifecycle State Machine (BAP-455)
+
+Every proposal transitions through a deterministic, strictly validated lifecycle:
 
 ```mermaid
-graph LR
-    subgraph Edge_Tier ["Edge Storage Tier (Zero Overhead)"]
-        EDGE_LOG["Append-Only JSONL (ltd-audit.jsonl)"]
-        EDGE_LOG -->|Local Fast Sub-1ms Append| DISK1[Local Host Disk]
-    end
-
-    subgraph Central_Tier ["Central Governance Storage Tier"]
-        INGEST["POST /api/v1/audit/ingest (Batch Endpoint)"]
-        HASH["Sequential SHA-256 Hash Chainer"]
-        INGEST --> HASH
-        
-        subgraph Deployment_Profiles ["Deployment Profiles"]
-            PROFILE_DEV["Single-Node / Appliance"]
-            PROFILE_CORP["Cloud / Distributed Enterprise"]
-        end
-        
-        HASH --> PROFILE_DEV
-        HASH --> PROFILE_CORP
-        
-        PROFILE_DEV --> SQLITE["Embedded SQLite (WAL Mode) or DuckDB"]
-        PROFILE_CORP --> CLICK["ClickHouse / TimescaleDB"]
-    end
-
-    EDGE_LOG -.->|150ms HTTP Push| INGEST
+stateDiagram-v2
+    [*] --> PROPOSED: Agent Submits Proposal
+    PROPOSED --> EVALUATING: Control Plane Receives
+    
+    EVALUATING --> AUTHORIZED: Cedar Evaluation Permits
+    EVALUATING --> DENIED: Cedar Evaluation Forbids
+    
+    AUTHORIZED --> GRANTED: Bounded Grant Token Minted
+    GRANTED --> PRESENTED: Agent Presents Token to Gateway PEP
+    GRANTED --> EXPIRED: TTL Elapses Before Presentation
+    GRANTED --> REVOKED: Admin Revocation Directive
+    
+    PRESENTED --> PEP_ALLOWED: Gateway PEP Verifies Token & Burns
+    PRESENTED --> DENIED: Action/Resource Mismatch or Tampered Token
+    
+    PEP_ALLOWED --> EXECUTING: Dispatched to Downstream Service
+    EXECUTING --> COMMITTED: Backend Transaction Committed
+    COMMITTED --> COMPLETED: 200 OK Returned to Agent
+    
+    EXECUTING --> UNKNOWN: Network Timeout / Disconnection
+    UNKNOWN --> RECONCILING: Orphan Reconciliation Process
+    RECONCILING --> COMPLETED: Verified Executed on Backend
+    RECONCILING --> FAILED: Verified Rolled Back on Backend
 ```
 
-1. **Edge Tier (`bapedge`)**:
-   - **Storage Engine**: Append-only JSON Lines (`ltd-audit.jsonl`).
-   - **Rationale**: Requires zero native database drivers or external services on developer laptops. Writes complete in under 1 millisecond. If the operating system crashes or power is interrupted, prior append-only lines remain intact.
-2. **Central Tier (`bapcontrolplane`)**:
-   - **Single-Node / Appliance Profile**: Embedded **SQLite in WAL (Write-Ahead Logging) mode** or **DuckDB**.
-     - *Advantages*: Zero-maintenance single-binary deployment; concurrency support via WAL mode; ACID transactions; sub-millisecond query performance for sessions and events; single-file backup (`bap-audit.db`).
-   - **Cloud Enterprise / Fleet Deployment Profile**: **ClickHouse** or **TimescaleDB**.
-     - *Advantages*: Optimized for multi-billion record analytical queries; 10:1 columnar compression ratios; sub-second aggregation across thousands of developer machines and CI nodes; native partitioning by date, app, and tenant.
+---
+
+### 7.6. Execution Reconciliation & Orphan Detection (BAP-456)
+
+In distributed architectures, authorization does not guarantee execution. If a network partition occurs after the Gateway PEP admits a request, BAP marks the state `UNKNOWN` rather than guessing success or failure:
+
+* **Orphan Detection Scenarios:**
+  1. *Unpresented Grants:* State remains `GRANTED` until TTL expiry, then transitions to `EXPIRED`.
+  2. *Unconfirmed Executions:* State is `PEP_ALLOWED` but lacks backend receipt. Flagged for background reconciliation.
+* **Non-Idempotent Safety:** The reconciliation engine **never automatically re-executes** consequential operations (e.g. transfers, payments, drops, cancellations). It queries the downstream service's idempotency log or raises an incident for human investigation.
+
+---
+
+### 7.7. Governance Simulation & Investigation Timeline (BAP-457, BAP-458, BAP-459)
+
+1. **Policy Simulation & Dry-Run Engine:**
+   Security engineers run regression suites of historical proposals against draft Cedar bundles ($V_{N} \rightarrow V_{N+1}$) before deployment to preview behavioral diffs without touching production systems.
+2. **Investigation Timeline:**
+   The operations cockpit reconstructs both serial workflows and concurrent parallel tool invocations using explicit correlation IDs (`trace_id`, `proposal_id`, `task_id`), accurately displaying multi-agent branching.
+
