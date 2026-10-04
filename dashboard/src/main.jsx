@@ -4,6 +4,7 @@ import { elapsed, presence } from './presence.js';
 import PolicyStudio from './PolicyStudio.jsx';
 import ShadowITView from './ShadowITView.jsx';
 import GatewayPEPView from './GatewayPEPView.jsx';
+import EndpointHardeningView from './EndpointHardeningView.jsx';
 import './style.css';
 
 const API = '/api/v1';
@@ -369,6 +370,14 @@ function App() {
         >
           <Icon name="lock" size={14}/> Gateway PEP Guard
         </button>
+        <button
+          role="tab"
+          aria-selected={activeView === 'endpoint'}
+          className={`view-tab ${activeView === 'endpoint' ? 'active' : ''}`}
+          onClick={() => setActiveView('endpoint')}
+        >
+          <Icon name="shield" size={14}/> Endpoint Hardening
+        </button>
       </nav>
       <div className="topbar-actions">
         <div className={`connection ${connected ? 'online' : ''}`}><i/>{connected ? 'Live telemetry' : 'Reconnecting'}<small>{lastRefresh ? elapsed(now - lastRefresh) : 'waiting'}</small></div>
@@ -388,6 +397,9 @@ function App() {
       )}
       {activeView === 'pep' && (
         <GatewayPEPView adminToken={adminToken} onNotify={(msg) => setNotice(msg)}/>
+      )}
+      {activeView === 'endpoint' && (
+        <EndpointHardeningView adminToken={adminToken} onNotify={(msg) => setNotice(msg)}/>
       )}
       {activeView === 'fleet' && (
         <>
