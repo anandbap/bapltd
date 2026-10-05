@@ -261,7 +261,7 @@ func RunLogin(args []string) error {
 		Department:   tokenResp.Department,
 		Groups:       tokenResp.Groups,
 		IdPProvider:  provider,
-		EnrolledAt:   time.Now(),
+		EnrolledAt:   time.Now().UTC(),
 	}
 
 	if err := os.MkdirAll(filepath.Dir(*configPath), 0700); err != nil {

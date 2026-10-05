@@ -54,7 +54,7 @@ function intentLabel(value = 'UNKNOWN') {
 
 function riskFor(agent) {
   if (agent.status === 'revoked') return 'REVOKED';
-  if (agent.status === 'stopped' || agent.status === 'closed') return 'STOPPED';
+  if (['stopped', 'closed', 'offline', 'deregistered'].includes(agent.status)) return 'STOPPED';
   if (agent.isHighRisk || agent.promptRiskLevel === 'CRITICAL' || agent.deniedCount >= 2 || agent.hasTamper) return 'CRITICAL';
   if (agent.promptRiskLevel === 'ELEVATED' || agent.deniedCount === 1) return 'ELEVATED';
   return 'HEALTHY';
@@ -83,7 +83,7 @@ function normalizeFleet(data, sensitive, now, localStatus) {
       owner: agent.owner_email || agent.owner_id || 'Governed operator',
       hostname: agent.hostname || 'unreported-host',
       spiffeId: agent.spiffe_id || `spiffe://bap.internal/app/${agent.app_id}/instance/${id}`,
-      status: agent.status || currentPresence.status, lastSeen: currentPresence.age,
+      status: (agent.status === 'revoked' ? 'revoked' : currentPresence.status === 'offline' ? 'offline' : (agent.status || currentPresence.status)), lastSeen: currentPresence.age,
       prompt: agent.user_prompt || '', events: [], allowedCount: 0, deniedCount: 0, totalEvents: 0,
       primaryIntent: agent.intent?.primary || 'UNKNOWN', secondaryIntents: agent.intent?.secondary || [],
       intentTags: agent.intent?.tags || [], intentConfidence: agent.intent?.confidence || 0,
@@ -102,8 +102,8 @@ function normalizeFleet(data, sensitive, now, localStatus) {
 	const rawId = session.session_id;
 	const id = existing?.id || (protectedValue(rawId) ? `${session.app_id || 'agent'}:session:${index}` : rawId);
     const currentPresence = presence(session, now);
-    const revoked = session.status === 'revoked' || revokedSessions.includes(session.session_id) || revokedUsers.includes(session.user_id) || revokedUsers.includes(session.user_email);
-    const status = localStatus[session.session_id] || (revoked ? 'revoked' : session.status || currentPresence.status);
+    const hostAgentOffline = existing && (existing.status === 'offline' || existing.status === 'stopped' || existing.status === 'deregistered');
+    const status = localStatus[session.session_id] || (revoked ? 'revoked' : (currentPresence.status === 'offline' || hostAgentOffline) ? 'offline' : (session.status || currentPresence.status));
     const next = existing || { id, events: [], allowedCount: 0, deniedCount: 0 };
     const mission = session.intent || {};
     // Public telemetry protects stable identifiers. In that mode the session
@@ -461,7 +461,7 @@ function App() {
           </div>
           <div className="fleet-grid" aria-label="Active agent fleet">
             {visibleFleet.map((agent) => {
-              const stopped = ['closed', 'stopped', 'revoked'].includes(agent.status);
+              const stopped = ['closed', 'stopped', 'revoked', 'offline', 'deregistered'].includes(agent.status);
               return <button key={agent.id} className={`agent-tile risk-${agent.risk.toLowerCase()} ${selected?.id === agent.id ? 'selected' : ''}`} onClick={() => setSelectedId(agent.id)} aria-label={agent.name}>
                 <span className="tile-top"><i className={`state-dot ${stopped ? 'stopped' : killSwitch ? 'frozen' : ''}`}/><b>{agent.name}</b><em>{agent.risk}</em></span>
                 <span className="tile-owner">{agent.owner}</span>

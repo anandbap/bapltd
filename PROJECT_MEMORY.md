@@ -74,3 +74,34 @@ BAP (Bounded Authority Plane) is a Zero-Trust governance and least-privilege pol
   - Interactive pauses (`[ENTER]`) between Stage 1 (5 live), Stage 2 (drop 2 $\rightarrow$ 3 left), and Stage 3 (add 1 $\rightarrow$ 4 live) for visual confirmation on Dashboard and Cockpit.
 - `scratch/test_claude_fleet.py`: Automated headless test verifying the full multi-instance lifecycle.
 
+---
+
+## Unified `.bapstate` Hierarchy & Clean Directory Architecture
+All BAP components (`bap-edge`, `bap-controlplane`, `bap-gateway`, `python-agent`) standardize on `.bapstate`:
+- **Resolution Order**:
+  1. `$BAP_STATE_DIR` (explicit override)
+  2. `~/.bapstate` (user home directory - primary default)
+  3. `./.bapstate` (workspace local fallback)
+- **Directory Contents**:
+  - `credentials.json`: Agent identity, OTC tokens, and JWT credentials.
+  - `config.json`: Endpoint configuration (`controlplane_url`, `gateway_url`).
+  - `audit.jsonl`: Offline audit spool (cryptographically hashed, flushes on reconnect).
+  - `sessions/`: Per-session and per-PID active session markers (`sess-<ID>.json`, `pid-<PID>.json`).
+  - `session.json`: Current workspace active session fallback descriptor.
+  - `revoked/`: Local persistent revocation markers (`user-<USER>.json`).
+- **Automated Migration**: Legacy files from `~/.ltd/`, `.bap/`, and root `ltd-audit.jsonl` are automatically migrated on startup.
+
+---
+
+## Fleet-Wide UTC Timestamp Standardization
+- **Universal UTC Standard**: All timestamp generation across all components strictly adheres to ISO 8601 / RFC 3339 UTC format (`time.Now().UTC()`, `time.RFC3339`).
+- Eliminates cross-timezone desynchronization, clock skew anomalies, and ensures forensic audit trail consistency across geographically distributed edge nodes.
+
+---
+
+## Hierarchical Agent & Session Liveness Coupling
+- **45-Second Heartbeat Expiry**: Agents and sessions must pulse heartbeats at least every 45 seconds. Lapsed heartbeats dynamically report status as `offline`.
+- **Strict Invariant (No Ghost Sessions)**: An offline agent can NEVER host active sessions. When an agent lapses or is closed, all child sessions immediately reflect `offline` / `closed`.
+- **Stable Workstation Identity**: Multiple Claude Code launches on the same host reuse the single workstation agent identity, registering individual runs as concurrent execution sessions rather than sprawling duplicate agent cards.
+- **Reconciliation & Sweep**: `bapedge sweep` purges dead session markers for terminated PIDs, flushes pending offline audit spools, and reconciles state with the central control plane.
+

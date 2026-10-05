@@ -97,6 +97,11 @@ func Log(entryInput any, logPath string) error {
 	if entry.EventID == "" {
 		entry.EventID = GenerateEventID()
 	}
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = time.Now().UTC()
+	} else {
+		entry.Timestamp = entry.Timestamp.UTC()
+	}
 
 	// Determine previous hash from existing file tail
 	lastHash := "genesis-ltd-local"

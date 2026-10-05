@@ -235,7 +235,7 @@ func handleRequest(w *bufio.Writer, req JSONRPCRequest, authorizer *authz.Author
 }
 
 func executeCommand(fullCommand string, authorizer *authz.Authorizer, cfg ServerConfig) CallToolResult {
-	startTime := time.Now()
+	startTime := time.Now().UTC()
 	cleaned := sandbox.CleanCommandString(fullCommand)
 	executable, cmdArguments := sandbox.ParseCommand(cleaned)
 

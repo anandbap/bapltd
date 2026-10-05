@@ -117,7 +117,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		"service":   "bap-gateway-pep",
 		"status":    "healthy",
 		"mode":      "envoy-ext-authz-emulator",
-		"timestamp": time.Now().Format(time.RFC3339),
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	})
 }
 

@@ -1,6 +1,9 @@
 package types
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type EnvProfile string
 
@@ -15,7 +18,26 @@ const (
 	StatusPendingEnrollment AgentStatus = "pending_enrollment"
 	StatusActive            AgentStatus = "active"
 	StatusRevoked           AgentStatus = "revoked"
+	StatusOffline           AgentStatus = "offline"
+	StatusDeregistered      AgentStatus = "deregistered"
 )
+
+// SanitizeInstanceID normalizes hostnames and labels into safe identifiers.
+func SanitizeInstanceID(s string) string {
+	var sb strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			sb.WriteRune(r)
+		} else {
+			sb.WriteRune('-')
+		}
+	}
+	res := strings.Trim(sb.String(), "-")
+	if res == "" {
+		return "workstation"
+	}
+	return res
+}
 
 type RegisteredAgent struct {
 	AgentID             string      `json:"agent_id"`

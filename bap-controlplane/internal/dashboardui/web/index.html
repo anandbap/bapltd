@@ -523,7 +523,9 @@ VIEWS.overview={
     const d=S.decisions, n=d.length||1, den=d.filter(x=>x.out==='DENY').length, al=d.filter(x=>x.out==='ALLOW').length;
     const online=S.agents.filter(a=>a.state!=='QUARANTINED').length, q=S.agents.length-online;
     const liveAgents=S.agents.filter(a=>a.liveness==='LIVE').length;
-    const activeSessions=S.sessions.filter(s=>s.status==='active').length;
+    const now=Date.now();
+    const isSessLive=s=>s.status==='active'&&((now-(s.last_active_at?new Date(s.last_active_at).getTime():(s.started_at?new Date(s.started_at).getTime():0)))<=45000);
+    const activeSessions=S.sessions.filter(isSessLive).length;
     const active=S.grants.filter(g=>g.ttl>0&&g.used<g.max).length;
     return `
     <div class="planes">
@@ -644,7 +646,8 @@ VIEWS.agents={
         ? `<span class="tag t-OFFLINE"><span class="dot-offline"></span>OFFLINE</span>`
         : `<span class="tag t-QUARANTINED">${esc(a.liveness)}</span>`;
 
-      const activeSess = S.sessions.filter(s => s.status === 'active' && ((a.instanceId && s.instance_id === a.instanceId) || s.app_id === a.appId));
+      const isSessLive = s => s.status === 'active' && ((Date.now() - (s.last_active_at ? new Date(s.last_active_at).getTime() : (s.started_at ? new Date(s.started_at).getTime() : 0))) <= 45000);
+      const activeSess = a.liveness === 'LIVE' ? S.sessions.filter(s => isSessLive(s) && ((a.instanceId && s.instance_id === a.instanceId) || s.app_id === a.appId)) : [];
       const totalSess = S.sessions.filter(s => ((a.instanceId && s.instance_id === a.instanceId) || s.app_id === a.appId));
       const sessHtml = activeSess.length > 0
         ? `<b style="color:var(--allow)">${activeSess.length} active</b><span style="color:var(--muted);font-size:12px"> (${totalSess.length} total)</span>`
@@ -704,7 +707,14 @@ VIEWS.agents={
 /* Sessions */
 VIEWS.sessions={
   html(){
-    const actCount = S.sessions.filter(s=>s.status==='active').length;
+    const now = Date.now();
+    const isSessLive = s => {
+      const liveByTime = s.status === 'active' && ((now - (s.last_active_at ? new Date(s.last_active_at).getTime() : (s.started_at ? new Date(s.started_at).getTime() : 0))) <= 45000);
+      if (!liveByTime) return false;
+      const pAgent = S.agents.find(a => (s.instance_id && (a.instanceId === s.instance_id || a.id === s.instance_id)) || a.id === s.session_id);
+      return pAgent ? pAgent.liveness === 'LIVE' : true;
+    };
+    const actCount = S.sessions.filter(isSessLive).length;
     return `<div class="panel">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
       <div>
@@ -727,7 +737,7 @@ VIEWS.sessions={
       <th>Last Active</th>
     </tr></thead><tbody>
     ${S.sessions.length ? S.sessions.map(s => {
-      const isAct = s.status === 'active';
+      const isAct = isSessLive(s);
       const stTag = isAct
         ? `<span class="tag t-LIVE"><span class="dot-live"></span>ACTIVE</span>`
         : (s.status === 'revoked' ? `<span class="tag t-QUARANTINED">REVOKED</span>` : `<span class="tag t-OFFLINE"><span class="dot-offline"></span>CLOSED</span>`);

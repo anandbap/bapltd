@@ -190,7 +190,7 @@ func RunRegister(args []string) error {
 		Status:       regResp.Status,
 		BinaryHash:   binHash,
 		SessionToken: regResp.SessionToken,
-		EnrolledAt:   time.Now(),
+		EnrolledAt:   time.Now().UTC(),
 	}
 
 	if err := os.MkdirAll(filepath.Dir(*configPath), 0700); err != nil {

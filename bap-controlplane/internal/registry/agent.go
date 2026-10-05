@@ -67,7 +67,19 @@ func (s *Store) Get(agentID string) (*types.RegisteredAgent, error) {
 	if !exists {
 		return nil, fmt.Errorf("agent %q not found in registry", agentID)
 	}
-	return agent, nil
+	copy := *agent
+	copy.AllowedBinaryHashes = append([]string(nil), agent.AllowedBinaryHashes...)
+	copy.PermittedScopes = append([]string(nil), agent.PermittedScopes...)
+	if copy.Status == types.StatusActive {
+		lastAct := copy.CreatedAt
+		if copy.LastHeartbeatAt != nil {
+			lastAct = *copy.LastHeartbeatAt
+		}
+		if time.Since(lastAct) > 45*time.Second {
+			copy.Status = types.StatusOffline
+		}
+	}
+	return &copy, nil
 }
 
 func (s *Store) Enroll(agentID string, binaryHash, pubKey, hostname, osName, arch, instanceID string) (*types.RegisteredAgent, error) {
@@ -270,11 +282,21 @@ func (s *Store) List() []*types.RegisteredAgent {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	now := time.Now()
 	list := make([]*types.RegisteredAgent, 0, len(s.agents))
 	for _, a := range s.agents {
 		copy := *a
 		copy.AllowedBinaryHashes = append([]string(nil), a.AllowedBinaryHashes...)
 		copy.PermittedScopes = append([]string(nil), a.PermittedScopes...)
+		if copy.Status == types.StatusActive {
+			lastAct := copy.CreatedAt
+			if copy.LastHeartbeatAt != nil {
+				lastAct = *copy.LastHeartbeatAt
+			}
+			if now.Sub(lastAct) > 45*time.Second {
+				copy.Status = types.StatusOffline
+			}
+		}
 		list = append(list, &copy)
 	}
 	return list
@@ -302,6 +324,15 @@ func (s *Store) ListVisible(maxAge time.Duration, isUserRevoked func(string) boo
 		copy := *a
 		copy.AllowedBinaryHashes = append([]string(nil), a.AllowedBinaryHashes...)
 		copy.PermittedScopes = append([]string(nil), a.PermittedScopes...)
+		if copy.Status == types.StatusActive {
+			lastAct := copy.CreatedAt
+			if copy.LastHeartbeatAt != nil {
+				lastAct = *copy.LastHeartbeatAt
+			}
+			if now.Sub(lastAct) > 45*time.Second {
+				copy.Status = types.StatusOffline
+			}
+		}
 		list = append(list, &copy)
 	}
 	return list
@@ -314,8 +345,7 @@ func (s *Store) TrustDomain() string {
 }
 
 // EnsureSessionAgent guarantees that any active agent session is tracked in the registry.
-// Callers must provide a stable, non-empty instance ID. Session-backed workloads use
-// their session ID when the client has no independently enrolled instance identity.
+// Stable instance ID is derived when not provided, avoiding agent sprawl across sessions.
 func (s *Store) EnsureSessionAgent(appID, instanceID, spiffeID, userEmail, hostname string, agentNames ...string) *types.RegisteredAgent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -331,7 +361,7 @@ func (s *Store) EnsureSessionAgent(appID, instanceID, spiffeID, userEmail, hostn
 	}
 	agentID := fmt.Sprintf("agent-%s-%s", strings.ToLower(appID), instanceID)
 	for _, enrolled := range s.agents {
-		if enrolled.AppID == appID && enrolled.InstanceID == instanceID {
+		if strings.EqualFold(enrolled.AppID, appID) && (enrolled.InstanceID == instanceID || enrolled.AgentID == agentID) {
 			agentID = enrolled.AgentID
 			break
 		}
@@ -392,10 +422,11 @@ func (s *Store) HeartbeatInstance(appID, instanceID string) error {
 	}
 	now := time.Now()
 	for _, a := range s.agents {
-		if strings.EqualFold(a.AppID, appID) && a.InstanceID == instanceID {
+		if strings.EqualFold(a.AppID, appID) && (a.InstanceID == instanceID || a.AgentID == instanceID) {
 			if a.Status == types.StatusRevoked {
 				return fmt.Errorf("agent %q is revoked", a.AgentID)
 			}
+			a.Status = types.StatusActive
 			a.LastHeartbeatAt = &now
 			return nil
 		}

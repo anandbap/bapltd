@@ -279,7 +279,7 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 
 // RunExec handles the 'exec' subcommand.
 func RunExec(args []string) {
-	startTime := time.Now()
+	startTime := time.Now().UTC()
 
 	fs := flag.NewFlagSet("exec", flag.ContinueOnError)
 	policyPath := fs.String("policy", "", "Path to policy.cedar file (defaults to ./policy.cedar)")

@@ -1914,6 +1914,55 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   3. Release aggregation job generates `SHA256SUMS.txt` containing SHA-256 digests for all binaries, packages, and profiles.
   4. Release publishes `SHA256SUMS.txt` directly to the GitHub Release.
 
+---
+
+### Epic 27: Fleet Telemetry Consistency, Dynamic Liveness Coupling & Unified State Architecture (BAP-EPIC-27)
+
+#### BAP-510: Fleet-Wide UTC Timestamp Standardization
+* **Status**: DONE
+* **Type**: Core Telemetry & Audit Integrity
+* **As a**: Security Operations Engineer / Compliance Auditor
+* **I want**: All timestamp generation across `bap-edge`, `bap-controlplane`, `bap-gateway`, and `cchook` to strictly use UTC RFC 3339 format
+* **So that**: Distributed edge nodes running across multiple geographic time zones produce consistent, deterministic, tamper-evident audit logs without clock skew or chronological confusion.
+* **Acceptance Criteria**:
+  1. `bap-edge` audit logging, start times, enrollment timestamps, and transmission payloads strictly enforce `.UTC()` and RFC 3339 formatting.
+  2. Central audit store `Ingest()` normalizes incoming timestamps to RFC 3339 UTC.
+  3. Gateway PEP, status checks, and session telemetry timestamps format exclusively in UTC.
+
+#### BAP-511: Hierarchical Agent-to-Session Liveness Coupling
+* **Status**: DONE
+* **Type**: Fleet Governance & Lifecycle State Engine
+* **As a**: Fleet Administrator & SOC Analyst
+* **I want**: Execution sessions to be strictly coupled to their parent host agent's liveness state
+* **So that**: An offline or deregistered agent can NEVER show active sessions ("ghost sessions"), and session status dynamically transitions to `offline`/`closed` when the parent agent heartbeat lapses.
+* **Acceptance Criteria**:
+  1. If an agent's heartbeat lapses (> 45s), status is dynamically reported as `offline`.
+  2. `handleInspectorData` enforces agent-session coupling: sessions attached to offline agents are strictly marked `offline`.
+  3. React and HTML dashboards filter out ghost sessions and render offline agents and closed sessions with stopped indicators, never active green dots.
+  4. Closing or deregistering an agent terminates or marks all child sessions as closed.
+
+#### BAP-512: Stable Workstation Identity & Multi-Session De-Duplication
+* **Status**: DONE
+* **Type**: Identity Governance & Agent Lifecycle
+* **As a**: Software Engineer using Claude Code / AI Agents
+* **I want**: Multiple Claude sessions on the same workstation to share a single registered agent identity
+* **So that**: Launching Claude multiple times does not spawn duplicate agent cards or clutter the fleet matrix with orphaned agent registrations.
+* **Acceptance Criteria**:
+  1. Workstation instances derive a stable, host-pinned instance identity (`hostname` sanitized).
+  2. `EnsureSessionAgent` reuses the registered agent definition for identical `(app_id, instance_id)` or `(app_id, hostname)`.
+  3. Multiple interactive sessions cleanly attach as concurrent sessions under the single workstation agent tile.
+
+#### BAP-513: Unified `.bapstate` Hierarchy & Clean Sweep Reconciliation
+* **Status**: DONE
+* **Type**: Resilience & File System Cleanliness
+* **As a**: Developer & DevOps Engineer
+* **I want**: All BAP configuration, credentials, session markers, and offline audit spool to reside in a clean, predictable `.bapstate` directory
+* **So that**: Workspaces remain tidy, configuration precedence is deterministic, and `bapedge sweep` can cleanly purge orphaned markers and flush offline audit spools.
+* **Acceptance Criteria**:
+  1. Directory resolution adheres to strict precedence: `$BAP_STATE_DIR` -> `~/.bapstate` -> `./.bapstate`.
+  2. Automatic seamless migration from legacy `.ltd`, `.bap/`, and root `ltd-audit.jsonl` files.
+  3. `bapedge sweep` flushes pending audit records and cleans up dead session markers.
+
 
 
 

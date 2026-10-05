@@ -1360,12 +1360,36 @@ func (s *Server) handleInspectorData(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	liveAgentInstances := make(map[string]bool)
+	for _, a := range agents {
+		if a.Status == types.StatusActive {
+			if a.InstanceID != "" {
+				liveAgentInstances[a.InstanceID] = true
+			}
+			if a.AgentID != "" {
+				liveAgentInstances[a.AgentID] = true
+			}
+		}
+	}
+
 	var sessionsList any = []any{}
 	var revokedSessions []string
 	var revokedUsers []string
 	if s.sessionStore != nil {
-		// The command center paginates on the client and searches the full fleet.
-		sessionsList = s.sessionStore.ListVisible(5000, 2*time.Hour)
+		rawSessions := s.sessionStore.ListVisible(5000, 2*time.Hour)
+		for _, sess := range rawSessions {
+			// Coupling: if host agent is offline, sessions attached to it cannot be active
+			if sess.Status == "active" && len(agents) > 0 {
+				inst := sess.InstanceID
+				if inst == "" {
+					inst = sess.SessionID
+				}
+				if !liveAgentInstances[inst] && !liveAgentInstances[sess.SessionID] {
+					sess.Status = "offline"
+				}
+			}
+		}
+		sessionsList = rawSessions
 		revokedSessions = s.sessionStore.ListRevoked()
 		revokedUsers = s.sessionStore.ListRevokedUsers()
 	}
@@ -1479,6 +1503,9 @@ func (s *Server) handleControlSweep(w http.ResponseWriter, r *http.Request) {
 
 	if s.sessionStore != nil {
 		sweptSessions += s.sessionStore.PurgeStale(idleTimeout)
+	}
+	if s.registry != nil {
+		s.registry.PurgeStale(idleTimeout)
 	}
 
 	reconciledGrants := 0

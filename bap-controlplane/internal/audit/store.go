@@ -59,7 +59,12 @@ func (s *Store) Ingest(incoming []Event) (int, error) {
 	ingested := 0
 	for _, ev := range incoming {
 		if ev.EventID == "" {
-			ev.EventID = fmt.Sprintf("ev-%d-%d", time.Now().UnixNano(), len(s.events))
+			ev.EventID = fmt.Sprintf("ev-%d-%d", time.Now().UTC().UnixNano(), len(s.events))
+		}
+		if ev.Timestamp == "" {
+			ev.Timestamp = time.Now().UTC().Format(time.RFC3339)
+		} else if parsed, err := time.Parse(time.RFC3339, ev.Timestamp); err == nil {
+			ev.Timestamp = parsed.UTC().Format(time.RFC3339)
 		}
 
 		if _, exists := s.seenIDs[ev.EventID]; exists {

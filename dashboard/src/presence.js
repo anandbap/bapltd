@@ -8,7 +8,7 @@ export function presence(agent, now) {
   if (agent.status === 'stopped' || agent.status === 'closed') {
     return { status: agent.status, age, visible: age < 300_000 };
   }
-  if (['deregistered', 'inactive'].includes(agent.status) || age >= OFFLINE_MS) {
+  if (['deregistered', 'inactive', 'offline'].includes(agent.status) || age >= OFFLINE_MS) {
     return { status: 'offline', age, visible: false };
   }
   return { status: agent.status || 'active', age, visible: true };

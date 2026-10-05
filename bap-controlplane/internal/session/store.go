@@ -306,6 +306,9 @@ func (s *Store) Start(req SessionStartRequest) (*Session, error) {
 		if req.UserEmail != "" {
 			existing.UserEmail = req.UserEmail
 		}
+		if req.InstanceID != "" {
+			existing.InstanceID = req.InstanceID
+		}
 		if req.UserPrompt != "" || req.Intent.Primary != "" {
 			existing.UserPrompt = req.UserPrompt
 			existing.Intent = normalizeIntent(req.Intent, req.UserPrompt)
@@ -459,7 +462,7 @@ func (s *Store) IsRevoked(sessionID string) bool {
 	return false
 }
 
-// HasActiveSessionsForInstance checks if any session attached to the given instanceID is currently active.
+// HasActiveSessionsForInstance checks if any session attached to the given instanceID is currently active and alive.
 func (s *Store) HasActiveSessionsForInstance(instanceID string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -467,9 +470,12 @@ func (s *Store) HasActiveSessionsForInstance(instanceID string) bool {
 	if instanceID == "" {
 		return false
 	}
+	now := time.Now().UTC()
 	for _, sess := range s.sessions {
-		if sess.InstanceID == instanceID && sess.Status == "active" {
-			return true
+		if (sess.InstanceID == instanceID || sess.SessionID == instanceID) && sess.Status == "active" {
+			if now.Sub(sess.LastActiveAt) <= 45*time.Second {
+				return true
+			}
 		}
 	}
 	return false
@@ -668,6 +674,7 @@ func (s *Store) List(limit int) []*Session {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	now := time.Now().UTC()
 	total := len(s.order)
 	if limit <= 0 || limit > total {
 		limit = total
@@ -680,6 +687,9 @@ func (s *Store) List(limit int) []*Session {
 			// Return shallow copy without embedding all raw events to keep payloads light
 			cp := *sess
 			cp.Events = nil // summary only
+			if cp.Status == "active" && now.Sub(cp.LastActiveAt) > 45*time.Second {
+				cp.Status = "offline"
+			}
 			result = append(result, &cp)
 		}
 	}
@@ -708,6 +718,9 @@ func (s *Store) ListVisible(limit int, maxAge time.Duration) []*Session {
 			}
 			cp := *sess
 			cp.Events = nil
+			if cp.Status == "active" && now.Sub(cp.LastActiveAt) > 45*time.Second {
+				cp.Status = "offline"
+			}
 			result = append(result, &cp)
 		}
 	}
@@ -727,6 +740,9 @@ func (s *Store) Get(sessionID string) (*Session, error) {
 	eventsCopy := make([]audit.Event, len(sess.Events))
 	copy(eventsCopy, sess.Events)
 	cp.Events = eventsCopy
+	if cp.Status == "active" && time.Since(cp.LastActiveAt) > 45*time.Second {
+		cp.Status = "offline"
+	}
 	return &cp, nil
 }
 

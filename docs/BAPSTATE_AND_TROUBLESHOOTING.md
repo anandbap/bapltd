@@ -320,3 +320,77 @@ bapedge exec -- git status
 ```
 
 All credentials, logs, policy bundles, and session markers will be isolated to the custom directory without modifying `~/.bapstate`.
+
+---
+
+### Playbook 7: Resolving Spool Backlog ("Un-flushed entries pending network reconnection")
+
+**Symptom**:
+`bapedge status` outputs:
+```text
+  OFFLINE AUDIT STORE & RESILIENCE:
+    • Spool Backlog:  2815 un-flushed entries pending network reconnection in .bapstate/audit.jsonl
+                      Run 'bapedge sweep' to reconcile and flush immediately.
+```
+
+**Root Cause**:
+Commands were executed while disconnected from the control plane, during high-volume testing (`pytest`, `go test`), or when the control plane was temporarily unreachable. The tamper-evident offline spool records all actions safely on disk.
+
+**Resolution Steps**:
+1. Verify the Control Plane is online:
+   ```bash
+   bapedge status
+   ```
+2. Run clean sweep to flush the entire backlog in batches to the control plane and clear local spool residue:
+   ```bash
+   bapedge sweep
+   ```
+   **Output**:
+   ```text
+   [✓] Flushed 2815 offline audit records to central tamper-evident ledger
+   [✓] Central Control Plane reconciled: 0 idle sessions closed
+   [✓] Workstation successfully rejoined fleet with clean state.
+   ```
+3. During active Claude Code sessions, the background daemon `bapedge watch` automatically pulses heartbeats every 2 seconds and flushes the spool every 10 seconds.
+
+---
+
+### Playbook 8: Agent-to-Session Liveness Coupling & De-Duplication
+
+**Symptom**:
+An agent showed as offline, but its session appeared active, or launching Claude Code multiple times created duplicate agent cards in the dashboard.
+
+**Root Cause**:
+1. **Liveness Threshold**: Agents and execution sessions must pulse heartbeats within 45 seconds. Previously, expired sessions were reported active without checking heartbeat age.
+2. **Coupling Rule**: An execution session runs inside an agent. If the agent's heartbeat expires (> 45s) or the agent is closed, its attached execution sessions are now strictly coupled and immediately reported as `offline`/`closed`.
+3. **Agent De-Duplication**: Multiple Claude Code launches on the same workstation now share a single, host-pinned agent identity (`agent-claude-code-<hostname>`). Individual runs are tracked as concurrent sessions within that single agent tile.
+
+**Resolution Steps**:
+1. Run `bapedge sweep` on the workstation to purge orphaned session markers from previous killed processes:
+   ```bash
+   bapedge sweep
+   ```
+2. Alternatively, trigger a remote sweep on the Control Plane:
+   ```powershell
+   Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/control/sweep" -Body '{"stale_idle_seconds":45}' -ContentType "application/json"
+   ```
+3. Both the React Dashboard (`/`) and Cockpit (`/inspector_v2.html`) will immediately refresh, showing live agents with green dots and offline/closed agents with gray dots.
+
+---
+
+### Playbook 9: Fleet-Wide UTC Timestamp Verification
+
+**Standard**:
+All BAP audit records, session markers, and API telemetry format strictly in **UTC RFC 3339** (`YYYY-MM-DDTHH:MM:SSZ`), regardless of the local timezone of the developer machine.
+
+**Verification**:
+1. Inspect the last entry in the local audit spool:
+   ```powershell
+   Get-Content -Path ~/.bapstate/audit.jsonl -Tail 1 | ConvertFrom-Json | Select-Object event_id, timestamp, decision, full_command
+   ```
+   Confirm `timestamp` ends with `Z` or `+00:00`.
+2. Inspect Central Control Plane live audit stream:
+   ```powershell
+   (Invoke-RestMethod -Uri "http://localhost:8080/api/v1/inspector/data").central_events[-1].timestamp
+   ```
+   Timestamps will align identically across all distributed workstations.
