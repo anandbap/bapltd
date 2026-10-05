@@ -17,7 +17,3 @@ services:
         generateValue: true
       - key: BAP_DB_PATH
         value: /data/bap-controlplane.db
-    disk:
-      name: bap-data
-      mountPath: /data
-      sizeGB: 1
