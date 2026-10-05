@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-var httpClient = httptransport.New(300 * time.Millisecond)
+var httpClient = httptransport.New(5 * time.Second)
 
 // HandshakeAck models the cryptographic acknowledgement returned by bapcontrolplane.
 type HandshakeAck struct {

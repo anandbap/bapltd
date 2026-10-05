@@ -626,7 +626,7 @@ func syncRevocationsFast(serverURL, policyPath string) {
 	if serverURL == "" || os.Getenv("BAP_OFFLINE") == "1" || os.Getenv("BAP_TEST_MODE") == "1" {
 		return
 	}
-	client := httptransport.New(200 * time.Millisecond)
+	client := httptransport.New(3 * time.Second)
 	resp, err := client.Get(serverURL + "/api/v1/control/revocations")
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return
