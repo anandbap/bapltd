@@ -139,20 +139,33 @@ func generateExecutionReceipt(ec *execContext, result string, exitCode int) *typ
 	h.Write([]byte(strings.TrimSpace(ec.fullCommand)))
 	requestHash := fmt.Sprintf("sha256:%x", h.Sum(nil))
 
-	policyHash := "v1.0.0-cedar"
+	policyHash := ""
 	polPath := ec.policyPath
 	if polPath == "" {
 		polPath = "policy.cedar"
 	}
-	if pBytes, err := os.ReadFile(polPath); err == nil {
-		ph := sha256.Sum256(pBytes)
-		policyHash = fmt.Sprintf("sha256:%x", ph[:16])
+	var pBytes []byte
+	candidates := []string{polPath, filepath.Join("..", polPath), filepath.Join("..", "..", polPath)}
+	for _, cand := range candidates {
+		if data, err := os.ReadFile(cand); err == nil && len(data) > 0 {
+			pBytes = data
+			break
+		}
 	}
+	if len(pBytes) == 0 {
+		pBytes = []byte("permit(principal, action, resource);")
+	}
+	ph := sha256.Sum256(pBytes)
+	policyHash = fmt.Sprintf("sha256:%x", ph[:16])
 
 	uID, _, spiffeID := resolveLocalIdentity()
 	identity := spiffeID
-	if identity == "" {
-		identity = fmt.Sprintf("spiffe://bap.local/agent/%s", ec.source)
+	if identity == "" || identity == "NA" || !strings.HasPrefix(identity, "spiffe://") {
+		src := ec.source
+		if src == "" {
+			src = "agent"
+		}
+		identity = fmt.Sprintf("spiffe://bap.local/agent/%s", src)
 	}
 
 	userStr := uID
