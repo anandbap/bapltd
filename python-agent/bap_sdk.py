@@ -75,11 +75,48 @@ class BAPExecResult:
         return f"<BAPExecResult decision={self.decision} code={self.exit_code} latency={self.duration_ms}ms>"
 
 
+def get_bapstate_dir() -> str:
+    """
+    Resolves the .bapstate directory following the precedence:
+    1. BAP_STATE_DIR env var
+    2. ~/.bapstate in user home (if exists)
+    3. ./.bapstate in current working directory (if exists)
+    4. Defaults to ~/.bapstate (fallback to ./.bapstate)
+    """
+    env_dir = os.getenv("BAP_STATE_DIR")
+    if env_dir:
+        return env_dir
+    home_dir = os.path.expanduser("~/.bapstate")
+    if os.path.isdir(home_dir):
+        return home_dir
+    cwd_dir = os.path.abspath(".bapstate")
+    if os.path.isdir(cwd_dir):
+        return cwd_dir
+    try:
+        os.makedirs(home_dir, exist_ok=True)
+        return home_dir
+    except Exception:
+        os.makedirs(cwd_dir, exist_ok=True)
+        return cwd_dir
+
+
+def get_bap_credentials_path() -> str:
+    if os.getenv("BAP_CREDENTIALS"):
+        return os.environ["BAP_CREDENTIALS"]
+    bapstate_creds = os.path.join(get_bapstate_dir(), "credentials.json")
+    if os.path.isfile(bapstate_creds):
+        return bapstate_creds
+    legacy_creds = os.path.expanduser("~/.ltd/credentials.json")
+    if os.path.isfile(legacy_creds):
+        return legacy_creds
+    return bapstate_creds
+
+
 def resolve_endpoints() -> dict:
     """
     Resolves BAP central endpoints from:
     1. Environment variables (BAP_SERVER_URL, BAP_GATEWAY_URL, etc.)
-    2. bap-config.json in current directory or ancestor directories
+    2. .bapstate/config.json, bap-config.json in current directory or ancestor directories
     3. User home directory ~/.bap/config.json
     4. Default local fallback (localhost:8080, localhost:9090)
     """
@@ -91,7 +128,9 @@ def resolve_endpoints() -> dict:
     }
 
     # 1. Search candidate config files
-    candidate_paths = []
+    candidate_paths = [
+        os.path.join(get_bapstate_dir(), "config.json"),
+    ]
     curr = os.getcwd()
     for _ in range(4):
         candidate_paths.append(os.path.join(curr, "bap-config.json"))
@@ -304,7 +343,7 @@ class BAPSession:
         Acquires an ephemeral BAP authority grant (JWT-SVID) from the BAP Control Plane.
         Required when calling protected enterprise API Gateways (Envoy, Kong, bap-gateway).
         """
-        credentials_path = os.getenv("BAP_CREDENTIALS", os.path.expanduser("~/.ltd/credentials.json"))
+        credentials_path = get_bap_credentials_path()
         try:
             with open(credentials_path, encoding="utf-8") as handle:
                 credentials = json.load(handle)

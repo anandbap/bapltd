@@ -97,6 +97,9 @@ bap-gateway/bapgateway.exe
 bap-controlplane.db*
 policy-state.json
 manual-acceptance-results.json
+.bapstate/
+.bap/
+.ltd/
 
 # ==============================================================================
 # Audit Logs & Runtime Telemetry

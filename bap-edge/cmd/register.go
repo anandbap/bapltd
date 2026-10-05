@@ -18,6 +18,7 @@ import (
 	"bap-edge/internal/config"
 	"bap-edge/internal/httptransport"
 	"bap-edge/internal/policystore"
+	"bap-edge/internal/state"
 )
 
 type RegisterRequest struct {
@@ -57,13 +58,9 @@ type StoredCredentials struct {
 	EnrolledAt   time.Time `json:"enrolled_at"`
 }
 
-// DefaultCredentialsPath returns ~/.ltd/credentials.json
+// DefaultCredentialsPath returns the path to credentials.json in .bapstate.
 func DefaultCredentialsPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "."
-	}
-	return filepath.Join(home, ".ltd", "credentials.json")
+	return state.CredentialsPath()
 }
 
 // RunRegister executes the edge agent self-registration against bap-controlplane.

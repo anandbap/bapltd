@@ -291,7 +291,7 @@ func RunExec(args []string) {
 		defaultSource = "cli"
 	}
 	sourceFlag := fs.String("source", defaultSource, "Identifier of agent invoking command (e.g. claude-code, copilot, cli)")
-	auditLogFlag := fs.String("audit-log", "", "Path to audit log file in JSON lines (defaults to LTD_AUDIT_LOG or ltd-audit.jsonl, 'off' to disable)")
+	auditLogFlag := fs.String("audit-log", "", "Path to audit log file in JSON lines (defaults to .bapstate/audit.jsonl or LTD_AUDIT_LOG, 'off' to disable)")
 
 	defaultSession := os.Getenv("BAP_SESSION_ID")
 	if defaultSession == "" {

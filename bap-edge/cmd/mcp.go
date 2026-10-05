@@ -13,7 +13,7 @@ import (
 func RunMCP(args []string) error {
 	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	policyPath := fs.String("policy", "", "Path to policy.cedar file (defaults to ./policy.cedar)")
-	auditLogFlag := fs.String("audit-log", "", "Path to audit log file in JSON lines (defaults to LTD_AUDIT_LOG or ltd-audit.jsonl)")
+	auditLogFlag := fs.String("audit-log", "", "Path to audit log file in JSON lines (defaults to .bapstate/audit.jsonl or LTD_AUDIT_LOG)")
 
 	defaultSession := os.Getenv("BAP_SESSION_ID")
 	if defaultSession == "" {

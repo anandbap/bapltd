@@ -2,6 +2,7 @@ package policystore
 
 import (
 	"bap-edge/internal/httptransport"
+	"bap-edge/internal/state"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -47,12 +48,9 @@ type Store struct {
 	directory string
 }
 
+// DefaultPolicyDir returns the cached policy directory in .bapstate/policy.
 func DefaultPolicyDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "."
-	}
-	return filepath.Join(home, ".ltd", "policy")
+	return state.PolicyDir()
 }
 
 func New(dir string) *Store {

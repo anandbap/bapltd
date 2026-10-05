@@ -10,7 +10,7 @@ import (
 // RunVerifyLog checks the cryptographic integrity of the local JSON Lines audit log.
 func RunVerifyLog(args []string) error {
 	fs := flag.NewFlagSet("verify-log", flag.ContinueOnError)
-	fileFlag := fs.String("file", "", "Path to audit log file (defaults to LTD_AUDIT_LOG or ltd-audit.jsonl)")
+	fileFlag := fs.String("file", "", "Path to audit log file (defaults to .bapstate/audit.jsonl or LTD_AUDIT_LOG)")
 
 	if err := fs.Parse(args); err != nil {
 		return err

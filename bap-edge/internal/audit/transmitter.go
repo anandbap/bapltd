@@ -147,6 +147,10 @@ func FlushOfflineAudit(serverURL string, logPath string) (int, error) {
 		return 0, nil
 	}
 
+	if logPath == "" {
+		logPath = DefaultLogPath()
+	}
+
 	entries, err := ReadEntries(logPath)
 	if err != nil {
 		return 0, err

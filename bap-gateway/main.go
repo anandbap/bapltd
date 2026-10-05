@@ -249,8 +249,8 @@ func emitGatewayAudit(cfg GatewayConfig, sessionID, agentID, appID, path, method
 			_, _ = client.Post(cfg.ControlPlane+"/api/v1/audit/ingest", "application/json", bytes.NewReader(data))
 		}
 
-		// 2. Append to local ltd-audit.jsonl
-		for _, auditFile := range []string{"ltd-audit.jsonl", "../ltd-audit.jsonl"} {
+		// 2. Append to local .bapstate/audit.jsonl or legacy ltd-audit.jsonl
+		for _, auditFile := range []string{".bapstate/audit.jsonl", "../.bapstate/audit.jsonl", "ltd-audit.jsonl", "../ltd-audit.jsonl"} {
 			if f, err := os.OpenFile(auditFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
 				data, _ := json.Marshal(ev)
 				_, _ = f.Write(append(data, '\n'))

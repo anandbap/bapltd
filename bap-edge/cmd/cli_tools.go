@@ -19,6 +19,7 @@ import (
 	"bap-edge/internal/config"
 	"bap-edge/internal/httptransport"
 	"bap-edge/internal/policystore"
+	"bap-edge/internal/state"
 )
 
 // RunSetup provides a 1-click idempotent configuration for developer workstations (BAP-471).
@@ -154,6 +155,7 @@ func RunStatus(args []string) error {
 	fmt.Printf("  Host:             %s (%s/%s)\n", hostname, runtime.GOOS, runtime.GOARCH)
 	fmt.Printf("  User:             %s\n", username)
 	fmt.Printf("  Control Plane:    %s\n", serverURL)
+	fmt.Printf("  State Directory:  %s\n", state.Dir())
 	fmt.Printf("  Workspace Root:   %s\n", authz.GetWorkspaceRoot())
 
 	// Enrolled Identity & Authentication Status
@@ -188,41 +190,48 @@ func RunStatus(args []string) error {
 	fmt.Println("--------------------------------------------------------------------------------")
 
 	// 1. Inspect Active Sessions
-	sessionsDir := filepath.Join(".bap", "sessions")
-	entries, _ := os.ReadDir(sessionsDir)
+	sessionDirs := []string{state.SessionsDir(), filepath.Join(".bap", "sessions")}
 	activeCount := 0
 	staleCount := 0
+	seenSessionIDs := make(map[string]bool)
 
 	fmt.Println("  ACTIVE SESSIONS:")
 	foundSessions := false
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || strings.HasPrefix(entry.Name(), "pid-") {
-			continue
-		}
-		path := filepath.Join(sessionsDir, entry.Name())
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		var sInfo struct {
-			SessionID string    `json:"session_id"`
-			PID       int       `json:"pid"`
-			AppID     string    `json:"app_id"`
-			StartedAt time.Time `json:"started_at"`
-		}
-		if json.Unmarshal(data, &sInfo) == nil && sInfo.SessionID != "" {
-			foundSessions = true
-			alive := isProcessAlive(sInfo.PID)
-			statusStr := "ACTIVE"
-			if !alive {
-				statusStr = "ORPHANED/STALE (Process Dead)"
-				staleCount++
-			} else {
-				activeCount++
+	for _, sDir := range sessionDirs {
+		entries, _ := os.ReadDir(sDir)
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || strings.HasPrefix(entry.Name(), "pid-") {
+				continue
 			}
-			age := time.Since(sInfo.StartedAt).Round(time.Second)
-			fmt.Printf("    • [%s] Session: %-25s App: %-12s PID: %-7d Uptime: %s\n",
-				statusStr, sInfo.SessionID, sInfo.AppID, sInfo.PID, age)
+			path := filepath.Join(sDir, entry.Name())
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			var sInfo struct {
+				SessionID string    `json:"session_id"`
+				PID       int       `json:"pid"`
+				AppID     string    `json:"app_id"`
+				StartedAt time.Time `json:"started_at"`
+			}
+			if json.Unmarshal(data, &sInfo) == nil && sInfo.SessionID != "" {
+				if seenSessionIDs[sInfo.SessionID] {
+					continue
+				}
+				seenSessionIDs[sInfo.SessionID] = true
+				foundSessions = true
+				alive := isProcessAlive(sInfo.PID)
+				statusStr := "ACTIVE"
+				if !alive {
+					statusStr = "ORPHANED/STALE (Process Dead)"
+					staleCount++
+				} else {
+					activeCount++
+				}
+				age := time.Since(sInfo.StartedAt).Round(time.Second)
+				fmt.Printf("    • [%s] Session: %-25s App: %-12s PID: %-7d Uptime: %s\n",
+					statusStr, sInfo.SessionID, sInfo.AppID, sInfo.PID, age)
+			}
 		}
 	}
 	if !foundSessions {
@@ -390,40 +399,42 @@ func RunSweep(args []string) error {
 	fmt.Println("--------------------------------------------------------------------------------")
 
 	sweptLocalSessions := 0
-	sessionsDir := filepath.Join(".bap", "sessions")
-	entries, _ := os.ReadDir(sessionsDir)
+	sessionSweepDirs := []string{state.SessionsDir(), filepath.Join(".bap", "sessions")}
 
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		p := filepath.Join(sessionsDir, entry.Name())
-		data, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
+	for _, sessionsDir := range sessionSweepDirs {
+		entries, _ := os.ReadDir(sessionsDir)
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			p := filepath.Join(sessionsDir, entry.Name())
+			data, err := os.ReadFile(p)
+			if err != nil {
+				continue
+			}
 
-		var sInfo struct {
-			SessionID string `json:"session_id"`
-			PID       int    `json:"pid"`
-		}
-		if json.Unmarshal(data, &sInfo) == nil {
-			shouldPurge := *forceFlag || (sInfo.PID > 0 && !isProcessAlive(sInfo.PID))
-			if shouldPurge {
-				_ = os.Remove(p)
-				if sInfo.SessionID != "" {
-					_ = os.Remove(sessionMarkerPath(sInfo.SessionID))
-					// Inform control plane of crash recovery
-					sweepPayload := map[string]any{
-						"session_id": sInfo.SessionID,
-						"reason":     "orphaned_crash_detected_by_edge_sweep",
+			var sInfo struct {
+				SessionID string `json:"session_id"`
+				PID       int    `json:"pid"`
+			}
+			if json.Unmarshal(data, &sInfo) == nil {
+				shouldPurge := *forceFlag || (sInfo.PID > 0 && !isProcessAlive(sInfo.PID))
+				if shouldPurge {
+					_ = os.Remove(p)
+					if sInfo.SessionID != "" {
+						_ = os.Remove(sessionMarkerPath(sInfo.SessionID))
+						// Inform control plane of crash recovery
+						sweepPayload := map[string]any{
+							"session_id": sInfo.SessionID,
+							"reason":     "orphaned_crash_detected_by_edge_sweep",
+						}
+						_ = postJSONQuick(serverURL+"/api/v1/control/sweep", sweepPayload)
 					}
-					_ = postJSONQuick(serverURL+"/api/v1/control/sweep", sweepPayload)
+					if sInfo.PID > 0 {
+						_ = os.Remove(sessionPIDMarkerPath(sInfo.PID))
+					}
+					sweptLocalSessions++
 				}
-				if sInfo.PID > 0 {
-					_ = os.Remove(sessionPIDMarkerPath(sInfo.PID))
-				}
-				sweptLocalSessions++
 			}
 		}
 	}
@@ -431,6 +442,7 @@ func RunSweep(args []string) error {
 	// Purge stale root markers
 	_ = os.Remove(".bap-session.json")
 	_ = os.Remove("../.bap-session.json")
+	_ = os.Remove(state.WorkspaceSessionPath())
 	_ = os.Remove(filepath.Join(".bap", "session.json"))
 	_ = os.Remove(".bap-prompt.txt")
 	_ = os.Remove("../.bap-prompt.txt")

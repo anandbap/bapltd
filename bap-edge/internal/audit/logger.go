@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"bap-edge/internal/state"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -38,13 +39,10 @@ type AuditEntry struct {
 
 var mu sync.Mutex
 
-// DefaultLogPath returns the default audit log file location.
-// It checks LTD_AUDIT_LOG environment variable first, defaulting to "ltd-audit.jsonl".
+// DefaultLogPath returns the default audit log file location in .bapstate/audit.jsonl.
+// Precedence: BAP_AUDIT_LOG -> LTD_AUDIT_LOG -> <.bapstate>/audit.jsonl
 func DefaultLogPath() string {
-	if envPath := os.Getenv("LTD_AUDIT_LOG"); envPath != "" {
-		return envPath
-	}
-	return "ltd-audit.jsonl"
+	return state.AuditLogPath()
 }
 
 // ComputeEntryHash calculates a deterministic SHA-256 integrity hash for an entry.

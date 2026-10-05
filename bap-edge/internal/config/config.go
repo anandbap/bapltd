@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bap-edge/internal/state"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -144,6 +145,9 @@ func getFirstEnv(keys ...string) string {
 func getCandidateConfigFilePaths() []string {
 	var candidates []string
 
+	// 1. Authoritative .bapstate config path
+	candidates = append(candidates, state.ConfigPath())
+
 	// Current working directory and parent search (up to 4 levels)
 	cwd, err := os.Getwd()
 	if err == nil {
@@ -200,11 +204,7 @@ func loadConfigFile(path string) (*EndpointsConfig, error) {
 }
 
 func loadServerURLFromCredentials() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	credsPath := filepath.Join(home, ".ltd", "credentials.json")
+	credsPath := state.CredentialsPath()
 	data, err := os.ReadFile(credsPath)
 	if err != nil {
 		return ""
@@ -218,14 +218,10 @@ func loadServerURLFromCredentials() string {
 	return ""
 }
 
-// SaveConfig writes the configuration to the specified path or defaults to .bap/bap-config.json or ./bap-config.json.
+// SaveConfig writes the configuration to the specified path or defaults to .bapstate/config.json.
 func SaveConfig(cfg EndpointsConfig, targetPath string) error {
 	if targetPath == "" {
-		if fi, err := os.Stat(".bap"); err == nil && fi.IsDir() {
-			targetPath = filepath.Join(".bap", "bap-config.json")
-		} else {
-			targetPath = "bap-config.json"
-		}
+		targetPath = state.ConfigPath()
 	}
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil && filepath.Dir(targetPath) != "." {
 		return err

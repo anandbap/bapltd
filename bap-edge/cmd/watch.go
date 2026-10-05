@@ -18,6 +18,7 @@ import (
 
 	"bap-edge/internal/audit"
 	"bap-edge/internal/config"
+	"bap-edge/internal/state"
 )
 
 var isLocalScanRunning atomic.Bool
@@ -328,11 +329,11 @@ func RunWatch(args []string) error {
 
 func sessionMarkerPath(sessionID string) string {
 	sum := sha256.Sum256([]byte(sessionID))
-	return filepath.Join(".bap", "sessions", fmt.Sprintf("%x.json", sum[:]))
+	return filepath.Join(state.SessionsDir(), fmt.Sprintf("%x.json", sum[:]))
 }
 
 func sessionPIDMarkerPath(pid int) string {
-	return filepath.Join(".bap", "sessions", fmt.Sprintf("pid-%d.json", pid))
+	return filepath.Join(state.SessionsDir(), fmt.Sprintf("pid-%d.json", pid))
 }
 
 func writeSessionMarker(sessionID, serverURL, appID, username, hostname, initialPrompt string, watchPID int, instanceIDOpt ...string) {
@@ -362,7 +363,8 @@ func writeSessionMarker(sessionID, serverURL, appID, username, hostname, initial
 			_ = os.WriteFile(sessionPIDMarkerPath(watchPID), data, 0600)
 		}
 
-		// 3. Write workspace session fallback inside .bap/
+		// 3. Write workspace session fallback inside .bapstate/ and legacy .bap/
+		_ = os.WriteFile(state.WorkspaceSessionPath(), data, 0600)
 		_ = os.WriteFile(filepath.Join(".bap", "session.json"), data, 0600)
 		// Clean up any stray root marker
 		_ = os.Remove(".bap-session.json")
@@ -376,6 +378,7 @@ func cleanupSessionMarker(sessionID string, watchPID int) {
 	if watchPID > 0 {
 		_ = os.Remove(sessionPIDMarkerPath(watchPID))
 	}
+	_ = os.Remove(state.WorkspaceSessionPath())
 	_ = os.Remove(filepath.Join(".bap", "session.json"))
 
 	// Clean up legacy .bap-session.json if present
@@ -395,34 +398,36 @@ func cleanupSessionMarker(sessionID string, watchPID int) {
 	cleanupStaleSessionMarkers()
 }
 
-// cleanupStaleSessionMarkers scans .bap/sessions/ and removes orphaned markers for dead processes.
+// cleanupStaleSessionMarkers scans .bapstate/sessions/ (and legacy .bap/sessions/) and removes orphaned markers for dead processes.
 func cleanupStaleSessionMarkers() {
-	sessionsDir := filepath.Join(".bap", "sessions")
-	entries, err := os.ReadDir(sessionsDir)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		path := filepath.Join(sessionsDir, entry.Name())
-		data, err := os.ReadFile(path)
+	searchDirs := []string{state.SessionsDir(), filepath.Join(".bap", "sessions")}
+	for _, sessionsDir := range searchDirs {
+		entries, err := os.ReadDir(sessionsDir)
 		if err != nil {
 			continue
 		}
-		var marker struct {
-			PID       int       `json:"pid"`
-			SessionID string    `json:"session_id"`
-			StartedAt time.Time `json:"started_at"`
-		}
-		if err := json.Unmarshal(data, &marker); err == nil {
-			if marker.PID > 0 && !isProcessAlive(marker.PID) {
-				_ = os.Remove(path)
-				if marker.SessionID != "" {
-					_ = os.Remove(sessionMarkerPath(marker.SessionID))
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			path := filepath.Join(sessionsDir, entry.Name())
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			var marker struct {
+				PID       int       `json:"pid"`
+				SessionID string    `json:"session_id"`
+				StartedAt time.Time `json:"started_at"`
+			}
+			if err := json.Unmarshal(data, &marker); err == nil {
+				if marker.PID > 0 && !isProcessAlive(marker.PID) {
+					_ = os.Remove(path)
+					if marker.SessionID != "" {
+						_ = os.Remove(sessionMarkerPath(marker.SessionID))
+					}
+					_ = os.Remove(sessionPIDMarkerPath(marker.PID))
 				}
-				_ = os.Remove(sessionPIDMarkerPath(marker.PID))
 			}
 		}
 	}

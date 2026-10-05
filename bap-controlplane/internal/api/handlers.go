@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -1321,11 +1322,17 @@ func (s *Server) handleInspectorData(w http.ResponseWriter, r *http.Request) {
 	// Read local ltd-audit.jsonl lines if present
 	var edgeLogs []map[string]any
 	candidates := []string{
+		".bapstate/audit.jsonl",
+		"../.bapstate/audit.jsonl",
+		"../../.bapstate/audit.jsonl",
 		"ltd-audit.jsonl",
 		"../ltd-audit.jsonl",
 		"../../ltd-audit.jsonl",
 		"bap-edge/ltd-audit.jsonl",
 		"../bap-edge/ltd-audit.jsonl",
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		candidates = append([]string{filepath.Join(home, ".bapstate", "audit.jsonl")}, candidates...)
 	}
 	for _, c := range candidates {
 		if data, err := os.ReadFile(c); err == nil && len(data) > 0 {
@@ -1891,8 +1898,8 @@ func (s *Server) handleDemoExecSafe(w http.ResponseWriter, r *http.Request) {
 		_, _ = s.auditStore.Ingest([]audit.Event{ev})
 	}
 
-	// Append to ltd-audit.jsonl
-	for _, auditFile := range []string{"ltd-audit.jsonl", "../ltd-audit.jsonl", "../../ltd-audit.jsonl"} {
+	// Append to .bapstate/audit.jsonl or legacy ltd-audit.jsonl
+	for _, auditFile := range []string{".bapstate/audit.jsonl", "../.bapstate/audit.jsonl", "ltd-audit.jsonl", "../ltd-audit.jsonl", "../../ltd-audit.jsonl"} {
 		if f, err := os.OpenFile(auditFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
 			data, _ := json.Marshal(ev)
 			_, _ = f.Write(append(data, '\n'))
@@ -1980,8 +1987,8 @@ func (s *Server) handleDemoExecAttack(w http.ResponseWriter, r *http.Request) {
 		_, _ = s.auditStore.Ingest([]audit.Event{ev})
 	}
 
-	// Append to ltd-audit.jsonl
-	for _, auditFile := range []string{"ltd-audit.jsonl", "../ltd-audit.jsonl", "../../ltd-audit.jsonl"} {
+	// Append to .bapstate/audit.jsonl or legacy ltd-audit.jsonl
+	for _, auditFile := range []string{".bapstate/audit.jsonl", "../.bapstate/audit.jsonl", "ltd-audit.jsonl", "../ltd-audit.jsonl", "../../ltd-audit.jsonl"} {
 		if f, err := os.OpenFile(auditFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
 			data, _ := json.Marshal(ev)
 			_, _ = f.Write(append(data, '\n'))

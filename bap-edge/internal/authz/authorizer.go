@@ -1,6 +1,7 @@
 package authz
 
 import (
+	"bap-edge/internal/state"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -76,25 +77,23 @@ func NewAuthorizer(policyPath string) (*Authorizer, error) {
 
 	authz := &Authorizer{policySet: ps}
 
-	// Load authenticated corporate identity from ~/.ltd/credentials.json if enrolled
-	if home, err := os.UserHomeDir(); err == nil {
-		credsCandidate := filepath.Join(home, ".ltd", "credentials.json")
-		if data, err := os.ReadFile(credsCandidate); err == nil {
-			var creds struct {
-				UserEmail  string   `json:"user_email"`
-				Department string   `json:"department"`
-				Groups     []string `json:"groups"`
-				AgentID    string   `json:"agent_id"`
-				AuthMode   string   `json:"auth_mode"`
-			}
-			if json.Unmarshal(data, &creds) == nil {
-				authz.identity = PrincipalIdentity{
-					UserEmail:  creds.UserEmail,
-					Department: creds.Department,
-					Groups:     creds.Groups,
-					AgentID:    creds.AgentID,
-					AuthMode:   creds.AuthMode,
-				}
+	// Load authenticated corporate identity from .bapstate/credentials.json if enrolled
+	credsCandidate := state.CredentialsPath()
+	if data, err := os.ReadFile(credsCandidate); err == nil {
+		var creds struct {
+			UserEmail  string   `json:"user_email"`
+			Department string   `json:"department"`
+			Groups     []string `json:"groups"`
+			AgentID    string   `json:"agent_id"`
+			AuthMode   string   `json:"auth_mode"`
+		}
+		if json.Unmarshal(data, &creds) == nil {
+			authz.identity = PrincipalIdentity{
+				UserEmail:  creds.UserEmail,
+				Department: creds.Department,
+				Groups:     creds.Groups,
+				AgentID:    creds.AgentID,
+				AuthMode:   creds.AuthMode,
 			}
 		}
 	}
@@ -242,7 +241,11 @@ func findFile(customPath, defaultName string) (string, error) {
 		}
 	}
 
-	// 3. User cached policy directory (~/.ltd/policy/ or ~/.bap/policy/)
+	// 3. User cached policy directory (.bapstate/policy/ or legacy ~/.ltd/policy/)
+	stateCache := filepath.Join(state.PolicyDir(), defaultName)
+	if _, err := os.Stat(stateCache); err == nil {
+		return stateCache, nil
+	}
 	if home, err := os.UserHomeDir(); err == nil {
 		ltdCache := filepath.Join(home, ".ltd", "policy", defaultName)
 		if _, err := os.Stat(ltdCache); err == nil {
@@ -254,7 +257,7 @@ func findFile(customPath, defaultName string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("%s not found in custom path, current directory, executable directory, or ~/.ltd/policy/", defaultName)
+	return "", fmt.Errorf("%s not found in custom path, current directory, executable directory, or .bapstate/policy/", defaultName)
 }
 
 // CheckSessionRevocation checks if the given sessionID or system is blocked by local or cached policy state.
