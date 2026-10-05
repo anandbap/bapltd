@@ -208,6 +208,23 @@ dl.kv dt{color:var(--muted);font-size:13px} dl.kv dd{margin:0;word-break:break-w
 .contract-stage{background:var(--surface);border:1.5px solid var(--line);border-radius:10px;padding:12px 14px;position:relative}
 .contract-num{width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;display:inline-grid;place-items:center;font-size:11px;font-weight:700;margin-right:6px}
 .deviation-card{border:1.5px solid var(--deny);background:var(--deny-bg);border-radius:10px;padding:14px;margin-top:12px}
+
+/* ===== v2 additions: Role-Tailored Nav, Approvals, Add-ons, WhyBlocked ===== */
+.persona{display:grid;gap:4px;margin:4px 0 10px;padding:0 6px}
+.persona small{padding:0 6px;font-size:11px;opacity:.6;letter-spacing:.06em;text-transform:uppercase}
+.persona button{display:block;width:100%;text-align:left;background:rgba(255,255,255,.05);border:1px solid transparent;color:inherit;border-radius:8px;padding:7px 9px;cursor:pointer;transition:all .15s}
+.persona button b{display:block;font-size:13px;color:#fff;font-weight:600}
+.persona button span{font-size:11px;opacity:.65}
+.persona button[aria-pressed="true"]{background:rgba(127,155,255,.18);border-color:rgba(127,155,255,.55)}
+.persona button:hover{background:rgba(255,255,255,.1)}
+.risk{font:600 12.5px var(--mono);padding:2px 7px;border-radius:6px;display:inline-block}
+.risk.hi{background:var(--deny-bg);color:var(--deny)} .risk.md{background:var(--unk-bg);color:var(--unk)} .risk.lo{background:var(--allow-bg);color:var(--allow)}
+.fnd{display:inline-block;font-size:11.5px;padding:1px 8px;border-radius:99px;background:var(--surface2);border:1px solid var(--line);margin:2px 4px 2px 0}
+.mini{width:100%;border-collapse:collapse;font-size:13.5px}
+.mini td{padding:8px 6px;border-bottom:1px solid var(--line)}
+.lst{list-style:none;margin:0;padding:0}
+.lst li{display:flex;gap:10px;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+body:not(.can-quarantine) [data-q],body:not(.can-quarantine) [data-rel],body:not(.can-revoke) [data-rg],body:not(.can-publish) #ppub{opacity:.4}
 </style>
 </head>
 <body>
@@ -288,7 +305,33 @@ const S = {
   actTopology: null,
   selectedTopologyNode: 'Enterprise Root',
   activeDrillIntent: 'Investigate / Diagnose',
-  eventSource: null
+  eventSource: null,
+  // v2 feature ports (Approvals, Add-ons, Recon, Shadow)
+  approvals: [
+    {id:'apr_109a',agent:'claude-payments',team:'Payments',op:'database.schema_migration',why:'High-risk operation (risk score 0.85). Changes prod database schema.',intent:'Execute loyalty tier migration',age:2},
+    {id:'apr_204b',agent:'worker-etl',team:'Finance',op:'core-banking.transfer.bulk',why:'Bulk financial transfer exceeding automated limit ($250,000).',intent:'Reconcile batch payouts',age:7}
+  ],
+  addons: [
+    {id:'ad1',name:'sql-query-skill',type:'Skill',source:'Public GitHub',ver:'2.1',risk:2.1,findings:[],status:'Approved',agents:6},
+    {id:'ad2',name:'jira-mcp',type:'MCP server',source:'Marketplace',ver:'1.4',risk:3.4,findings:['Broad project access'],status:'Approved',agents:4},
+    {id:'ad3',name:'pdf-tools',type:'Plugin',source:'Marketplace',ver:'3.1 (was 3.0)',risk:6.8,findings:['Changed since approval','Loads outside instructions'],status:'Drifted',agents:5},
+    {id:'ad4',name:'slack-notify-skill',type:'Skill',source:'Internal',ver:'1.0',risk:1.2,findings:[],status:'Approved',agents:8},
+    {id:'ad5',name:'shell-helper',type:'Skill',source:'Public GitHub',ver:'0.9',risk:9.2,findings:['Hidden behavior','Data exfiltration path','Prompt injection'],status:'Blocked',agents:0},
+    {id:'ad6',name:'crm-connector',type:'MCP server',source:'Vendor',ver:'2.2',risk:4.9,findings:['Broad data access'],status:'Under review',agents:1},
+    {id:'ad7',name:'terraform-plugin',type:'Plugin',source:'Public GitHub',ver:'0.4',risk:7.4,findings:['Unpinned update channel','Runs shell on install'],status:'Under review',agents:2},
+    {id:'ad8',name:'docs-writer-subagent',type:'Sub-agent',source:'Internal',ver:'1.3',risk:1.8,findings:[],status:'Approved',agents:3},
+    {id:'ad9',name:'git-hooks-pack',type:'Hook',source:'Internal',ver:'2.0',risk:2.6,findings:[],status:'Approved',agents:7}
+  ],
+  recon: [
+    {id:'rc1',agent:'worker-banking',op:'POST /api/v1/core-banking/transfer',since:'4m 12s',note:'Gateway authorized and burned the single-use grant, but no execution receipt came back.'},
+    {id:'rc2',agent:'agent-python-etl',op:'POST /api/v1/warehouse/sync',since:'1m 40s',note:'Receipt timed out after a network drop. The agent was offline.'},
+    {id:'rc3',agent:'claude-db-admin',op:'database.schema_migration',since:'9m 03s',note:'Step-up approved, then the agent restarted before reporting the result.'}
+  ],
+  shadow: [
+    {id:'sh1',tool:'Cursor',host:'dev-laptop-22',user:'b.nowak',seen:'3 min ago',risk:'Medium'},
+    {id:'sh2',tool:'OpenClaw',host:'ws-ben',user:'b.cohen',seen:'1 h ago',risk:'High'},
+    {id:'sh3',tool:'Gemini CLI',host:'mbp-lee',user:'m.lee',seen:'2 h ago',risk:'Medium'}
+  ]
 };
 
 const SCEN = [
@@ -529,21 +572,99 @@ function recalcBuckets(){
   });
 }
 
-/* ---------- nav ---------- */
-const NAV=[
-  ['AI Workforce',[['pulse','Workforce Pulse (CIO)'],['map','Live Agent Map'],['contract','Intent Contract']]],
-  ['Operate',[['overview','Overview'],['decisions','Decisions'],['agents','Agents'],['sessions','Sessions'],['grants','Grants']]],
-  ['Govern',[['policies','Policies'],['audit','Audit chain'],['endpoint','Endpoint hardening']]],
-  ['System',[['settings','Connection & access']]],
-];
+/* ---------- personas & nav ---------- */
+const PERMS=['quarantine','revoke','publish','approve','recon','kill','enroll','addons','ops','request','repush'];
+function can(p){
+  const cfg = PERSONAS[S.persona];
+  return cfg && cfg.can ? cfg.can.includes(p) : false;
+}
+
+const PERSONAS={
+  cio:{
+    label:'CIO / Business',
+    sub:'Executive pulse, intent topology & impact',
+    home:'pulse',
+    can:[],
+    nav:[
+      ['AI Workforce',[['pulse','Workforce Pulse'],['map','Live Agent Map'],['contract','Intent Contract']]],
+      ['Trust & Governance',[['audit','Audit chain'],['agents','Fleet identity'],['overview','Decisions summary']]]
+    ]
+  },
+  ciso:{
+    label:'CISO / Security',
+    sub:'Zero-trust defense, policy & supply chain',
+    home:'overview',
+    can:['quarantine','revoke','publish','approve','recon','kill','enroll','addons','ops'],
+    nav:[
+      ['Defend',[['overview','Overview & alerts'],['approvals','Approval queue'],['decisions','Decisions evidence']]],
+      ['Govern',[['addons','Add-on supply chain'],['policies','Cedar policies'],['grants','Active grants'],['audit','Cryptographic audit chain'],['endpoint','Endpoint hardening']]],
+      ['Fleet',[['agents','Agents & posture'],['sessions','Live sessions'],['contract','Intent contract']]],
+      ['System',[['settings','Connection & access']]]
+    ]
+  },
+  ops:{
+    label:'Prod Ops / SRE',
+    sub:'Reliability, fail-close & reconciliation',
+    home:'overview',
+    can:['quarantine','revoke','approve','recon','kill','ops'],
+    nav:[
+      ['Run',[['overview','Overview'],['approvals','Approval queue'],['recon','Reconciliation'],['sessions','Active sessions']]],
+      ['Inspect',[['decisions','Decisions'],['grants','Grants'],['agents','Agents'],['audit','Audit chain']]],
+      ['System',[['settings','Connection & access']]]
+    ]
+  },
+  it:{
+    label:'IT Enablement',
+    sub:'Rollout, device packaging & user helpdesk',
+    home:'endpoint',
+    can:['enroll','request','repush'],
+    nav:[
+      ['Enable',[['endpoint','Endpoint hardening'],['rollout','Rollout funnel'],['agents','Managed agents']]],
+      ['Support',[['whyblocked','Why was it blocked?'],['addons','Add-on catalog'],['settings','Connection & access']]]
+    ]
+  }
+};
+
+const META={
+  pulse:['CIO — AI Workforce Pulse','Executive visibility into what agents are doing now, where value is generated, and whether activity is governed.'],
+  map:['Live Agent Map','Enterprise activity topology showing active agents across business units, teams, platforms, and intents.'],
+  contract:['Intent \u2192 Action Contract','Cryptographic correlation and intent deviation detection across the 8-stage agent execution lifecycle.'],
+  overview:['Overview & Fleet Posture','Live view of every agent decision across edge, control plane, gateway PEP, and audit store.'],
+  decisions:['Decisions Evidence','Every allow, deny, step-up and unknown outcome. Select a row for cryptographic chain evidence.'],
+  agents:['Agents & Identity','Persistent host identity, device compliance, and 3-layer containment enforcement.'],
+  sessions:['Workload Sessions','Execution sessions attached to attested agent identities.'],
+  grants:['Bounded Grants','Bounded, short-lived authority. Single-use grants are burned atomically at Gateway PEP.'],
+  policies:['Cedar Policies','Author Cedar policy and test what it would do before signing and publishing.'],
+  audit:['Audit Chain','Tamper-evident SHA-256 hash chain of Intent, Authority, PEP and Execution.'],
+  endpoint:['Endpoint Hardening','Three-layer enforcement (A/B/C), MDM packaging, biometric step-up, and offline fail-closed rules.'],
+  approvals:['Step-Up Approvals','High-risk actions waiting for human authorization. Fail closed on timeout.'],
+  addons:['Add-on Supply Chain','Skills, MCP servers, plugins and hooks. Scan and vet before agents can load them.'],
+  recon:['Reconciliation Queue','Rule R3: Operations authorized by PEP but lacking confirmed execution receipts.'],
+  whyblocked:['Why was it blocked?','Plain-language diagnosis and remediation guidance for helpdesk and end users.'],
+  rollout:['Rollout & Friction','Device layer adoption funnel (A/B/C) and user workflow friction diagnostics.'],
+  settings:['Connection & Access','Control plane connection settings, admin authentication, and zero-trust checklist.']
+};
+
 function drawNav(){
   const q=S.agents.filter(a=>a.state==='QUARANTINED').length;
   const liveCount=S.agents.filter(a=>a.liveness==='LIVE').length;
   const activeSess=S.sessions.filter(s=>s.status==='active').length;
-  $('#nav').innerHTML=NAV.map(([g,items])=>`<div class="nav-group">${g}</div>`+items.map(([id,l])=>{
+  const pCfg=PERSONAS[S.persona] || PERSONAS.cio;
+  
+  const cnt={
+    approvals: (S.approvals||[]).length,
+    recon: (S.recon||[]).length,
+    addons: (S.addons||[]).filter(a=>a.status==='Drifted'||a.status==='Under review').length,
+    agents: q || liveCount
+  };
+
+  $('#nav').innerHTML=pCfg.nav.map(([g,items])=>`<div class="nav-group">${g}</div>`+items.map(([id,l])=>{
     let c='';
-    if(id==='pulse') c=`<span class="cnt" style="background:rgba(34,197,94,.18);color:var(--allow)">1.2k</span>`;
+    if(id==='pulse') c=`<span class="cnt" style="background:rgba(34,197,94,.18);color:var(--allow)">live</span>`;
     else if(id==='map') c=`<span class="cnt">live</span>`;
+    else if(id==='approvals'&&cnt.approvals) c=`<span class="cnt hot">${cnt.approvals}</span>`;
+    else if(id==='recon'&&cnt.recon) c=`<span class="cnt hot">${cnt.recon}</span>`;
+    else if(id==='addons'&&cnt.addons) c=`<span class="cnt hot">${cnt.addons}</span>`;
     else if(id==='agents'&&q) c=`<span class="cnt hot">${q}</span>`;
     else if(id==='agents'&&liveCount) c=`<span class="cnt">${liveCount}</span>`;
     else if(id==='sessions'&&activeSess) c=`<span class="cnt">${activeSess}</span>`;
@@ -553,22 +674,22 @@ function drawNav(){
 $('#nav').addEventListener('click',e=>{const b=e.target.closest('button[data-v]');if(!b)return;go(b.dataset.v);$('#side').classList.remove('on')});
 $('#menuBtn').onclick=()=>$('#side').classList.toggle('on');
 
-const META={
-  pulse:['CIO — AI Workforce Pulse','Executive visibility into what agents are doing now, where value is generated, and whether activity is governed.'],
-  map:['Live Agent Map','Enterprise activity topology showing active agents across business units, teams, platforms, and intents.'],
-  contract:['Intent \u2192 Action Contract','Cryptographic correlation and intent deviation detection across the 8-stage agent execution lifecycle.'],
-  overview:['Overview','Live view of every agent decision, across all four planes'],
-  decisions:['Decisions','Every allow, deny, step-up and unknown outcome. Select a row for evidence'],
-  agents:['Agents','Persistent host identity, device compliance, and containment layers'],
-  sessions:['Sessions','Workload execution sessions attached to registered agents'],
-  grants:['Grants','Bounded, short-lived authority. Single-use grants are burned atomically'],
-  policies:['Policies','Author Cedar policy and test what it would do before publishing'],
-  audit:['Audit chain','Tamper-evident SHA-256 hash chain of Intent, Authority, PEP and Execution'],
-  endpoint:['Endpoint hardening','Three-layer enforcement, MDM packaging, step-up and offline rules'],
-  settings:['Connection & access','Connect to a live control plane and review access controls'],
-};
-function go(v){S.view=v;if(!META[v])v='overview';$('#title').textContent=META[v][0];$('#subtitle').textContent=META[v][1];drawNav();render()}
-function render(){const v=VIEWS[S.view]||VIEWS.overview;$('#view').innerHTML='';v.html?($('#view').innerHTML=v.html()):0;v.after&&v.after()}
+function go(v){
+  const pCfg = PERSONAS[S.persona] || PERSONAS.cio;
+  if(!VIEWS[v]) v = pCfg.home || 'overview';
+  S.view=v;
+  const meta = META[v] || ['Control Plane', 'Bounded Authority Plane'];
+  $('#title').textContent=meta[0];
+  $('#subtitle').textContent=pCfg.label + ' \u2014 ' + meta[1];
+  drawNav();
+  render();
+}
+function render(){
+  const v=VIEWS[S.view]||VIEWS.overview;
+  $('#view').innerHTML='';
+  v.html?($('#view').innerHTML=v.html()):0;
+  v.after&&v.after();
+}
 
 /* ---------- views ---------- */
 const VIEWS={};
@@ -1413,6 +1534,274 @@ VIEWS.endpoint={
   }
 };
 
+/* Approvals Queue */
+VIEWS.approvals = {
+  html() {
+    return `<div id="aprList"></div>`;
+  },
+  after() {
+    drawApr();
+  }
+};
+function drawApr() {
+  const el = $('#aprList');
+  if (!el) return;
+  const list = S.approvals || [];
+  el.innerHTML = list.length ? list.map(p => `
+    <div class="panel" style="margin-bottom:12px">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        ${tag('STEP_UP')}
+        <b class="mono" style="font-size:14px">${esc(p.op)}</b>
+        <span class="spacer"></span>
+        <span class="mono" style="color:var(--muted);font-size:12.5px">Agent: ${esc(p.agent)} (${esc(p.team||'Core')})</span>
+      </div>
+      <p style="margin:10px 0 4px;font-size:14px"><b>Declared Intent:</b> ${esc(p.intent || 'High-privilege system request')}</p>
+      <p class="hint" style="margin:0 0 12px;color:var(--muted);font-size:13px">${esc(p.why)}</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn primary" data-act="apr-approve" data-ref="${esc(p.id)}">Approve with biometric token</button>
+        <button class="btn danger" data-act="apr-reject" data-ref="${esc(p.id)}">Reject and fail closed</button>
+      </div>
+    </div>`).join('') : `
+    <div class="panel empty">
+      <h3>No approvals pending</h3>
+      <p class="hint">When an agent encounters a policy requiring step-up authentication (e.g. risk score &gt; 0.70 or bulk fund movements), it pauses execution and appears here. If no human approves within the TTL window, the request fails closed.</p>
+    </div>`;
+}
+
+/* Add-ons Vetting and Supply Chain */
+const ST_MAP = { Approved: 'ALLOW', Blocked: 'DENY', 'Under review': 'UNKNOWN', Drifted: 'STEP_UP' };
+const stTag = s => `<span class="tag t-${ST_MAP[s]||'UNKNOWN'}">${esc(s)}</span>`;
+const riskCls = r => r >= 7 ? 'hi' : r >= 4 ? 'md' : 'lo';
+
+function addonBtns(a) {
+  if (can('addons')) {
+    return a.status === 'Blocked'
+      ? `<button class="btn sm" data-act="addon-approve" data-ref="${esc(a.id)}">Unblock</button>`
+      : a.status === 'Approved'
+      ? `<button class="btn sm danger" data-act="addon-block" data-ref="${esc(a.id)}">Block</button>`
+      : `<button class="btn sm" data-act="addon-approve" data-ref="${esc(a.id)}">Approve</button> <button class="btn sm danger" data-act="addon-block" data-ref="${esc(a.id)}">Block</button>`;
+  }
+  if (can('request') && (a.status === 'Under review' || a.status === 'Drifted')) {
+    return `<button class="btn sm" data-act="addon-request" data-ref="${esc(a.id)}">Nudge Security</button>`;
+  }
+  return '';
+}
+
+VIEWS.addons = {
+  html() {
+    return `
+    <div class="panel" style="margin-bottom:16px">
+      <h2>Vet an add-on before it reaches an agent</h2>
+      <p class="hint">Analyze MCP server definitions, skill packages, or subagent plugins for hidden prompt injections, broad scopes, and unpinned update channels.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input type="text" id="scanIn" style="flex:1;min-width:240px" placeholder="github.com/org/custom-mcp-server or skill package URL">
+        <button class="btn primary" data-act="scan">Run Static & Dynamic Vetting</button>
+      </div>
+      <div id="scanOut"></div>
+    </div>
+    <div class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div>
+          <h2>Add-on Catalog & Supply Chain Inventory</h2>
+          <p class="hint" style="margin:0">Active plugins, MCP servers, and skills loaded across the fleet.</p>
+        </div>
+      </div>
+      <div class="tw">
+        <table>
+          <thead>
+            <tr>
+              <th>Add-on Name</th>
+              <th>Source</th>
+              <th>Version</th>
+              <th>Risk Score</th>
+              <th>Static Findings</th>
+              <th>Status</th>
+              <th>Active Agents</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="adT"></tbody>
+        </table>
+      </div>
+    </div>`;
+  },
+  after() {
+    drawAddons();
+  }
+};
+function drawAddons() {
+  const el = $('#adT');
+  if (!el) return;
+  const list = S.addons || [];
+  el.innerHTML = list.length ? list.map(a => `
+    <tr>
+      <td><b>${esc(a.name)}</b><div class="who" style="color:var(--muted);font-size:12.5px">${esc(a.type)}</div></td>
+      <td>${esc(a.source)}</td>
+      <td class="mono">${esc(a.ver)}</td>
+      <td><span class="risk ${riskCls(a.risk)}">${a.risk.toFixed(1)}</span></td>
+      <td>${a.findings && a.findings.length ? a.findings.map(f => `<span class="fnd">${esc(f)}</span>`).join('') : '<span style="color:var(--muted)">Clean</span>'}</td>
+      <td>${stTag(a.status)}</td>
+      <td class="mono">${a.agents} active</td>
+      <td style="white-space:nowrap">${addonBtns(a)}</td>
+    </tr>`).join('') : '<tr><td colspan="8" class="empty">No add-ons registered in catalog.</td></tr>';
+}
+
+/* Reconciliation Queue (Rule R3) */
+VIEWS.recon = {
+  html() {
+    return `
+    <div class="panel">
+      <h2>Operations with an unknown execution outcome (Rule R3)</h2>
+      <p class="hint">The PEP authorized and burned the bounded single-use grant, but the network connection dropped before an execution receipt returned. Reconcile records to ensure ledger integrity.</p>
+      <div class="tw">
+        <table>
+          <thead>
+            <tr>
+              <th>Agent ID</th>
+              <th>Target Operation</th>
+              <th>Elapsed</th>
+              <th>PEP & Network Evidence</th>
+              <th>Reconciliation Action</th>
+            </tr>
+          </thead>
+          <tbody id="rcT"></tbody>
+        </table>
+      </div>
+    </div>`;
+  },
+  after() {
+    drawRecon();
+  }
+};
+function drawRecon() {
+  const el = $('#rcT');
+  if (!el) return;
+  const list = S.recon || [];
+  el.innerHTML = list.length ? list.map(r => `
+    <tr>
+      <td class="mono"><b>${esc(r.agent)}</b></td>
+      <td class="mono">${esc(r.op)}</td>
+      <td class="mono">${esc(r.since)}</td>
+      <td>${esc(r.note)}</td>
+      <td style="white-space:nowrap">
+        <button class="btn sm" data-act="recon-done" data-ref="${esc(r.id)}">Confirmed Ran</button>
+        <button class="btn sm danger" data-act="recon-not" data-ref="${esc(r.id)}">Did Not Run</button>
+        <button class="btn sm" data-act="recon-retry" data-ref="${esc(r.id)}">Safe Idempotent Retry</button>
+      </td>
+    </tr>`).join('') : '<tr><td colspan="5" class="empty">Reconciliation queue is empty. Every PEP grant matches verified execution receipts.</td></tr>';
+}
+
+/* Why Was It Blocked? (IT Helpdesk View) */
+function nextStepHelp(d) {
+  const inv = (d.inv || '').toLowerCase();
+  if (d.out === 'STEP_UP') return 'A human biometric approval is required. Request an approver on Security or Prod Ops to authorize the Step-Up Queue.';
+  if (d.out === 'UNKNOWN') return 'Ambiguous prompt mission intent. Refine the task instructions with explicit boundaries and resource targets.';
+  if (inv.includes('egress') || inv.includes('layer c')) return 'Destination host not on the approved Gateway whitelist. Route through BAP PEP or request an egress rule exception.';
+  if (inv.includes('interceptor') || inv.includes('i2')) return 'Modification of BAP security config or Cedar policy prohibited. Edits must be made via signed Control Plane workflows.';
+  if (inv.includes('rogue') || inv.includes('spoof')) return 'Agent lacks valid SPIFFE identity or bearer token. Verify host enrollment in Intune/Jamf MDM.';
+  if (inv.includes('kill')) return 'Control Plane kill switch is active. Normal operations are paused enterprise-wide.';
+  return 'Submit a support ticket citing the Decision ID below for policy bundle administrator review.';
+}
+
+VIEWS.whyblocked = {
+  html() {
+    return `
+    <div class="grid g-2">
+      <div class="panel">
+        <h2>Recent Interceptions & Denials</h2>
+        <p class="hint">Select an event below to inspect the plain-language helpdesk diagnosis and recommended resolution.</p>
+        <div class="stream" id="wbList" style="max-height:520px;overflow-y:auto"></div>
+      </div>
+      <div class="panel" id="wbDetail">
+        <div class="empty">Select a denied or step-up decision on the left to view the helpdesk explainer.</div>
+      </div>
+    </div>`;
+  },
+  after() {
+    drawWB();
+  }
+};
+function drawWB() {
+  const el = $('#wbList');
+  if (!el) return;
+  const deniedDecisions = S.decisions.filter(d => d.out !== 'ALLOW').slice(-25).reverse();
+  el.innerHTML = deniedDecisions.length ? deniedDecisions.map(d => `
+    <div class="row" data-act="explain" data-ref="${esc(d.id)}" tabindex="0">
+      <div>${tag(d.out)}</div>
+      <div>
+        <div class="cmd mono">${esc(d.cmd)}</div>
+        <div class="who">${esc((d.agent && d.agent.name) || d.agent_id || 'agent')} &bull; ${esc((d.agent && d.agent.host) || 'host')}</div>
+      </div>
+      <div class="tm">${fmtT(d.ts)}</div>
+    </div>`).join('') : '<div class="empty">No intercepted actions found in telemetry buffer.</div>';
+}
+function showWB(id) {
+  const d = S.decisions.find(x => x.id === id);
+  if (!d) return;
+  const detailEl = $('#wbDetail');
+  if (!detailEl) return;
+  detailEl.innerHTML = `
+    <div>${tag(d.out)}</div>
+    <h2 style="margin-top:10px" class="mono">${esc(d.cmd)}</h2>
+    <p style="margin:6px 0 14px;font-size:14px">Agent <b>${esc((d.agent && d.agent.name) || d.agent_id || 'agent')}</b> attempted this action and was ${d.out === 'STEP_UP' ? 'held pending step-up approval' : d.out === 'UNKNOWN' ? 'paused due to ambiguous intent' : 'halted by zero-trust enforcement'}.</p>
+    <dl class="kv">
+      <dt>Enforcement Reason</dt><dd>${esc(d.why)}</dd>
+      <dt>Guarding Invariant</dt><dd class="mono">${esc(d.inv)}</dd>
+      <dt>Remediation Guidance</dt><dd style="font-weight:600;color:var(--accent)">${esc(nextStepHelp(d))}</dd>
+      <dt>Decision ID</dt><dd class="mono">${esc(d.id)}</dd>
+      <dt>Evaluation Latency</dt><dd class="mono">${d.latency} ms</dd>
+    </dl>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px">
+      <button class="btn" onclick="openDecision('${esc(d.id)}')">View Full Evidence Drawer</button>
+      <button class="btn primary" data-act="ticket" data-ref="${esc(d.id)}">Generate Helpdesk Ticket</button>
+    </div>`;
+}
+
+/* Rollout Funnel View (IT Enablement) */
+VIEWS.rollout = {
+  html() {
+    const totalAgents = S.agents.length || 1;
+    const lA = S.agents.filter(a => a.layers && a.layers[0]).length;
+    const lB = S.agents.filter(a => a.layers && a.layers[1]).length;
+    const lC = S.agents.filter(a => a.layers && a.layers[2]).length;
+    const shadowCount = (S.shadow || []).length;
+    return `
+    <div class="grid g-2">
+      <div class="panel funnel">
+        <h2>Endpoint Containment Rollout Funnel</h2>
+        <p class="hint">Enforcement progression across enrolled fleet endpoints</p>
+        <div style="display:grid;gap:12px;margin-top:14px">
+          <div class="fr"><span>Enrolled Agents</span><div class="bar"><div style="width:100%"></div></div><b class="mono">${totalAgents}</b></div>
+          <div class="fr"><span>Layer A (Hooks)</span><div class="bar"><div style="width:${Math.round(lA/totalAgents*100)}%"></div></div><b class="mono">${lA} (${Math.round(lA/totalAgents*100)}%)</b></div>
+          <div class="fr"><span>Layer B (Kernel Sandbox)</span><div class="bar"><div style="width:${Math.round(lB/totalAgents*100)}%"></div></div><b class="mono">${lB} (${Math.round(lB/totalAgents*100)}%)</b></div>
+          <div class="fr"><span>Layer C (Egress Pinning)</span><div class="bar"><div style="width:${Math.round(lC/totalAgents*100)}%"></div></div><b class="mono">${lC} (${Math.round(lC/totalAgents*100)}%)</b></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Unmanaged Shadow Agents Detected</h2>
+        <p class="hint">Autonomous agent tools discovered on workstations without active BAP MDM profiles</p>
+        <div id="shRollout">
+          ${shadowCount ? `
+          <table class="mini">
+            <thead><tr><th>Tool / Process</th><th>Host & User</th><th>Risk</th><th>Action</th></tr></thead>
+            <tbody>
+              ${(S.shadow||[]).map(s => `
+              <tr>
+                <td><b>${esc(s.tool)}</b></td>
+                <td><span class="mono">${esc(s.host)}</span> &bull; ${esc(s.user)}</td>
+                <td><span class="tag ${s.risk==='High'?'t-DENY':'t-UNKNOWN'}">${esc(s.risk)}</span></td>
+                <td><button class="btn sm" data-act="enroll" data-ref="${esc(s.id)}">Enroll Device</button></td>
+              </tr>`).join('')}
+            </tbody>
+          </table>` : '<div class="empty">All detected agent workloads are enrolled and governed under BAP.</div>'}
+        </div>
+      </div>
+    </div>`;
+  }
+};
+
+
+
 /* Settings */
 VIEWS.settings={
   html(){return `<div class="grid g-eq">
@@ -1608,6 +1997,12 @@ function updatePersonaUI() {
       btn.setAttribute('aria-pressed', btn.dataset.p === S.persona);
     });
   }
+  PERMS.forEach(k => document.body.classList.toggle('can-' + k, can(k)));
+  const kb = $('#killBtn');
+  if (kb) {
+    kb.disabled = !can('kill');
+    kb.title = can('kill') ? '' : 'Kill-switch requires CISO or Prod Ops role';
+  }
 }
 
 function setPersona(p) {
@@ -1619,17 +2014,191 @@ function setPersona(p) {
   window.history.replaceState({}, '', u);
   updatePersonaUI();
   
-  // Navigate to appropriate default view for persona
-  if (p === 'cio') {
-    go('pulse');
-  } else if (p === 'ciso') {
-    go('overview');
-  } else if (p === 'ops') {
-    go('overview');
-  } else if (p === 'it') {
-    go('endpoint');
-  }
+  const pCfg = PERSONAS[p] || PERSONAS.cio;
+  go(pCfg.home || 'overview');
 }
+
+/* ---------- Global Action Dispatcher & Role Gates ---------- */
+const PERM_REQ = {
+  'apr-approve': 'approve',
+  'apr-reject': 'approve',
+  'enroll': 'enroll',
+  'addon-block': 'addons',
+  'addon-approve': 'addons',
+  'addon-request': 'request',
+  'recon-done': 'recon',
+  'recon-not': 'recon',
+  'recon-retry': 'recon',
+  'repush': 'repush'
+};
+
+const ACT = {
+  'apr-approve'(id) {
+    const idx = (S.approvals || []).findIndex(x => x.id === id);
+    if (idx >= 0) {
+      const app = S.approvals.splice(idx, 1)[0];
+      audit('stepup.approve', app.id + ' ' + app.op);
+      toast('Biometric step-up approved: ' + app.op);
+      drawNav();
+      if (S.view === 'approvals') drawApr();
+    }
+  },
+  'apr-reject'(id) {
+    const idx = (S.approvals || []).findIndex(x => x.id === id);
+    if (idx >= 0) {
+      const app = S.approvals.splice(idx, 1)[0];
+      audit('stepup.reject', app.id + ' ' + app.op);
+      toast('Action rejected: ' + app.op + ' (failed closed)');
+      drawNav();
+      if (S.view === 'approvals') drawApr();
+    }
+  },
+  'enroll'(ref) {
+    const s = (S.shadow || []).find(x => x.id === ref);
+    if (!s) return;
+    confirmBox('Bring ' + s.tool + ' under BAP governance?',
+      'An attested SPIFFE identity will be provisioned, pre-tool-use hooks deployed via MDM, and execution gated through Layer B containment.',
+      'Enroll Agent', () => {
+        const agId = 'agent-' + s.tool.toLowerCase().replace(/\W/g,'') + '-' + Math.floor(1000 + Math.random()*9000);
+        S.agents.push({
+          id: agId,
+          name: s.tool,
+          host: s.host,
+          os: 'windows',
+          state: 'COMPLIANT',
+          layers: [1,1,1],
+          liveness: 'LIVE',
+          risk: 0.15,
+          mission: 'Governed developer workload'
+        });
+        S.shadow = S.shadow.filter(x => x !== s);
+        audit('agent.enroll', agId + ' ' + s.tool);
+        toast(s.tool + ' enrolled successfully');
+        drawNav();
+        render();
+      }
+    );
+  },
+  'addon-block'(id) {
+    const a = (S.addons || []).find(x => x.id === id);
+    if (!a) return;
+    a.status = 'Blocked';
+    a.agents = 0;
+    audit('addon.block', a.name);
+    toast(a.name + ' blocked enterprise-wide');
+    drawNav();
+    if (S.view === 'addons') drawAddons();
+  },
+  'addon-approve'(id) {
+    const a = (S.addons || []).find(x => x.id === id);
+    if (!a) return;
+    a.status = 'Approved';
+    a.findings = a.findings.filter(f => f !== 'Changed since approval');
+    audit('addon.approve', a.name + ' ' + a.ver);
+    toast(a.name + ' approved for fleet catalog');
+    drawNav();
+    if (S.view === 'addons') drawAddons();
+  },
+  'addon-request'(id) {
+    const a = (S.addons || []).find(x => x.id === id);
+    if (!a) return;
+    audit('addon.review_requested', a.name);
+    toast('Security team notified to review ' + a.name);
+  },
+  'recon-done'(id) {
+    const r = (S.recon || []).find(x => x.id === id);
+    if (!r) return;
+    S.recon = S.recon.filter(x => x !== r);
+    audit('recon.resolve', r.op + ' | Confirmed executed');
+    toast('Reconciliation recorded: operation confirmed executed');
+    drawNav();
+    if (S.view === 'recon') drawRecon();
+  },
+  'recon-not'(id) {
+    const r = (S.recon || []).find(x => x.id === id);
+    if (!r) return;
+    S.recon = S.recon.filter(x => x !== r);
+    audit('recon.resolve', r.op + ' | Confirmed did not run');
+    toast('Reconciliation recorded: grant invalidated, did not execute');
+    drawNav();
+    if (S.view === 'recon') drawRecon();
+  },
+  'recon-retry'(id) {
+    const r = (S.recon || []).find(x => x.id === id);
+    if (!r) return;
+    S.recon = S.recon.filter(x => x !== r);
+    audit('recon.retry', r.op + ' | Safe idempotency re-dispatch');
+    toast('Safe retry minted with atomic idempotency key');
+    drawNav();
+    if (S.view === 'recon') drawRecon();
+  },
+  'scan'() {
+    const inp = $('#scanIn');
+    if (!inp) return;
+    const v = inp.value.trim();
+    if (!v) { toast('Paste an add-on or MCP repository link first'); return; }
+    $('#scanOut').innerHTML = '<p class="hint" style="margin-top:12px">Running BAP zero-trust AST & static permission scan...</p>';
+    setTimeout(() => {
+      let h = 0;
+      for (const c of v) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+      const risk = Math.round((h % 90)) / 10;
+      const pool = ['Hidden behavior', 'Data exfiltration path', 'Prompt injection', 'Runs shell on install', 'Unpinned update channel', 'Excessive permissions', 'Loads outside instructions'];
+      const f = [];
+      for (let i = 0; i < (risk >= 7 ? 3 : risk >= 4 ? 2 : risk >= 2 ? 1 : 0); i++) {
+        f.push(pool[(h >> i * 3) % pool.length]);
+      }
+      const name = v.split('/').filter(Boolean).pop() || 'new-mcp-server';
+      const st = risk >= 7 ? 'Blocked' : 'Under review';
+      S.addons.unshift({
+        id: 'ad_' + Date.now(),
+        name,
+        type: 'MCP server',
+        source: 'Vetted URL',
+        ver: '1.0',
+        risk,
+        findings: [...new Set(f)],
+        status: st,
+        agents: 0
+      });
+      audit('addon.scan', name + ' risk ' + risk);
+      $('#scanOut').innerHTML = `<div class="verdict ${risk >= 7 ? 'bad' : 'ok'}" style="margin-top:12px"><b>Static scan completed: Risk ${risk.toFixed(1)}/10.</b> ${risk >= 7 ? 'Critical risk identified: Blocked before enrollment.' : risk >= 4 ? 'Moderate risk: Queued for Security review.' : 'Low risk profile. Standard review approval pending.'}</div>`;
+      drawAddons();
+      drawNav();
+    }, 700);
+  },
+  'explain'(id) {
+    showWB(id);
+  },
+  'ticket'(id) {
+    audit('ticket.create', id);
+    toast('Helpdesk ticket generated with decision evidence attached (ITSM simulated)');
+  }
+};
+
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-act]');
+  if (!t) return;
+  const act = t.dataset.act;
+  if (PERM_REQ[act] && !can(PERM_REQ[act])) {
+    toast('Action restricted: Read-only for ' + (PERSONAS[S.persona]||{}).label);
+    return;
+  }
+  if (ACT[act]) {
+    ACT[act](t.dataset.ref, t);
+  }
+});
+
+/* Role gate for quarantine, revoke, and publish actions */
+document.addEventListener('click', e => {
+  for (const [sel, perm] of [['[data-q],[data-rel]', 'quarantine'], ['[data-rg]', 'revoke'], ['#ppub', 'publish']]) {
+    if (e.target.closest(sel) && !can(perm)) {
+      e.stopPropagation();
+      e.preventDefault();
+      toast('Action restricted: Read-only for ' + (PERSONAS[S.persona]||{}).label);
+      return;
+    }
+  }
+}, true);
 
 /* ---------- SSE Stream Connection ---------- */
 function initActivityStream() {
