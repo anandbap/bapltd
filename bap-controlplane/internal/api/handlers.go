@@ -1573,7 +1573,9 @@ func (s *Server) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
 		if instanceID == "" {
 			instanceID = sess.SessionID
 		}
-		s.registry.EndSessionAgent(sess.AppID, instanceID)
+		if s.sessionStore == nil || !s.sessionStore.HasActiveSessionsForInstance(instanceID) {
+			s.registry.EndSessionAgent(sess.AppID, instanceID)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{

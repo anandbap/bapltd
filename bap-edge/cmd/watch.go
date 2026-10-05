@@ -22,6 +22,41 @@ import (
 
 var isLocalScanRunning atomic.Bool
 
+func sanitizeInstanceID(s string) string {
+	var sb strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			sb.WriteRune(r)
+		} else {
+			sb.WriteRune('-')
+		}
+	}
+	res := strings.Trim(sb.String(), "-")
+	if res == "" {
+		return "workstation"
+	}
+	return res
+}
+
+func resolveDefaultInstanceID(customID string) string {
+	if customID != "" {
+		return customID
+	}
+	if envID := strings.TrimSpace(os.Getenv("BAP_INSTANCE_ID")); envID != "" {
+		return envID
+	}
+	if data, err := os.ReadFile(DefaultCredentialsPath()); err == nil {
+		var creds StoredCredentials
+		if json.Unmarshal(data, &creds) == nil && creds.InstanceID != "" {
+			return creds.InstanceID
+		}
+	}
+	h, _ := os.Hostname()
+	if h != "" {
+		return strings.ToLower(sanitizeInstanceID(h))
+	}
+	return "local-workstation"
+}
 
 // RunSessionStart executes a zero-trust pre-flight check and starts the session.
 // If the user or session is revoked, prints an alert and exits with code 2.
@@ -31,6 +66,7 @@ func RunSessionStart(args []string) error {
 	serverFlag := fs.String("server", "", "Central control plane URL")
 	sessionFlag := fs.String("session-id", "", "Session ID to watch and govern")
 	appFlag := fs.String("app-id", "claude-code", "Governed workload identifier")
+	instanceFlag := fs.String("instance-id", "", "Agent instance ID (default: enrolled identity or host-derived)")
 	pidFlag := fs.Int("pid", 0, "Target process ID to watch (default: parent PID)")
 	promptFlag := fs.String("prompt", "", "Initial user prompt")
 
@@ -100,10 +136,13 @@ func RunSessionStart(args []string) error {
 		}
 	}
 
+	instanceID := resolveDefaultInstanceID(*instanceFlag)
+
 	// 2. Pre-flight check with Central Control Plane
 	startPayload := map[string]any{
 		"session_id":  sessionID,
 		"app_id":      *appFlag,
+		"instance_id": instanceID,
 		"user_id":     username,
 		"hostname":    hostname,
 		"client_pid":  watchPID,
@@ -135,7 +174,7 @@ func RunSessionStart(args []string) error {
 	}
 
 	// 3. Persist workspace session marker with PID
-	writeSessionMarker(sessionID, serverURL, *appFlag, username, hostname, initialPrompt, watchPID)
+	writeSessionMarker(sessionID, serverURL, *appFlag, username, hostname, initialPrompt, watchPID, instanceID)
 
 	// 4. Start continuous background heartbeat watcher
 	exe, err := os.Executable()
@@ -148,6 +187,7 @@ func RunSessionStart(args []string) error {
 		fmt.Sprintf("--server=%s", serverURL),
 		fmt.Sprintf("--session-id=%s", sessionID),
 		fmt.Sprintf("--app-id=%s", *appFlag),
+		fmt.Sprintf("--instance-id=%s", instanceID),
 	}
 	detachedCmd := exec.Command(exe, cmdArgs...)
 	detachedCmd.SysProcAttr = getSysProcAttrDetached()
@@ -216,6 +256,7 @@ func RunWatch(args []string) error {
 	serverFlag := fs.String("server", "", "Central control plane URL")
 	sessionFlag := fs.String("session-id", "", "Session ID to watch and govern")
 	appFlag := fs.String("app-id", "claude-code", "Governed workload identifier")
+	instanceFlag := fs.String("instance-id", "", "Agent instance ID")
 	detachFlag := fs.Bool("detach", false, "Spawn background detached process and exit immediately")
 
 	if err := fs.Parse(args); err != nil {
@@ -258,6 +299,8 @@ func RunWatch(args []string) error {
 		sessionID = fmt.Sprintf("sess-%s-%d", *appFlag, watchPID)
 	}
 
+	instanceID := resolveDefaultInstanceID(*instanceFlag)
+
 	if *detachFlag {
 		exe, err := os.Executable()
 		if err != nil {
@@ -269,6 +312,7 @@ func RunWatch(args []string) error {
 			fmt.Sprintf("--server=%s", serverURL),
 			fmt.Sprintf("--session-id=%s", sessionID),
 			fmt.Sprintf("--app-id=%s", *appFlag),
+			fmt.Sprintf("--instance-id=%s", instanceID),
 		}
 		detachedCmd := exec.Command(exe, cmdArgs...)
 		detachedCmd.SysProcAttr = getSysProcAttrDetached()
@@ -278,7 +322,7 @@ func RunWatch(args []string) error {
 		return nil
 	}
 
-	runWatchLoop(watchPID, serverURL, sessionID, *appFlag)
+	runWatchLoop(watchPID, serverURL, sessionID, *appFlag, instanceID)
 	return nil
 }
 
@@ -291,9 +335,14 @@ func sessionPIDMarkerPath(pid int) string {
 	return filepath.Join(".bap", "sessions", fmt.Sprintf("pid-%d.json", pid))
 }
 
-func writeSessionMarker(sessionID, serverURL, appID, username, hostname, initialPrompt string, watchPID int) {
+func writeSessionMarker(sessionID, serverURL, appID, username, hostname, initialPrompt string, watchPID int, instanceIDOpt ...string) {
+	instID := ""
+	if len(instanceIDOpt) > 0 {
+		instID = instanceIDOpt[0]
+	}
 	marker := map[string]any{
 		"session_id":  sessionID,
+		"instance_id": instID,
 		"server_url":  serverURL,
 		"pid":         watchPID,
 		"app_id":      appID,
@@ -379,7 +428,15 @@ func cleanupStaleSessionMarkers() {
 	}
 }
 
-func runWatchLoop(watchPID int, serverURL, sessionID, appID string) {
+func runWatchLoop(watchPID int, serverURL, sessionID, appID string, instanceIDOpt ...string) {
+	instanceID := ""
+	if len(instanceIDOpt) > 0 {
+		instanceID = instanceIDOpt[0]
+	}
+	if instanceID == "" {
+		instanceID = resolveDefaultInstanceID("")
+	}
+
 	initialPrompt := strings.TrimSpace(os.Getenv("BAP_USER_PROMPT"))
 
 	username := os.Getenv("USERNAME")
@@ -389,12 +446,13 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string) {
 	hostname, _ := os.Hostname()
 
 	// 1. Ensure isolated per-session marker exists
-	writeSessionMarker(sessionID, serverURL, appID, username, hostname, initialPrompt, watchPID)
+	writeSessionMarker(sessionID, serverURL, appID, username, hostname, initialPrompt, watchPID, instanceID)
 
 	// 2. Enroll session into central control plane (idempotent)
 	startPayload := map[string]any{
 		"session_id":  sessionID,
 		"app_id":      appID,
+		"instance_id": instanceID,
 		"user_id":     username,
 		"hostname":    hostname,
 		"client_pid":  watchPID,

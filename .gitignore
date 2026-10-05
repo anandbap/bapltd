@@ -81,6 +81,7 @@ bap-controlplane/bapcontrolplane.exe
 bap-controlplane/server.exe
 bap-edge/bapedge.exe
 bap-edge/bap-edge.exe
+bapedge-darwin-*
 bap-gateway/bapgateway.exe
 
 # ==============================================================================

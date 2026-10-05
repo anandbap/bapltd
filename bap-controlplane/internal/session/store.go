@@ -459,6 +459,22 @@ func (s *Store) IsRevoked(sessionID string) bool {
 	return false
 }
 
+// HasActiveSessionsForInstance checks if any session attached to the given instanceID is currently active.
+func (s *Store) HasActiveSessionsForInstance(instanceID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if instanceID == "" {
+		return false
+	}
+	for _, sess := range s.sessions {
+		if sess.InstanceID == instanceID && sess.Status == "active" {
+			return true
+		}
+	}
+	return false
+}
+
 // IsUserRevoked checks if a username is in the revoked users list.
 func (s *Store) IsUserRevoked(username string) bool {
 	if username == "" || username == "NA" {

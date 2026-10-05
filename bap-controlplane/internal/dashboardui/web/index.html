@@ -78,14 +78,19 @@ button,input,select,textarea{font:inherit;color:inherit}
 .kpi em{font-style:normal;font-size:12.5px;color:var(--muted)}
 .kpi.bad strong{color:var(--deny)} .kpi.good strong{color:var(--allow)}
 /* tags */
-.tag{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;font-weight:600}
+.tag{display:inline-flex;align-items:center;padding:2px 9px;border-radius:99px;font-size:12px;font-weight:600}
 .t-ALLOW,.t-allow{background:var(--allow-bg);color:var(--allow)}
 .t-DENY,.t-deny{background:var(--deny-bg);color:var(--deny)}
 .t-UNKNOWN,.t-unknown{background:var(--unk-bg);color:var(--unk)}
 .t-STEP_UP,.t-step_up{background:var(--step-bg);color:var(--step)}
-.t-COMPLIANT,.t-active{background:var(--allow-bg);color:var(--allow)}
-.t-QUARANTINED,.t-revoked{background:var(--deny-bg);color:var(--deny)}
-.t-COOPERATIVE_BYOD,.t-closed{background:var(--unk-bg);color:var(--unk)}
+.t-COMPLIANT,.t-compliant{background:var(--allow-bg);color:var(--allow)}
+.t-ACTIVE,.t-active{background:var(--allow-bg);color:var(--allow)}
+.t-QUARANTINED,.t-quarantined,.t-REVOKED,.t-revoked{background:var(--deny-bg);color:var(--deny)}
+.t-COOPERATIVE_BYOD,.t-closed,.t-CLOSED{background:var(--surface2);color:var(--muted);border:1px solid var(--line)}
+.t-LIVE,.t-live{background:rgba(34,197,94,.12);color:var(--allow);border:1px solid rgba(34,197,94,.25)}
+.t-OFFLINE,.t-offline,.t-deregistered{background:var(--surface2);color:var(--muted);border:1px solid var(--line)}
+.dot-live{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--allow);box-shadow:0 0 6px var(--allow);margin-right:6px}
+.dot-offline{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--muted);margin-right:6px}
 .mono{font-family:var(--mono);font-size:12.5px}
 /* tables */
 .tw{overflow-x:auto}
@@ -211,6 +216,17 @@ const esc = s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt
 const pick = a=>a[Math.floor(Math.random()*a.length)];
 const hex = n=>Array.from({length:n},()=>Math.floor(Math.random()*16).toString(16)).join('');
 const fmtT = d=>d instanceof Date ? d.toLocaleTimeString([], {hour12:false}) : String(d||'');
+const timeAgo = d => {
+  if(!d) return 'Never';
+  const dt = d instanceof Date ? d : new Date(d);
+  if(isNaN(dt.getTime())) return '-';
+  const sec = Math.floor((Date.now() - dt.getTime()) / 1000);
+  if(sec < 5) return 'just now';
+  if(sec < 60) return sec + 's ago';
+  if(sec < 3600) return Math.floor(sec/60) + 'm ago';
+  if(sec < 86400) return Math.floor(sec/3600) + 'h ago';
+  return Math.floor(sec/86400) + 'd ago';
+};
 async function sha256(t){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(t));return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('')}
 function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;$('#toasts').append(t);setTimeout(()=>t.remove(),2800)}
 const tag=(v)=>{const cls=String(v||'').replace(/[^a-zA-Z0-9_-]/g,'');return `<span class="tag t-${esc(cls)}">${esc(String(v||'').replace('_',' '))}</span>`};
@@ -334,15 +350,26 @@ function ingestServerData(data){
   if(Array.isArray(data.revoked_users)) S.revokedUsers = data.revoked_users;
 
   // Ingest agents
+  const now = Date.now();
   if(Array.isArray(data.agents)) {
     S.agents = data.agents.map(a => {
-      const isRev = (S.revokedSessions.includes(a.instance_id) || S.revokedUsers.includes(a.owner_email));
+      const isRev = (a.status === 'revoked' || S.revokedSessions.includes(a.instance_id) || S.revokedUsers.includes(a.owner_email));
+      const lastHB = a.last_heartbeat_at ? new Date(a.last_heartbeat_at).getTime() : (a.created_at ? new Date(a.created_at).getTime() : 0);
+      const isStale = (!lastHB) || (now - lastHB > 45000);
+      const isLive = (a.status === 'active') && !isStale && !isRev;
+      const liveness = isRev ? 'REVOKED' : (isLive ? 'LIVE' : 'OFFLINE');
+      const compState = isRev ? 'QUARANTINED' : 'COMPLIANT';
+
       return {
         id: a.agent_id || a.instance_id || 'unknown',
-        name: a.app_id || 'Workload Agent',
+        instanceId: a.instance_id || '',
+        name: a.agent_name || a.app_id || 'Workload Agent',
+        appId: a.app_id || '',
         host: a.hostname || a.instance_id || 'edge-endpoint',
-        os: a.os_info || (a.hostname && a.hostname.includes('DESKTOP') ? 'windows' : 'linux'),
-        state: isRev ? 'QUARANTINED' : (a.state || 'COMPLIANT'),
+        os: a.os || a.os_info || (a.hostname && a.hostname.includes('DESKTOP') ? 'windows' : 'linux'),
+        state: compState,
+        liveness: liveness,
+        lastHeartbeat: a.last_heartbeat_at ? new Date(a.last_heartbeat_at) : null,
         layers: [1, 1, 1],
         mission: a.mission || 'Agent workload execution',
         risk: isRev ? 0.95 : 0.15,
@@ -354,24 +381,33 @@ function ingestServerData(data){
   // Ingest sessions
   if(Array.isArray(data.sessions)) {
     S.sessions = data.sessions;
-    // Also supplement agents from sessions if agents list was sparse
-    data.sessions.forEach(sess => {
-      const exists = S.agents.some(a => a.id === sess.session_id || a.id === sess.instance_id);
-      if(!exists) {
+    // Only synthesize an agent entry if data.agents was completely empty
+    if(S.agents.length === 0) {
+      const seen = new Set();
+      data.sessions.forEach(sess => {
+        const key = sess.instance_id || sess.app_id || sess.session_id;
+        if(seen.has(key)) return;
+        seen.add(key);
         const isRev = (sess.status === 'revoked' || S.revokedSessions.includes(sess.session_id) || S.revokedUsers.includes(sess.user_email));
+        const lastAct = sess.last_active_at ? new Date(sess.last_active_at).getTime() : (sess.started_at ? new Date(sess.started_at).getTime() : 0);
+        const isLive = (sess.status === 'active') && (now - lastAct <= 45000) && !isRev;
         S.agents.push({
-          id: sess.session_id,
-          name: sess.app_id || sess.agent_name || 'Agent',
+          id: sess.instance_id ? ('agent-' + (sess.app_id || 'workload') + '-' + sess.instance_id) : sess.session_id,
+          instanceId: sess.instance_id || '',
+          name: sess.agent_name || sess.app_id || 'Agent',
+          appId: sess.app_id || '',
           host: sess.hostname || 'edge-endpoint',
-          os: 'macos',
-          state: isRev ? 'QUARANTINED' : (sess.status === 'active' ? 'COMPLIANT' : 'COOPERATIVE_BYOD'),
+          os: 'windows',
+          state: isRev ? 'QUARANTINED' : 'COMPLIANT',
+          liveness: isRev ? 'REVOKED' : (isLive ? 'LIVE' : 'OFFLINE'),
+          lastHeartbeat: lastAct ? new Date(lastAct) : null,
           layers: [1, 1, 1],
           mission: sess.user_prompt || (sess.intent && sess.intent.primary) || 'Autonomous operations',
           risk: isRev ? 0.95 : (sess.denied_count > 0 ? 0.65 : 0.12),
           raw: sess
         });
-      }
-    });
+      });
+    }
   }
 
   // Ingest audit events as decisions
@@ -414,8 +450,8 @@ function ingestServerData(data){
   } else if(S.view === 'decisions') {
     const dt = $('#dt');
     if(dt) VIEWS.decisions.after();
-  } else if(S.view === 'agents') {
-    VIEWS.agents.after();
+  } else if(S.view === 'agents' || S.view === 'sessions') {
+    render();
   }
 }
 
@@ -438,15 +474,20 @@ function recalcBuckets(){
 
 /* ---------- nav ---------- */
 const NAV=[
-  ['Operate',[['overview','Overview'],['decisions','Decisions'],['agents','Agents'],['grants','Grants']]],
+  ['Operate',[['overview','Overview'],['decisions','Decisions'],['agents','Agents'],['sessions','Sessions'],['grants','Grants']]],
   ['Govern',[['policies','Policies'],['audit','Audit chain'],['endpoint','Endpoint hardening']]],
   ['System',[['settings','Connection & access']]],
 ];
 function drawNav(){
   const q=S.agents.filter(a=>a.state==='QUARANTINED').length;
-  const den=S.decisions.filter(d=>d.out==='DENY').length;
+  const liveCount=S.agents.filter(a=>a.liveness==='LIVE').length;
+  const activeSess=S.sessions.filter(s=>s.status==='active').length;
   $('#nav').innerHTML=NAV.map(([g,items])=>`<div class="nav-group">${g}</div>`+items.map(([id,l])=>{
-    const c=id==='agents'&&q?`<span class="cnt hot">${q}</span>`:id==='decisions'&&S.decisions.length?`<span class="cnt">${S.decisions.length}</span>`:'';
+    let c='';
+    if(id==='agents'&&q) c=`<span class="cnt hot">${q}</span>`;
+    else if(id==='agents'&&liveCount) c=`<span class="cnt">${liveCount}</span>`;
+    else if(id==='sessions'&&activeSess) c=`<span class="cnt">${activeSess}</span>`;
+    else if(id==='decisions'&&S.decisions.length) c=`<span class="cnt">${S.decisions.length}</span>`;
     return `<button data-v="${id}" ${S.view===id?'aria-current="page"':''}>${l}${c}</button>`}).join('')).join('');
 }
 $('#nav').addEventListener('click',e=>{const b=e.target.closest('button[data-v]');if(!b)return;go(b.dataset.v);$('#side').classList.remove('on')});
@@ -455,7 +496,8 @@ $('#menuBtn').onclick=()=>$('#side').classList.toggle('on');
 const META={
   overview:['Overview','Live view of every agent decision, across all four planes'],
   decisions:['Decisions','Every allow, deny, step-up and unknown outcome. Select a row for evidence'],
-  agents:['Agents','Identity, device compliance and containment layers'],
+  agents:['Agents','Persistent host identity, device compliance, and containment layers'],
+  sessions:['Sessions','Workload execution sessions attached to registered agents'],
   grants:['Grants','Bounded, short-lived authority. Single-use grants are burned atomically'],
   policies:['Policies','Author Cedar policy and test what it would do before publishing'],
   audit:['Audit chain','Tamper-evident SHA-256 hash chain of Intent, Authority, PEP and Execution'],
@@ -473,10 +515,12 @@ VIEWS.overview={
   html(){
     const d=S.decisions, n=d.length||1, den=d.filter(x=>x.out==='DENY').length, al=d.filter(x=>x.out==='ALLOW').length;
     const online=S.agents.filter(a=>a.state!=='QUARANTINED').length, q=S.agents.length-online;
+    const liveAgents=S.agents.filter(a=>a.liveness==='LIVE').length;
+    const activeSessions=S.sessions.filter(s=>s.status==='active').length;
     const active=S.grants.filter(g=>g.ttl>0&&g.used<g.max).length;
     return `
     <div class="planes">
-      <div class="plane"><i class="${q?'warn':''}"></i><b>Edge execution</b><span>${online} of ${S.agents.length} agents enforcing</span></div>
+      <div class="plane"><i class="${q?'warn':liveAgents?'':'bad'}"></i><b>Edge execution</b><span>${liveAgents} of ${S.agents.length} agents live (${activeSessions} active sessions)</span></div>
       <div class="plane"><i class="${S.kill?'bad':''}"></i><b>Control plane</b><span>Policy ${S.policyVersion}, ${S.kill?'kill switch on':'accepting requests'}</span></div>
       <div class="plane"><i></i><b>Gateway PEP</b><span>Atomic consume healthy</span></div>
       <div class="plane"><i class="${S.chainStatus==='corrupted'?'bad':'good'}"></i><b>Observability</b><span>Chain: ${S.chainStatus}</span></div>
@@ -486,7 +530,7 @@ VIEWS.overview={
       <div class="kpi good"><small>Allowed</small><strong id="k2">${Math.round(al/n*100)}%</strong><em>${al} decisions</em></div>
       <div class="kpi bad"><small>Denied</small><strong id="k3">${den}</strong><em>${Math.round(den/n*100)}% of traffic</em></div>
       <div class="kpi"><small>Active grants</small><strong id="k4">${active}</strong><em>${S.grants.length-active} spent or expired</em></div>
-      <div class="kpi ${q?'bad':'good'}"><small>Quarantined agents</small><strong id="k5">${q}</strong><em>${online} compliant or active</em></div>
+      <div class="kpi ${liveAgents?'good':''}"><small>Fleet Liveness</small><strong id="k5">${liveAgents} Live</strong><em>${activeSessions} active sessions / ${S.agents.length-liveAgents} offline</em></div>
     </div>
     <div class="grid g-2">
       <div class="panel">
@@ -558,12 +602,58 @@ function closeDrawer(){$('#drawer').classList.remove('on');if(!$('#modal').class
 
 /* Agents */
 VIEWS.agents={
-  html(){return `<div class="panel"><div class="tw"><table><thead><tr><th>Agent</th><th>Host</th><th>Compliance</th><th>Layers A / B / C</th><th>Risk</th><th>Mission</th><th></th></tr></thead><tbody>
-  ${S.agents.map(a=>`<tr><td><b>${esc(a.name)}</b><div class="mono" style="color:var(--muted)">${esc(a.id)}</div></td><td>${esc(a.host)}<div style="color:var(--muted);font-size:12.5px">${esc(a.os)}</div></td><td>${tag(a.state)}</td>
-  <td>${a.layers.map((l,i)=>`<span class="tag ${l?'t-ALLOW':'t-DENY'}" title="Layer ${'ABC'[i]} ${l?'enforcing':'not enforcing'}">${'ABC'[i]} ${l?'on':'off'}</span>`).join(' ')}</td>
-  <td style="min-width:90px"><div class="bar"><div style="width:${a.risk*100}%;background:${a.risk>.7?'var(--deny)':a.risk>.4?'var(--unk)':'var(--allow)'}"></div></div><span class="mono">${a.risk.toFixed(2)}</span></td>
-  <td>${esc(a.mission)}</td><td style="white-space:nowrap">${a.state==='QUARANTINED'?`<button class="btn sm" data-rel="${a.id}">Release</button>`:`<button class="btn sm danger" data-q="${a.id}">Quarantine</button>`}</td></tr>`).join('')}
-  </tbody></table></div></div>`},
+  html(){
+    return `<div class="panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div>
+        <h2>Registered Workload Agents</h2>
+        <p class="hint" style="margin:0">Persistent enrolled edge agents and workload runners</p>
+      </div>
+      <div style="display:flex;gap:10px">
+        <span class="tag t-LIVE"><span class="dot-live"></span>${S.agents.filter(a=>a.liveness==='LIVE').length} Live</span>
+        <span class="tag t-OFFLINE"><span class="dot-offline"></span>${S.agents.filter(a=>a.liveness==='OFFLINE').length} Offline</span>
+      </div>
+    </div>
+    <div class="tw"><table><thead><tr>
+      <th>Agent / Workload</th>
+      <th>Status</th>
+      <th>Compliance</th>
+      <th>Host</th>
+      <th>Active Sessions</th>
+      <th>Last Activity</th>
+      <th>Layers</th>
+      <th>Risk</th>
+      <th></th>
+    </tr></thead><tbody>
+    ${S.agents.length ? S.agents.map(a=>{
+      const liveBadge = a.liveness==='LIVE'
+        ? `<span class="tag t-LIVE"><span class="dot-live"></span>LIVE</span>`
+        : a.liveness==='OFFLINE'
+        ? `<span class="tag t-OFFLINE"><span class="dot-offline"></span>OFFLINE</span>`
+        : `<span class="tag t-QUARANTINED">${esc(a.liveness)}</span>`;
+
+      const activeSess = S.sessions.filter(s => s.status === 'active' && ((a.instanceId && s.instance_id === a.instanceId) || s.app_id === a.appId));
+      const totalSess = S.sessions.filter(s => ((a.instanceId && s.instance_id === a.instanceId) || s.app_id === a.appId));
+      const sessHtml = activeSess.length > 0
+        ? `<b style="color:var(--allow)">${activeSess.length} active</b><span style="color:var(--muted);font-size:12px"> (${totalSess.length} total)</span>`
+        : `<span style="color:var(--muted)">0 active (${totalSess.length} total)</span>`;
+
+      const actTime = a.lastHeartbeat ? timeAgo(a.lastHeartbeat) : 'Never';
+
+      return `<tr>
+        <td><b>${esc(a.name)}</b><div class="mono" style="color:var(--muted)">${esc(a.id)}</div></td>
+        <td>${liveBadge}</td>
+        <td>${tag(a.state)}</td>
+        <td>${esc(a.host)}<div style="color:var(--muted);font-size:12.5px">${esc(a.os)}</div></td>
+        <td>${sessHtml}</td>
+        <td class="mono" style="color:var(--muted);font-size:12px">${actTime}</td>
+        <td>${a.layers.map((l,i)=>`<span class="tag ${l?'t-ALLOW':'t-DENY'}" title="Layer ${'ABC'[i]} ${l?'enforcing':'not enforcing'}">${'ABC'[i]} ${l?'on':'off'}</span>`).join(' ')}</td>
+        <td style="min-width:70px"><div class="bar"><div style="width:${a.risk*100}%;background:${a.risk>.7?'var(--deny)':a.risk>.4?'var(--unk)':'var(--allow)'}"></div></div><span class="mono">${a.risk.toFixed(2)}</span></td>
+        <td style="white-space:nowrap">${a.state==='QUARANTINED'?`<button class="btn sm" data-rel="${a.id}">Release</button>`:`<button class="btn sm danger" data-q="${a.id}">Quarantine</button>`}</td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="9" class="empty">No registered agents yet. Run <code>bapedge register</code> or launch Claude Code.</td></tr>`}
+    </tbody></table></div></div>`;
+  },
   after(){$('#view').onclick=async e=>{
     const q=e.target.closest('[data-q]'),r=e.target.closest('[data-rel]');
     if(q)confirmBox('Quarantine this agent?','All its grants are revoked and every action fails closed until you release it.','Quarantine',async()=>{
@@ -576,7 +666,7 @@ VIEWS.agents={
         });
       } catch(err){console.error(err)}
       const a=S.agents.find(x=>x.id===targetId);
-      if(a) a.state='QUARANTINED';
+      if(a) { a.state='QUARANTINED'; a.liveness='REVOKED'; }
       audit('agent.quarantine',targetId);
       toast((a?a.name:targetId)+' quarantined');
       drawNav();render();
@@ -597,6 +687,54 @@ VIEWS.agents={
       drawNav();render();
     });
   }}
+};
+
+/* Sessions */
+VIEWS.sessions={
+  html(){
+    const actCount = S.sessions.filter(s=>s.status==='active').length;
+    return `<div class="panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div>
+        <h2>Workload Execution Sessions</h2>
+        <p class="hint" style="margin:0">Active and historical Claude Code runs attached to host agents</p>
+      </div>
+      <div style="display:flex;gap:10px">
+        <span class="tag t-LIVE"><span class="dot-live"></span>${actCount} Active</span>
+        <span class="tag t-OFFLINE">${S.sessions.length - actCount} Closed</span>
+      </div>
+    </div>
+    <div class="tw"><table><thead><tr>
+      <th>Session ID</th>
+      <th>Workload / App</th>
+      <th>Status</th>
+      <th>Host / PID</th>
+      <th>User</th>
+      <th>Decisions</th>
+      <th>Started</th>
+      <th>Last Active</th>
+    </tr></thead><tbody>
+    ${S.sessions.length ? S.sessions.map(s => {
+      const isAct = s.status === 'active';
+      const stTag = isAct
+        ? `<span class="tag t-LIVE"><span class="dot-live"></span>ACTIVE</span>`
+        : (s.status === 'revoked' ? `<span class="tag t-QUARANTINED">REVOKED</span>` : `<span class="tag t-OFFLINE"><span class="dot-offline"></span>CLOSED</span>`);
+      const eventsSummary = (s.allowed_count || 0) + ' allowed / ' + (s.denied_count || 0) + ' denied';
+      const startedStr = s.started_at ? timeAgo(new Date(s.started_at)) : '-';
+      const lastActStr = s.last_active_at ? timeAgo(new Date(s.last_active_at)) : (s.ended_at ? timeAgo(new Date(s.ended_at)) : '-');
+      return `<tr>
+        <td class="mono"><b>${esc(s.session_id)}</b>${s.user_prompt ? `<div style="color:var(--muted);font-size:12px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.user_prompt)}</div>` : ''}</td>
+        <td><b>${esc(s.app_id || s.agent_name || 'workload')}</b>${s.instance_id ? `<div class="mono" style="color:var(--muted);font-size:11.5px">${esc(s.instance_id)}</div>` : ''}</td>
+        <td>${stTag}</td>
+        <td>${esc(s.hostname || 'workstation')}${s.client_pid ? `<div class="mono" style="color:var(--muted);font-size:12px">PID: ${s.client_pid}</div>` : ''}</td>
+        <td>${esc(s.user_id || s.user_email || 'default')}</td>
+        <td class="mono" style="font-size:12px">${eventsSummary}</td>
+        <td class="mono" style="color:var(--muted);font-size:12px">${startedStr}</td>
+        <td class="mono" style="color:var(--muted);font-size:12px">${lastActStr}</td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="8" class="empty">No sessions recorded yet. Run <code>run-claude-bap.bat</code> to initiate an active session.</td></tr>`}
+    </tbody></table></div></div>`;
+  }
 };
 
 /* Grants */
