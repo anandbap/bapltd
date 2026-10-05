@@ -437,8 +437,11 @@ func RunSweep(args []string) error {
 
 	// Flush any pending offline audit logs
 	flushedAudit := 0
-	if n, err := audit.FlushOfflineAudit(serverURL, ""); err == nil {
+	n, flushErr := audit.FlushOfflineAudit(serverURL, "")
+	if flushErr == nil {
 		flushedAudit = n
+	} else {
+		fmt.Printf("  [!] Audit flush notice: %v\n", flushErr)
 	}
 
 	// Request central control plane sweep

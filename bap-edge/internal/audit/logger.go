@@ -254,6 +254,57 @@ func RemoveEntry(eventID string, logPath string) error {
 	return os.WriteFile(logPath, buf.Bytes(), 0644)
 }
 
+// RemoveEntries removes multiple entries by event_id in a single atomic pass.
+func RemoveEntries(eventIDs map[string]struct{}, logPath string) error {
+	if len(eventIDs) == 0 || logPath == "off" || logPath == "none" {
+		return nil
+	}
+	if logPath == "" {
+		logPath = DefaultLogPath()
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	lines := bytes.Split(bytes.TrimSpace(content), []byte("\n"))
+	var remainingLines [][]byte
+
+	for _, line := range lines {
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) == 0 {
+			continue
+		}
+		var entry struct {
+			EventID string `json:"event_id"`
+		}
+		if err := json.Unmarshal(trimmed, &entry); err == nil && entry.EventID != "" {
+			if _, remove := eventIDs[entry.EventID]; remove {
+				continue
+			}
+		}
+		remainingLines = append(remainingLines, line)
+	}
+
+	if len(remainingLines) == 0 {
+		return os.Truncate(logPath, 0)
+	}
+
+	var buf bytes.Buffer
+	for _, l := range remainingLines {
+		buf.Write(l)
+		buf.WriteByte('\n')
+	}
+	return os.WriteFile(logPath, buf.Bytes(), 0644)
+}
+
 // ClearLog truncates the local log file to 0 bytes.
 func ClearLog(logPath string) error {
 	if logPath == "" {
