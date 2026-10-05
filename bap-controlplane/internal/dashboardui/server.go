@@ -85,7 +85,7 @@ func Handler(controlPlane *url.URL, transport http.RoundTripper, allowRemoteAdmi
 		if strings.HasPrefix(r.URL.Path, "/inspector") {
 			w.Header().Set("Content-Security-Policy", "default-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://www.gstatic.com; style-src 'self' 'unsafe-inline'; connect-src 'self' *; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 		} else {
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; connect-src 'self' *; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 		}
 		mux.ServeHTTP(w, r)
 	})

