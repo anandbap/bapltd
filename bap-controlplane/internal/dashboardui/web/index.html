@@ -89,6 +89,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 .t-COOPERATIVE_BYOD,.t-closed,.t-CLOSED{background:var(--surface2);color:var(--muted);border:1px solid var(--line)}
 .t-LIVE,.t-live{background:rgba(34,197,94,.12);color:var(--allow);border:1px solid rgba(34,197,94,.25)}
 .t-OFFLINE,.t-offline,.t-deregistered{background:var(--surface2);color:var(--muted);border:1px solid var(--line)}
+.t-INTENT,.t-intent{background:rgba(59,130,246,.15);color:var(--accent);border:1px solid rgba(59,130,246,.3)}
 .dot-live{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--allow);box-shadow:0 0 6px var(--allow);margin-right:6px}
 .dot-offline{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--muted);margin-right:6px}
 .mono{font-family:var(--mono);font-size:12.5px}
@@ -415,21 +416,27 @@ function ingestServerData(data){
     const rawEvents = [...data.central_events].reverse();
     S.decisions = rawEvents.map(e => {
       const out = (e.decision || 'allow').toUpperCase();
+      const host = e.hostname || 'workstation';
+      const osName = e.os || (host.toLowerCase().includes('desktop') || host.toLowerCase().includes('win') ? 'windows' : (host.toLowerCase().includes('mac') ? 'macos' : 'linux'));
+      const isPrompt = out === 'INTENT' || e.executable === 'user_prompt';
+      const whyText = e.reason || (out === 'ALLOW' ? 'Permitted by active policy' : (isPrompt ? 'User mission intent classified at BAP edge' : 'Denied by BAP zero-trust policy'));
+      const invText = e.decision_rule || (out === 'ALLOW' ? 'I4 local Cedar eval' : (isPrompt ? 'Layer A prompt classification' : 'I4 default deny'));
+
       return {
         id: e.event_id || ('dec_' + hex(8)),
         ts: new Date(e.timestamp || Date.now()),
         agent: {
           id: e.session_id || 'unknown',
           name: e.source || 'claude-code',
-          host: e.hostname || 'workstation',
-          os: 'linux',
+          host: host,
+          os: osName,
           mission: e.user_prompt || 'Task execution'
         },
         cmd: e.full_command || e.executable || 'exec',
-        out: out === 'ALLOW' ? 'ALLOW' : (out === 'DENY' ? 'DENY' : out),
-        why: e.reason || (out === 'ALLOW' ? 'Permitted by active policy' : 'Denied by BAP zero-trust policy'),
-        inv: e.decision_rule || (out === 'ALLOW' ? 'I4 local Cedar eval' : 'I4 default deny'),
-        cat: e.primary_intent || (e.full_command && e.full_command.startsWith('git') ? 'Local dev' : 'Business API'),
+        out: out,
+        why: whyText,
+        inv: invText,
+        cat: e.primary_intent || (e.full_command && e.full_command.startsWith('git') ? 'Local dev' : (isPrompt ? 'Prompt Context' : 'Business API')),
         grant: e.grant_id || null,
         latency: +(e.duration_ms || (0.4 + Math.random()*1.2)).toFixed(2),
         hash: e.event_hash || hex(64),
@@ -593,9 +600,14 @@ function openDecision(id){
   <dt>Mission</dt><dd>${esc(d.agent.mission)}</dd><dt>Enforced by</dt><dd>${esc(d.inv)}</dd><dt>Grant</dt><dd class="mono">${d.grant||'none (local policy only)'}</dd>
   <dt>Eval latency</dt><dd>${d.latency} ms</dd><dt>Time</dt><dd>${d.ts.toLocaleString()}</dd><dt>Record hash</dt><dd class="mono">${d.hash}</dd></dl>
   <h3 style="font-size:14px">Chain of custody</h3>
-  <div style="display:grid;gap:6px;font-size:13.5px;margin:8px 0 14px">${['Intent recorded (context only)','Policy decision: '+d.out.replace('_',' ').toLowerCase(),d.grant?'Bounded grant presented to gateway':'No resource-side grant required','Execution evidence '+(d.out==='ALLOW'?'reconciled & audited':'denied & reported')].map((s,i)=>`<div style="display:flex;gap:10px"><b style="color:var(--accent)">${i+1}</b><span>${s}</span></div>`).join('')}</div>
-  <button class="btn" id="dpol">Replay in policy tester</button>`;
-  $('#dx').onclick=closeDrawer;$('#dpol').onclick=()=>{closeDrawer();go('policies');setTimeout(()=>{$('#whyIn').value=d.cmd;runWhy()},0)};
+  <div style="display:grid;gap:6px;font-size:13.5px;margin:8px 0 14px">${[
+    'Intent recorded (context only)',
+    'Policy decision: '+d.out.replace('_',' ').toLowerCase(),
+    d.grant?'Bounded grant presented to gateway':'No resource-side grant required',
+    d.out==='INTENT' ? 'Mission context registered & bound to audit chain' : ('Execution evidence '+(d.out==='ALLOW'?'reconciled & audited':'denied & reported'))
+  ].map((s,i)=>`<div style="display:flex;gap:10px"><b style="color:var(--accent)">${i+1}</b><span>${s}</span></div>`).join('')}</div>
+  ${d.out!=='INTENT'?`<button class="btn" id="dpol">Replay in policy tester</button>`:''}`;
+  $('#dx').onclick=closeDrawer;if($('#dpol'))$('#dpol').onclick=()=>{closeDrawer();go('policies');setTimeout(()=>{$('#whyIn').value=d.cmd;runWhy()},0)};
   $('#drawer').classList.add('on');$('#scrim').classList.add('on');$('#scrim').onclick=closeDrawer;
 }
 function closeDrawer(){$('#drawer').classList.remove('on');if(!$('#modal').classList.contains('on'))$('#scrim').classList.remove('on')}
