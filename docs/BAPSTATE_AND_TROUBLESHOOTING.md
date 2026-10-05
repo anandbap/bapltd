@@ -374,7 +374,7 @@ An agent showed as offline, but its session appeared active, or launching Claude
    ```powershell
    Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/control/sweep" -Body '{"stale_idle_seconds":45}' -ContentType "application/json"
    ```
-3. Both the React Dashboard (`/`) and Cockpit (`/inspector_v2.html`) will immediately refresh, showing live agents with green dots and offline/closed agents with gray dots.
+3. Both the BAP Cockpit Dashboard (`/dashboard/`) and Cockpit (`/inspector_v2.html`) will immediately refresh, showing live agents with green dots and offline/closed agents with gray dots.
 
 ---
 

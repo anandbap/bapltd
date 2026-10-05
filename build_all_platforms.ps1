@@ -28,13 +28,6 @@ function Safe-CopyItem {
 Write-Host ">>> Ensuring BAP Root CA and TLS credentials (Domain: $Domain)..." -ForegroundColor Cyan
 & (Join-Path $rootDir "scripts\ensure_certs.ps1") -ForceRegen:$ForceRegenCerts -AdditionalSAN $Domain -InstallToStore:$false
 
-Write-Host ">>> Building standalone dashboard assets..." -ForegroundColor Cyan
-Push-Location (Join-Path $rootDir "dashboard")
-try {
-    npm run build
-    if ($LASTEXITCODE -ne 0) { throw "Dashboard asset build failed" }
-}
-finally { Pop-Location }
 
 $env:CGO_ENABLED = "0"
 $env:GOTOOLCHAIN = "auto"

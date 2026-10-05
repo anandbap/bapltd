@@ -2,27 +2,7 @@
   "": {
     "entityTypes": {
       "Agent": {
-        "memberOfTypes": [],
-        "shape": {
-          "type": "Record",
-          "attributes": {
-            "department": {
-              "type": "String",
-              "required": false
-            },
-            "email": {
-              "type": "String",
-              "required": false
-            },
-            "groups": {
-              "type": "Set",
-              "element": {
-                "type": "String"
-              },
-              "required": false
-            }
-          }
-        }
+        "memberOfTypes": []
       },
       "Command": {
         "memberOfTypes": []
@@ -54,14 +34,6 @@
               },
               "escapes_workspace": {
                 "type": "Boolean",
-                "required": false
-              },
-              "department": {
-                "type": "String",
-                "required": false
-              },
-              "user_email": {
-                "type": "String",
                 "required": false
               }
             }

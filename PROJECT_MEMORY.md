@@ -20,10 +20,10 @@ BAP (Bounded Authority Plane) is a Zero-Trust governance and least-privilege pol
   - `/api/v1/control/revocations`: Live kill-switch and per-session/user revocation state.
   - `/inspector_v2.html`: Modern standalone Cockpit with live pulse indicators and auto-refresh.
 
-### 2. React Administrative Dashboard (`dashboard/` & `bapdashboard.exe`)
-- **Binary**: `dist/windows-amd64/dashboard/bapdashboard.exe`
+### 2. Standalone Administrative Cockpit Dashboard (`bapdashboard.exe`)
+- **Binary**: `dist/windows-amd64/dashboard/bapdashboard.exe` (and root `bapdashboard.exe`)
 - **Default Port**: HTTPS 8444
-- **Frontend**: React + Vite + Tailwind UI (built into `bap-controlplane/internal/dashboardui/web/`).
+- **Frontend**: Pure zero-dependency standalone HTML/CSS/JS Cockpit (`bap-controlplane/internal/dashboardui/web/index.html`). Fast, responsive, dark/light theme support, embeds directly into binary without Node/npm dependencies.
 - **Telemetry Parity**: Automatically merges dynamic sessions (`sessions`) with registered agents (`agents`) into a unified grid with live heartbeat age, PID, user, prompt, and stop/revoke controls.
 
 ### 3. Edge Agent & Watcher (`bap-edge/` & `bapedge.exe`)

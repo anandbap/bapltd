@@ -7,18 +7,13 @@ set "GOTOOLCHAIN=auto"
 
 if "%1"=="--all" goto :build_all
 if "%1"=="-all" goto :build_all
-echo [0/7] Ensuring BAP Root CA and TLS credentials...
+echo [0/6] Ensuring BAP Root CA and TLS credentials...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT_DIR%scripts\ensure_certs.ps1"
 if %ERRORLEVEL% neq 0 (
     echo [WARNING] ensure_certs.ps1 failed, continuing build...
 )
 
-echo [1/7] Building dashboard assets...
-cd /d "%ROOT_DIR%dashboard"
-call npm run build
-if %ERRORLEVEL% neq 0 exit /b 1
-
-echo [2/7] Building bap-controlplane and standalone dashboard...
+echo [1/6] Building bap-controlplane and standalone dashboard...
 cd /d "%ROOT_DIR%bap-controlplane"
 go build -trimpath -ldflags "-s -w" -o bapcontrolplane.exe ./cmd/server
 if %ERRORLEVEL% neq 0 (
@@ -33,7 +28,7 @@ if %ERRORLEVEL% neq 0 (
 )
 copy /y bapdashboard.exe "%ROOT_DIR%bapdashboard.exe" >nul
 
-echo [3/7] Building bap-edge...
+echo [2/6] Building bap-edge...
 cd /d "%ROOT_DIR%bap-edge"
 go build -trimpath -ldflags "-s -w" -o bapedge.exe .
 if %ERRORLEVEL% neq 0 (
@@ -43,7 +38,7 @@ if %ERRORLEVEL% neq 0 (
 copy /y bapedge.exe "%ROOT_DIR%bapedge.exe" >nul 2>&1
 copy /y bapedge.exe "%ROOT_DIR%bapmcp.exe" >nul 2>&1
 
-echo [4/7] Building bap-gateway...
+echo [3/6] Building bap-gateway...
 cd /d "%ROOT_DIR%bap-gateway"
 go build -trimpath -ldflags "-s -w" -o bapgateway.exe .
 if %ERRORLEVEL% neq 0 (
@@ -52,7 +47,7 @@ if %ERRORLEVEL% neq 0 (
 )
 copy /y bapgateway.exe "%ROOT_DIR%bapgateway.exe" >nul
 
-echo [5/7] Building cchook (Claude Code interceptor)...
+echo [4/6] Building cchook (Claude Code interceptor)...
 cd /d "%ROOT_DIR%cchook"
 go build -trimpath -ldflags "-s -w" -o interceptor.exe interceptor.go
 if %ERRORLEVEL% neq 0 (
@@ -60,7 +55,7 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-echo [6/7] Building copilot (GitHub Copilot interceptor)...
+echo [5/6] Building copilot (GitHub Copilot interceptor)...
 cd /d "%ROOT_DIR%copilot"
 go build -trimpath -ldflags "-s -w" -o copilot_interceptor.exe copilot_interceptor.go
 if %ERRORLEVEL% neq 0 (
@@ -68,7 +63,7 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-echo [7/7] Synchronizing Inspector cockpits, dist role packages, and assets...
+echo [6/6] Synchronizing Inspector cockpits, dist role packages, and assets...
 copy /y "%ROOT_DIR%inspector.html" "%ROOT_DIR%bap-controlplane\inspector.html" >nul
 copy /y "%ROOT_DIR%inspector_v2.html" "%ROOT_DIR%bap-controlplane\inspector_v2.html" >nul
 for /r "%ROOT_DIR%dist" %%F in (inspector.html) do if exist "%%F" copy /y "%ROOT_DIR%inspector.html" "%%F" >nul 2>&1

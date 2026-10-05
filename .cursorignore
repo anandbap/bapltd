@@ -26,11 +26,7 @@ coverage/
 *.key
 *.pem
 
-# Generated dashboard assets and visual test artifacts
-bap-controlplane/internal/dashboardui/web/assets/
-dashboard/test-results/
-dashboard/playwright-report/
-dashboard/*.png
+
 
 # Standalone manual-only negative/adversarial test scripts (simulation payloads)
 run_negative_testcases.bat

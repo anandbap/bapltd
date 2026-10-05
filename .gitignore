@@ -122,12 +122,6 @@ python-agent/dist/
 python-agent/build/
 python-agent/*.egg-info/
 
-# ==============================================================================
-# Dashboard Dependencies & Test Reports
-# ==============================================================================
-dashboard/node_modules/
-dashboard/test-results/
-dashboard/playwright-report/
 
 # ==============================================================================
 # IDE & Operating System Files

@@ -166,13 +166,12 @@ class TestExecutiveDemo(unittest.TestCase):
             body2 = resp2.read().decode("utf-8")
             self.assertIn("/dashboard/", body2)
 
-        # 3. Test /dashboard/ returns HTTP 200 with React bundle assets
+        # 3. Test /dashboard/ returns HTTP 200 with Cockpit dashboard HTML
         req_dash = urllib.request.Request(f"{self.server_url}/dashboard/")
         with urllib.request.urlopen(req_dash, context=ssl_ctx, timeout=5) as resp_dash:
             self.assertEqual(resp_dash.status, 200)
             dash_html = resp_dash.read().decode("utf-8")
-            self.assertIn("<div id=\"root\"></div>", dash_html)
-            self.assertIn("assets/", dash_html)
+            self.assertIn("Agent operations", dash_html)
 
     # -------------------------------------------------------------------------
     # BAP-214: Deterministic Executive Demo Execution (< 60 seconds)
