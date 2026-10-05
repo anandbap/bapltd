@@ -14,9 +14,9 @@ import (
 func TestActivityEndpoints(t *testing.T) {
 	s := setupTestServer()
 
-	// 1. Test GET /api/activity/summary
-	t.Run("ActivitySummary", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/activity/summary", nil)
+	// 1. Test Demo Mode Simulation (?demo=true)
+	t.Run("DemoModeSimulation", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/activity/summary?demo=true", nil)
 		rec := httptest.NewRecorder()
 		s.mux.ServeHTTP(rec, req)
 
@@ -29,102 +29,65 @@ func TestActivityEndpoints(t *testing.T) {
 			t.Fatalf("failed to decode summary: %v", err)
 		}
 
-		if summary.TotalActiveAgents <= 0 {
-			t.Errorf("expected positive active agents, got %d", summary.TotalActiveAgents)
+		if summary.TotalActiveAgents != 1284 {
+			t.Errorf("expected 1284 active agents in demo mode, got %d", summary.TotalActiveAgents)
 		}
-		if summary.BusinessUnitsActive == "" {
-			t.Errorf("expected non-empty business units active string")
-		}
-	})
-
-	// 2. Test GET /api/activity/live
-	t.Run("ActivityLive", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/activity/live?limit=5", nil)
-		rec := httptest.NewRecorder()
-		s.mux.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d", rec.Code)
+		if summary.BusinessUnitsActive != "31/34" {
+			t.Errorf("expected '31/34' in demo mode, got %s", summary.BusinessUnitsActive)
 		}
 
-		var resp map[string]any
-		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-			t.Fatalf("failed to decode live response: %v", err)
-		}
-
-		acts, ok := resp["activities"].([]any)
-		if !ok || len(acts) == 0 {
-			t.Fatalf("expected non-empty activities list, got %v", resp["activities"])
-		}
-	})
-
-	// 3. Test GET /api/activity/intents
-	t.Run("ActivityIntents", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/activity/intents", nil)
-		rec := httptest.NewRecorder()
-		s.mux.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d", rec.Code)
-		}
-
-		var resp map[string]any
-		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-			t.Fatalf("failed to decode intents: %v", err)
-		}
-
-		intents, ok := resp["intents"].([]any)
-		if !ok || len(intents) == 0 {
-			t.Fatalf("expected intents list, got %v", resp["intents"])
-		}
-	})
-
-	// 4. Test GET /api/activity/business-units
-	t.Run("ActivityBusinessUnits", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/activity/business-units", nil)
-		rec := httptest.NewRecorder()
-		s.mux.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d", rec.Code)
-		}
-
-		var resp map[string]any
-		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-			t.Fatalf("failed to decode business-units: %v", err)
-		}
-
-		bus, ok := resp["business_units"].([]any)
-		if !ok || len(bus) == 0 {
-			t.Fatalf("expected business units list, got %v", resp["business_units"])
-		}
-	})
-
-	// 5. Test GET /api/activity/topology
-	t.Run("ActivityTopology", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/activity/topology?group_by=bu", nil)
-		rec := httptest.NewRecorder()
-		s.mux.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d", rec.Code)
-		}
-
+		// Demo topology
+		reqTopo := httptest.NewRequest(http.MethodGet, "/api/activity/topology?demo=true", nil)
+		recTopo := httptest.NewRecorder()
+		s.mux.ServeHTTP(recTopo, reqTopo)
 		var tree types.BusinessUnitTopologyNode
-		if err := json.Unmarshal(rec.Body.Bytes(), &tree); err != nil {
-			t.Fatalf("failed to decode topology tree: %v", err)
+		if err := json.Unmarshal(recTopo.Body.Bytes(), &tree); err != nil {
+			t.Fatalf("failed to decode demo topology: %v", err)
 		}
-
-		if tree.Name != "Enterprise AI Workforce" {
-			t.Errorf("expected root name 'Enterprise AI Workforce', got %s", tree.Name)
+		if tree.ActiveSessions != 1284 {
+			t.Errorf("expected 1284 sessions in demo topology, got %d", tree.ActiveSessions)
 		}
 		if len(tree.Children) == 0 {
-			t.Errorf("expected children nodes under topology root")
+			t.Errorf("expected children in demo topology")
 		}
 	})
 
-	// 6. Test POST /api/activity/ingest
-	t.Run("ActivityIngest", func(t *testing.T) {
+	// 2. Test Live Unsimulated Zero-State (no agents, no mock data)
+	t.Run("LiveUnsimulatedZeroState", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/activity/summary", nil)
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, req)
+
+		var summary types.ActivitySummary
+		if err := json.Unmarshal(rec.Body.Bytes(), &summary); err != nil {
+			t.Fatalf("failed to decode live summary: %v", err)
+		}
+
+		if summary.TotalActiveAgents != 0 {
+			t.Errorf("expected 0 active agents in clean live state, got %d", summary.TotalActiveAgents)
+		}
+		if summary.BusinessUnitsActive != "0/0" {
+			t.Errorf("expected '0/0' in clean live state, got %s", summary.BusinessUnitsActive)
+		}
+
+		// Live topology clean state
+		reqTopo := httptest.NewRequest(http.MethodGet, "/api/activity/topology", nil)
+		recTopo := httptest.NewRecorder()
+		s.mux.ServeHTTP(recTopo, reqTopo)
+		var tree types.BusinessUnitTopologyNode
+		if err := json.Unmarshal(recTopo.Body.Bytes(), &tree); err != nil {
+			t.Fatalf("failed to decode live topology: %v", err)
+		}
+		if tree.ActiveSessions != 0 {
+			t.Errorf("expected 0 active sessions in live topology, got %d", tree.ActiveSessions)
+		}
+		if len(tree.Children) != 0 {
+			t.Errorf("expected 0 children in live zero-state topology, got %d", len(tree.Children))
+		}
+	})
+
+	// 3. Test POST /api/activity/ingest populates live data dynamically
+	t.Run("LiveIngestAndDynamicAggregation", func(t *testing.T) {
 		ev := types.AgentActivityEvent{
 			Timestamp:          time.Now().UTC().Format(time.RFC3339),
 			SessionID:          "sess-test-ingest-01",
@@ -157,9 +120,32 @@ func TestActivityEndpoints(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 		}
+
+		// Now verify GET /api/activity/live returns the real ingested event
+		reqLive := httptest.NewRequest(http.MethodGet, "/api/activity/live?limit=5", nil)
+		recLive := httptest.NewRecorder()
+		s.mux.ServeHTTP(recLive, reqLive)
+
+		var resp map[string]any
+		_ = json.Unmarshal(recLive.Body.Bytes(), &resp)
+		acts, ok := resp["activities"].([]any)
+		if !ok || len(acts) != 1 {
+			t.Fatalf("expected exactly 1 live activity, got %v", resp["activities"])
+		}
+
+		// Verify GET /api/activity/intents computed dynamically
+		reqIntents := httptest.NewRequest(http.MethodGet, "/api/activity/intents", nil)
+		recIntents := httptest.NewRecorder()
+		s.mux.ServeHTTP(recIntents, reqIntents)
+		var intentsResp map[string]any
+		_ = json.Unmarshal(recIntents.Body.Bytes(), &intentsResp)
+		intentsList, ok := intentsResp["intents"].([]any)
+		if !ok || len(intentsList) == 0 {
+			t.Fatalf("expected dynamic intents, got %v", intentsResp["intents"])
+		}
 	})
 
-	// 7. Test GET /api/activity/deviation
+	// 4. Test GET /api/activity/deviation
 	t.Run("IntentDeviationDetection", func(t *testing.T) {
 		// Out-of-intent test: Production diagnosis attempting Customer DB write
 		req := httptest.NewRequest(http.MethodGet, "/api/activity/deviation?intent=PRODUCTION_DIAGNOSIS&action=UPDATE+accounts+SET+balance%3D0&tool=postgres_client&target_resource=db://prod/customers", nil)

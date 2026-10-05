@@ -165,31 +165,48 @@ class TestPersonaAndActivityService(unittest.TestCase):
         self.assertEqual(resp.get("deviation"), "NONE")
 
     def test_03_live_activity_service(self):
-        """BAP-522: Live activity endpoints return valid telemetry."""
-        # Live activities list
+        """BAP-522: Live activity endpoints return valid telemetry for live and demo mode."""
+        # 1. Live activities list (contains the ingested event from test_02)
         code, resp, _ = http_req(f"{CP_URL}/api/activity/live?limit=10")
         self.assertEqual(code, 200)
         acts = resp.get("activities", [])
         self.assertIsInstance(acts, list)
         self.assertGreaterEqual(len(acts), 1)
 
-        # Activity summary
+        # 2. Live Activity summary (computed dynamically from live activity)
         code, sum_resp, _ = http_req(f"{CP_URL}/api/activity/summary")
         self.assertEqual(code, 200)
         self.assertIn("total_active_agents", sum_resp)
         self.assertIn("governed_percent", sum_resp)
         self.assertIn("business_units_active", sum_resp)
-        self.assertGreater(sum_resp["total_active_agents"], 0)
 
-        # Business units
+        # 3. Demo mode Activity summary (simulated 1,284 agents dataset)
+        code, demo_sum, _ = http_req(f"{CP_URL}/api/activity/summary?demo=true")
+        self.assertEqual(code, 200)
+        self.assertEqual(demo_sum.get("total_active_agents"), 1284)
+        self.assertEqual(demo_sum.get("governed_percent"), 98.7)
+        self.assertEqual(demo_sum.get("business_units_active"), "31/34")
+
+        # 4. Business units endpoint
         code, bu_resp, _ = http_req(f"{CP_URL}/api/activity/business-units")
         self.assertEqual(code, 200)
         self.assertIn("business_units", bu_resp)
-        self.assertGreater(len(bu_resp["business_units"]), 0)
+
+        # 5. Demo mode Business units endpoint
+        code, demo_bu, _ = http_req(f"{CP_URL}/api/activity/business-units?demo=true")
+        self.assertEqual(code, 200)
+        self.assertIn("business_units", demo_bu)
+        self.assertEqual(demo_bu.get("active_total"), 1284)
 
     def test_04_cio_workforce_pulse_intents(self):
         """BAP-523: CIO Workforce Pulse categories and drill-down distributions."""
-        code, resp, _ = http_req(f"{CP_URL}/api/activity/intents")
+        # Live intents (computed from ingested events)
+        code, live_int, _ = http_req(f"{CP_URL}/api/activity/intents")
+        self.assertEqual(code, 200)
+        self.assertIn("intents", live_int)
+
+        # Demo intents (prototype breakdown: 32% Build, 24% Investigate, etc.)
+        code, resp, _ = http_req(f"{CP_URL}/api/activity/intents?demo=true")
         self.assertEqual(code, 200)
         intents = resp.get("intents", [])
         self.assertGreater(len(intents), 0)
@@ -205,9 +222,16 @@ class TestPersonaAndActivityService(unittest.TestCase):
 
     def test_05_live_agent_map_topology(self):
         """BAP-524: Live Agent Map enterprise activity topology hierarchy."""
-        code, resp, _ = http_req(f"{CP_URL}/api/activity/topology?group_by=bu")
+        # Live topology endpoint
+        code, live_top, _ = http_req(f"{CP_URL}/api/activity/topology")
+        self.assertEqual(code, 200)
+        self.assertEqual(live_top.get("name"), "Enterprise AI Workforce")
+
+        # Demo topology hierarchy
+        code, resp, _ = http_req(f"{CP_URL}/api/activity/topology?demo=true")
         self.assertEqual(code, 200)
         self.assertEqual(resp.get("name"), "Enterprise AI Workforce")
+        self.assertEqual(resp.get("active_sessions"), 1284)
         children = resp.get("children", [])
         self.assertGreater(len(children), 0)
 

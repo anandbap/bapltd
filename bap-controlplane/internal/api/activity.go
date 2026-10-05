@@ -3,17 +3,107 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"bap-controlplane/internal/session"
 	"bap-controlplane/pkg/types"
 )
 
+func (s *Server) isDemoMode(r *http.Request) bool {
+	if s.demoMode {
+		return true
+	}
+	if r != nil {
+		q := strings.ToLower(r.URL.Query().Get("demo"))
+		if q == "true" || q == "1" || q == "yes" {
+			return true
+		}
+	}
+	return false
+}
+
+func mapIntentToCategory(intent string) string {
+	u := strings.ToUpper(strings.TrimSpace(intent))
+	switch {
+	case strings.Contains(u, "BUILD"), strings.Contains(u, "CHANGE"), strings.Contains(u, "BUG"), strings.Contains(u, "REFACTOR"), strings.Contains(u, "DEPLOY"):
+		return "Build / Change"
+	case strings.Contains(u, "DIAGNOS"), strings.Contains(u, "INVESTIGAT"), strings.Contains(u, "INCIDENT"), strings.Contains(u, "LOG"):
+		return "Investigate / Diagnose"
+	case strings.Contains(u, "SEARCH"), strings.Contains(u, "EXPLAIN"), strings.Contains(u, "DOC"), strings.Contains(u, "CODEBASE"):
+		return "Search / Explain"
+	case strings.Contains(u, "AUTOMAT"), strings.Contains(u, "WORKFLOW"), strings.Contains(u, "PIPELINE"), strings.Contains(u, "CI"):
+		return "Automate Workflow"
+	case strings.Contains(u, "ANALYSIS"), strings.Contains(u, "BUSINESS"), strings.Contains(u, "METRIC"), strings.Contains(u, "REPORT"):
+		return "Business Analysis"
+	default:
+		return "Investigate / Diagnose"
+	}
+}
+
+func (s *Server) sessionToActivityEvent(sess *session.Session) *types.AgentActivityEvent {
+	intentCat := "Investigate / Diagnose"
+	if sess.Intent.Primary != "" {
+		intentCat = mapIntentToCategory(sess.Intent.Primary)
+	}
+	devLevel := "NONE"
+	if sess.DeniedCount > 0 {
+		devLevel = "ELEVATED"
+	}
+	status := "working"
+	if sess.Status != "active" {
+		status = sess.Status
+	}
+	risk := sess.PromptRiskScore
+	if risk <= 0 {
+		risk = 0.10
+	}
+
+	bu := "Engineering"
+	if s.registry != nil {
+		if agent, err := s.registry.Get(sess.InstanceID); err == nil && agent != nil && agent.Department != "" {
+			bu = agent.Department
+		}
+	}
+
+	summary := sess.UserPrompt
+	if summary == "" {
+		summary = "Autonomous agent session active"
+	}
+
+	return &types.AgentActivityEvent{
+		Timestamp:          sess.LastActiveAt.Format(time.RFC3339),
+		SessionID:          sess.SessionID,
+		AgentID:            sess.InstanceID,
+		AgentType:          sess.AgentName,
+		RuntimeID:          sess.Hostname,
+		UserID:             sess.UserEmail,
+		BusinessUnit:       bu,
+		Application:        sess.AppID,
+		PromptSummary:      summary,
+		Intent:             sess.Intent.Primary,
+		IntentCategory:     intentCat,
+		Action:             "Active workload execution",
+		Tool:               "bapedge",
+		TargetResource:     "internal://session",
+		DataClassification: "Internal",
+		PolicyDecision:     "ALLOW",
+		RiskScore:          risk,
+		ActionStatus:       status,
+		OutcomeCategory:    "Success",
+		TraceID:            "tr-" + sess.SessionID,
+		DeviationLevel:     devLevel,
+	}
+}
+
 func (s *Server) initActivityEngine() {
 	s.activitySubs = make(map[chan *types.AgentActivityEvent]struct{})
-	s.seedBaselineActivities()
+	if s.demoMode {
+		s.seedBaselineActivities()
+	}
 }
 
 func (s *Server) seedBaselineActivities() {
@@ -325,6 +415,26 @@ func (s *Server) handleActivityLive(w http.ResponseWriter, r *http.Request) {
 	}
 	s.activityMu.RUnlock()
 
+	// If unsimulated mode and no ingested events yet, synthesize from real active sessions
+	if len(res) == 0 && s.sessionStore != nil && !s.isDemoMode(r) {
+		for _, sess := range s.sessionStore.List(limit) {
+			ev := s.sessionToActivityEvent(sess)
+			if qStatus != "" && !strings.EqualFold(ev.ActionStatus, qStatus) {
+				continue
+			}
+			if qAgentType != "" && !strings.EqualFold(ev.AgentType, qAgentType) {
+				continue
+			}
+			if qBU != "" && !strings.EqualFold(ev.BusinessUnit, qBU) {
+				continue
+			}
+			res = append(res, ev)
+			if len(res) >= limit {
+				break
+			}
+		}
+	}
+
 	s.writeTelemetry(w, r, map[string]any{
 		"activities": res,
 		"count":      len(res),
@@ -339,49 +449,179 @@ func (s *Server) handleActivitySummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.isDemoMode(r) {
+		s.activityMu.RLock()
+		totalEvents := len(s.activities)
+		s.activityMu.RUnlock()
+
+		summary := &types.ActivitySummary{
+			TotalActiveAgents:    1284,
+			GovernedAgentUsers:   7842,
+			WorkIntentsCompleted: 17100 + totalEvents,
+			BusinessUnitsActive:  "31/34",
+			GovernedPercent:      98.7,
+			HighRiskPrevented:    146,
+			DepartmentMix: map[string]int{
+				"Engineering":  68,
+				"Operations":   17,
+				"Business Ops": 9,
+				"Other":        6,
+			},
+			IntentMix: map[string]int{
+				"Build / Change":         32,
+				"Investigate / Diagnose": 24,
+				"Search / Explain":       18,
+				"Automate Workflow":      15,
+				"Business Analysis":      11,
+			},
+			OutcomePulse: map[string]int{
+				"Code / change assistance":     8431,
+				"Incident investigation":       1407,
+				"Knowledge synthesis":          3984,
+				"Workflow automation":          2153,
+				"Customer / business analysis": 1106,
+			},
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		}
+		s.writeTelemetry(w, r, summary)
+		return
+	}
+
+	// 100% LIVE DATA COMPUTATION
+	var allSessions []*session.Session
+	if s.sessionStore != nil {
+		allSessions = s.sessionStore.List(0)
+	}
+	var allAgents []*types.RegisteredAgent
+	if s.registry != nil {
+		allAgents = s.registry.List()
+	}
+
+	now := time.Now().UTC()
+	activeSessionsCount := 0
+	totalEvents := 0
+	totalAllowed := 0
+	totalDenied := 0
+
+	intentTally := make(map[string]int)
+	deptTally := make(map[string]int)
+	userSet := make(map[string]struct{})
+	deptSet := make(map[string]struct{})
+	activeDeptSet := make(map[string]struct{})
+
+	for _, a := range allAgents {
+		dept := a.Department
+		if dept == "" {
+			dept = "General Workloads"
+		}
+		deptSet[dept] = struct{}{}
+		if a.OwnerEmail != "" {
+			userSet[a.OwnerEmail] = struct{}{}
+		}
+		if a.UserEmail != "" {
+			userSet[a.UserEmail] = struct{}{}
+		}
+		if a.Status == types.StatusActive && a.LastHeartbeatAt != nil && now.Sub(*a.LastHeartbeatAt) <= 45*time.Second {
+			activeDeptSet[dept] = struct{}{}
+		}
+	}
+
+	for _, sess := range allSessions {
+		if sess.Status == "active" && now.Sub(sess.LastActiveAt) <= 45*time.Second {
+			activeSessionsCount++
+			bu := "Engineering"
+			if a, err := s.registry.Get(sess.InstanceID); err == nil && a != nil && a.Department != "" {
+				bu = a.Department
+			}
+			deptTally[bu]++
+			deptSet[bu] = struct{}{}
+			activeDeptSet[bu] = struct{}{}
+		}
+		if sess.UserEmail != "" {
+			userSet[sess.UserEmail] = struct{}{}
+		}
+		totalEvents += sess.TotalEvents
+		totalAllowed += sess.AllowedCount
+		totalDenied += sess.DeniedCount
+
+		cat := "Investigate / Diagnose"
+		if sess.Intent.Primary != "" {
+			cat = mapIntentToCategory(sess.Intent.Primary)
+		}
+		intentTally[cat]++
+	}
+
 	s.activityMu.RLock()
-	totalEvents := len(s.activities)
-	activeCount := 0
-	for _, a := range s.activities {
-		if a.ActionStatus == "working" || a.ActionStatus == "waiting" {
-			activeCount++
+	for _, act := range s.activities {
+		totalEvents++
+		if act.PolicyDecision == "DENY" {
+			totalDenied++
+		} else {
+			totalAllowed++
+		}
+		if act.UserID != "" {
+			userSet[act.UserID] = struct{}{}
+		}
+		if act.BusinessUnit != "" {
+			deptSet[act.BusinessUnit] = struct{}{}
+			activeDeptSet[act.BusinessUnit] = struct{}{}
+		}
+		if act.IntentCategory != "" {
+			intentTally[act.IntentCategory]++
 		}
 	}
 	s.activityMu.RUnlock()
 
-	// Merge with real registered agents count if higher
-	realAgents := len(s.registry.List())
-	activeAgents := 1284
-	if realAgents > 0 {
-		activeAgents = 1284 + realAgents
+	governedPercent := 100.0
+	totalDecisions := totalAllowed + totalDenied
+	if totalDecisions > 0 {
+		governedPercent = (float64(totalAllowed) / float64(totalDecisions)) * 100.0
+	}
+
+	deptMix := make(map[string]int)
+	if activeSessionsCount > 0 {
+		for d, count := range deptTally {
+			deptMix[d] = int(math.Round(float64(count) / float64(activeSessionsCount) * 100.0))
+		}
+	}
+
+	intentMix := make(map[string]int)
+	totalIntents := 0
+	for _, c := range intentTally {
+		totalIntents += c
+	}
+	if totalIntents > 0 {
+		for cat, count := range intentTally {
+			intentMix[cat] = int(math.Round(float64(count) / float64(totalIntents) * 100.0))
+		}
+	}
+
+	buActiveStr := fmt.Sprintf("%d/%d", len(activeDeptSet), len(deptSet))
+	if len(deptSet) == 0 {
+		buActiveStr = "0/0"
+	}
+
+	activeAgentsCount := activeSessionsCount
+	if activeAgentsCount == 0 {
+		for _, a := range allAgents {
+			if a.Status == types.StatusActive && a.LastHeartbeatAt != nil && now.Sub(*a.LastHeartbeatAt) <= 45*time.Second {
+				activeAgentsCount++
+			}
+		}
 	}
 
 	summary := &types.ActivitySummary{
-		TotalActiveAgents:    activeAgents,
-		GovernedAgentUsers:   7842,
-		WorkIntentsCompleted: 17100 + totalEvents,
-		BusinessUnitsActive:  "31/34",
-		GovernedPercent:      98.7,
-		HighRiskPrevented:    146,
-		DepartmentMix: map[string]int{
-			"Engineering":  68,
-			"Operations":   17,
-			"Business Ops": 9,
-			"Other":        6,
-		},
-		IntentMix: map[string]int{
-			"Build / Change":         32,
-			"Investigate / Diagnose": 24,
-			"Search / Explain":       18,
-			"Automate Workflow":      15,
-			"Business Analysis":      11,
-		},
+		TotalActiveAgents:    activeAgentsCount,
+		GovernedAgentUsers:   len(userSet),
+		WorkIntentsCompleted: totalEvents,
+		BusinessUnitsActive:  buActiveStr,
+		GovernedPercent:      math.Round(governedPercent*10) / 10,
+		HighRiskPrevented:    totalDenied,
+		DepartmentMix:        deptMix,
+		IntentMix:            intentMix,
 		OutcomePulse: map[string]int{
-			"Code / change assistance":     8431,
-			"Incident investigation":       1407,
-			"Knowledge synthesis":          3984,
-			"Workflow automation":          2153,
-			"Customer / business analysis": 1106,
+			"Allowed operations": totalAllowed,
+			"Denied violations":  totalDenied,
 		},
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
@@ -396,53 +636,88 @@ func (s *Server) handleActivityIntents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	drillDowns := []types.IntentDrillDown{
-		{
-			Category: "Build / Change",
-			Share:    0.32,
-			Subtypes: map[string]int{
-				"Code Generation":    52,
-				"Refactoring":        28,
-				"CI/CD Integration":  20,
+	if s.isDemoMode(r) {
+		drillDowns := []types.IntentDrillDown{
+			{
+				Category: "Build / Change",
+				Share:    0.32,
+				Subtypes: map[string]int{"Code Generation": 52, "Refactoring": 28, "CI/CD Integration": 20},
 			},
-		},
-		{
-			Category: "Investigate / Diagnose",
-			Share:    0.24,
-			Subtypes: map[string]int{
-				"Production Incidents": 47,
-				"Code Analysis":        28,
-				"Infrastructure":       16,
-				"Security":             9,
+			{
+				Category: "Investigate / Diagnose",
+				Share:    0.24,
+				Subtypes: map[string]int{"Production Incidents": 47, "Code Analysis": 28, "Infrastructure": 16, "Security": 9},
 			},
-		},
-		{
-			Category: "Search / Explain",
-			Share:    0.18,
-			Subtypes: map[string]int{
-				"Documentation Query": 44,
-				"Architecture Lookup": 36,
-				"API Discovery":       20,
+			{
+				Category: "Search / Explain",
+				Share:    0.18,
+				Subtypes: map[string]int{"Documentation Query": 44, "Architecture Lookup": 36, "API Discovery": 20},
 			},
-		},
-		{
-			Category: "Automate Workflow",
-			Share:    0.15,
-			Subtypes: map[string]int{
-				"Release Scripts":    45,
-				"Test Orchestration": 35,
-				"PR Preparation":     20,
+			{
+				Category: "Automate Workflow",
+				Share:    0.15,
+				Subtypes: map[string]int{"Release Scripts": 45, "Test Orchestration": 35, "PR Preparation": 20},
 			},
-		},
-		{
-			Category: "Business Analysis",
-			Share:    0.11,
-			Subtypes: map[string]int{
-				"Metric Modeling": 48,
-				"Financial Query": 32,
-				"Reporting":       20,
+			{
+				Category: "Business Analysis",
+				Share:    0.11,
+				Subtypes: map[string]int{"Metric Modeling": 48, "Financial Query": 32, "Reporting": 20},
 			},
-		},
+		}
+		s.writeTelemetry(w, r, map[string]any{
+			"intents":   drillDowns,
+			"timestamp": time.Now().UTC().Format(time.RFC3339),
+		})
+		return
+	}
+
+	// 100% LIVE COMPUTED INTENTS
+	catTally := make(map[string]int)
+	subTally := make(map[string]map[string]int)
+	totalObserved := 0
+
+	recordIntent := func(cat, sub string) {
+		catTally[cat]++
+		totalObserved++
+		if subTally[cat] == nil {
+			subTally[cat] = make(map[string]int)
+		}
+		subTally[cat][sub]++
+	}
+
+	if s.sessionStore != nil {
+		for _, sess := range s.sessionStore.List(0) {
+			if sess.Intent.Primary != "" {
+				cat := mapIntentToCategory(sess.Intent.Primary)
+				recordIntent(cat, sess.Intent.Primary)
+			}
+		}
+	}
+
+	s.activityMu.RLock()
+	for _, act := range s.activities {
+		if act.IntentCategory != "" {
+			sub := act.Intent
+			if sub == "" {
+				sub = act.Action
+			}
+			recordIntent(act.IntentCategory, sub)
+		}
+	}
+	s.activityMu.RUnlock()
+
+	var drillDowns []types.IntentDrillDown
+	if totalObserved > 0 {
+		for cat, count := range catTally {
+			share := math.Round((float64(count)/float64(totalObserved))*100) / 100
+			drillDowns = append(drillDowns, types.IntentDrillDown{
+				Category: cat,
+				Share:    share,
+				Subtypes: subTally[cat],
+			})
+		}
+	} else {
+		drillDowns = []types.IntentDrillDown{}
 	}
 
 	s.writeTelemetry(w, r, map[string]any{
@@ -458,18 +733,131 @@ func (s *Server) handleActivityBusinessUnits(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	bus := []map[string]any{
-		{"name": "Payments Engineering", "division": "Engineering", "active_agents": 391, "governed_pct": 99.4, "risk_posture": "healthy", "top_platform": "Claude Code"},
-		{"name": "Cloud Infrastructure", "division": "Operations", "active_agents": 218, "governed_pct": 98.1, "risk_posture": "healthy", "top_platform": "Copilot"},
-		{"name": "Core Banking", "division": "Engineering", "active_agents": 267, "governed_pct": 99.8, "risk_posture": "healthy", "top_platform": "Codex"},
-		{"name": "Enterprise Security", "division": "Operations", "active_agents": 78, "governed_pct": 97.2, "risk_posture": "warning", "top_platform": "Claude Code"},
-		{"name": "Fraud Operations", "division": "Business Ops", "active_agents": 110, "governed_pct": 98.9, "risk_posture": "healthy", "top_platform": "Internal"},
-		{"name": "Data Platform", "division": "Business Ops", "active_agents": 82, "governed_pct": 98.5, "risk_posture": "healthy", "top_platform": "Claude Code"},
+	if s.isDemoMode(r) {
+		bus := []map[string]any{
+			{"name": "Payments Engineering", "division": "Engineering", "active_agents": 391, "governed_pct": 99.4, "risk_posture": "healthy", "top_platform": "Claude Code"},
+			{"name": "Cloud Infrastructure", "division": "Operations", "active_agents": 218, "governed_pct": 98.1, "risk_posture": "healthy", "top_platform": "Copilot"},
+			{"name": "Core Banking", "division": "Engineering", "active_agents": 267, "governed_pct": 99.8, "risk_posture": "healthy", "top_platform": "Codex"},
+			{"name": "Enterprise Security", "division": "Operations", "active_agents": 78, "governed_pct": 97.2, "risk_posture": "warning", "top_platform": "Claude Code"},
+			{"name": "Fraud Operations", "division": "Business Ops", "active_agents": 110, "governed_pct": 98.9, "risk_posture": "healthy", "top_platform": "Internal"},
+			{"name": "Data Platform", "division": "Business Ops", "active_agents": 82, "governed_pct": 98.5, "risk_posture": "healthy", "top_platform": "Claude Code"},
+		}
+		s.writeTelemetry(w, r, map[string]any{
+			"business_units": bus,
+			"active_total":   1284,
+			"timestamp":      time.Now().UTC().Format(time.RFC3339),
+		})
+		return
+	}
+
+	// 100% LIVE COMPUTED BUSINESS UNITS
+	type buInfo struct {
+		name        string
+		division    string
+		active      int
+		allowed     int
+		denied      int
+		topPlatform string
+		platforms   map[string]int
+	}
+
+	buMap := make(map[string]*buInfo)
+	now := time.Now().UTC()
+
+	if s.registry != nil {
+		for _, a := range s.registry.List() {
+			dept := a.Department
+			if dept == "" {
+				dept = "General Workloads"
+			}
+			info, exists := buMap[dept]
+			if !exists {
+				info = &buInfo{
+					name:      dept,
+					division:  dept,
+					platforms: make(map[string]int),
+				}
+				buMap[dept] = info
+			}
+			if a.Status == types.StatusActive && a.LastHeartbeatAt != nil && now.Sub(*a.LastHeartbeatAt) <= 45*time.Second {
+				info.active++
+				p := a.AgentName
+				if p == "" {
+					p = "agent"
+				}
+				info.platforms[p]++
+			}
+		}
+	}
+
+	if s.sessionStore != nil {
+		for _, sess := range s.sessionStore.List(0) {
+			dept := "Engineering"
+			if a, err := s.registry.Get(sess.InstanceID); err == nil && a != nil && a.Department != "" {
+				dept = a.Department
+			}
+			info, exists := buMap[dept]
+			if !exists {
+				info = &buInfo{
+					name:      dept,
+					division:  dept,
+					platforms: make(map[string]int),
+				}
+				buMap[dept] = info
+			}
+			if sess.Status == "active" && now.Sub(sess.LastActiveAt) <= 45*time.Second {
+				p := sess.AgentName
+				if p == "" {
+					p = "claude-code"
+				}
+				info.platforms[p]++
+			}
+			info.allowed += sess.AllowedCount
+			info.denied += sess.DeniedCount
+		}
+	}
+
+	var bus []map[string]any
+	totalActive := 0
+	for name, info := range buMap {
+		totalActive += info.active
+		topP := "agent"
+		maxP := 0
+		for p, c := range info.platforms {
+			if c > maxP {
+				maxP = c
+				topP = p
+			}
+		}
+
+		govPct := 100.0
+		totalD := info.allowed + info.denied
+		if totalD > 0 {
+			govPct = float64(info.allowed) / float64(totalD) * 100.0
+		}
+
+		posture := "healthy"
+		if info.denied > 0 {
+			posture = "warning"
+		}
+
+		bus = append(bus, map[string]any{
+			"name":          name,
+			"division":      info.division,
+			"active_agents": info.active,
+			"governed_pct":  math.Round(govPct*10) / 10,
+			"risk_posture":  posture,
+			"top_platform":  topP,
+		})
+	}
+
+	if bus == nil {
+		bus = []map[string]any{}
 	}
 
 	s.writeTelemetry(w, r, map[string]any{
 		"business_units": bus,
-		"active_total":   1284,
+		"active_total":   totalActive,
 		"timestamp":      time.Now().UTC().Format(time.RFC3339),
 	})
 }
@@ -481,120 +869,285 @@ func (s *Server) handleActivityTopology(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	tree := &types.BusinessUnitTopologyNode{
+	if s.isDemoMode(r) {
+		tree := &types.BusinessUnitTopologyNode{
+			ID:             "enterprise-root",
+			Name:           "Enterprise AI Workforce",
+			Type:           "root",
+			ActiveSessions: 1284,
+			RiskPosture:    "healthy",
+			PlatformCounts: map[string]int{"claude-code": 581, "copilot": 362, "codex": 213, "internal": 128},
+			Children: []*types.BusinessUnitTopologyNode{
+				{
+					ID:             "div-engineering",
+					Name:           "Engineering",
+					Type:           "division",
+					ActiveSessions: 874,
+					RiskPosture:    "healthy",
+					PlatformCounts: map[string]int{"claude-code": 391, "copilot": 267, "codex": 118, "internal": 98},
+					Children: []*types.BusinessUnitTopologyNode{
+						{
+							ID:             "team-dev",
+							Name:           "Software Delivery (Dev)",
+							Type:           "team",
+							ActiveSessions: 509,
+							RiskPosture:    "healthy",
+							PlatformCounts: map[string]int{"claude-code": 391, "codex": 118},
+						},
+						{
+							ID:             "team-qa",
+							Name:           "Quality & Test (QA)",
+							Type:           "team",
+							ActiveSessions: 205,
+							RiskPosture:    "healthy",
+							PlatformCounts: map[string]int{"copilot": 145, "internal": 60},
+						},
+						{
+							ID:             "team-sre",
+							Name:           "Reliability (SRE)",
+							Type:           "team",
+							ActiveSessions: 160,
+							RiskPosture:    "healthy",
+							PlatformCounts: map[string]int{"claude-code": 110, "copilot": 50},
+						},
+					},
+				},
+				{
+					ID:             "div-operations",
+					Name:           "Operations",
+					Type:           "division",
+					ActiveSessions: 218,
+					RiskPosture:    "warning",
+					PlatformCounts: map[string]int{"copilot": 95, "claude-code": 78, "internal": 45},
+					Children: []*types.BusinessUnitTopologyNode{
+						{
+							ID:             "team-infra",
+							Name:           "Cloud & Network",
+							Type:           "team",
+							ActiveSessions: 95,
+							RiskPosture:    "healthy",
+							PlatformCounts: map[string]int{"copilot": 95},
+						},
+						{
+							ID:             "team-sec",
+							Name:           "SecOps / Threat Hunting",
+							Type:           "team",
+							ActiveSessions: 78,
+							RiskPosture:    "critical",
+							PlatformCounts: map[string]int{"claude-code": 78},
+						},
+						{
+							ID:             "team-support",
+							Name:           "Technical Support",
+							Type:           "team",
+							ActiveSessions: 45,
+							RiskPosture:    "healthy",
+							PlatformCounts: map[string]int{"internal": 45},
+						},
+					},
+				},
+				{
+					ID:             "div-business-ops",
+					Name:           "Business Operations",
+					Type:           "division",
+					ActiveSessions: 192,
+					RiskPosture:    "healthy",
+					PlatformCounts: map[string]int{"claude-code": 82, "copilot": 65, "internal": 45},
+					Children: []*types.BusinessUnitTopologyNode{
+						{
+							ID:             "team-data",
+							Name:           "Data Analytics",
+							Type:           "team",
+							ActiveSessions: 82,
+							RiskPosture:    "healthy",
+							PlatformCounts: map[string]int{"claude-code": 82},
+						},
+						{
+							ID:             "team-fin",
+							Name:           "Finance & Actuarial",
+							Type:           "team",
+							ActiveSessions: 65,
+							RiskPosture:    "healthy",
+							PlatformCounts: map[string]int{"copilot": 65},
+						},
+						{
+							ID:             "team-mktg",
+							Name:           "Growth & Enablement",
+							Type:           "team",
+							ActiveSessions: 45,
+							RiskPosture:    "healthy",
+							PlatformCounts: map[string]int{"internal": 45},
+						},
+					},
+				},
+			},
+		}
+		s.writeTelemetry(w, r, tree)
+		return
+	}
+
+	// 100% LIVE COMPUTED TOPOLOGY
+	tree := s.buildLiveTopologyTree()
+	s.writeTelemetry(w, r, tree)
+}
+
+func (s *Server) buildLiveTopologyTree() *types.BusinessUnitTopologyNode {
+	var allSessions []*session.Session
+	if s.sessionStore != nil {
+		allSessions = s.sessionStore.List(0)
+	}
+	var allAgents []*types.RegisteredAgent
+	if s.registry != nil {
+		allAgents = s.registry.List()
+	}
+
+	now := time.Now().UTC()
+	totalActive := 0
+	totalPlatforms := make(map[string]int)
+
+	type divisionData struct {
+		activeCount int
+		platforms   map[string]int
+		hasWarning  bool
+		hasCritical bool
+		teams       map[string]*types.BusinessUnitTopologyNode
+	}
+	divisions := make(map[string]*divisionData)
+
+	getOrCreateDiv := func(dept string) *divisionData {
+		if dept == "" {
+			dept = "General Workloads"
+		}
+		d, exists := divisions[dept]
+		if !exists {
+			d = &divisionData{
+				platforms: make(map[string]int),
+				teams:     make(map[string]*types.BusinessUnitTopologyNode),
+			}
+			divisions[dept] = d
+		}
+		return d
+	}
+
+	for _, sess := range allSessions {
+		if sess.Status != "active" || now.Sub(sess.LastActiveAt) > 45*time.Second {
+			continue
+		}
+		totalActive++
+		plat := sess.AgentName
+		if plat == "" {
+			plat = "claude-code"
+		}
+		totalPlatforms[plat]++
+
+		dept := "Engineering"
+		if a, err := s.registry.Get(sess.InstanceID); err == nil && a != nil && a.Department != "" {
+			dept = a.Department
+		}
+
+		d := getOrCreateDiv(dept)
+		d.activeCount++
+		d.platforms[plat]++
+
+		if sess.DeniedCount > 0 {
+			d.hasWarning = true
+		}
+		if sess.PromptRiskScore > 0.8 {
+			d.hasCritical = true
+		}
+
+		appName := sess.AppID
+		if appName == "" {
+			appName = sess.Hostname
+		}
+		if appName == "" {
+			appName = "workload"
+		}
+
+		teamNode, exists := d.teams[appName]
+		if !exists {
+			teamNode = &types.BusinessUnitTopologyNode{
+				ID:             "team-" + strings.ToLower(appName),
+				Name:           appName,
+				Type:           "team",
+				RiskPosture:    "healthy",
+				PlatformCounts: make(map[string]int),
+			}
+			d.teams[appName] = teamNode
+		}
+		teamNode.ActiveSessions++
+		teamNode.PlatformCounts[plat]++
+		if sess.DeniedCount > 0 {
+			teamNode.RiskPosture = "warning"
+		}
+	}
+
+	// If no sessions, check registered agents
+	if totalActive == 0 {
+		for _, a := range allAgents {
+			if a.Status != types.StatusActive || a.LastHeartbeatAt == nil || now.Sub(*a.LastHeartbeatAt) > 45*time.Second {
+				continue
+			}
+			totalActive++
+			plat := a.AgentName
+			if plat == "" {
+				plat = "registered-agent"
+			}
+			totalPlatforms[plat]++
+
+			dept := a.Department
+			if dept == "" {
+				dept = "General Workloads"
+			}
+			d := getOrCreateDiv(dept)
+			d.activeCount++
+			d.platforms[plat]++
+		}
+	}
+
+	rootPosture := "healthy"
+	var divNodes []*types.BusinessUnitTopologyNode
+	for deptName, d := range divisions {
+		posture := "healthy"
+		if d.hasCritical {
+			posture = "critical"
+			rootPosture = "warning"
+		} else if d.hasWarning {
+			posture = "warning"
+			if rootPosture == "healthy" {
+				rootPosture = "warning"
+			}
+		}
+
+		var teamNodes []*types.BusinessUnitTopologyNode
+		for _, t := range d.teams {
+			teamNodes = append(teamNodes, t)
+		}
+
+		divNodes = append(divNodes, &types.BusinessUnitTopologyNode{
+			ID:             "div-" + strings.ToLower(strings.ReplaceAll(deptName, " ", "-")),
+			Name:           deptName,
+			Type:           "division",
+			ActiveSessions: d.activeCount,
+			RiskPosture:    posture,
+			PlatformCounts: d.platforms,
+			Children:       teamNodes,
+		})
+	}
+
+	if divNodes == nil {
+		divNodes = []*types.BusinessUnitTopologyNode{}
+	}
+
+	return &types.BusinessUnitTopologyNode{
 		ID:             "enterprise-root",
 		Name:           "Enterprise AI Workforce",
 		Type:           "root",
-		ActiveSessions: 1284,
-		RiskPosture:    "healthy",
-		PlatformCounts: map[string]int{"claude-code": 581, "copilot": 362, "codex": 213, "internal": 128},
-		Children: []*types.BusinessUnitTopologyNode{
-			{
-				ID:             "div-engineering",
-				Name:           "Engineering",
-				Type:           "division",
-				ActiveSessions: 874,
-				RiskPosture:    "healthy",
-				PlatformCounts: map[string]int{"claude-code": 391, "copilot": 267, "codex": 118, "internal": 98},
-				Children: []*types.BusinessUnitTopologyNode{
-					{
-						ID:             "team-dev",
-						Name:           "Software Delivery (Dev)",
-						Type:           "team",
-						ActiveSessions: 509,
-						RiskPosture:    "healthy",
-						PlatformCounts: map[string]int{"claude-code": 391, "codex": 118},
-					},
-					{
-						ID:             "team-qa",
-						Name:           "Quality & Test (QA)",
-						Type:           "team",
-						ActiveSessions: 205,
-						RiskPosture:    "healthy",
-						PlatformCounts: map[string]int{"copilot": 145, "internal": 60},
-					},
-					{
-						ID:             "team-sre",
-						Name:           "Reliability (SRE)",
-						Type:           "team",
-						ActiveSessions: 160,
-						RiskPosture:    "healthy",
-						PlatformCounts: map[string]int{"claude-code": 110, "copilot": 50},
-					},
-				},
-			},
-			{
-				ID:             "div-operations",
-				Name:           "Operations",
-				Type:           "division",
-				ActiveSessions: 218,
-				RiskPosture:    "warning",
-				PlatformCounts: map[string]int{"copilot": 95, "claude-code": 78, "internal": 45},
-				Children: []*types.BusinessUnitTopologyNode{
-					{
-						ID:             "team-infra",
-						Name:           "Cloud & Network",
-						Type:           "team",
-						ActiveSessions: 95,
-						RiskPosture:    "healthy",
-						PlatformCounts: map[string]int{"copilot": 95},
-					},
-					{
-						ID:             "team-sec",
-						Name:           "SecOps / Threat Hunting",
-						Type:           "team",
-						ActiveSessions: 78,
-						RiskPosture:    "critical",
-						PlatformCounts: map[string]int{"claude-code": 78},
-					},
-					{
-						ID:             "team-support",
-						Name:           "Technical Support",
-						Type:           "team",
-						ActiveSessions: 45,
-						RiskPosture:    "healthy",
-						PlatformCounts: map[string]int{"internal": 45},
-					},
-				},
-			},
-			{
-				ID:             "div-business-ops",
-				Name:           "Business Operations",
-				Type:           "division",
-				ActiveSessions: 192,
-				RiskPosture:    "healthy",
-				PlatformCounts: map[string]int{"claude-code": 82, "copilot": 65, "internal": 45},
-				Children: []*types.BusinessUnitTopologyNode{
-					{
-						ID:             "team-data",
-						Name:           "Data Analytics",
-						Type:           "team",
-						ActiveSessions: 82,
-						RiskPosture:    "healthy",
-						PlatformCounts: map[string]int{"claude-code": 82},
-					},
-					{
-						ID:             "team-fin",
-						Name:           "Finance & Actuarial",
-						Type:           "team",
-						ActiveSessions: 65,
-						RiskPosture:    "healthy",
-						PlatformCounts: map[string]int{"copilot": 65},
-					},
-					{
-						ID:             "team-mktg",
-						Name:           "Growth & Enablement",
-						Type:           "team",
-						ActiveSessions: 45,
-						RiskPosture:    "healthy",
-						PlatformCounts: map[string]int{"internal": 45},
-					},
-				},
-			},
-		},
+		ActiveSessions: totalActive,
+		RiskPosture:    rootPosture,
+		PlatformCounts: totalPlatforms,
+		Children:       divNodes,
 	}
-
-	s.writeTelemetry(w, r, tree)
 }
 
 // GET /api/activity/stream & /api/v1/activity/stream (SSE real-time stream)

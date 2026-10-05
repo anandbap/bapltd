@@ -285,6 +285,7 @@ const S = {
   actSummary: null,
   actIntents: [],
   actBusinessUnits: [],
+  actTopology: null,
   selectedTopologyNode: 'Enterprise Root',
   activeDrillIntent: 'Investigate / Diagnose',
   eventSource: null
@@ -575,61 +576,117 @@ const VIEWS={};
 /* CIO Workforce Pulse */
 VIEWS.pulse = {
   html() {
-    const total = S.actSummary ? S.actSummary.active_agents : 1284;
-    const governedPct = S.actSummary ? S.actSummary.governed_percentage : 98.7;
-    const prevented = S.actSummary ? S.actSummary.risky_prevented : 146;
-    const activeBU = S.actSummary ? S.actSummary.active_business_units : 31;
-    const totalBU = S.actSummary ? S.actSummary.total_business_units : 34;
+    const isDemo = new URLSearchParams(window.location.search).get('demo') === 'true';
+    const total = S.actSummary ? (S.actSummary.total_active_agents != null ? S.actSummary.total_active_agents : (S.actSummary.active_agents || 0)) : (isDemo ? 1284 : 0);
+    const governedPct = S.actSummary ? (S.actSummary.governed_percent != null ? S.actSummary.governed_percent : 100.0) : 100.0;
+    const prevented = S.actSummary ? (S.actSummary.high_risk_prevented != null ? S.actSummary.high_risk_prevented : 0) : 0;
+    const buActiveStr = S.actSummary ? (S.actSummary.business_units_active || '0/0') : (isDemo ? '31/34' : '0/0');
+    const workCompleted = S.actSummary ? (S.actSummary.work_intents_completed || 0) : 0;
     const activeDrill = S.activeDrillIntent || 'Investigate / Diagnose';
 
-    const drillSubs = {
-      'Investigate / Diagnose': [
-        ['Production Incidents', 47],
-        ['Code Analysis', 28],
-        ['Infrastructure Telemetry', 16],
-        ['Security & Auth', 9]
-      ],
-      'Build / Change': [
-        ['Feature Implementation', 52],
-        ['Bug Remediation', 31],
-        ['Refactoring & Cleanup', 17]
-      ],
-      'Search / Explain': [
-        ['Codebase Exploration', 64],
-        ['System Architecture', 22],
-        ['Documentation Search', 14]
-      ],
-      'Automate Workflow': [
-        ['CI/CD Deployments', 45],
-        ['Data Pipeline Sync', 35],
-        ['Config Management', 20]
-      ],
-      'Analyze Business': [
-        ['Financial Ledger Reports', 58],
-        ['Ops Metric Aggregation', 27],
-        ['Compliance Auditing', 15]
-      ]
-    }[activeDrill] || [
-      ['Production Incidents', 47],
-      ['Code Analysis', 28],
-      ['Infrastructure', 16],
-      ['Security', 9]
+    // Department Mix stats
+    const deptStats = S.actSummary && S.actSummary.department_mix ? S.actSummary.department_mix : {};
+    const dEng = deptStats['Engineering'] || 0;
+    const dOps = deptStats['Operations'] || 0;
+    const dBiz = deptStats['Business Operations'] || deptStats['Business Ops'] || 0;
+    const dSec = deptStats['Security & IT'] || deptStats['Security'] || 0;
+
+    // Intents list from API or live
+    let intentList = [
+      ['Build / Change', 0],
+      ['Investigate / Diagnose', 0],
+      ['Search / Explain', 0],
+      ['Automate Workflow', 0],
+      ['Business Analysis', 0]
     ];
 
+    if (S.actSummary && S.actSummary.intent_mix) {
+      intentList = Object.entries(S.actSummary.intent_mix).map(([k, v]) => [k, v]);
+    } else if (S.actIntents && S.actIntents.length) {
+      intentList = S.actIntents.map(i => [i.category, Math.round((i.share || 0) * 100)]);
+    } else if (isDemo) {
+      intentList = [
+        ['Build / Change', 32],
+        ['Investigate / Diagnose', 24],
+        ['Search / Explain', 18],
+        ['Automate Workflow', 15],
+        ['Business Analysis', 11]
+      ];
+    }
+
+    // Sub-intent drill-down
+    let drillSubs = [];
+    if (S.actIntents && S.actIntents.length) {
+      const match = S.actIntents.find(i => i.category.toLowerCase() === activeDrill.toLowerCase());
+      if (match && match.subtypes) {
+        drillSubs = Object.entries(match.subtypes).map(([k, v]) => [k, v]);
+      }
+    }
+    if (!drillSubs.length) {
+      drillSubs = {
+        'Investigate / Diagnose': [
+          ['Production Incidents', 47],
+          ['Code Analysis', 28],
+          ['Infrastructure Telemetry', 16],
+          ['Security & Auth', 9]
+        ],
+        'Build / Change': [
+          ['Feature Implementation', 52],
+          ['Bug Remediation', 31],
+          ['Refactoring & Cleanup', 17]
+        ],
+        'Search / Explain': [
+          ['Codebase Exploration', 64],
+          ['System Architecture', 22],
+          ['Documentation Search', 14]
+        ],
+        'Automate Workflow': [
+          ['CI/CD Deployments', 45],
+          ['Data Pipeline Sync', 35],
+          ['Config Management', 20]
+        ],
+        'Business Analysis': [
+          ['Financial Ledger Reports', 58],
+          ['Ops Metric Aggregation', 27],
+          ['Compliance Auditing', 15]
+        ]
+      }[activeDrill] || [];
+    }
+
+    const isZeroState = total === 0 && (!S.activities || S.activities.length === 0);
+
     return `
+    ${isZeroState ? `
+    <div style="background:var(--surface2);border:1px solid var(--line);border-radius:12px;padding:16px 20px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+      <div>
+        <b style="font-size:14px;color:var(--accent)">Live Zero-State Telemetry (No active sessions connected)</b>
+        <div style="font-size:12.5px;color:var(--muted);margin-top:2px">Running against live unsimulated BAP cluster. Connect Claude Code with <code>run-claude-bap.bat</code> or register edge agents to stream live activity.</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <a href="?demo=true" class="btn sm primary">Load Demo Simulation Dataset</a>
+      </div>
+    </div>` : (isDemo ? `
+    <div style="background:rgba(217,119,6,0.1);border:1px solid rgba(217,119,6,0.3);border-radius:12px;padding:12px 18px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+      <div>
+        <span class="tag t-STEP_UP">DEMO MODE ACTIVE</span>
+        <span style="font-size:13px;margin-left:8px;font-weight:600">Simulating 1,284 enterprise agents across 31 business units for presentation</span>
+      </div>
+      <a href="?demo=false" class="btn sm">Switch to Pure Live Mode</a>
+    </div>` : '')}
+
     <div class="pulse-hero">
       <div class="pulse-eyebrow">Enterprise Telemetry &amp; Workforce Pulse</div>
       <div class="pulse-title">Autonomous Agents Working on Real Business Outcomes</div>
       <div class="pulse-big">
         <span id="pulseTotal">${total.toLocaleString()}</span>
-        <span class="tag t-LIVE" style="font-size:14px"><span class="dot-live"></span>ACTIVE NOW</span>
+        <span class="tag ${total > 0 ? 't-LIVE' : 't-OFFLINE'}" style="font-size:14px"><span class="${total > 0 ? 'dot-live' : 'dot-offline'}"></span>${total > 0 ? 'ACTIVE NOW' : 'IDLE'}</span>
       </div>
       <div class="pulse-sub">Unique governed agent sessions observed across enterprise runtimes in the last 5 minutes</div>
       <div class="pulse-stats">
-        <div class="pulse-stat"><b>68% (874)</b><span>ENGINEERING</span></div>
-        <div class="pulse-stat"><b>17% (218)</b><span>OPERATIONS</span></div>
-        <div class="pulse-stat"><b>9% (114)</b><span>BUSINESS OPS</span></div>
-        <div class="pulse-stat"><b>6% (78)</b><span>SECURITY &amp; OTHER</span></div>
+        <div class="pulse-stat"><b>${dEng ? dEng + '%' : (isDemo ? '68%' : '0%')}</b><span>ENGINEERING</span></div>
+        <div class="pulse-stat"><b>${dOps ? dOps + '%' : (isDemo ? '17%' : '0%')}</b><span>OPERATIONS</span></div>
+        <div class="pulse-stat"><b>${dBiz ? dBiz + '%' : (isDemo ? '9%' : '0%')}</b><span>BUSINESS OPS</span></div>
+        <div class="pulse-stat"><b>${dSec ? dSec + '%' : (isDemo ? '6%' : '0%')}</b><span>SECURITY &amp; OTHER</span></div>
       </div>
       <div class="privacy-badge">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
@@ -640,8 +697,8 @@ VIEWS.pulse = {
     <div class="grid g-kpi">
       <div class="kpi good"><small>Governed Ratio</small><strong>${governedPct}%</strong><em>observed actions under policy</em></div>
       <div class="kpi bad"><small>Risky Prevented</small><strong>${prevented}</strong><em>stopped without blocking work</em></div>
-      <div class="kpi"><small>Active Business Units</small><strong>${activeBU} / ${totalBU}</strong><em>91% enterprise adoption</em></div>
-      <div class="kpi"><small>Work Intents Done</small><strong>17.1k</strong><em>today across all runtimes</em></div>
+      <div class="kpi"><small>Active Business Units</small><strong>${buActiveStr}</strong><em>active enterprise departments</em></div>
+      <div class="kpi"><small>Work Intents Done</small><strong>${workCompleted}</strong><em>observed across all runtimes</em></div>
       <div class="kpi"><small>Standing Privilege</small><strong>0.0%</strong><em>zero persistent credentials</em></div>
     </div>
 
@@ -661,13 +718,7 @@ VIEWS.pulse = {
         <h2>Intent Mix</h2>
         <p class="hint">What the AI workforce is doing (click a category to drill down)</p>
         <div class="intent-list" id="intentList">
-          ${[
-            ['Build / Change', 32],
-            ['Investigate / Diagnose', 24],
-            ['Search / Explain', 18],
-            ['Automate Workflow', 15],
-            ['Analyze Business', 11]
-          ].map(([name, pct]) => `
+          ${intentList.map(([name, pct]) => `
             <div class="intent-item ${name === activeDrill ? 'active' : ''}" data-intent="${esc(name)}">
               <div class="intent-item-header">
                 <span>${esc(name)}</span>
@@ -687,13 +738,13 @@ VIEWS.pulse = {
             <button class="btn sm" id="drillFilterBtn">Filter Sessions</button>
           </div>
           <div style="display:grid;gap:8px">
-            ${drillSubs.map(([sub, pct]) => `
+            ${drillSubs.length ? drillSubs.map(([sub, pct]) => `
               <div style="display:flex;justify-content:space-between;align-items:center;font-size:12.5px">
                 <span>${esc(sub)}</span>
                 <span class="mono" style="font-weight:600">${pct}%</span>
               </div>
               <div class="bar" style="height:6px"><div style="width:${pct}%;background:var(--step)"></div></div>
-            `).join('')}
+            `).join('') : `<div class="empty">No active sub-intents observed for this category.</div>`}
           </div>
         </div>
 
@@ -731,7 +782,27 @@ VIEWS.pulse = {
 /* Live Agent Map */
 VIEWS.map = {
   html() {
+    const isDemo = new URLSearchParams(window.location.search).get('demo') === 'true';
     const sel = S.selectedTopologyNode || 'Enterprise Root';
+    const topo = S.actTopology || {
+      id: 'enterprise-root',
+      name: 'Enterprise AI Workforce',
+      active_sessions: isDemo ? 1284 : 0,
+      risk_posture: 'healthy',
+      platform_counts: isDemo ? {'claude-code': 582, 'copilot': 398, 'codex': 184, 'internal': 120} : {},
+      children: isDemo ? [
+        { name: 'Engineering', active_sessions: 874, risk_posture: 'healthy', children: [{ name: 'checkout-api', active_sessions: 509 }] },
+        { name: 'Operations & SRE', active_sessions: 218, risk_posture: 'healthy', children: [{ name: 'k8s-cluster', active_sessions: 160 }] },
+        { name: 'Customer Operations', active_sessions: 114, risk_posture: 'warning', children: [{ name: 'crm-sync', active_sessions: 114 }] },
+        { name: 'Security & IT', active_sessions: 78, risk_posture: 'healthy', children: [{ name: 'iam-manager', active_sessions: 78 }] }
+      ] : []
+    };
+
+    const rootTotal = topo.active_sessions || 0;
+    const buNodes = Array.isArray(topo.children) ? topo.children : [];
+    const platCounts = topo.platform_counts || {};
+    const totalPlatSessions = Object.values(platCounts).reduce((a, b) => a + b, 0) || 1;
+
     return `
     <div class="panel" style="margin-bottom:16px">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
@@ -740,65 +811,54 @@ VIEWS.map = {
           <p class="hint" style="margin:0">Live agent workforce distribution mapped across business units, teams, and execution runtimes</p>
         </div>
         <div style="display:flex;gap:10px;align-items:center">
-          <label style="font-size:12.5px;color:var(--muted)" for="topoGroup">Group by:</label>
-          <select id="topoGroup" style="width:auto">
-            <option value="bu">Business Unit</option>
-            <option value="team">Team / Role</option>
-            <option value="platform">Agent Platform</option>
-            <option value="intent">Intent Category</option>
-            <option value="risk">Risk Classification</option>
-          </select>
-          <button class="btn sm" id="resetTopoBtn">Reset Filter</button>
+          <label style="font-size:12.5px;color:var(--muted)" for="topoGroup">Filter by:</label>
+          <button class="btn sm" id="resetTopoBtn">Reset Filter (${esc(sel)})</button>
         </div>
       </div>
     </div>
 
     <div class="panel">
       <div style="text-align:center;padding:12px 0 20px">
-        <div class="topo-node ${sel === 'Enterprise Root' ? 'active' : ''}" data-node="Enterprise Root" style="margin:auto;max-width:320px;text-align:center;border-width:2px">
-          <b>ENTERPRISE AI WORKFORCE</b>
-          <span style="font-size:14px;font-weight:700;color:var(--allow)">1,284 Active Sessions</span>
-          <span>31 of 34 Business Units Active &bull; 98.7% Governed</span>
+        <div class="topo-node ${sel === 'Enterprise Root' || sel === topo.name ? 'active' : ''}" data-node="Enterprise Root" style="margin:auto;max-width:340px;text-align:center;border-width:2px">
+          <b>${esc(topo.name || 'ENTERPRISE AI WORKFORCE')}</b>
+          <span style="font-size:15px;font-weight:700;color:var(--allow)">${rootTotal.toLocaleString()} Active Sessions</span>
+          <span style="font-size:12px;color:var(--muted)">${buNodes.length} Business Units Active &bull; Zero Trust Governed</span>
         </div>
         <div style="width:2px;height:24px;background:var(--line);margin:0 auto"></div>
       </div>
 
       <div style="font-size:12px;font-weight:700;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Business Units</div>
       <div class="topo-grid" id="topoBUGrid">
-        ${[
-          { name: 'Engineering', count: 874, health: 'good', pct: '68%', apps: 'checkout-api, billing-svc, auth-core' },
-          { name: 'Operations & SRE', count: 218, health: 'good', pct: '17%', apps: 'k8s-cluster, telemetry, pipeline' },
-          { name: 'Customer Operations', count: 114, health: 'warn', pct: '9%', apps: 'crm-sync, support-bot' },
-          { name: 'Security & IT', count: 78, health: 'good', pct: '6%', apps: 'iam-manager, cert-watcher' }
-        ].map(bu => `
+        ${buNodes.length ? buNodes.map(bu => {
+          const act = bu.active_sessions || 0;
+          const pct = rootTotal > 0 ? Math.round((act / rootTotal) * 100) + '%' : '-';
+          const subTeams = Array.isArray(bu.children) ? bu.children.map(c => c.name).join(', ') : 'Direct edge workloads';
+          return `
           <div class="topo-node ${sel === bu.name ? 'active' : ''}" data-node="${esc(bu.name)}">
             <div style="display:flex;justify-content:space-between;align-items:center">
               <b>${esc(bu.name)}</b>
-              <span class="tag ${bu.health === 'warn' ? 't-STEP_UP' : 't-LIVE'}">${bu.pct}</span>
+              <span class="tag ${bu.risk_posture === 'warning' ? 't-STEP_UP' : (bu.risk_posture === 'critical' ? 't-DENY' : 't-LIVE')}">${pct}</span>
             </div>
-            <span style="font-size:16px;font-weight:700">${bu.count} agents</span>
-            <span style="font-size:11.5px;color:var(--muted)">${esc(bu.apps)}</span>
-          </div>
-        `).join('')}
+            <span style="font-size:16px;font-weight:700">${act} agents</span>
+            <span style="font-size:11.5px;color:var(--muted)">${esc(subTeams || 'Active instances')}</span>
+          </div>`;
+        }).join('') : `<div class="empty" style="grid-column:1/-1">No business units currently have active sessions.</div>`}
       </div>
 
       <div style="font-size:12px;font-weight:700;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;margin:22px 0 8px">Platforms &amp; Agent Runners</div>
       <div class="topo-grid" id="topoPlatformGrid">
-        ${[
-          { name: 'Claude Code', count: 582, share: '45.3%', status: 'Sanctioned &bull; Cooperative Hooks' },
-          { name: 'VS Code Copilot', count: 398, share: '31.0%', status: 'Sanctioned &bull; Kernel Isolated' },
-          { name: 'Codex Workloads', count: 184, share: '14.3%', status: 'Sanctioned &bull; Container Sandboxed' },
-          { name: 'Internal Python / CLI', count: 120, share: '9.4%', status: 'Sanctioned &bull; PreToolUse Pinning' }
-        ].map(p => `
-          <div class="topo-node ${sel === p.name ? 'active' : ''}" data-node="${esc(p.name)}">
+        ${Object.keys(platCounts).length ? Object.entries(platCounts).map(([name, count]) => {
+          const share = ((count / totalPlatSessions) * 100).toFixed(1) + '%';
+          return `
+          <div class="topo-node ${sel === name ? 'active' : ''}" data-node="${esc(name)}">
             <div style="display:flex;justify-content:space-between;align-items:center">
-              <b>${esc(p.name)}</b>
-              <span class="tag t-LIVE">${p.share}</span>
+              <b>${esc(name)}</b>
+              <span class="tag t-LIVE">${share}</span>
             </div>
-            <span style="font-size:16px;font-weight:700">${p.count} active</span>
-            <span style="font-size:11.5px;color:var(--muted)">${p.status}</span>
-          </div>
-        `).join('')}
+            <span style="font-size:16px;font-weight:700">${count} active</span>
+            <span style="font-size:11.5px;color:var(--muted)">Sanctioned &bull; Zero-Trust Inspected</span>
+          </div>`;
+        }).join('') : `<div class="empty" style="grid-column:1/-1">No agent platforms active.</div>`}
       </div>
     </div>
 
@@ -1422,7 +1482,13 @@ $('#themeBtn').onclick=()=>{const r=document.documentElement,dark=(r.dataset.the
 function renderPulseFeed() {
   const el = $('#pulseFeed');
   if (!el) return;
-  const items = S.activities && S.activities.length ? S.activities : [
+  const isDemo = new URLSearchParams(window.location.search).get('demo') === 'true';
+  const hasLive = S.activities && S.activities.length > 0;
+  if (!hasLive && !isDemo) {
+    el.innerHTML = '<div class="empty">No live activity events recorded yet. Connect an agent or run commands through BAP edge to stream live activity.</div>';
+    return;
+  }
+  const items = hasLive ? S.activities : [
     {
       business_unit: 'Payments Engineering',
       agent_type: 'claude-code',
@@ -1604,15 +1670,19 @@ function initActivityStream() {
 
 async function fetchActivityData() {
   try {
-    const [resSum, resLive] = await Promise.all([
-      fetch(S.api.base + '/api/activity/summary', { headers: getHeaders() }),
-      fetch(S.api.base + '/api/activity/live', { headers: getHeaders() })
+    const isDemo = new URLSearchParams(window.location.search).get('demo') === 'true';
+    const qs = isDemo ? '?demo=true' : '';
+    const [resSum, resLive, resInt, resTop] = await Promise.all([
+      fetch(S.api.base + '/api/activity/summary' + qs, { headers: getHeaders() }),
+      fetch(S.api.base + '/api/activity/live' + qs, { headers: getHeaders() }),
+      fetch(S.api.base + '/api/activity/intents' + qs, { headers: getHeaders() }),
+      fetch(S.api.base + '/api/activity/topology' + qs, { headers: getHeaders() })
     ]);
     if (resSum.ok) {
       S.actSummary = await resSum.json();
       const totEl = $('#pulseTotal');
-      if (totEl && S.actSummary.active_agents) {
-        totEl.textContent = S.actSummary.active_agents.toLocaleString();
+      if (totEl && S.actSummary.total_active_agents != null) {
+        totEl.textContent = S.actSummary.total_active_agents.toLocaleString();
       }
     }
     if (resLive.ok) {
@@ -1622,6 +1692,18 @@ async function fetchActivityData() {
         if (S.view === 'pulse') renderPulseFeed();
         if (S.view === 'map') renderTopoFilteredFeed();
       }
+    }
+    if (resInt.ok) {
+      const intData = await resInt.json();
+      if (intData && Array.isArray(intData.intents)) {
+        S.actIntents = intData.intents;
+      }
+    }
+    if (resTop.ok) {
+      S.actTopology = await resTop.json();
+    }
+    if (S.view === 'pulse' || S.view === 'map') {
+      render();
     }
   } catch(e){}
 }
