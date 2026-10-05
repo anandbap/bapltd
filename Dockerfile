@@ -1,11 +1,12 @@
 # Multi-stage Dockerfile for BAP Control Plane on Render / Cloud
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
 # Copy dependency manifests
 COPY bap-controlplane/go.mod bap-controlplane/go.sum* ./bap-controlplane/
 WORKDIR /app/bap-controlplane
+ENV GOTOOLCHAIN=auto
 RUN go mod download
 
 # Copy full repository

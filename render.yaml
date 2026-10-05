@@ -16,4 +16,4 @@ services:
       - key: BAP_SECRET_KEY
         generateValue: true
       - key: BAP_DB_PATH
-        value: /data/bap-controlplane.db
+        value: /app/bap-controlplane.db
