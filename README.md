@@ -366,6 +366,56 @@ Recovers from sudden laptop shutoffs, terminal force-kills, or power loss by pur
 
 ---
 
+### 10. Agent Watch Persona Control Plane & Canonical Activity Engine (Epic 28)
+
+Epic 28 transforms the administrative console into a persona-driven governance experience supporting four enterprise lenses over a unified zero-trust data model:
+
+```text
+             HookWatch (Interceptors)
+                       │
+             Agent Runtime (bapedge)
+                       │
+                       ▼
+             AgentActivityEvent
+                       │
+             ┌─────────┼─────────┐
+             │         │         │
+           Intent    Policy     ZSP
+             │         │         │
+             └─────────┼─────────┘
+                       ▼
+             Activity / Evidence API
+                       │
+          ┌────────────┼────────────┐
+          │            │            │
+         CIO          CISO       ProdOps
+          │                         │
+          └─────── IT Enablement ───┘
+```
+
+#### 1. Persona Control Plane Switching (`?persona=cio|ciso|ops|it`)
+- **CIO / Business**: AI Workforce Pulse, work category distributions, business-unit adoption, and governance efficiency.
+- **CISO / Security**: Invariant violations, quarantine controls, blast-radius mitigation, and intent deviation detection.
+- **Prod Ops / SRE**: Fleet telemetry, interceptor health, local evaluation latencies, and grant issuance rates.
+- **IT Enablement**: Managed catalog deployment, endpoint compliance (Layers A/B/C), and MDM packaging.
+
+#### 2. CIO AI Workforce Pulse & Live Activity Stream
+- High-level executive pulse: Communicates active governed scale without fabricated ROI claims.
+- **Live Work Stream**: Real-time SSE streaming (`/api/activity/stream`) of sanitized activity records.
+- **Intent Mix & Sub-Intent Drill-Down**: Categorizes work across `Build / Change`, `Investigate / Diagnose`, `Search / Explain`, `Automate Workflow`, and `Business Analysis`.
+- **Pure Live vs Demo Simulation**: Production defaults to pure live unsimulated telemetry (zero-state when no agents connected); demo prototype dataset (1,284 agents) is activated via `-demo-mode` or `?demo=true`.
+
+#### 3. Enterprise Activity Topology Map
+- Hierarchical organizational tree (`/api/activity/topology`) mapping Divisions, Teams/Workloads, and Agent Platforms (Claude Code, Copilot, Codex, Internal CLI).
+- Interactive node filtering updates live session streams in real time.
+
+#### 4. Intent $\rightarrow$ Action Lifecycle Contract
+- Cryptographically tracks the 8-stage execution chain:
+  $$\text{Human Intent} \to \text{Interpretation} \to \text{Plan} \to \text{Capability} \to \text{Policy Gate} \to \text{ZSP Grant} \to \text{Observed Action} \to \text{Outcome}$$
+- Automated **Critical Intent Deviation Detection**: Blocks side-effects when an agent performs actions inconsistent with declared human purpose (e.g. `PRODUCTION_DIAGNOSIS` attempting customer database modifications).
+
+---
+
 ## 📂 Repository Structure
 
 | Path | Purpose & Capabilities |

@@ -34,6 +34,14 @@ This document is the complete REST API specification for **`bapcontrolplane`**, 
 | `POST` | `/api/v1/auth/oidc/device-code` | Initiate RFC 8628 Device Authorization Flow | None |
 | `POST` | `/api/v1/auth/oidc/device-token` | Poll for RFC 8628 device token authorization | Device Code |
 | `POST` | `/api/v1/auth/oidc/device-verify` | Verify & approve device session with corporate IdP claims | MFA / Corporate User |
+| `POST` | `/api/activity/ingest` | Ingest canonical AgentActivityEvent | None / Edge Client |
+| `GET` | `/api/activity/live` | Query currently active agent sessions & status | None / RBAC Redacted |
+| `GET` | `/api/activity/summary` | Aggregate workforce KPIs (active agents, governed %, BU active) | None / RBAC Redacted |
+| `GET` | `/api/activity/intents` | Intent category distributions & sub-intent drill-downs | None / RBAC Redacted |
+| `GET` | `/api/activity/business-units` | Business unit activity counts and risk postures | None / RBAC Redacted |
+| `GET` | `/api/activity/topology` | Enterprise activity topology hierarchy tree | None / RBAC Redacted |
+| `GET` | `/api/activity/stream` | Real-time Server-Sent Events (SSE) stream of activity events | None / RBAC Redacted |
+| `GET` | `/api/activity/deviation` | Evaluate intent-to-action contract & deviation level | None |
 
 ---
 
@@ -747,6 +755,170 @@ Internal or IdP callback endpoint verifying the developer's corporate identity a
   {
     "status": "approved",
     "user_email": "alice@company.com"
+  }
+  ```
+
+---
+
+### 3.13. Canonical Agent Activity & Persona Telemetry (Epic 28)
+
+These endpoints provide real-time, privacy-safe telemetry for the Agent Watch persona architecture (CIO, CISO, SRE/Ops, IT Enablement) and power the Workforce Pulse, Live Agent Map, and Intent Contract.
+
+#### 3.13.1. Ingest Canonical Activity Event
+Ingests a normalized `AgentActivityEvent` from edge interceptors (`cchook`, `copilot`) or agent runtimes (`bapedge`).
+- **Method**: `POST`
+- **Path**: `/api/activity/ingest` (or `/api/v1/activity/ingest`)
+- **Request Body**:
+  ```json
+  {
+    "timestamp": "2026-10-05T09:00:00Z",
+    "session_id": "sess-live-01",
+    "agent_id": "agent-claude-pay01",
+    "agent_type": "claude-code",
+    "runtime_id": "macbook-pro-419",
+    "user_id": "dev@enterprise.internal",
+    "business_unit": "Payments Engineering",
+    "application": "checkout-api",
+    "prompt_id": "prmpt-81923",
+    "prompt_summary": "Investigating checkout latency spike following deployment",
+    "intent": "PRODUCTION_DIAGNOSIS",
+    "intent_category": "Investigate / Diagnose",
+    "action": "kubectl logs -n prod deploy/checkout-api --tail=100",
+    "tool": "kubectl",
+    "target_resource": "k8s://prod/checkout-api",
+    "data_classification": "Internal",
+    "policy_decision": "ALLOW",
+    "risk_score": 0.12,
+    "grant_id": "zsp-pay-read-991",
+    "grant_scope": "read:observability",
+    "grant_ttl": 300,
+    "action_status": "working",
+    "outcome_category": "Success",
+    "trace_id": "tr-pay-8192301"
+  }
+  ```
+- **Example Response (`200 OK`)**:
+  ```json
+  {
+    "status": "ingested",
+    "session_id": "sess-live-01",
+    "deviation": "NONE"
+  }
+  ```
+
+#### 3.13.2. Query Activity Summary
+Returns executive KPIs for the CIO AI Workforce Pulse dashboard.
+- **Method**: `GET`
+- **Path**: `/api/activity/summary` (Supports `?demo=true` for prototype dataset)
+- **Example Response (`200 OK`)**:
+  ```json
+  {
+    "total_active_agents": 12,
+    "governed_agent_users": 8,
+    "work_intents_completed": 142,
+    "business_units_active": "4/6",
+    "governed_percent": 98.6,
+    "high_risk_prevented": 2,
+    "department_mix": {
+      "Engineering": 60,
+      "Operations": 25,
+      "Security": 15
+    },
+    "intent_mix": {
+      "Build / Change": 45,
+      "Investigate / Diagnose": 30,
+      "Search / Explain": 25
+    },
+    "timestamp": "2026-10-05T10:14:00Z"
+  }
+  ```
+
+#### 3.13.3. Query Intent Breakdown & Sub-Intent Drill-Down
+Returns primary intent categories and nested sub-intent distributions.
+- **Method**: `GET`
+- **Path**: `/api/activity/intents` (Supports `?demo=true`)
+- **Example Response (`200 OK`)**:
+  ```json
+  {
+    "intents": [
+      {
+        "category": "Investigate / Diagnose",
+        "share": 0.30,
+        "subtypes": {
+          "Production Incidents": 47,
+          "Code Analysis": 28,
+          "Infrastructure Telemetry": 16,
+          "Security & Auth": 9
+        }
+      }
+    ]
+  }
+  ```
+
+#### 3.13.4. Query Enterprise Activity Topology
+Returns the hierarchical activity tree (Divisions, Teams, Platform Counts) for the Live Agent Map.
+- **Method**: `GET`
+- **Path**: `/api/activity/topology` (Supports `?demo=true` and `?group_by=bu|team|platform`)
+- **Example Response (`200 OK`)**:
+  ```json
+  {
+    "id": "enterprise-root",
+    "name": "Enterprise AI Workforce",
+    "type": "root",
+    "active_sessions": 12,
+    "risk_posture": "healthy",
+    "platform_counts": {
+      "claude-code": 8,
+      "copilot": 4
+    },
+    "children": [
+      {
+        "id": "div-engineering",
+        "name": "Engineering",
+        "type": "division",
+        "active_sessions": 8,
+        "risk_posture": "healthy",
+        "platform_counts": { "claude-code": 8 },
+        "children": [
+          {
+            "id": "team-checkout-api",
+            "name": "checkout-api",
+            "type": "team",
+            "active_sessions": 5,
+            "risk_posture": "healthy"
+          }
+        ]
+      }
+    ]
+  }
+  ```
+
+#### 3.13.5. Evaluate Intent Contract & Critical Deviation
+Evaluates whether a proposed agent action or tool command complies with declared human intent.
+- **Method**: `GET`
+- **Path**: `/api/activity/deviation?intent=...&action=...&tool=...&target_resource=...`
+- **Example Compliant Response (`200 OK`)**:
+  ```json
+  {
+    "intent": "CODE_REFACTOR",
+    "action": "pytest tests/unit",
+    "is_deviated": false,
+    "deviation_level": "NONE",
+    "policy_decision": "ALLOW",
+    "risk_score": 0.10,
+    "reason": "Action complies with declared intent contract."
+  }
+  ```
+- **Example Critical Deviation Response (`200 OK`)**:
+  ```json
+  {
+    "intent": "PRODUCTION_DIAGNOSIS",
+    "action": "UPDATE customer_records SET balance = 0",
+    "is_deviated": true,
+    "deviation_level": "CRITICAL",
+    "policy_decision": "DENY",
+    "risk_score": 0.95,
+    "reason": "Blocked because the requested customer-record modification was inconsistent with the session's declared production-diagnosis intent."
   }
   ```
 

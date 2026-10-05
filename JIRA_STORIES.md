@@ -19,6 +19,7 @@ This document represents the complete functional and non-functional requirements
 | `BAP-220` | Real GitHub Copilot adapter | **DONE** | Standalone copilot interceptor wrapping bapedge exec with standard mission context and audit event emission verified. |
 | `BAP-221` | Production control-plane security | **DONE** | Mandatory admin tokens (X-BAP-Admin-Token), banned demo keys, tamper-evident hash chaining on audit events, and fail-closed security. |
 | `BAP-222` | Real protected-resource proof | **DONE** | Zero-trust Gateway PEP and control plane atomically consume bounded grants (maxUses=1) with strict bypass rejection; verified by 10-point test matrix. |
+| `BAP-520`–`BAP-525` | Agent Watch Persona Control Plane & Canonical Activity Engine | **DONE** | Persona switching (CIO/CISO/Ops/IT), canonical activity events, live SSE stream, CIO Pulse, Live Topology Map, and Intent Contract with Critical Deviation Detection. Pure live unsimulated telemetry decoupled from `-demo-mode` / `?demo=true`. |
 
 ### MVP exit sequence
 
@@ -93,7 +94,7 @@ This document represents the complete functional and non-functional requirements
 | `BAP-EPIC-25` | Enterprise Identity Provider Federation (Okta / Entra / OIDC) (BAP-480–BAP-483) | MVP Enterprise Pack | **DONE** |
 | `BAP-EPIC-26` | Cross-Platform Packaging & CI/CD Release Pipeline (BAP-500–BAP-504) | MVP Enterprise Pack | **DONE** |
 | `BAP-EPIC-27` | Fleet Telemetry Consistency, Dynamic Liveness Coupling & Unified State Architecture (BAP-510–BAP-513) | MVP Core & Telemetry | **DONE** |
-| `BAP-EPIC-28` | Agent Watch Persona Architecture, Canonical Activity Event & Live Enterprise Topology (BAP-520–BAP-525) | MVP Post-Pilot / v2.1 | **READY FOR DEV** |
+| `BAP-EPIC-28` | Agent Watch Persona Architecture, Canonical Activity Event & Live Enterprise Topology (BAP-520–BAP-525) | MVP Post-Pilot / v2.1 | **DONE** |
 
 ---
 
@@ -2011,10 +2012,15 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 ---
 
 #### BAP-520: Create Persona-Based Control Plane Experience
-* **Status**: READY FOR DEV
+* **Status**: DONE
 * **Type**: Product Architecture & Frontend Experience
 * **Epic**: `BAP-EPIC-28`
 * **Original Proposal Ref**: *BAP-460*
+* **Implementation Evidence**:
+  - Implemented persona switcher in `bap-controlplane/internal/dashboardui/web/index.html` with query parameter routing (`?persona=cio|ciso|ops|it`) and persistent localStorage state.
+  - Dynamically drives landing views (`cio` -> Workforce Pulse, `ciso` -> Overview / Decisions, `ops` -> Overview / Telemetry, `it` -> Endpoint Hardening & MDM).
+  - Preserves single unified application bundle without reloads.
+  - Verified by Python integration tests in `tests/test_persona_activity.py::test_01_persona_controlplane_views`.
 * **Goal**: Make persona a first-class concept in Agent Watch without creating separate products or siloed application codebases.
 * **Requirements**:
   1. Support core enterprise personas:
@@ -2040,10 +2046,15 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 ---
 
 #### BAP-521: Build Canonical Agent Activity Event
-* **Status**: READY FOR DEV
+* **Status**: DONE
 * **Type**: Core Backend Architecture & Normalization
 * **Epic**: `BAP-EPIC-28`
 * **Original Proposal Ref**: *BAP-461*
+* **Implementation Evidence**:
+  - Defined canonical struct `AgentActivityEvent` in `bap-controlplane/pkg/types/activity.go`.
+  - Implemented `/api/activity/ingest` and `/api/v1/activity/ingest` in `bap-controlplane/internal/api/activity.go`.
+  - Privacy-safe redaction: prompts sanitized to `prompt_summary` and high-level `intent_category`.
+  - Verified by `tests/test_persona_activity.py::test_02_canonical_activity_event_ingestion`.
 * **Goal**: Establish the authoritative, normalized `AgentActivityEvent` representing agent actions across the entire enterprise.
 * **Requirements**:
   1. Define canonical `AgentActivityEvent` schema containing:
@@ -2084,10 +2095,14 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 ---
 
 #### BAP-522: Live Agent Activity Service
-* **Status**: READY FOR DEV
+* **Status**: DONE
 * **Type**: Streaming Telemetry Service & Real-Time APIs
 * **Epic**: `BAP-EPIC-28`
 * **Original Proposal Ref**: *BAP-462*
+* **Implementation Evidence**:
+  - Implemented `/api/activity/live`, `/api/activity/summary`, `/api/activity/intents`, `/api/activity/business-units`, and `/api/activity/stream` (SSE) in `bap-controlplane/internal/api/activity.go`.
+  - Built dynamic computation over `sessionStore`, `registry`, and `activities`, reporting pure unsimulated live data (0 active agents on zero-state) when in production, while gating the prototype dataset behind `-demo-mode` or `?demo=true`.
+  - Verified by `tests/test_persona_activity.py::test_03_live_activity_service`.
 * **Goal**: Provide a real-time HTTP and WebSocket/SSE streaming service delivering sanitized agent telemetry to UI dashboards.
 * **Requirements**:
   1. Implement high-throughput HTTP endpoints on Control Plane:
@@ -2119,13 +2134,19 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 ---
 
 #### BAP-523: CIO AI Workforce Pulse
-* **Status**: READY FOR DEV
+* **Status**: DONE
 * **Type**: Executive UI & Workforce Observability
 * **Epic**: `BAP-EPIC-28`
 * **Original Proposal Ref**: *BAP-463*
+* **Implementation Evidence**:
+  - Built executive Workforce Pulse view in `bap-controlplane/internal/dashboardui/web/index.html`.
+  - Computes active agent count, department mix (Engineering, Operations, Business Ops, Security), governed ratio, prevented risks, and work intents done from live data.
+  - Supports interactive intent drill-down (e.g. `Investigate / Diagnose` -> Production Incidents, Code Analysis, Infrastructure, Security).
+  - Handles zero-state unsimulated fleet cleanly with live enrollment guidance and demo toggle.
+  - Verified by `tests/test_persona_activity.py::test_04_cio_workforce_pulse_intents`.
 * **Goal**: Build the first fully functional persona screen communicating real-time agent scale, work distribution, and governance efficacy without fabricated ROI claims.
 * **Requirements**:
-  1. Prominently display active agent scale: e.g. **`1,284 agents working right now`**.
+  1. Prominently display active agent scale: e.g. **`1,284 agents working right now`** in demo mode, or actual live connected agents in production mode.
   2. Real-time Work Breakdown by category:
      - `Build / Change` (e.g. 32%)
      - `Investigate / Diagnose` (e.g. 24%)
@@ -2154,10 +2175,15 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 ---
 
 #### BAP-524: Live Agent Map & Enterprise Activity Topology
-* **Status**: READY FOR DEV
+* **Status**: DONE
 * **Type**: Interactive Topology Visualization & Fleet Navigation
 * **Epic**: `BAP-EPIC-28`
 * **Original Proposal Ref**: *BAP-464*
+* **Implementation Evidence**:
+  - Implemented `/api/activity/topology` in `bap-controlplane/internal/api/activity.go` with `buildLiveTopologyTree()`.
+  - Dynamically builds tree hierarchy across Divisions, Teams/Workloads, and Platform runners from active session store and registry.
+  - Rendered in `bap-controlplane/internal/dashboardui/web/index.html` with interactive node filtering, risk coloring (healthy, warning, critical), and synchronized session detail streams.
+  - Verified by `tests/test_persona_activity.py::test_05_live_agent_map_topology`.
 * **Goal**: Deliver an enterprise activity topology map visualizing organization agent hierarchy and deployment density across departments, teams, and platforms.
 * **Requirements**:
   1. Visual topology hierarchy:
@@ -2195,10 +2221,16 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 ---
 
 #### BAP-525: Intent → Action Contract & Deviation Signal
-* **Status**: READY FOR DEV
+* **Status**: DONE
 * **Type**: Zero-Trust Security Invariant & Behavioral Integrity
 * **Epic**: `BAP-EPIC-28`
 * **Original Proposal Ref**: *BAP-465*
+* **Implementation Evidence**:
+  - Implemented `/api/activity/deviation` in `bap-controlplane/internal/api/activity.go` with `evaluateIntentDeviation()`.
+  - Enforces 8-stage lifecycle contract: Human Intent -> Interpretation -> Plan -> Requested Capability -> Policy Gate -> Temporary Authority (ZSP) -> Observed Action -> Outcome.
+  - Detects critical deviations (e.g. `PRODUCTION_DIAGNOSIS` requesting customer DB modifications triggers `CRITICAL DEVIATION`, `policy_decision: DENY`, `risk_score: 0.95`).
+  - Added interactive Intent Sandbox in `bap-controlplane/internal/dashboardui/web/index.html`.
+  - Verified by `tests/test_persona_activity.py::test_06_intent_action_contract_deviation`.
 * **Goal**: Track the end-to-end contract from Human Intent to Execution Outcome, calculating real-time Intent Deviation signals when actions drift outside declared purposes.
 * **Requirements**:
   1. Construct unified lifecycle contract for every session:

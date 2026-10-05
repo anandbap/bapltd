@@ -812,6 +812,38 @@ flowchart TD
    - The release job calculates SHA-256 digests across all compiled packages and produces `SHA256SUMS.txt`.
    - Security teams can independently verify binary digests against the signed manifest before pushing to workstation fleets.
 
+---
+
+## 12. Agent Watch Persona Architecture & Canonical Activity Engine (Epic 28)
+
+### 12.1. Canonical Agent Activity Event Normalization
+To prevent disparate data schemas across executive, security, and operational dashboards, BAP enforces a single normalized event structure:
+```text
+AgentActivityEvent:
+  - Identity & Runtime: timestamp (RFC 3339 UTC), session_id, agent_id, agent_type, runtime_id, user_id (redacted), business_unit, application
+  - Prompt & Mission: prompt_id, prompt_summary (privacy-safe), intent, intent_category
+  - Action & Resource: action, tool, target_resource, data_classification
+  - Zero-Trust Policy: policy_decision, risk_score, grant_id, grant_scope, grant_ttl
+  - Execution Status: action_status (working/waiting/completed/denied/failed), outcome_category, trace_id, deviation_level
+```
+
+### 12.2. Intent to Action Contract & Invariant Deviation Engine
+Every agent operation is evaluated against the 8-stage lifecycle contract:
+$$\text{Intent} \longrightarrow \text{Interpretation} \longrightarrow \text{Plan} \longrightarrow \text{Capability} \longrightarrow \text{Policy Gate} \longrightarrow \text{ZSP Grant} \longrightarrow \text{Observed Action} \longrightarrow \text{Outcome}$$
+
+When an agent requests capabilities or executes tools conflicting with declared intent (e.g., executing arbitrary database writes during a read-only production latency diagnosis), the engine flags a **CRITICAL DEVIATION**, assigns a high risk score ($0.95$), and denies execution with a human-readable audit explanation.
+
+### 12.3. Enterprise Activity Topology Mapping
+Dynamic clustering algorithm groups sessions into a multi-tiered hierarchy:
+$$\text{Enterprise Root} \longrightarrow \text{Divisions} \longrightarrow \text{Teams / Applications} \longrightarrow \text{Agent Platforms}$$
+Nodes scale proportionally to active session count, while color encodes security posture (`healthy`, `warning`, `critical`).
+
+### 12.4. Production Live Mode vs Demo Simulation
+Control Plane natively supports dual operating modes:
+- **Pure Live Mode (Default)**: Dynamically aggregates live connected agents, sessions, and activity events. Shows an unsimulated zero-state when the fleet is idle.
+- **Demo Mode (`-demo-mode` flag or `?demo=true` param)**: Renders the 1,284-agent enterprise prototype dataset across 31 business units for presentations.
+
+
 
 
 
