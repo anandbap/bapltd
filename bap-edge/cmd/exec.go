@@ -36,6 +36,7 @@ type execContext struct {
 	shadowReason    string
 	forceJSON       bool
 	forceRaw        bool
+	userPrompt      string
 }
 
 type sessionRiskState struct {
@@ -244,9 +245,13 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 		decision = "shadow_deny"
 	}
 	uID, uEmail, spiffeID := resolveLocalIdentity()
+	uPrompt := ec.userPrompt
+	if uPrompt == "" {
+		uPrompt = os.Getenv("BAP_USER_PROMPT")
+	}
 	entry := audit.AuditEntry{
 		SessionID:   ec.sessionID,
-		UserPrompt:  os.Getenv("BAP_USER_PROMPT"),
+		UserPrompt:  uPrompt,
 		UserID:      uID,
 		UserEmail:   uEmail,
 		SPIFFEID:    spiffeID,
@@ -300,6 +305,7 @@ func RunExec(args []string) {
 	decisionOnlyFlag := fs.Bool("decision-only", false, "Evaluate policy and log audit decision without executing the command")
 	checkOnlyFlag := fs.Bool("check-only", false, "Alias for --decision-only")
 	cmdB64Flag := fs.String("cmd-b64", "", "Base64-encoded command string (safe broker handoff)")
+	promptFlag := fs.String("prompt", os.Getenv("BAP_USER_PROMPT"), "User prompt driving the command (e.g. 'Investigate auth issue')")
 
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing arguments: %v\n", err)
@@ -317,6 +323,7 @@ func RunExec(args []string) {
 		decisionOnly:    *decisionOnlyFlag || *checkOnlyFlag,
 		forceJSON:       *jsonFlag,
 		forceRaw:        *rawFlag,
+		userPrompt:      *promptFlag,
 	}
 
 	cmdArgs := fs.Args()

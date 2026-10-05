@@ -624,6 +624,17 @@ func (s *Store) RecordEvent(sessionID string, ev audit.Event) {
 	if ev.SPIFFEID != "" && sess.SPIFFEID == "" {
 		sess.SPIFFEID = ev.SPIFFEID
 	}
+	if ev.UserPrompt != "" {
+		if sess.UserPrompt == "" {
+			sess.UserPrompt = ev.UserPrompt
+		}
+		if sess.Intent.Primary == "" || sess.Intent.Primary == "UNKNOWN" {
+			sess.Intent = normalizeIntent(sess.Intent, ev.UserPrompt)
+			sess.IntentHistory = append(sess.IntentHistory, sess.Intent.Primary)
+			sess.PromptCount++
+			s.recordIntentLocked(sess.SessionID, sess.Intent.Primary, time.Now().UTC())
+		}
+	}
 
 	sess.LastActiveAt = time.Now().UTC()
 	sess.TotalEvents++
