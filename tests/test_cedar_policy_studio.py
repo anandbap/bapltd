@@ -331,7 +331,7 @@ when {
         st, _, raw = http_req(f"{CP_URL}/dashboard/")
         self.assertEqual(st, 200)
         html = raw.decode("utf-8")
-        self.assertIn("index-", html)
+        self.assertIn("Cedar policy", html)
 
 
 if __name__ == "__main__":
