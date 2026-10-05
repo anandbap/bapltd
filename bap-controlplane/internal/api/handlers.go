@@ -71,6 +71,11 @@ type Server struct {
 	deviceUserCodes  map[string]*deviceAuthSession
 	oidcConfigMu     sync.RWMutex
 	oidcConfig       types.OIDCConfig
+
+	activityMu    sync.RWMutex
+	activities    []*types.AgentActivityEvent
+	activitySubMu sync.Mutex
+	activitySubs  map[chan *types.AgentActivityEvent]struct{}
 }
 
 type deviceAuthSession struct {
@@ -137,6 +142,7 @@ func NewServer(reg *registry.Store, otcStore *otc.Store, minter *authz.TokenMint
 		},
 		mux:             http.NewServeMux(),
 	}
+	s.initActivityEngine()
 	s.registerRoutes()
 	return s
 }
@@ -345,6 +351,25 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/endpoint/stepup/challenge", s.handleEndpointStepUpChallenge)
 	s.mux.HandleFunc("/api/v1/endpoint/stepup/verify", s.handleEndpointStepUpVerify)
 	s.mux.HandleFunc("/api/v1/endpoint/offline/classify", s.handleEndpointOfflineClassify)
+
+	// Epic 28: Canonical Activity Telemetry, Live Stream, Topology & Intent Deviation (BAP-520 - BAP-525)
+	s.mux.HandleFunc("/api/activity/live", s.handleActivityLive)
+	s.mux.HandleFunc("/api/activity/summary", s.handleActivitySummary)
+	s.mux.HandleFunc("/api/activity/intents", s.handleActivityIntents)
+	s.mux.HandleFunc("/api/activity/business-units", s.handleActivityBusinessUnits)
+	s.mux.HandleFunc("/api/activity/topology", s.handleActivityTopology)
+	s.mux.HandleFunc("/api/activity/stream", s.handleActivityStream)
+	s.mux.HandleFunc("/api/activity/ingest", s.handleActivityIngest)
+	s.mux.HandleFunc("/api/activity/deviation", s.handleActivityDeviation)
+
+	s.mux.HandleFunc("/api/v1/activity/live", s.handleActivityLive)
+	s.mux.HandleFunc("/api/v1/activity/summary", s.handleActivitySummary)
+	s.mux.HandleFunc("/api/v1/activity/intents", s.handleActivityIntents)
+	s.mux.HandleFunc("/api/v1/activity/business-units", s.handleActivityBusinessUnits)
+	s.mux.HandleFunc("/api/v1/activity/topology", s.handleActivityTopology)
+	s.mux.HandleFunc("/api/v1/activity/stream", s.handleActivityStream)
+	s.mux.HandleFunc("/api/v1/activity/ingest", s.handleActivityIngest)
+	s.mux.HandleFunc("/api/v1/activity/deviation", s.handleActivityDeviation)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

