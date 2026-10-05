@@ -56,6 +56,9 @@ This document represents the complete functional and non-functional requirements
    - [Epic 20: Standalone Observability Plane (BAP-EPIC-20)](#epic-20-standalone-observability-plane-bap-epic-20)
    - [Epic 21: Failure & Security Behavior (BAP-EPIC-21)](#epic-21-failure--security-behavior-bap-epic-21)
    - [Epic 22: Operations & Governance Extension (BAP-EPIC-22)](#epic-22-operations--governance-extension-bap-epic-22)
+   - [Epic 26: Cross-Platform Packaging & CI/CD Release Pipeline (BAP-EPIC-26)](#gap-4-cross-platform-packaging--cicd-release-pipeline)
+   - [Epic 27: Fleet Telemetry Consistency, Dynamic Liveness Coupling & Unified State Architecture (BAP-EPIC-27)](#epic-27-fleet-telemetry-consistency-dynamic-liveness-coupling--unified-state-architecture-bap-epic-27)
+   - [Epic 28: Agent Watch Persona Architecture, Canonical Activity Event & Live Enterprise Topology (BAP-EPIC-28)](#epic-28-agent-watch-persona-architecture-canonical-activity-event--live-enterprise-topology-bap-epic-28)
    - [Core Architectural Invariants & Adversarial Test Matrix](#core-architectural-invariants--adversarial-test-matrix)
 
 ---
@@ -88,6 +91,9 @@ This document represents the complete functional and non-functional requirements
 | `BAP-EPIC-23` | Layered Endpoint Enforcement & Workstation Hardening (BAP-460–BAP-463) | MVP Enterprise Pack | **DONE** |
 | `BAP-EPIC-24` | Operational Resilience, Crash Sweeps & Developer CLI Tooling (BAP-470–BAP-473) | MVP Enterprise Pack | **DONE** |
 | `BAP-EPIC-25` | Enterprise Identity Provider Federation (Okta / Entra / OIDC) (BAP-480–BAP-483) | MVP Enterprise Pack | **DONE** |
+| `BAP-EPIC-26` | Cross-Platform Packaging & CI/CD Release Pipeline (BAP-500–BAP-504) | MVP Enterprise Pack | **DONE** |
+| `BAP-EPIC-27` | Fleet Telemetry Consistency, Dynamic Liveness Coupling & Unified State Architecture (BAP-510–BAP-513) | MVP Core & Telemetry | **DONE** |
+| `BAP-EPIC-28` | Agent Watch Persona Architecture, Canonical Activity Event & Live Enterprise Topology (BAP-520–BAP-525) | MVP Post-Pilot / v2.1 | **READY FOR DEV** |
 
 ---
 
@@ -1963,6 +1969,266 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   2. Automatic seamless migration from legacy `.ltd`, `.bap/`, and root `ltd-audit.jsonl` files.
   3. `bapedge sweep` flushes pending audit records and cleans up dead session markers.
 
+---
 
+### Epic 28: Agent Watch Persona Architecture, Canonical Activity Event & Live Enterprise Topology (BAP-EPIC-28)
+**Summary**: Establish the foundational backend primitives and UI components for persona-driven governance across CIO, CISO, SRE/ProdOps, and IT Enablement. Replaces fragmented dashboard queries with a single unified, privacy-safe `AgentActivityEvent` pipeline, live WebSocket/SSE activity streaming service, CIO Workforce Pulse analytics, interactive Enterprise Activity Topology mapping, and strict Intent-to-Action contract verification.
 
+#### Architectural Foundation:
+```text
+             HookWatch (Interceptors)
+                       │
+             Agent Runtime (bapedge)
+                       │
+                       ▼
+             AgentActivityEvent
+                       │
+             ┌─────────┼─────────┐
+             │         │         │
+           Intent    Policy     ZSP
+             │         │         │
+             └─────────┼─────────┘
+                       ▼
+             Activity / Evidence API
+                       │
+          ┌────────────┼────────────┐
+          │            │            │
+         CIO          CISO       ProdOps
+          │                         │
+          └─────── IT Enablement ───┘
+```
 
+#### Recommended Implementation Sequence:
+> **`BAP-521` → `BAP-522` → `BAP-523` → `BAP-520` → `BAP-524` → `BAP-525`**
+>
+> 1. **BAP-521 (Canonical Activity Event)**: Establish one trustworthy, normalized schema representing what an agent is doing before building consumers.
+> 2. **BAP-522 (Live Activity Service)**: Build the real-time API/WebSocket streaming pipeline over that event stream.
+> 3. **BAP-523 (CIO AI Workforce Pulse)**: Deliver the "show before telling" executive surface driven by live telemetry.
+> 4. **BAP-520 (Persona Control Plane Experience)**: Provide seamless switching and state persistence across CIO, CISO, SRE, and IT personas without separate applications.
+> 5. **BAP-524 (Live Agent Map & Enterprise Topology)**: Visualize organization hierarchy and allow interactive drill-down.
+> 6. **BAP-525 (Intent → Action Contract)**: Enforce end-to-end deviation analysis when runtime actions drift outside declared human intent.
+
+---
+
+#### BAP-520: Create Persona-Based Control Plane Experience
+* **Status**: READY FOR DEV
+* **Type**: Product Architecture & Frontend Experience
+* **Epic**: `BAP-EPIC-28`
+* **Original Proposal Ref**: *BAP-460*
+* **Goal**: Make persona a first-class concept in Agent Watch without creating separate products or siloed application codebases.
+* **Requirements**:
+  1. Support core enterprise personas:
+     - **CIO / Business**: Work category distribution, BU adoption, governed vs ungoverned work, prevented risk, workforce pulse.
+     - **CISO / Security**: Known vs shadow agents, risky add-ons, prompt injection attacks, intent deviation, blast radius, quarantine queue.
+     - **Prod Ops / SRE**: Interceptor health, version drift, heartbeat latency, policy evaluation duration, grant issuance rate, tool errors.
+     - **IT Enablement**: Onboarding funnel (eligible → installed → active), managed deployment coverage, approved catalog compliance.
+  2. Authorized users can dynamically toggle persona from the cockpit header or URL query parameter (`?persona=cio|ciso|ops|it`).
+  3. Persona preference persists across sessions in local storage / user state.
+  4. Persona selection dynamically alters:
+     - Landing dashboard & widget arrangement
+     - KPI metric ordering & emphasis
+     - Alert prioritization & severity badges
+     - Recommended actions & quick links
+     - Terminology (e.g. "Work Categories" for CIO vs "Threat Surface" for CISO)
+  5. Backed by the same underlying APIs and canonical data model across all personas.
+  6. Underlying RBAC strictly controls actual data visibility and authorized control capabilities.
+* **Acceptance Criteria**:
+  1. Routing supports `/dashboard?persona=cio`, `/dashboard?persona=ciso`, `/dashboard?persona=ops`, and `/dashboard?persona=it`.
+  2. Switching persona updates the visual hierarchy instantaneously without page reloads or loading separate bundles.
+  3. Dashboard widgets are driven by a dynamic persona configuration model rather than hard-coded disparate pages.
+
+---
+
+#### BAP-521: Build Canonical Agent Activity Event
+* **Status**: READY FOR DEV
+* **Type**: Core Backend Architecture & Normalization
+* **Epic**: `BAP-EPIC-28`
+* **Original Proposal Ref**: *BAP-461*
+* **Goal**: Establish the authoritative, normalized `AgentActivityEvent` representing agent actions across the entire enterprise.
+* **Requirements**:
+  1. Define canonical `AgentActivityEvent` schema containing:
+     ```text
+     timestamp            // Strict RFC 3339 UTC
+     session_id           // UUID/string session identifier
+     agent_id             // Unique agent identifier
+     agent_type           // claude-code, copilot, codex, custom
+     runtime_id           // Host/workstation machine ID
+     user_id              // Masked unless authorized admin
+     business_unit        // e.g. "Payments Engineering"
+     application          // Target application or service
+     prompt_id            // Unique prompt identifier
+     prompt_summary       // Privacy-safe synthesized executive summary
+     intent               // Primary classified intent
+     intent_category      // High-level category (e.g. PRODUCTION_DIAGNOSIS)
+     action               // Executed command or tool call
+     tool                 // Tool/interceptor invoked
+     target_resource      // Destination file, table, or API endpoint
+     data_classification  // Public, Internal, Confidential, Restricted
+     policy_decision      // ALLOW, DENY, STEP_UP, UNKNOWN
+     risk_score           // Normalized 0.0 - 1.0 float
+     grant_id             // ZSP grant identifier (if minted)
+     grant_scope          // Minted grant permissions
+     grant_ttl            // Grant validity duration in seconds
+     action_status        // working, waiting, completed, denied, failed
+     outcome_category     // Success, Blocked, Exception, Timeout
+     trace_id             // Distributed trace identifier
+     ```
+  2. Privacy-first telemetry: Dashboards must **never** require raw prompts. Edge interceptor generates privacy-safe `prompt_summary` and `intent` at classification time.
+  3. Real-time correlation: Every event correlates HookWatch prompt inputs, Agent Runtime executions, Cedar policy decisions (via `trace_id`), and resource-side ZSP grants (via `grant_id`).
+* **Acceptance Criteria**:
+  1. Interceptor events (`cchook`, `copilot`) populate the normalized schema.
+  2. Agent Runtime events (`bapedge`) update status and outcome fields.
+  3. Query API supports filtering across: time window, agent type, user, business unit, intent, risk score, and outcome category.
+  4. Unit and integration tests verify schema serialization and field completeness.
+
+---
+
+#### BAP-522: Live Agent Activity Service
+* **Status**: READY FOR DEV
+* **Type**: Streaming Telemetry Service & Real-Time APIs
+* **Epic**: `BAP-EPIC-28`
+* **Original Proposal Ref**: *BAP-462*
+* **Goal**: Provide a real-time HTTP and WebSocket/SSE streaming service delivering sanitized agent telemetry to UI dashboards.
+* **Requirements**:
+  1. Implement high-throughput HTTP endpoints on Control Plane:
+     - `GET /api/activity/live`: Currently active agent tasks with status and risk.
+     - `GET /api/activity/summary`: Aggregate counts, active agent totals, and department metrics.
+     - `GET /api/activity/intents`: Intent category breakdowns and distribution.
+     - `GET /api/activity/business-units`: Activity counts and risk posture grouped by department.
+  2. Implement bidirectional streaming endpoint:
+     - `WS /api/activity/stream` (with SSE fallback `/api/activity/sse`).
+  3. Stream emits privacy-safe, sanitized JSON records:
+     ```json
+     {
+       "agent": "Claude Code",
+       "businessUnit": "Payments Engineering",
+       "intent": "Production Diagnosis",
+       "summary": "Investigating elevated checkout latency",
+       "status": "working",
+       "governed": true,
+       "risk": "low"
+     }
+     ```
+  4. Supported lifecycle statuses: `working`, `waiting`, `completed`, `denied`, `failed`.
+  5. Enforcement of RBAC: PII, raw prompts, and sensitive arguments are strictly redacted for non-admin connections.
+* **Acceptance Criteria**:
+  1. Connected dashboards receive telemetry updates in under 2 seconds without full-page refresh.
+  2. Aggregate KPI counters update concurrently as new events stream in.
+  3. Load test demonstrates minimal CPU overhead with 1,000+ concurrent active agent sessions.
+
+---
+
+#### BAP-523: CIO AI Workforce Pulse
+* **Status**: READY FOR DEV
+* **Type**: Executive UI & Workforce Observability
+* **Epic**: `BAP-EPIC-28`
+* **Original Proposal Ref**: *BAP-463*
+* **Goal**: Build the first fully functional persona screen communicating real-time agent scale, work distribution, and governance efficacy without fabricated ROI claims.
+* **Requirements**:
+  1. Prominently display active agent scale: e.g. **`1,284 agents working right now`**.
+  2. Real-time Work Breakdown by category:
+     - `Build / Change` (e.g. 32%)
+     - `Investigate / Diagnose` (e.g. 24%)
+     - `Search / Explain` (e.g. 18%)
+     - `Automate Workflow` (e.g. 15%)
+     - `Business Analysis` (e.g. 11%)
+  3. Live activity ticker displaying:
+     - Business Unit & Agent Type (e.g. `Payments Engineering • Claude Code`)
+     - Privacy-safe summary (e.g. `Investigating production checkout latency after a recent deployment.`)
+     - Real-time badge (`WORKING • GOVERNED`)
+  4. Enterprise distribution breakdown:
+     - Engineering (68%), Operations (17%), Business Ops (9%), Other (6%).
+  5. Governance Efficacy metrics:
+     - Governance compliance rate (e.g. `98.7% governed`)
+     - Risky actions prevented count (e.g. `146 risky actions prevented`)
+     - Active business units (e.g. `31 / 34 business units active`)
+  6. Interactive Drill-Down:
+     - Clicking a primary category (e.g. `Investigate / Diagnose — 24%`) expands sub-breakdown:
+       - Production Incidents (47%), Code Analysis (28%), Infrastructure (16%), Security (9%).
+     - Clicking sub-category allows authorized users to inspect individual session evidence.
+* **Acceptance Criteria**:
+  1. Zero fabricated productivity or monetary ROI claims; every number is directly computed from observed telemetry.
+  2. Explicit visual separation between observed activity, inferred intent, and measured outcome.
+  3. Live activity feed updates in real-time via BAP-522 stream.
+
+---
+
+#### BAP-524: Live Agent Map & Enterprise Activity Topology
+* **Status**: READY FOR DEV
+* **Type**: Interactive Topology Visualization & Fleet Navigation
+* **Epic**: `BAP-EPIC-28`
+* **Original Proposal Ref**: *BAP-464*
+* **Goal**: Deliver an enterprise activity topology map visualizing organization agent hierarchy and deployment density across departments, teams, and platforms.
+* **Requirements**:
+  1. Visual topology hierarchy:
+     ```text
+                        1,284 ACTIVE AGENTS
+      Engineering             Operations           Business Ops
+          874                     218                  192
+           │                       │                    │
+      ┌────┼────┐             ┌────┼────┐          ┌────┼────┐
+      │    │    │             │    │    │          │    │    │
+     Dev  QA   SRE           Infra Sec Support    Data Fin  Mktg
+      │
+      ├── Claude Code  391
+      ├── Copilot      267
+      ├── Codex        118
+      └── Internal      98
+     ```
+  2. Multi-dimensional grouping toggles:
+     - Business Unit / Team
+     - Agent Type / Vendor
+     - Geographic Region / Datacenter
+     - Intent Category
+     - Risk Score Tier
+     - Governed vs Shadow Status
+  3. Interactive topological filtering:
+     - Clicking any node (e.g. `Payments → Claude Code → Production Diagnosis`) filters the activity stream and associated panels to that exact subset.
+  4. Node visual indicators:
+     - Node diameter scales proportionally to active session count.
+     - Node color encodes security posture (Green = Healthy, Amber = Warning, Red = Critical/Denied).
+* **Acceptance Criteria**:
+  1. Fed live by BAP-522 streaming service with zero manual refresh.
+  2. Clicking a leaf node opens session details drawer with full intent summary and audit chain.
+  3. Layout adapts responsively to desktop and widescreen command center displays.
+
+---
+
+#### BAP-525: Intent → Action Contract & Deviation Signal
+* **Status**: READY FOR DEV
+* **Type**: Zero-Trust Security Invariant & Behavioral Integrity
+* **Epic**: `BAP-EPIC-28`
+* **Original Proposal Ref**: *BAP-465*
+* **Goal**: Track the end-to-end contract from Human Intent to Execution Outcome, calculating real-time Intent Deviation signals when actions drift outside declared purposes.
+* **Requirements**:
+  1. Construct unified lifecycle contract for every session:
+     ```text
+     Human Intent
+          ↓
+     Agent Interpretation
+          ↓
+     Agent Plan
+          ↓
+     Requested Capability
+          ↓
+     Policy Decision
+          ↓
+     Temporary Authority (ZSP)
+          ↓
+     Observed Action
+          ↓
+     Outcome
+     ```
+  2. Implement Intent Deviation scoring engine:
+     - Compares executed tool arguments and targets against declared session intent.
+     - Flags anomalies (e.g. Intent = `Diagnose checkout latency`, Plan = `Inspect logs`, Action = `Customer DB write` $\rightarrow$ **DEVIATION: CRITICAL**).
+  3. Cedar policy invariant integration:
+     - Policy engine evaluates both action capabilities and intent boundaries.
+     - Blocks execution when deviation threshold is breached.
+  4. Human-readable explainability:
+     - Audit logs and cockpit drawers render clear explanations:
+       `"Blocked because the requested customer-record modification was inconsistent with the session's declared production-diagnosis intent."`
+* **Acceptance Criteria**:
+  1. Correlates events end-to-end across `trace_id` and `grant_id`.
+  2. Real-time deviation alerts emitted to CISO and investigation views.
+  3. Automated adversarial test verifies that intent deviation blocks unauthorized side effects and preserves audit receipts.
