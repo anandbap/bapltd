@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,6 +49,18 @@ func main() {
 	oidcTenantID := flag.String("oidc-tenant-id", "", "Microsoft Entra tenant ID or Okta org")
 	oidcAllowedDomains := flag.String("oidc-allowed-domains", "", "Comma-separated corporate email domains permitted (e.g. corp.com,internal.org)")
 	flag.Parse()
+	if envPort := os.Getenv("PORT"); envPort != "" && *port == 8080 {
+		if p, err := strconv.Atoi(envPort); err == nil && p > 0 {
+			*port = p
+		}
+	} else if envPort := os.Getenv("BAP_PORT"); envPort != "" && *port == 8080 {
+		if p, err := strconv.Atoi(envPort); err == nil && p > 0 {
+			*port = p
+		}
+	}
+	if envRemote := os.Getenv("BAP_ALLOW_REMOTE_ADMIN"); envRemote != "" {
+		*allowRemoteAdmin = envRemote == "1" || strings.EqualFold(envRemote, "true")
+	}
 	if envDemo := strings.TrimSpace(os.Getenv("BAP_DEMO_MODE")); envDemo != "" {
 		*demoMode = envDemo == "1" || strings.EqualFold(envDemo, "true")
 	}
@@ -165,6 +178,9 @@ func main() {
 	}
 
 	cedarContent, _ := os.ReadFile(resolvedPolicy)
+	if len(cedarContent) == 0 {
+		cedarContent = []byte("permit(principal, action, resource);")
+	}
 	schemaContent, _ := os.ReadFile(resolvedSchema)
 	policyStore := policy.NewStore(string(cedarContent), string(schemaContent))
 	auditStore := audit.NewStore()

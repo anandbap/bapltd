@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: bap-controlplane
+    runtime: docker
+    dockerfilePath: Dockerfile
+    plan: starter
+    region: oregon
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: BAP_MODE
+        value: prod
+      - key: BAP_ALLOW_REMOTE_ADMIN
+        value: "true"
+      - key: BAP_ADMIN_TOKEN
+        generateValue: true
+      - key: BAP_SECRET_KEY
+        generateValue: true
+      - key: BAP_DB_PATH
+        value: /data/bap-controlplane.db
+    disk:
+      name: bap-data
+      mountPath: /data
+      sizeGB: 1

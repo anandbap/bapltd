@@ -86,3 +86,16 @@ jobs:
       - name: Run Full Python Test Suite (100+ Tests)
         run: |
           python -m unittest discover tests
+
+      - name: Upload Windows AMD64 Executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: bap-windows-amd64-executables
+          path: |
+            bapedge.exe
+            bapcontrolplane.exe
+            bapdashboard.exe
+            bapgateway.exe
+            bapmcp.exe
+            dist/windows-amd64/*.exe
+          retention-days: 14
