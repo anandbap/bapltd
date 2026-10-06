@@ -1595,7 +1595,13 @@ func (s *Server) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 		if instanceID == "" {
 			instanceID = sess.SessionID
 		}
-		s.registry.EnsureSessionAgent(sess.AppID, instanceID, sess.SPIFFEID, sess.UserEmail, sess.Hostname, sess.AgentName)
+		regAgent := s.registry.EnsureSessionAgent(sess.AppID, instanceID, sess.SPIFFEID, sess.UserEmail, sess.Hostname, sess.AgentName)
+		if regAgent != nil && (regAgent.Department == "" || regAgent.Department == "Engineering") {
+			bu := s.sessionToActivityEvent(sess).BusinessUnit
+			if bu != "" {
+				regAgent.Department = bu
+			}
+		}
 	}
 	s.writeTelemetry(w, r, sess)
 }
@@ -1635,6 +1641,13 @@ func (s *Server) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
 		if s.sessionStore == nil || !s.sessionStore.HasActiveSessionsForInstance(instanceID) {
 			s.registry.EndSessionAgent(sess.AppID, instanceID)
 		}
+	}
+
+	if sess != nil {
+		ev := s.sessionToActivityEvent(sess)
+		ev.ActionStatus = "completed"
+		ev.Action = "Session terminated (" + req.Reason + ")"
+		s.IngestActivity(ev)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -1759,6 +1772,11 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 			UserEmail:        sess.UserEmail,
 		}})
 	}
+
+	// Emit canonical AgentActivityEvent to stream live workforce pulse
+	actEv := s.sessionToActivityEvent(sess)
+	s.IngestActivity(actEv)
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":            "updated",
 		"intent":            sess.Intent,

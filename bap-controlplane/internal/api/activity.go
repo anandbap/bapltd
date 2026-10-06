@@ -29,15 +29,15 @@ func (s *Server) isDemoMode(r *http.Request) bool {
 func mapIntentToCategory(intent string) string {
 	u := strings.ToUpper(strings.TrimSpace(intent))
 	switch {
-	case strings.Contains(u, "BUILD"), strings.Contains(u, "CHANGE"), strings.Contains(u, "BUG"), strings.Contains(u, "REFACTOR"), strings.Contains(u, "DEPLOY"):
+	case strings.Contains(u, "BUILD"), strings.Contains(u, "CHANGE"), strings.Contains(u, "BUG"), strings.Contains(u, "REFACTOR"), strings.Contains(u, "DEPLOY"), strings.Contains(u, "DATABASE"), strings.Contains(u, "FEATURE"), strings.Contains(u, "MIGRAT"):
 		return "Build / Change"
-	case strings.Contains(u, "DIAGNOS"), strings.Contains(u, "INVESTIGAT"), strings.Contains(u, "INCIDENT"), strings.Contains(u, "LOG"):
+	case strings.Contains(u, "DIAGNOS"), strings.Contains(u, "INVESTIGAT"), strings.Contains(u, "INCIDENT"), strings.Contains(u, "LOG"), strings.Contains(u, "SECURITY"):
 		return "Investigate / Diagnose"
 	case strings.Contains(u, "SEARCH"), strings.Contains(u, "EXPLAIN"), strings.Contains(u, "DOC"), strings.Contains(u, "CODEBASE"):
 		return "Search / Explain"
-	case strings.Contains(u, "AUTOMAT"), strings.Contains(u, "WORKFLOW"), strings.Contains(u, "PIPELINE"), strings.Contains(u, "CI"):
+	case strings.Contains(u, "AUTOMAT"), strings.Contains(u, "WORKFLOW"), strings.Contains(u, "PIPELINE"), strings.Contains(u, "CI"), strings.Contains(u, "TEST"), strings.Contains(u, "WORK_MANAGEMENT"):
 		return "Automate Workflow"
-	case strings.Contains(u, "ANALYSIS"), strings.Contains(u, "BUSINESS"), strings.Contains(u, "METRIC"), strings.Contains(u, "REPORT"):
+	case strings.Contains(u, "ANALYSIS"), strings.Contains(u, "BUSINESS"), strings.Contains(u, "METRIC"), strings.Contains(u, "REPORT"), strings.Contains(u, "FINANCE"), strings.Contains(u, "FRAUD"):
 		return "Business Analysis"
 	default:
 		return "Investigate / Diagnose"
@@ -64,8 +64,47 @@ func (s *Server) sessionToActivityEvent(sess *session.Session) *types.AgentActiv
 
 	bu := "Engineering"
 	if s.registry != nil {
-		if agent, err := s.registry.Get(sess.InstanceID); err == nil && agent != nil && agent.Department != "" {
+		agentID := fmt.Sprintf("agent-%s-%s", strings.ToLower(sess.AppID), sess.InstanceID)
+		if agent, err := s.registry.Get(agentID); err == nil && agent != nil && agent.Department != "" {
 			bu = agent.Department
+		} else if agent, err := s.registry.Get(sess.InstanceID); err == nil && agent != nil && agent.Department != "" {
+			bu = agent.Department
+		}
+	}
+	if bu == "Engineering" {
+		// Heuristic department inference from app/team name or instance metadata
+		low := strings.ToLower(sess.AppID + " " + sess.InstanceID + " " + sess.AgentName)
+		switch {
+		case strings.Contains(low, "payment") || strings.Contains(low, "checkout") || strings.Contains(low, "billing"):
+			bu = "Payments Engineering"
+		case strings.Contains(low, "core-banking") || strings.Contains(low, "ledger") || strings.Contains(low, "banking"):
+			bu = "Core Banking"
+		case strings.Contains(low, "fraud") || strings.Contains(low, "risk"):
+			bu = "Fraud Operations"
+		case strings.Contains(low, "cloud") || strings.Contains(low, "infra") || strings.Contains(low, "sre") || strings.Contains(low, "k8s"):
+			bu = "Cloud Infrastructure"
+		case strings.Contains(low, "security") || strings.Contains(low, "secops") || strings.Contains(low, "iam"):
+			bu = "Enterprise Security"
+		case strings.Contains(low, "data") || strings.Contains(low, "etl") || strings.Contains(low, "warehouse") || strings.Contains(low, "analytics"):
+			bu = "Data Platform"
+		case strings.Contains(low, "support") || strings.Contains(low, "crm") || strings.Contains(low, "ticket"):
+			bu = "Customer Support"
+		case strings.Contains(low, "finance") || strings.Contains(low, "accounting"):
+			bu = "Finance Operations"
+		case strings.Contains(low, "it-ops") || strings.Contains(low, "helpdesk") || strings.Contains(low, "it-enablement"):
+			bu = "IT Operations"
+		case strings.Contains(low, "qa") || strings.Contains(low, "test"):
+			bu = "Quality Assurance"
+		case strings.Contains(low, "devops") || strings.Contains(low, "ci-cd") || strings.Contains(low, "release"):
+			bu = "DevOps Engineering"
+		case strings.Contains(low, "mobile") || strings.Contains(low, "ios") || strings.Contains(low, "android"):
+			bu = "Mobile Engineering"
+		case strings.Contains(low, "ai-ml") || strings.Contains(low, "mlops") || strings.Contains(low, "llm"):
+			bu = "AI & ML Platform"
+		case strings.Contains(low, "product") || strings.Contains(low, "growth"):
+			bu = "Product Growth"
+		case strings.Contains(low, "compliance") || strings.Contains(low, "audit") || strings.Contains(low, "grc"):
+			bu = "Regulatory Compliance"
 		}
 	}
 
@@ -529,10 +568,7 @@ func (s *Server) handleActivitySummary(w http.ResponseWriter, r *http.Request) {
 	for _, sess := range allSessions {
 		if sess.Status == "active" && now.Sub(sess.LastActiveAt) <= 45*time.Second {
 			activeSessionsCount++
-			bu := "Engineering"
-			if a, err := s.registry.Get(sess.InstanceID); err == nil && a != nil && a.Department != "" {
-				bu = a.Department
-			}
+			bu := s.sessionToActivityEvent(sess).BusinessUnit
 			deptTally[bu]++
 			deptSet[bu] = struct{}{}
 			activeDeptSet[bu] = struct{}{}

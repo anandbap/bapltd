@@ -374,9 +374,11 @@ class BAPSession:
         bapedge_path: Optional[str] = None,
         user_prompt: Optional[str] = None,
         intent: Optional[dict] = None,
+        agent_name: Optional[str] = None,
     ):
         ep = resolve_endpoints()
         self.app_id = app_id
+        self.agent_name = agent_name or app_id
         self.user_prompt = user_prompt if user_prompt is not None else os.getenv("BAP_USER_PROMPT", "")
         if intent is not None:
             self.intent = intent
@@ -486,6 +488,7 @@ class BAPSession:
             "user_prompt": self.user_prompt,
             "intent": self.intent,
             "app_id": self.app_id,
+            "agent_name": self.agent_name,
             "instance_id": self.instance_id,
             "user_id": self.user_id,
             "user_email": self.user_email,
