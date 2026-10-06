@@ -116,11 +116,12 @@ _INTENT_RULES = [
         (" add ", "add", 2), (" build ", "build", 2), (" create ", "create", 2)
     ]),
     ("INVESTIGATION", [
+        (" production failure ", "production failure", 8), (" incident ", "incident", 7),
         (" root cause ", "root cause", 7), (" investigate ", "investigate", 6),
-        (" analyze ", "analyze", 5), (" diagnose ", "diagnose", 5),
-        (" find out ", "find out", 4), (" understand ", "understand", 3),
-        (" inspect ", "inspect", 2), (" review ", "review", 2),
-        (" reconcile ", "reconcile", 4), (" audit ", "audit", 3)
+        (" failure ", "failure", 5), (" analyze ", "analyze", 5),
+        (" diagnose ", "diagnose", 5), (" find out ", "find out", 4),
+        (" reconcile ", "reconcile", 4), (" understand ", "understand", 3),
+        (" inspect ", "inspect", 2), (" review ", "review", 2), (" audit ", "audit", 3)
     ]),
     ("REFACTOR", [
         (" refactor ", "refactor", 7), (" clean up code ", "clean up code", 5),
@@ -128,8 +129,10 @@ _INTENT_RULES = [
         (" optimize ", "optimize", 3)
     ]),
     ("TEST_VERIFICATION", [
-        (" write tests ", "write tests", 7), (" add tests ", "add tests", 7),
-        (" test coverage ", "test coverage", 6), (" verify ", "verify", 4),
+        (" generate unit tests ", "generate unit tests", 8), (" unit tests ", "unit tests", 7),
+        (" unit test ", "unit test", 7), (" write tests ", "write tests", 7),
+        (" add tests ", "add tests", 7), (" test coverage ", "test coverage", 6),
+        (" tests ", "tests", 5), (" verify ", "verify", 4),
         (" validate ", "validate", 4), (" test ", "test", 3)
     ]),
     ("DOCUMENTATION", [
@@ -250,7 +253,60 @@ def classify_intent(prompt: str) -> dict:
     if tags:
         result["tags"] = tags
 
+    # Map to canonical BAP-477 work category
+    result["work_category"] = map_intent_to_work_category(
+        result["primary"],
+        result.get("confidence", 0.0),
+        tags=tags,
+        prompt=prompt
+    )
+
     return result
+
+
+CANONICAL_WORK_CATEGORIES = [
+    "Feature Development / Enhancement",
+    "Bug Fix",
+    "Testing / Quality",
+    "Documentation",
+    "Production Operations",
+    "Security",
+    "Data / Analytics",
+    "Research",
+    "Automation",
+    "Other / Unclassified"
+]
+
+
+def map_intent_to_work_category(intent_primary: str, confidence: float = 1.0, tags: list = None, prompt: str = "") -> str:
+    """Maps primary classified intent to canonical BAP-477 extensible category."""
+    if confidence < 0.25 or not intent_primary or intent_primary in ("UNKNOWN", "NONE"):
+        return "Other / Unclassified"
+    u = intent_primary.upper()
+    tags_upper = [t.upper() for t in (tags or [])]
+    p_lower = prompt.lower() if prompt else ""
+
+    if any(k in u for k in ("BUG", "DEFECT", "REGRESSION", "HOTFIX")):
+        return "Bug Fix"
+    if any(k in u for k in ("TEST", "QUALITY", "VERIF", "VALIDAT")):
+        return "Testing / Quality"
+    if any(k in u for k in ("DOC", "README", "MANUAL", "GUIDE", "SPEC")):
+        return "Documentation"
+    if any(k in u for k in ("SEC", "VULN", "CVE", "IAM", "AUDIT")):
+        return "Security"
+    if any(k in u for k in ("PROD", "DEPLOY")) or "PRODUCTION" in tags_upper or "INFRASTRUCTURE" in tags_upper or any(k in p_lower for k in ("production", "prod", "k8s", "kubernetes", "cluster")):
+        return "Production Operations"
+    if any(k in u for k in ("DATA", "ANALYTIC", "DB", "DATABASE", "SQL", "SCHEMA", "ETL")) or "DATABASE" in tags_upper:
+        return "Data / Analytics"
+    if any(k in u for k in ("RESEARCH", "SEARCH", "EXPLAIN", "EXPLOR", "BENCHMARK")):
+        return "Research"
+    if any(k in u for k in ("AUTOMAT", "WORKFLOW", "PIPELINE", "CI", "CD", "WORK_MANAGEMENT", "JIRA")):
+        return "Automation"
+    if any(k in u for k in ("FEATURE", "BUILD", "CHANGE", "CREATE", "IMPLEMENT", "ENHANC", "REFACTOR")):
+        return "Feature Development / Enhancement"
+    if "INVESTIGATION" in u:
+        return "Production Operations" if ("PRODUCTION" in tags_upper or "INFRASTRUCTURE" in tags_upper) else "Research"
+    return "Other / Unclassified"
 
 
 def get_bapstate_dir() -> str:

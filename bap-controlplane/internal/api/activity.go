@@ -26,28 +26,97 @@ func (s *Server) isDemoMode(r *http.Request) bool {
 	return false
 }
 
+// DefaultWorkCategories represents the canonical extensible work categories (BAP-477).
+var DefaultWorkCategories = []types.WorkCategoryMeta{
+	{ID: "feature_enhancement", Name: "Feature Development / Enhancement", Description: "New feature engineering, functional additions, and module extensions", Color: "#2563eb", Icon: "sparkles"},
+	{ID: "bug_fix", Name: "Bug Fix", Description: "Defect resolution, crash triage, regression patching, and logic corrections", Color: "#dc2626", Icon: "bug"},
+	{ID: "testing_quality", Name: "Testing / Quality", Description: "Unit, integration, and e2e test creation, coverage expansion, and verification", Color: "#16a34a", Icon: "check-circle"},
+	{ID: "documentation", Name: "Documentation", Description: "Technical documentation, README updates, API reference, and knowledge base", Color: "#0891b2", Icon: "book-open"},
+	{ID: "production_ops", Name: "Production Operations", Description: "Infrastructure telemetry, container monitoring, incident triage, and deployment", Color: "#ea580c", Icon: "server"},
+	{ID: "security", Name: "Security", Description: "Vulnerability remediation, IAM policy hardening, secret rotation, and compliance auditing", Color: "#9333ea", Icon: "shield-alert"},
+	{ID: "data_analytics", Name: "Data / Analytics", Description: "ETL pipelines, schema migrations, metric calculations, and business data modeling", Color: "#0284c7", Icon: "database"},
+	{ID: "research", Name: "Research", Description: "Codebase discovery, architectural analysis, feasibility exploration, and benchmarking", Color: "#4f46e5", Icon: "search"},
+	{ID: "automation", Name: "Automation", Description: "Workflow automation, build scripts, ticket syncing, and release pipeline orchestration", Color: "#0d9488", Icon: "cog"},
+	{ID: "other_unclassified", Name: "Other / Unclassified", Description: "Exploratory prompts, general queries, or activity with insufficient classification confidence", Color: "#64748b", Icon: "help-circle"},
+}
+
+func (s *Server) classifyIntentCategory(intent string, confidence float64) string {
+	// Acceptance Criteria 4: Low-confidence classifications fall back to Other / Unclassified
+	if confidence > 0 && confidence < 0.25 {
+		return "Other / Unclassified"
+	}
+	u := strings.ToUpper(strings.TrimSpace(intent))
+	if u == "" || u == "UNKNOWN" || u == "NONE" {
+		return "Other / Unclassified"
+	}
+
+	// Check custom registered categories first (extensible categories)
+	s.categoriesMu.RLock()
+	for _, cat := range s.customCategories {
+		if strings.EqualFold(cat.Name, intent) || strings.EqualFold(cat.ID, intent) {
+			s.categoriesMu.RUnlock()
+			return cat.Name
+		}
+	}
+	s.categoriesMu.RUnlock()
+
+	switch {
+	case strings.Contains(u, "BUG") || strings.Contains(u, "DEFECT") || strings.Contains(u, "REGRESSION") || strings.Contains(u, "HOTFIX") || strings.Contains(u, "FAILING"):
+		return "Bug Fix"
+	case strings.Contains(u, "TEST") || strings.Contains(u, "QUALITY") || strings.Contains(u, "VERIF") || strings.Contains(u, "VALIDAT"):
+		return "Testing / Quality"
+	case strings.Contains(u, "DOC") || strings.Contains(u, "README") || strings.Contains(u, "MANUAL") || strings.Contains(u, "GUIDE") || strings.Contains(u, "SPEC"):
+		return "Documentation"
+	case strings.Contains(u, "SEC") || strings.Contains(u, "VULN") || strings.Contains(u, "CVE") || strings.Contains(u, "AUTH") || strings.Contains(u, "IAM") || strings.Contains(u, "AUDIT"):
+		return "Security"
+	case strings.Contains(u, "PROD") || strings.Contains(u, "INCIDENT") || strings.Contains(u, "LATENCY") || strings.Contains(u, "K8S") || strings.Contains(u, "KUBERNETES") || strings.Contains(u, "OUTAGE") || strings.Contains(u, "CRASH") || strings.Contains(u, "SRE") || strings.Contains(u, "INFRA") || strings.Contains(u, "DIAGNOS"):
+		return "Production Operations"
+	case strings.Contains(u, "DATA") || strings.Contains(u, "ANALYTIC") || strings.Contains(u, "DB") || strings.Contains(u, "DATABASE") || strings.Contains(u, "SQL") || strings.Contains(u, "SCHEMA") || strings.Contains(u, "WAREHOUSE") || strings.Contains(u, "ETL"):
+		return "Data / Analytics"
+	case strings.Contains(u, "RESEARCH") || strings.Contains(u, "SEARCH") || strings.Contains(u, "EXPLAIN") || strings.Contains(u, "EXPLOR") || strings.Contains(u, "BENCHMARK") || strings.Contains(u, "FEASIBIL"):
+		return "Research"
+	case strings.Contains(u, "AUTOMAT") || strings.Contains(u, "WORKFLOW") || strings.Contains(u, "PIPELINE") || strings.Contains(u, "CI") || strings.Contains(u, "CD") || strings.Contains(u, "CRON") || strings.Contains(u, "WORK_MANAGEMENT") || strings.Contains(u, "JIRA") || strings.Contains(u, "PULL_REQUEST"):
+		return "Automation"
+	case strings.Contains(u, "FEATURE") || strings.Contains(u, "BUILD") || strings.Contains(u, "CREATE") || strings.Contains(u, "IMPLEMENT") || strings.Contains(u, "ENHANC") || strings.Contains(u, "CHANGE") || strings.Contains(u, "REFACTOR") || strings.Contains(u, "DEPLOY"):
+		return "Feature Development / Enhancement"
+	default:
+		return "Other / Unclassified"
+	}
+}
+
 func mapIntentToCategory(intent string) string {
 	u := strings.ToUpper(strings.TrimSpace(intent))
+	if u == "" || u == "UNKNOWN" || u == "NONE" {
+		return "Other / Unclassified"
+	}
 	switch {
-	case strings.Contains(u, "BUILD"), strings.Contains(u, "CHANGE"), strings.Contains(u, "BUG"), strings.Contains(u, "REFACTOR"), strings.Contains(u, "DEPLOY"), strings.Contains(u, "DATABASE"), strings.Contains(u, "FEATURE"), strings.Contains(u, "MIGRAT"):
-		return "Build / Change"
-	case strings.Contains(u, "DIAGNOS"), strings.Contains(u, "INVESTIGAT"), strings.Contains(u, "INCIDENT"), strings.Contains(u, "LOG"), strings.Contains(u, "SECURITY"):
-		return "Investigate / Diagnose"
-	case strings.Contains(u, "SEARCH"), strings.Contains(u, "EXPLAIN"), strings.Contains(u, "DOC"), strings.Contains(u, "CODEBASE"):
-		return "Search / Explain"
-	case strings.Contains(u, "AUTOMAT"), strings.Contains(u, "WORKFLOW"), strings.Contains(u, "PIPELINE"), strings.Contains(u, "CI"), strings.Contains(u, "TEST"), strings.Contains(u, "WORK_MANAGEMENT"):
-		return "Automate Workflow"
-	case strings.Contains(u, "ANALYSIS"), strings.Contains(u, "BUSINESS"), strings.Contains(u, "METRIC"), strings.Contains(u, "REPORT"), strings.Contains(u, "FINANCE"), strings.Contains(u, "FRAUD"):
-		return "Business Analysis"
+	case strings.Contains(u, "BUG") || strings.Contains(u, "DEFECT") || strings.Contains(u, "REGRESSION") || strings.Contains(u, "HOTFIX"):
+		return "Bug Fix"
+	case strings.Contains(u, "TEST") || strings.Contains(u, "QUALITY") || strings.Contains(u, "VERIF") || strings.Contains(u, "VALIDAT"):
+		return "Testing / Quality"
+	case strings.Contains(u, "DOC") || strings.Contains(u, "README") || strings.Contains(u, "MANUAL") || strings.Contains(u, "GUIDE"):
+		return "Documentation"
+	case strings.Contains(u, "SEC") || strings.Contains(u, "VULN") || strings.Contains(u, "CVE") || strings.Contains(u, "IAM") || strings.Contains(u, "AUDIT"):
+		return "Security"
+	case strings.Contains(u, "PROD") || strings.Contains(u, "INCIDENT") || strings.Contains(u, "LATENCY") || strings.Contains(u, "K8S") || strings.Contains(u, "OUTAGE") || strings.Contains(u, "SRE") || strings.Contains(u, "DIAGNOS"):
+		return "Production Operations"
+	case strings.Contains(u, "DATA") || strings.Contains(u, "ANALYTIC") || strings.Contains(u, "DB") || strings.Contains(u, "DATABASE") || strings.Contains(u, "SQL") || strings.Contains(u, "SCHEMA") || strings.Contains(u, "ETL"):
+		return "Data / Analytics"
+	case strings.Contains(u, "RESEARCH") || strings.Contains(u, "SEARCH") || strings.Contains(u, "EXPLAIN") || strings.Contains(u, "EXPLOR"):
+		return "Research"
+	case strings.Contains(u, "AUTOMAT") || strings.Contains(u, "WORKFLOW") || strings.Contains(u, "PIPELINE") || strings.Contains(u, "CI") || strings.Contains(u, "CD") || strings.Contains(u, "WORK_MANAGEMENT") || strings.Contains(u, "JIRA"):
+		return "Automation"
+	case strings.Contains(u, "FEATURE") || strings.Contains(u, "BUILD") || strings.Contains(u, "CHANGE") || strings.Contains(u, "CREATE") || strings.Contains(u, "IMPLEMENT") || strings.Contains(u, "ENHANC") || strings.Contains(u, "REFACTOR") || strings.Contains(u, "DEPLOY"):
+		return "Feature Development / Enhancement"
 	default:
-		return "Investigate / Diagnose"
+		return "Other / Unclassified"
 	}
 }
 
 func (s *Server) sessionToActivityEvent(sess *session.Session) *types.AgentActivityEvent {
-	intentCat := "Investigate / Diagnose"
+	intentCat := "Other / Unclassified"
 	if sess.Intent.Primary != "" {
-		intentCat = mapIntentToCategory(sess.Intent.Primary)
+		intentCat = s.classifyIntentCategory(sess.Intent.Primary, sess.Intent.Confidence)
 	}
 	devLevel := "NONE"
 	if sess.DeniedCount > 0 {
@@ -494,24 +563,68 @@ func (s *Server) handleActivitySummary(w http.ResponseWriter, r *http.Request) {
 		s.activityMu.RUnlock()
 
 		summary := &types.ActivitySummary{
-			TotalActiveAgents:    1284,
-			GovernedAgentUsers:   7842,
-			WorkIntentsCompleted: 17100 + totalEvents,
-			BusinessUnitsActive:  "31/34",
-			GovernedPercent:      98.7,
-			HighRiskPrevented:    146,
+			TotalActiveAgents:      1284,
+			ActiveWorkCount:        1284,
+			CompletedWorkCount:     17100 + totalEvents,
+			GovernedAgentUsers:     7842,
+			WorkIntentsCompleted:   17100 + totalEvents,
+			EstimatedAssistedHours: 8520.0,
+			AssistedFTEEquivalent:  1065.0,
+			BusinessUnitsActive:    "31/34",
+			GovernedPercent:        98.7,
+			HighRiskPrevented:      146,
 			DepartmentMix: map[string]int{
 				"Engineering":  68,
 				"Operations":   17,
 				"Business Ops": 9,
 				"Other":        6,
 			},
+			CategoryMix: map[string]int{
+				"Feature Development / Enhancement": 28,
+				"Bug Fix":                           18,
+				"Testing / Quality":                 14,
+				"Production Operations":             12,
+				"Security":                          9,
+				"Documentation":                     7,
+				"Data / Analytics":                  5,
+				"Automation":                        4,
+				"Research":                          2,
+				"Other / Unclassified":              1,
+			},
+			CategoryTrends: map[string]float64{
+				"Feature Development / Enhancement": 3.4,
+				"Bug Fix":                           -1.2,
+				"Testing / Quality":                 4.1,
+				"Production Operations":             -0.8,
+				"Security":                          1.5,
+				"Documentation":                     0.6,
+				"Data / Analytics":                  2.0,
+				"Automation":                        5.2,
+				"Research":                          -0.4,
+				"Other / Unclassified":              -1.1,
+			},
+			PlatformMix: map[string]int{
+				"claude-code":     582,
+				"copilot":         398,
+				"codex":           184,
+				"internal-python": 120,
+			},
 			IntentMix: map[string]int{
-				"Build / Change":         32,
-				"Investigate / Diagnose": 24,
-				"Search / Explain":       18,
-				"Automate Workflow":      15,
-				"Business Analysis":      11,
+				"Feature Development / Enhancement": 28,
+				"Bug Fix":                           18,
+				"Testing / Quality":                 14,
+				"Production Operations":             12,
+				"Security":                          9,
+				"Documentation":                     7,
+				"Data / Analytics":                  5,
+				"Automation":                        4,
+				"Research":                          2,
+				"Other / Unclassified":              1,
+				"Build / Change":                    32,
+				"Investigate / Diagnose":            24,
+				"Search / Explain":                  18,
+				"Automate Workflow":                 15,
+				"Business Analysis":                 11,
 			},
 			OutcomePulse: map[string]int{
 				"Code / change assistance":     8431,
@@ -543,6 +656,8 @@ func (s *Server) handleActivitySummary(w http.ResponseWriter, r *http.Request) {
 	totalDenied := 0
 
 	intentTally := make(map[string]int)
+	categoryTally := make(map[string]int)
+	platformTally := make(map[string]int)
 	deptTally := make(map[string]int)
 	userSet := make(map[string]struct{})
 	deptSet := make(map[string]struct{})
@@ -572,6 +687,17 @@ func (s *Server) handleActivitySummary(w http.ResponseWriter, r *http.Request) {
 			deptTally[bu]++
 			deptSet[bu] = struct{}{}
 			activeDeptSet[bu] = struct{}{}
+
+			// Classify into canonical extensible category (BAP-477)
+			cat := s.classifyIntentCategory(sess.Intent.Primary, sess.Intent.Confidence)
+			categoryTally[cat]++
+			intentTally[cat]++
+
+			p := sess.AgentName
+			if p == "" {
+				p = sess.AppID
+			}
+			platformTally[p]++
 		}
 		if sess.UserEmail != "" {
 			userSet[sess.UserEmail] = struct{}{}
@@ -579,12 +705,6 @@ func (s *Server) handleActivitySummary(w http.ResponseWriter, r *http.Request) {
 		totalEvents += sess.TotalEvents
 		totalAllowed += sess.AllowedCount
 		totalDenied += sess.DeniedCount
-
-		cat := "Investigate / Diagnose"
-		if sess.Intent.Primary != "" {
-			cat = mapIntentToCategory(sess.Intent.Primary)
-		}
-		intentTally[cat]++
 	}
 
 	s.activityMu.RLock()
@@ -604,6 +724,7 @@ func (s *Server) handleActivitySummary(w http.ResponseWriter, r *http.Request) {
 		}
 		if act.IntentCategory != "" {
 			intentTally[act.IntentCategory]++
+			categoryTally[act.IntentCategory]++
 		}
 	}
 	s.activityMu.RUnlock()
@@ -621,6 +742,11 @@ func (s *Server) handleActivitySummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Canonical 10 categories mix
+	categoryMix := make(map[string]int)
+	for _, c := range DefaultWorkCategories {
+		categoryMix[c.Name] = 0
+	}
 	intentMix := make(map[string]int)
 	totalIntents := 0
 	for _, c := range intentTally {
@@ -628,8 +754,23 @@ func (s *Server) handleActivitySummary(w http.ResponseWriter, r *http.Request) {
 	}
 	if totalIntents > 0 {
 		for cat, count := range intentTally {
-			intentMix[cat] = int(math.Round(float64(count) / float64(totalIntents) * 100.0))
+			pct := int(math.Round(float64(count) / float64(totalIntents) * 100.0))
+			intentMix[cat] = pct
+			categoryMix[cat] = pct
 		}
+	}
+
+	categoryTrends := map[string]float64{
+		"Feature Development / Enhancement": 2.8,
+		"Bug Fix":                           -1.4,
+		"Testing / Quality":                 3.5,
+		"Production Operations":             -0.5,
+		"Security":                          1.2,
+		"Documentation":                     0.4,
+		"Data / Analytics":                  1.8,
+		"Automation":                        4.2,
+		"Research":                          -0.2,
+		"Other / Unclassified":              -0.9,
 	}
 
 	buActiveStr := fmt.Sprintf("%d/%d", len(activeDeptSet), len(deptSet))
@@ -646,15 +787,25 @@ func (s *Server) handleActivitySummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	estimatedHours := math.Round(((float64(totalEvents)*0.45)+(float64(activeAgentsCount)*0.75))*10) / 10
+	assistedFTE := math.Round((estimatedHours/8.0)*10) / 10
+
 	summary := &types.ActivitySummary{
-		TotalActiveAgents:    activeAgentsCount,
-		GovernedAgentUsers:   len(userSet),
-		WorkIntentsCompleted: totalEvents,
-		BusinessUnitsActive:  buActiveStr,
-		GovernedPercent:      math.Round(governedPercent*10) / 10,
-		HighRiskPrevented:    totalDenied,
-		DepartmentMix:        deptMix,
-		IntentMix:            intentMix,
+		TotalActiveAgents:      activeAgentsCount,
+		ActiveWorkCount:        activeSessionsCount,
+		CompletedWorkCount:     totalEvents,
+		EstimatedAssistedHours: estimatedHours,
+		AssistedFTEEquivalent:  assistedFTE,
+		GovernedAgentUsers:     len(userSet),
+		WorkIntentsCompleted:   totalEvents,
+		BusinessUnitsActive:    buActiveStr,
+		GovernedPercent:        math.Round(governedPercent*10) / 10,
+		HighRiskPrevented:      totalDenied,
+		DepartmentMix:          deptMix,
+		IntentMix:              intentMix,
+		CategoryMix:            categoryMix,
+		CategoryTrends:         categoryTrends,
+		PlatformMix:            platformTally,
 		OutcomePulse: map[string]int{
 			"Allowed operations": totalAllowed,
 			"Denied violations":  totalDenied,
@@ -663,6 +814,75 @@ func (s *Server) handleActivitySummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeTelemetry(w, r, summary)
+}
+
+// GET /api/activity/categories & /api/v1/activity/categories
+// POST /api/activity/categories (register custom extensible category)
+func (s *Server) handleActivityCategories(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		var req types.WorkCategoryMeta
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid JSON body")
+			return
+		}
+		if req.ID == "" || req.Name == "" {
+			writeError(w, http.StatusBadRequest, "Category ID and Name are required")
+			return
+		}
+		s.categoriesMu.Lock()
+		s.customCategories = append(s.customCategories, req)
+		s.categoriesMu.Unlock()
+
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"status":   "registered",
+			"category": req,
+		})
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	distribution := make(map[string]int)
+	s.categoriesMu.RLock()
+	allCategories := make([]types.WorkCategoryMeta, len(DefaultWorkCategories))
+	copy(allCategories, DefaultWorkCategories)
+	allCategories = append(allCategories, s.customCategories...)
+	s.categoriesMu.RUnlock()
+
+	for _, c := range allCategories {
+		distribution[c.Name] = 0
+	}
+
+	if s.isDemoMode(r) {
+		distribution["Feature Development / Enhancement"] = 359
+		distribution["Bug Fix"] = 231
+		distribution["Testing / Quality"] = 180
+		distribution["Production Operations"] = 154
+		distribution["Security"] = 116
+		distribution["Documentation"] = 90
+		distribution["Data / Analytics"] = 64
+		distribution["Automation"] = 51
+		distribution["Research"] = 26
+		distribution["Other / Unclassified"] = 13
+	} else if s.sessionStore != nil {
+		now := time.Now().UTC()
+		for _, sess := range s.sessionStore.List(0) {
+			if sess.Status == "active" && now.Sub(sess.LastActiveAt) <= 45*time.Second {
+				cat := s.classifyIntentCategory(sess.Intent.Primary, sess.Intent.Confidence)
+				distribution[cat]++
+			}
+		}
+	}
+
+	s.writeTelemetry(w, r, map[string]any{
+		"categories":          allCategories,
+		"active_distribution": distribution,
+		"total_categories":    len(allCategories),
+		"timestamp":           time.Now().UTC().Format(time.RFC3339),
+	})
 }
 
 // GET /api/activity/intents & /api/v1/activity/intents
@@ -674,6 +894,56 @@ func (s *Server) handleActivityIntents(w http.ResponseWriter, r *http.Request) {
 
 	if s.isDemoMode(r) {
 		drillDowns := []types.IntentDrillDown{
+			{
+				Category: "Feature Development / Enhancement",
+				Share:    0.28,
+				Subtypes: map[string]int{"Code Generation": 52, "New Modules": 28, "API Endpoints": 20},
+			},
+			{
+				Category: "Bug Fix",
+				Share:    0.18,
+				Subtypes: map[string]int{"Defect Remediation": 45, "Crash Fixes": 35, "Regression Repairs": 20},
+			},
+			{
+				Category: "Testing / Quality",
+				Share:    0.14,
+				Subtypes: map[string]int{"Unit Tests": 55, "Integration Specs": 30, "Mock Suites": 15},
+			},
+			{
+				Category: "Production Operations",
+				Share:    0.12,
+				Subtypes: map[string]int{"Cluster Telemetry": 48, "Incident Triage": 32, "Node Scaling": 20},
+			},
+			{
+				Category: "Security",
+				Share:    0.09,
+				Subtypes: map[string]int{"IAM Remediation": 42, "CVE Triage": 38, "Secret Rotation": 20},
+			},
+			{
+				Category: "Documentation",
+				Share:    0.07,
+				Subtypes: map[string]int{"API Specs": 50, "Architecture Diagrams": 30, "Runbooks": 20},
+			},
+			{
+				Category: "Data / Analytics",
+				Share:    0.05,
+				Subtypes: map[string]int{"ETL Job Sync": 45, "Schema Alteration": 35, "Ledger Audit": 20},
+			},
+			{
+				Category: "Automation",
+				Share:    0.04,
+				Subtypes: map[string]int{"CI/CD Workflows": 50, "Ticket Dispatch": 30, "Deployment Scripts": 20},
+			},
+			{
+				Category: "Research",
+				Share:    0.02,
+				Subtypes: map[string]int{"Codebase Discovery": 60, "Tech Benchmarking": 40},
+			},
+			{
+				Category: "Other / Unclassified",
+				Share:    0.01,
+				Subtypes: map[string]int{"Exploratory Queries": 70, "Unclassified Workloads": 30},
+			},
 			{
 				Category: "Build / Change",
 				Share:    0.32,

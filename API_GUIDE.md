@@ -42,6 +42,7 @@ This document is the complete REST API specification for **`bapcontrolplane`**, 
 | `GET` | `/api/activity/topology` | Enterprise activity topology hierarchy tree | None / RBAC Redacted |
 | `GET` | `/api/activity/stream` | Real-time Server-Sent Events (SSE) stream of activity events | None / RBAC Redacted |
 | `GET` | `/api/activity/deviation` | Evaluate intent-to-action contract & deviation level | None |
+| `GET` / `POST` | `/api/activity/categories` | Query or register extensible enterprise work categories (BAP-477) | None / Admin |
 
 ---
 
@@ -807,29 +808,56 @@ Ingests a normalized `AgentActivityEvent` from edge interceptors (`cchook`, `cop
   ```
 
 #### 3.13.2. Query Activity Summary
-Returns executive KPIs for the CIO AI Workforce Pulse dashboard.
+Returns executive KPIs for the CIO AI Workforce Pulse dashboard (BAP-477).
 - **Method**: `GET`
 - **Path**: `/api/activity/summary` (Supports `?demo=true` for prototype dataset)
 - **Example Response (`200 OK`)**:
   ```json
   {
-    "total_active_agents": 12,
-    "governed_agent_users": 8,
+    "total_active_agents": 75,
+    "governed_agent_users": 15,
     "work_intents_completed": 142,
-    "business_units_active": "4/6",
-    "governed_percent": 98.6,
-    "high_risk_prevented": 2,
+    "business_units_active": "15/15",
+    "governed_percent": 99.2,
+    "high_risk_prevented": 3,
+    "active_work_count": 75,
+    "completed_work_count": 142,
+    "estimated_assisted_hours": 182.4,
+    "assisted_fte_equivalent": 22.8,
+    "category_mix": {
+      "Feature Development / Enhancement": 28,
+      "Bug Fix": 20,
+      "Testing / Quality": 16,
+      "Production Operations": 12,
+      "Documentation": 8,
+      "Security": 6,
+      "Data / Analytics": 4,
+      "Research": 3,
+      "Automation": 2,
+      "Other / Unclassified": 1
+    },
+    "category_trends": {
+      "Feature Development / Enhancement": "+12%",
+      "Bug Fix": "-4%",
+      "Testing / Quality": "+8%"
+    },
+    "platform_mix": {
+      "claude-code": 35,
+      "copilot": 25,
+      "codex": 10,
+      "internal-python": 5
+    },
     "department_mix": {
       "Engineering": 60,
       "Operations": 25,
       "Security": 15
     },
     "intent_mix": {
-      "Build / Change": 45,
-      "Investigate / Diagnose": 30,
-      "Search / Explain": 25
+      "Feature Development / Enhancement": 28,
+      "Bug Fix": 20,
+      "Testing / Quality": 16
     },
-    "timestamp": "2026-10-05T10:14:00Z"
+    "timestamp": "2026-10-06T17:45:00Z"
   }
   ```
 
@@ -919,6 +947,112 @@ Evaluates whether a proposed agent action or tool command complies with declared
     "policy_decision": "DENY",
     "risk_score": 0.95,
     "reason": "Blocked because the requested customer-record modification was inconsistent with the session's declared production-diagnosis intent."
+  }
+  ```
+
+#### 3.13.6. Query and Register Extensible Work Categories (BAP-477)
+Retrieves or registers enterprise work categories dynamically without requiring UI redeployment.
+- **Methods**: `GET`, `POST`
+- **Paths**: `/api/activity/categories`, `/api/v1/activity/categories`
+- **GET Response (`200 OK`)**:
+  ```json
+  {
+    "categories": [
+      {
+        "id": "feature-development",
+        "name": "Feature Development / Enhancement",
+        "description": "New capabilities, API enhancements, schema migrations, and user-facing feature additions",
+        "color": "#3b82f6",
+        "icon": "sparkles"
+      },
+      {
+        "id": "bug-fix",
+        "name": "Bug Fix",
+        "description": "Defect remediation, regression fixes, timeout resolutions, and patch authoring",
+        "color": "#ef4444",
+        "icon": "wrench"
+      },
+      {
+        "id": "testing-quality",
+        "name": "Testing / Quality",
+        "description": "Unit test generation, integration testing, end-to-end suites, and quality validation",
+        "color": "#10b981",
+        "icon": "shield-check"
+      },
+      {
+        "id": "documentation",
+        "name": "Documentation",
+        "description": "API guides, architecture docs, release notes, and developer manuals",
+        "color": "#06b6d4",
+        "icon": "document-text"
+      },
+      {
+        "id": "production-operations",
+        "name": "Production Operations",
+        "description": "Kubernetes cluster debugging, incident triage, deployment operations, and telemetry monitoring",
+        "color": "#f59e0b",
+        "icon": "server-stack"
+      },
+      {
+        "id": "security",
+        "name": "Security",
+        "description": "Vulnerability scanning, dependency auditing, secret rotation, and compliance posture reviews",
+        "color": "#8b5cf6",
+        "icon": "lock-closed"
+      },
+      {
+        "id": "data-analytics",
+        "name": "Data / Analytics",
+        "description": "ETL pipeline authoring, database query optimization, data warehouse modeling, and reporting",
+        "color": "#6366f1",
+        "icon": "circle-stack"
+      },
+      {
+        "id": "research",
+        "name": "Research",
+        "description": "Architecture exploration, library evaluation, prototype feasibility studies, and literature review",
+        "color": "#ec4899",
+        "icon": "academic-cap"
+      },
+      {
+        "id": "automation",
+        "name": "Automation",
+        "description": "CI/CD workflow creation, build scripting, infrastructure as code, and repetitive task automation",
+        "color": "#14b8a6",
+        "icon": "cpu-chip"
+      },
+      {
+        "id": "other-unclassified",
+        "name": "Other / Unclassified",
+        "description": "General tasks, unclassified actions, or intents below confidence threshold (< 0.25)",
+        "color": "#64748b",
+        "icon": "question-mark-circle"
+      }
+    ],
+    "count": 10
+  }
+  ```
+- **POST Request (Register Custom Work Category)**:
+  ```json
+  {
+    "id": "finops",
+    "name": "Cloud Cost Optimization / FinOps",
+    "description": "Kubernetes cluster rightsizing, reserved instance planning, and cloud bill reduction",
+    "color": "#10b981",
+    "icon": "banknotes"
+  }
+  ```
+- **POST Response (`201 Created`)**:
+  ```json
+  {
+    "status": "registered",
+    "category": {
+      "id": "finops",
+      "name": "Cloud Cost Optimization / FinOps",
+      "description": "Kubernetes cluster rightsizing, reserved instance planning, and cloud bill reduction",
+      "color": "#10b981",
+      "icon": "banknotes"
+    }
   }
   ```
 

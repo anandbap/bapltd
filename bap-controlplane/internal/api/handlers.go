@@ -72,10 +72,12 @@ type Server struct {
 	oidcConfigMu     sync.RWMutex
 	oidcConfig       types.OIDCConfig
 
-	activityMu    sync.RWMutex
-	activities    []*types.AgentActivityEvent
-	activitySubMu sync.Mutex
-	activitySubs  map[chan *types.AgentActivityEvent]struct{}
+	activityMu       sync.RWMutex
+	activities       []*types.AgentActivityEvent
+	activitySubMu    sync.Mutex
+	activitySubs     map[chan *types.AgentActivityEvent]struct{}
+	categoriesMu     sync.RWMutex
+	customCategories []types.WorkCategoryMeta
 }
 
 type deviceAuthSession struct {
@@ -361,6 +363,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/activity/stream", s.handleActivityStream)
 	s.mux.HandleFunc("/api/activity/ingest", s.handleActivityIngest)
 	s.mux.HandleFunc("/api/activity/deviation", s.handleActivityDeviation)
+	s.mux.HandleFunc("/api/activity/categories", s.handleActivityCategories)
 
 	s.mux.HandleFunc("/api/v1/activity/live", s.handleActivityLive)
 	s.mux.HandleFunc("/api/v1/activity/summary", s.handleActivitySummary)
@@ -370,6 +373,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/activity/stream", s.handleActivityStream)
 	s.mux.HandleFunc("/api/v1/activity/ingest", s.handleActivityIngest)
 	s.mux.HandleFunc("/api/v1/activity/deviation", s.handleActivityDeviation)
+	s.mux.HandleFunc("/api/v1/activity/categories", s.handleActivityCategories)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

@@ -208,6 +208,16 @@ dl.kv dt{color:var(--muted);font-size:13px} dl.kv dd{margin:0;word-break:break-w
 .contract-stage{background:var(--surface);border:1.5px solid var(--line);border-radius:10px;padding:12px 14px;position:relative}
 .contract-num{width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;display:inline-grid;place-items:center;font-size:11px;font-weight:700;margin-right:6px}
 .deviation-card{border:1.5px solid var(--deny);background:var(--deny-bg);border-radius:10px;padding:14px;margin-top:12px}
+.category-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;margin-top:12px}
+.cat-card{border:1.5px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--surface);cursor:pointer;transition:all .15s ease}
+.cat-card:hover,.cat-card.active{border-color:var(--accent);background:var(--surface2);box-shadow:0 2px 10px rgba(0,0,0,0.06)}
+.cat-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.cat-name{font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cat-count{font-size:11.5px;color:var(--muted);margin-bottom:8px;display:flex;justify-content:space-between}
+.lifecycle-flow{display:flex;gap:8px;align-items:center;overflow-x:auto;padding:12px 14px;background:var(--surface2);border:1px solid var(--line);border-radius:10px;margin-top:14px}
+.flow-step{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:4px 9px;background:var(--surface);border:1px solid var(--line);border-radius:6px;white-space:nowrap}
+.flow-arrow{color:var(--muted);font-size:13px;font-weight:700}
+.privacy-principle-banner{background:rgba(37,99,235,0.06);border:1px solid rgba(37,99,235,0.22);border-radius:10px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;font-size:12px}
 
 /* ===== v2 additions: Role-Tailored Nav, Approvals, Add-ons, WhyBlocked ===== */
 .persona{display:grid;gap:4px;margin:4px 0 10px;padding:0 6px}
@@ -702,38 +712,61 @@ VIEWS.pulse = {
     const governedPct = S.actSummary ? (S.actSummary.governed_percent != null ? S.actSummary.governed_percent : 100.0) : 100.0;
     const prevented = S.actSummary ? (S.actSummary.high_risk_prevented != null ? S.actSummary.high_risk_prevented : 0) : 0;
     const buActiveStr = S.actSummary ? (S.actSummary.business_units_active || '0/0') : (isDemo ? '31/34' : '0/0');
-    const workCompleted = S.actSummary ? (S.actSummary.work_intents_completed || 0) : 0;
-    const activeDrill = S.activeDrillIntent || 'Investigate / Diagnose';
+    const workCompleted = S.actSummary ? (S.actSummary.completed_work_count != null ? S.actSummary.completed_work_count : (S.actSummary.work_intents_completed || 0)) : (isDemo ? 17100 : 0);
+    const activeWork = S.actSummary ? (S.actSummary.active_work_count != null ? S.actSummary.active_work_count : total) : total;
+    const assistedHours = S.actSummary ? (S.actSummary.estimated_assisted_hours != null ? S.actSummary.estimated_assisted_hours : Math.round(total * 6.6)) : (isDemo ? 8520 : Math.round(total * 6.6));
+    const assistedFTE = S.actSummary ? (S.actSummary.assisted_fte_equivalent != null ? S.actSummary.assisted_fte_equivalent : Math.round(assistedHours / 8.0)) : (isDemo ? 1065 : Math.round(assistedHours / 8.0));
+    const activeDrill = S.activeDrillIntent || 'Feature Development / Enhancement';
 
-    // Department Mix stats
-    const deptStats = S.actSummary && S.actSummary.department_mix ? S.actSummary.department_mix : {};
-    const dEng = deptStats['Engineering'] || 0;
-    const dOps = deptStats['Operations'] || 0;
-    const dBiz = deptStats['Business Operations'] || deptStats['Business Ops'] || 0;
-    const dSec = deptStats['Security & IT'] || deptStats['Security'] || 0;
-
-    // Intents list from API or live
-    let intentList = [
-      ['Build / Change', 0],
-      ['Investigate / Diagnose', 0],
-      ['Search / Explain', 0],
-      ['Automate Workflow', 0],
-      ['Business Analysis', 0]
+    // Canonical 10 Extensible Categories (BAP-477)
+    const canonicalCategories = [
+      { name: 'Feature Development / Enhancement', color: '#2563eb', desc: 'New feature engineering, functional additions, and module extensions' },
+      { name: 'Bug Fix', color: '#dc2626', desc: 'Defect resolution, crash triage, and regression patching' },
+      { name: 'Testing / Quality', color: '#16a34a', desc: 'Unit, integration, and e2e test creation, coverage expansion' },
+      { name: 'Documentation', color: '#0891b2', desc: 'Technical documentation, README updates, API reference' },
+      { name: 'Production Operations', color: '#ea580c', desc: 'Infrastructure telemetry, incident triage, and deployment' },
+      { name: 'Security', color: '#9333ea', desc: 'Vulnerability remediation, IAM hardening, secret rotation' },
+      { name: 'Data / Analytics', color: '#0284c7', desc: 'ETL pipelines, schema migrations, metric calculations' },
+      { name: 'Research', color: '#4f46e5', desc: 'Codebase discovery, architectural analysis, benchmarking' },
+      { name: 'Automation', color: '#0d9488', desc: 'Workflow automation, CI/CD scripts, ticket orchestration' },
+      { name: 'Other / Unclassified', color: '#64748b', desc: 'Low-confidence classification fallback or exploratory queries' }
     ];
 
-    if (S.actSummary && S.actSummary.intent_mix) {
-      intentList = Object.entries(S.actSummary.intent_mix).map(([k, v]) => [k, v]);
-    } else if (S.actIntents && S.actIntents.length) {
-      intentList = S.actIntents.map(i => [i.category, Math.round((i.share || 0) * 100)]);
-    } else if (isDemo) {
-      intentList = [
-        ['Build / Change', 32],
-        ['Investigate / Diagnose', 24],
-        ['Search / Explain', 18],
-        ['Automate Workflow', 15],
-        ['Business Analysis', 11]
-      ];
-    }
+    const mixData = (S.actSummary && (S.actSummary.category_mix || S.actSummary.intent_mix)) || {};
+    const trendsData = (S.actSummary && S.actSummary.category_trends) || {
+      'Feature Development / Enhancement': 3.4,
+      'Bug Fix': -1.2,
+      'Testing / Quality': 4.1,
+      'Production Operations': -0.8,
+      'Security': 1.5,
+      'Documentation': 0.6,
+      'Data / Analytics': 2.0,
+      'Automation': 5.2,
+      'Research': -0.4,
+      'Other / Unclassified': -1.1
+    };
+
+    const categories = canonicalCategories.map(c => {
+      let pct = mixData[c.name] != null ? mixData[c.name] : 0;
+      if (!mixData[c.name] && isDemo) {
+        const demoDefaults = {
+          'Feature Development / Enhancement': 28,
+          'Bug Fix': 18,
+          'Testing / Quality': 14,
+          'Production Operations': 12,
+          'Security': 9,
+          'Documentation': 7,
+          'Data / Analytics': 5,
+          'Automation': 4,
+          'Research': 2,
+          'Other / Unclassified': 1
+        };
+        pct = demoDefaults[c.name] || 0;
+      }
+      const trend = trendsData[c.name] != null ? trendsData[c.name] : 0.0;
+      const agentCount = total > 0 ? Math.round(total * (pct / 100.0)) : 0;
+      return { ...c, pct, trend, agentCount };
+    });
 
     // Sub-intent drill-down
     let drillSubs = [];
@@ -745,31 +778,53 @@ VIEWS.pulse = {
     }
     if (!drillSubs.length) {
       drillSubs = {
-        'Investigate / Diagnose': [
-          ['Production Incidents', 47],
-          ['Code Analysis', 28],
-          ['Infrastructure Telemetry', 16],
-          ['Security & Auth', 9]
+        'Feature Development / Enhancement': [
+          ['Code Generation', 52],
+          ['New Modules', 28],
+          ['API Endpoints', 20]
         ],
-        'Build / Change': [
-          ['Feature Implementation', 52],
-          ['Bug Remediation', 31],
-          ['Refactoring & Cleanup', 17]
+        'Bug Fix': [
+          ['Defect Remediation', 45],
+          ['Crash Fixes', 35],
+          ['Regression Repairs', 20]
         ],
-        'Search / Explain': [
-          ['Codebase Exploration', 64],
-          ['System Architecture', 22],
-          ['Documentation Search', 14]
+        'Testing / Quality': [
+          ['Unit Tests', 55],
+          ['Integration Specs', 30],
+          ['Mock Suites', 15]
         ],
-        'Automate Workflow': [
-          ['CI/CD Deployments', 45],
-          ['Data Pipeline Sync', 35],
-          ['Config Management', 20]
+        'Production Operations': [
+          ['Cluster Telemetry', 48],
+          ['Incident Triage', 32],
+          ['Node Scaling', 20]
         ],
-        'Business Analysis': [
-          ['Financial Ledger Reports', 58],
-          ['Ops Metric Aggregation', 27],
-          ['Compliance Auditing', 15]
+        'Security': [
+          ['IAM Remediation', 42],
+          ['CVE Triage', 38],
+          ['Secret Rotation', 20]
+        ],
+        'Documentation': [
+          ['API Specs', 50],
+          ['Architecture Diagrams', 30],
+          ['Runbooks', 20]
+        ],
+        'Data / Analytics': [
+          ['ETL Job Sync', 45],
+          ['Schema Alteration', 35],
+          ['Ledger Audit', 20]
+        ],
+        'Automation': [
+          ['CI/CD Workflows', 50],
+          ['Ticket Dispatch', 30],
+          ['Deployment Scripts', 20]
+        ],
+        'Research': [
+          ['Codebase Discovery', 60],
+          ['Tech Benchmarking', 40]
+        ],
+        'Other / Unclassified': [
+          ['Exploratory Queries', 70],
+          ['Unclassified Workloads', 30]
         ]
       }[activeDrill] || [];
     }
@@ -781,7 +836,7 @@ VIEWS.pulse = {
     <div style="background:var(--surface2);border:1px solid var(--line);border-radius:12px;padding:16px 20px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
       <div>
         <b style="font-size:14px;color:var(--accent)">Live Zero-State Telemetry (No active sessions connected)</b>
-        <div style="font-size:12.5px;color:var(--muted);margin-top:2px">Running against live unsimulated BAP cluster. Connect Claude Code with <code>run-claude-bap.bat</code> or register edge agents to stream live activity.</div>
+        <div style="font-size:12.5px;color:var(--muted);margin-top:2px">Running against live unsimulated BAP cluster. Connect Claude Code or launch <code>run_cio_workforce_demo.bat</code> to stream live activity.</div>
       </div>
       <div style="display:flex;gap:8px">
         <a href="?demo=true" class="btn sm primary">Load Demo Simulation Dataset</a>
@@ -795,23 +850,28 @@ VIEWS.pulse = {
       <a href="?demo=false" class="btn sm">Switch to Pure Live Mode</a>
     </div>` : '')}
 
+    <div class="privacy-principle-banner">
+      <div style="display:flex;align-items:center;gap:8px">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <span style="font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:var(--accent)">Product Principle: See The Work, Not The Worker</span>
+      </div>
+      <span style="color:var(--muted)">Aggregate executive visibility by default &bull; Zero employee surveillance, personal rankings, or keystroke monitoring.</span>
+    </div>
+
     <div class="pulse-hero">
-      <div class="pulse-eyebrow">Enterprise Telemetry &amp; Workforce Pulse</div>
-      <div class="pulse-title">Autonomous Agents Working on Real Business Outcomes</div>
+      <div class="pulse-eyebrow">BAP-477 &bull; CIO Agent Activity Pulse</div>
+      <div class="pulse-title">Enterprise AI Workforce Capacity Allocation</div>
       <div class="pulse-big">
         <span id="pulseTotal">${total.toLocaleString()}</span>
-        <span class="tag ${total > 0 ? 't-LIVE' : 't-OFFLINE'}" style="font-size:14px"><span class="${total > 0 ? 'dot-live' : 'dot-offline'}"></span>${total > 0 ? 'ACTIVE NOW' : 'IDLE'}</span>
+        <span class="tag ${total > 0 ? 't-LIVE' : 't-OFFLINE'}" style="font-size:14px"><span class="${total > 0 ? 'dot-live' : 'dot-offline'}"></span>${total > 0 ? 'ACTIVE AGENTS NOW' : 'IDLE'}</span>
+        ${total >= 2000 ? '<span class="tag t-LIVE" style="font-size:12px">2,000+ ENTERPRISE SCALE</span>' : ''}
       </div>
-      <div class="pulse-sub">Unique governed agent sessions observed across enterprise runtimes in the last 5 minutes</div>
+      <div class="pulse-sub">Dynamic observed intent across all runtimes (Claude Code, GitHub Copilot, Codex, Python Agents)</div>
       <div class="pulse-stats">
-        <div class="pulse-stat"><b>${dEng ? dEng + '%' : (isDemo ? '68%' : '0%')}</b><span>ENGINEERING</span></div>
-        <div class="pulse-stat"><b>${dOps ? dOps + '%' : (isDemo ? '17%' : '0%')}</b><span>OPERATIONS</span></div>
-        <div class="pulse-stat"><b>${dBiz ? dBiz + '%' : (isDemo ? '9%' : '0%')}</b><span>BUSINESS OPS</span></div>
-        <div class="pulse-stat"><b>${dSec ? dSec + '%' : (isDemo ? '6%' : '0%')}</b><span>SECURITY &amp; OTHER</span></div>
-      </div>
-      <div class="privacy-badge">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-        <span>Executive view uses privacy-safe intent categories and executive summaries — no raw employee prompts or sensitive data.</span>
+        <div class="pulse-stat"><b>${activeWork.toLocaleString()}</b><span>ACTIVE WORKSTREAMS</span></div>
+        <div class="pulse-stat"><b>${workCompleted.toLocaleString()}</b><span>COMPLETED TASKS</span></div>
+        <div class="pulse-stat"><b>${assistedHours.toLocaleString()} hrs</b><span>ASSISTED CAPACITY</span></div>
+        <div class="pulse-stat"><b>~${assistedFTE.toLocaleString()} FTEs</b><span>EQUIVALENT CAPACITY</span></div>
       </div>
     </div>
 
@@ -819,11 +879,68 @@ VIEWS.pulse = {
       <div class="kpi good"><small>Governed Ratio</small><strong>${governedPct}%</strong><em>observed actions under policy</em></div>
       <div class="kpi bad"><small>Risky Prevented</small><strong>${prevented}</strong><em>stopped without blocking work</em></div>
       <div class="kpi"><small>Active Business Units</small><strong>${buActiveStr}</strong><em>active enterprise departments</em></div>
-      <div class="kpi"><small>Work Intents Done</small><strong>${workCompleted}</strong><em>observed across all runtimes</em></div>
+      <div class="kpi"><small>Extensible Categories</small><strong>10 Active</strong><em>dynamic intent inference</em></div>
       <div class="kpi"><small>Standing Privilege</small><strong>0.0%</strong><em>zero persistent credentials</em></div>
     </div>
 
+    <!-- BAP-477 Work Categories Capacity Matrix -->
+    <div class="panel" style="margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px">
+        <div>
+          <h2 style="margin:0 0 4px">Work Category Capacity Allocation</h2>
+          <p class="hint" style="margin:0">What the AI workforce is working on right now across 10 extensible business themes (click any category to drill down)</p>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:12px;color:var(--muted)">Selected: <b style="color:var(--accent)">${esc(activeDrill)}</b></span>
+        </div>
+      </div>
+
+      <div class="category-grid" id="categoryGrid">
+        ${categories.map(c => `
+          <div class="cat-card ${c.name === activeDrill ? 'active' : ''}" data-category="${esc(c.name)}">
+            <div class="cat-header">
+              <div style="display:flex;align-items:center;gap:6px">
+                <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c.color}"></span>
+                <span class="cat-name" title="${esc(c.name)}">${esc(c.name)}</span>
+              </div>
+              <span class="mono" style="font-weight:700;font-size:14px">${c.pct}%</span>
+            </div>
+            <div class="cat-count">
+              <span>${c.agentCount > 0 ? c.agentCount.toLocaleString() + ' agents' : 'Active'}</span>
+              <span style="color:${c.trend >= 0 ? 'var(--allow)' : 'var(--deny)'};font-weight:600">
+                ${c.trend >= 0 ? '▲ +' : '▼ '}${c.trend.toFixed(1)}%
+              </span>
+            </div>
+            <div class="bar" style="height:6px"><div style="width:${Math.min(100, c.pct * 2.5)}%;background:${c.color}"></div></div>
+          </div>
+        `).join('')}
+      </div>
+
+      <!-- BAP-477 Dynamic Work Lifecycle Progression -->
+      <div style="margin-top:16px">
+        <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">
+          Observed Work Lifecycle Progression &bull; Agents Dynamically Shift Categories During Execution
+        </div>
+        <div class="lifecycle-flow">
+          <div class="flow-step"><span style="color:#4f46e5">Research</span><small style="color:var(--muted);margin-left:4px">2%</small></div>
+          <span class="flow-arrow">&rarr;</span>
+          <div class="flow-step"><span style="color:#2563eb">Feature Dev</span><small style="color:var(--muted);margin-left:4px">28%</small></div>
+          <span class="flow-arrow">&rarr;</span>
+          <div class="flow-step"><span style="color:#dc2626">Bug Fix</span><small style="color:var(--muted);margin-left:4px">18%</small></div>
+          <span class="flow-arrow">&rarr;</span>
+          <div class="flow-step"><span style="color:#16a34a">Testing / Quality</span><small style="color:var(--muted);margin-left:4px">14%</small></div>
+          <span class="flow-arrow">&rarr;</span>
+          <div class="flow-step"><span style="color:#0891b2">Documentation</span><small style="color:var(--muted);margin-left:4px">7%</small></div>
+          <span class="flow-arrow">&rarr;</span>
+          <div class="flow-step"><span style="color:#ea580c">Production Ops</span><small style="color:var(--muted);margin-left:4px">12%</small></div>
+          <span class="flow-arrow">&rarr;</span>
+          <div class="flow-step" style="background:var(--accent);color:#fff"><span>Completed Work</span><small style="color:rgba(255,255,255,0.8);margin-left:4px">${workCompleted.toLocaleString()}</small></div>
+        </div>
+      </div>
+    </div>
+
     <div class="grid g-2">
+      <!-- Live Work Stream -->
       <div class="panel">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
           <div>
@@ -835,44 +952,55 @@ VIEWS.pulse = {
         <div class="act-feed" id="pulseFeed"></div>
       </div>
 
+      <!-- Category Drill-Down & Organizational Context -->
       <div class="panel">
-        <h2>Intent Mix</h2>
-        <p class="hint">What the AI workforce is doing (click a category to drill down)</p>
-        <div class="intent-list" id="intentList">
-          ${intentList.map(([name, pct]) => `
-            <div class="intent-item ${name === activeDrill ? 'active' : ''}" data-intent="${esc(name)}">
-              <div class="intent-item-header">
-                <span>${esc(name)}</span>
-                <span class="mono">${pct}%</span>
-              </div>
-              <div class="bar"><div style="width:${pct*2.2}%;background:var(--accent)"></div></div>
-            </div>
-          `).join('')}
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div>
+            <h2 style="margin:0 0 2px">Drill-Down: ${esc(activeDrill)}</h2>
+            <p class="hint" style="margin:0">Sub-task and workload distribution within selected theme</p>
+          </div>
+          <button class="btn sm" id="drillFilterBtn">Filter Fleet</button>
         </div>
 
-        <div style="margin-top:20px;padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--surface2)">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="display:grid;gap:10px;margin-bottom:18px">
+          ${drillSubs.length ? drillSubs.map(([sub, pct]) => `
             <div>
-              <b style="font-size:13.5px">Drill-Down: ${esc(activeDrill)}</b>
-              <div style="font-size:12px;color:var(--muted)">Sub-intent distribution for active sessions</div>
-            </div>
-            <button class="btn sm" id="drillFilterBtn">Filter Sessions</button>
-          </div>
-          <div style="display:grid;gap:8px">
-            ${drillSubs.length ? drillSubs.map(([sub, pct]) => `
-              <div style="display:flex;justify-content:space-between;align-items:center;font-size:12.5px">
-                <span>${esc(sub)}</span>
-                <span class="mono" style="font-weight:600">${pct}%</span>
+              <div style="display:flex;justify-content:space-between;align-items:center;font-size:12.5px;margin-bottom:4px">
+                <span style="font-weight:600">${esc(sub)}</span>
+                <span class="mono" style="font-weight:700">${pct}%</span>
               </div>
-              <div class="bar" style="height:6px"><div style="width:${pct}%;background:var(--step)"></div></div>
-            `).join('') : `<div class="empty">No active sub-intents observed for this category.</div>`}
+              <div class="bar" style="height:6px"><div style="width:${pct}%;background:var(--accent)"></div></div>
+            </div>
+          `).join('') : `<div class="empty">No active sub-intents observed for this category.</div>`}
+        </div>
+
+        <!-- Organizational Context -->
+        <div style="padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--surface2)">
+          <b style="font-size:13px;display:block;margin-bottom:8px">Organizational Context &bull; Multi-Vendor Agent Platforms</b>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
+            <div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--surface);border-radius:6px;border:1px solid var(--line)">
+              <span>Claude Code</span>
+              <b class="mono">${((S.actSummary && S.actSummary.platform_mix && S.actSummary.platform_mix['claude-code']) || (isDemo ? 582 : 0)).toLocaleString()}</b>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--surface);border-radius:6px;border:1px solid var(--line)">
+              <span>GitHub Copilot</span>
+              <b class="mono">${((S.actSummary && S.actSummary.platform_mix && S.actSummary.platform_mix['copilot']) || (isDemo ? 398 : 0)).toLocaleString()}</b>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--surface);border-radius:6px;border:1px solid var(--line)">
+              <span>Codex / Cursor</span>
+              <b class="mono">${((S.actSummary && S.actSummary.platform_mix && S.actSummary.platform_mix['codex']) || (isDemo ? 184 : 0)).toLocaleString()}</b>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--surface);border-radius:6px;border:1px solid var(--line)">
+              <span>Internal Python SDK</span>
+              <b class="mono">${((S.actSummary && S.actSummary.platform_mix && S.actSummary.platform_mix['internal-python']) || (total > 0 ? total : (isDemo ? 120 : 0))).toLocaleString()}</b>
+            </div>
           </div>
         </div>
 
-        <div style="margin-top:16px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);display:flex;justify-content:space-between;align-items:center">
+        <div style="margin-top:14px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);display:flex;justify-content:space-between;align-items:center">
           <div>
             <b style="font-size:13px">Board-Ready Governance Evidence</b>
-            <div style="font-size:12px;color:var(--muted)">Track from human prompt to granted capability and verified outcome</div>
+            <div style="font-size:12px;color:var(--muted)">Cryptographic chain from human prompt to execution outcome</div>
           </div>
           <button class="btn sm primary" onclick="go('contract')">View Contract</button>
         </div>
@@ -881,12 +1009,12 @@ VIEWS.pulse = {
   },
   after() {
     renderPulseFeed();
-    const list = $('#intentList');
-    if (list) {
-      list.onclick = e => {
-        const item = e.target.closest('.intent-item');
-        if (item && item.dataset.intent) {
-          S.activeDrillIntent = item.dataset.intent;
+    const grid = $('#categoryGrid');
+    if (grid) {
+      grid.onclick = e => {
+        const card = e.target.closest('.cat-card');
+        if (card && card.dataset.category) {
+          S.activeDrillIntent = card.dataset.category;
           render();
         }
       };

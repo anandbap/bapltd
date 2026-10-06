@@ -268,6 +268,77 @@ class TestPersonaAndActivityService(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertIn("deviations", dev_list)
 
+    def test_07_bap_477_cio_agent_activity_pulse(self):
+        """BAP-477: CIO Agent Activity Pulse, extensible categories, and privacy-safe aggregation."""
+        import sys
+        sys.path.insert(0, os.path.join(WORKSPACE_ROOT, "python-agent"))
+        import bap_sdk
+
+        # 1. Verify Extensible Categories API
+        code, cat_resp, _ = http_req(f"{CP_URL}/api/activity/categories")
+        self.assertEqual(code, 200)
+        self.assertIn("categories", cat_resp)
+        cat_names = [c["name"] for c in cat_resp["categories"]]
+        expected_categories = [
+            "Feature Development / Enhancement",
+            "Bug Fix",
+            "Testing / Quality",
+            "Documentation",
+            "Production Operations",
+            "Security",
+            "Data / Analytics",
+            "Research",
+            "Automation",
+            "Other / Unclassified",
+        ]
+        for ec in expected_categories:
+            self.assertIn(ec, cat_names)
+
+        # 2. Register custom extensible category (Acceptance Criteria 8)
+        new_cat = {
+            "id": "compliance_audit",
+            "name": "Regulatory Compliance & Audit",
+            "description": "SOC2 evidence collection, GDPR validation, and audit automation",
+            "color": "#10b981",
+            "icon": "shield-check"
+        }
+        code, post_resp, _ = http_req(f"{CP_URL}/api/activity/categories", method="POST", data=new_cat)
+        self.assertEqual(code, 201)
+        self.assertEqual(post_resp.get("status"), "registered")
+
+        # 3. Verify Story Intent Classification Examples
+        test_prompts = [
+            ("Fix authentication timeout", "Bug Fix"),
+            ("Add retry support to payment API", "Feature Development / Enhancement"),
+            ("Generate unit tests", "Testing / Quality"),
+            ("Update API documentation", "Documentation"),
+            ("Investigate Kubernetes production failure", "Production Operations"),
+            ("Unknown arbitrary command 987123", "Other / Unclassified"),
+        ]
+        for prompt, expected_cat in test_prompts:
+            classified = bap_sdk.classify_intent(prompt)
+            self.assertEqual(
+                classified.get("work_category"),
+                expected_cat,
+                f"Prompt '{prompt}' classified as '{classified.get('work_category')}', expected '{expected_cat}'"
+            )
+
+        # 4. Verify Executive Indicators in Summary
+        code, sum_resp, _ = http_req(f"{CP_URL}/api/activity/summary?demo=true")
+        self.assertEqual(code, 200)
+        self.assertIn("category_mix", sum_resp)
+        self.assertIn("category_trends", sum_resp)
+        self.assertIn("active_work_count", sum_resp)
+        self.assertIn("completed_work_count", sum_resp)
+        self.assertIn("estimated_assisted_hours", sum_resp)
+        self.assertIn("assisted_fte_equivalent", sum_resp)
+        self.assertGreater(sum_resp["estimated_assisted_hours"], 0)
+
+        # 5. Product Principle: Verify zero employee productivity rankings or user leaderboards in CIO view
+        self.assertNotIn("employee_rankings", sum_resp)
+        self.assertNotIn("user_leaderboard", sum_resp)
+        self.assertNotIn("prompt_count_leaderboard", sum_resp)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,7 @@ This document represents the complete functional and non-functional requirements
 | `BAP-221` | Production control-plane security | **DONE** | Mandatory admin tokens (X-BAP-Admin-Token), banned demo keys, tamper-evident hash chaining on audit events, and fail-closed security. |
 | `BAP-222` | Real protected-resource proof | **DONE** | Zero-trust Gateway PEP and control plane atomically consume bounded grants (maxUses=1) with strict bypass rejection; verified by 10-point test matrix. |
 | `BAP-520`–`BAP-525` | Agent Watch Persona Control Plane & Canonical Activity Engine | **DONE** | Persona switching (CIO/CISO/Ops/IT), canonical activity events, live SSE stream, CIO Pulse, Live Topology Map, and Intent Contract with Critical Deviation Detection. Pure live unsimulated telemetry decoupled from `-demo-mode` / `?demo=true`. |
+| `BAP-477` | CIO Agent Activity Pulse & Dynamic Work Themes | **DONE** | Privacy-first executive pulse ("See the work, not the worker"), 10 extensible work categories, dynamic lifecycle stage progression, assisted capacity metrics (hours + FTE eq), multi-vendor fleet aggregation (2,000+ agents). |
 
 ### MVP exit sequence
 
@@ -2264,3 +2265,68 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   1. Correlates events end-to-end across `trace_id` and `grant_id`.
   2. Real-time deviation alerts emitted to CISO and investigation views.
   3. Automated adversarial test verifies that intent deviation blocks unauthorized side effects and preserves audit receipts.
+
+---
+
+#### BAP-477: CIO Agent Activity Pulse
+* **Status**: DONE
+* **Type**: Executive Visibility, Intent Classification & Capacity Intelligence
+* **Epic**: `BAP-EPIC-28`
+* **Original Proposal Ref**: *BAP-477*
+* **Implementation Evidence**:
+  - Implemented `/api/activity/summary` extensions in `bap-controlplane/pkg/types/activity.go` and `internal/api/activity.go`:
+    - `active_work_count`, `completed_work_count`, `estimated_assisted_hours`, `assisted_fte_equivalent`, `category_mix`, `category_trends`, `platform_mix`.
+  - Added extensible work category registry `/api/activity/categories` (supporting runtime GET and POST registration).
+  - Defined canonical 10 categories with deterministic intent mapping and confidence thresholding (< 0.25 fallback to `Other / Unclassified`):
+    - `Feature Development / Enhancement`
+    - `Bug Fix`
+    - `Testing / Quality`
+    - `Documentation`
+    - `Production Operations`
+    - `Security`
+    - `Data / Analytics`
+    - `Research`
+    - `Automation`
+    - `Other / Unclassified`
+  - Integrated dynamic multi-stage session lifecycle progression: `Bug Fix → Testing / Quality → Documentation → Deployment/Complete`.
+  - Enhanced dashboard UI in `bap-controlplane/internal/dashboardui/web/index.html` with:
+    - Privacy-first banner: *"See the work, not the worker"* (zero individual surveillance, no employee rankings).
+    - 2,000+ concurrent enterprise agent population badge.
+    - 10-category executive capacity distribution grid with live trends and active agent counts.
+    - Observed lifecycle progression flow diagram.
+    - Multi-vendor agent platform mix (Claude Code, GitHub Copilot, Codex, Internal Python).
+  - Updated `python-agent/bap_sdk/client.py` and `demo_cio_workforce.py` with 15 teams x 5 agents = 75 concurrent autonomous workers drawing randomly from a 300-task pool with live terminal ticker and clean shutdown on Enter.
+  - Verified by `tests/test_persona_activity.py::test_07_bap_477_cio_agent_activity_pulse` (100% pass).
+* **Story**:
+  > As a CIO or technology executive, I want a real-time view of how enterprise agents are being used across major categories of work, so I can understand where AI capacity is contributing to the business without monitoring individual employees.
+* **Business Intent**:
+  > The dashboard must answer: **"What is our AI workforce working on right now?"**
+  > For an enterprise with potentially thousands of active agents, the experience should make overall agent activity visible while dynamically organizing that activity into meaningful work themes. The goal is **business visibility and productivity insight, not employee surveillance or micromanagement**.
+* **Product Principle**:
+  > **"See the work, not the worker."**
+  > The dashboard helps leadership understand how agentic capacity is being used across the enterprise while maintaining developer trust and avoiding a feeling of individual surveillance.
+* **Desired Conceptual Flow**:
+  ```text
+  Agent Activity → Intent → Work Category → Business Context / Outcome
+  ```
+* **Key Requirements**:
+  1. **Scale**: Represent thousands of simultaneously active agents without requiring individual-agent inspection (tested for 2,000+ concurrent agents).
+  2. **Dynamic Work Themes**: Dynamically group active work into meaningful, extensible work categories based on observed/inferred intent.
+  3. **Low-Confidence Fallback**: When classification confidence is insufficient (< 0.25), place activity into **Other / Unclassified** rather than forcing an incorrect classification.
+  4. **Dynamic Lifecycle Progression**: Support classification updates during an agent session as its work evolves (e.g. `Bug Fix → Testing → Documentation → Complete`).
+  5. **Privacy by Default**: Aggregate by default. Zero employee productivity rankings, prompt-count leaderboards, or surveillance metrics.
+  6. **Executive Indicators**: Surface active agents, work/task volume, distribution by category, mix trends, completed vs active work, and assisted capacity (hours + FTE equivalent).
+  7. **Multi-Vendor Ecosystem**: Support cross-platform agent technologies (Claude Code, GitHub Copilot, Codex, and Internal Python agents).
+  8. **Audit Isolation**: Preserve trace-level telemetry for authorized security/audit use without turning the CIO dashboard into an investigation console.
+* **Acceptance Criteria**:
+  1. The system can represent thousands of simultaneously active agents without requiring individual-agent inspection.
+  2. Active work is dynamically grouped into meaningful work categories.
+  3. Classification can change during an agent session.
+  4. Low-confidence classifications fall back to Other/Unclassified.
+  5. The experience communicates where enterprise AI capacity is being applied.
+  6. The CIO view does not expose employee-level productivity rankings by default.
+  7. The design clearly distinguishes aggregate executive visibility from security/audit investigation capabilities.
+  8. Categories can evolve without major UI redesign.
+  9. The experience works across multiple agent technologies, not only Claude Code.
+  10. The resulting dashboard enables an executive to understand, within seconds: **How many agents are working, what kinds of work they are doing, and where AI is contributing to the organization.**
+

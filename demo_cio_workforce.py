@@ -542,24 +542,40 @@ class WorkforceAgent:
         self.thread.start()
 
     def _run_work_loop(self):
-        """Simulates realistic agent task progression, heartbeats, and 2-task execution."""
-        total_tasks = len(self.assigned_tasks)
-        task_switch_delay = random.uniform(35.0, 55.0)  # Transition to 2nd task mid-demo
+        """
+        Simulates realistic agent task progression with dynamic stage transitions (BAP-477):
+        Example: Bug Fix -> Testing -> Documentation -> Complete
+        or: Research -> Feature Enhancement -> Testing -> Automation
+        """
         start_time = time.time()
-        switched_to_task_2 = False
+        initial_task_text = self.assigned_tasks[0]["task"] if self.assigned_tasks else "Autonomous workload execution"
+        primary_intent = self.assigned_tasks[0].get("intent", "FEATURE_ENHANCEMENT") if self.assigned_tasks else "FEATURE_ENHANCEMENT"
+
+        # Construct realistic multi-stage progression pipeline for this agent
+        pipeline = [
+            {"intent": primary_intent, "prompt": initial_task_text, "delay": 0},
+            {"intent": "TEST_VERIFICATION", "prompt": f"Generate unit tests and verify assertions for: {initial_task_text[:60]}", "delay": random.uniform(20.0, 32.0)},
+            {"intent": "DOCUMENTATION", "prompt": f"Update API documentation and architectural runbook for: {initial_task_text[:60]}", "delay": random.uniform(45.0, 65.0)},
+        ]
+        if len(self.assigned_tasks) > 1:
+            task2_text = self.assigned_tasks[1]["task"]
+            task2_intent = self.assigned_tasks[1].get("intent", "DEPLOYMENT_RELEASE")
+            pipeline.append({"intent": task2_intent, "prompt": task2_text, "delay": random.uniform(75.0, 100.0)})
+
+        executed_stages = set()
 
         while self.is_running and self.session and self.session.is_active:
             elapsed = time.time() - start_time
 
-            # Switch to task 2 when ready
-            if not switched_to_task_2 and total_tasks > 1 and elapsed >= task_switch_delay:
-                self.current_task_idx = 1
-                self.current_task = self.assigned_tasks[1]
-                switched_to_task_2 = True
-                try:
-                    self.session.set_prompt(self.current_task["task"], category=self.current_task.get("intent"))
-                except Exception:
-                    pass
+            # Advance stage when delay reached
+            for idx, stage in enumerate(pipeline):
+                if idx not in executed_stages and elapsed >= stage["delay"]:
+                    executed_stages.add(idx)
+                    self.current_task = {"task": stage["prompt"], "intent": stage["intent"]}
+                    try:
+                        self.session.set_prompt(stage["prompt"], category=stage["intent"])
+                    except Exception:
+                        pass
 
             # Live heartbeat keeping presence active
             try:
@@ -567,7 +583,6 @@ class WorkforceAgent:
             except Exception:
                 pass
 
-            # Random small execution jitter
             time.sleep(random.uniform(2.5, 4.0))
 
     def stop(self):
@@ -712,7 +727,13 @@ def main():
                             tot = data.get("total_active_agents", live_count)
                             gov = data.get("governed_percent", 100.0)
                             bus = data.get("business_units_active", "15/15")
-                            act_str = f"Live Agents: {tot} | Governed: {gov:.1f}% | Active BUs: {bus}"
+                            done = data.get("work_intents_completed", 0)
+                            assisted = data.get("estimated_assisted_hours", round(tot * 6.6, 1))
+                            cat_mix = data.get("category_mix") or data.get("intent_mix") or {}
+                            top_themes = ", ".join(f"{k.split('/')[0].strip()}:{v}%" for k, v in sorted(cat_mix.items(), key=lambda x: -x[1])[:3] if v > 0)
+                            act_str = f"Live: {tot} | Gov: {gov:.1f}% | BUs: {bus} | Done: {done} | Assisted: {assisted}h"
+                            if top_themes:
+                                act_str += f" | Themes: [{top_themes}]"
                 except Exception:
                     pass
 

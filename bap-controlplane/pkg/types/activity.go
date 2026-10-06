@@ -32,18 +32,34 @@ type AgentActivityEvent struct {
 	DeviationReason    string    `json:"deviation_reason,omitempty"`
 }
 
-// ActivitySummary contains high-level KPIs for CIO / persona dashboards (BAP-522, BAP-523).
+// ActivitySummary contains high-level KPIs for CIO / persona dashboards (BAP-477, BAP-522, BAP-523).
 type ActivitySummary struct {
-	TotalActiveAgents    int            `json:"total_active_agents"`
-	GovernedAgentUsers   int            `json:"governed_agent_users"`
-	WorkIntentsCompleted int            `json:"work_intents_completed"`
-	BusinessUnitsActive  string         `json:"business_units_active"`
-	GovernedPercent      float64        `json:"governed_percent"`
-	HighRiskPrevented    int            `json:"high_risk_prevented"`
-	DepartmentMix        map[string]int `json:"department_mix"`
-	IntentMix            map[string]int `json:"intent_mix"`
-	OutcomePulse         map[string]int `json:"outcome_pulse"`
-	Timestamp            string         `json:"timestamp"`
+	TotalActiveAgents      int                `json:"total_active_agents"`
+	GovernedAgentUsers     int                `json:"governed_agent_users"`
+	WorkIntentsCompleted   int                `json:"work_intents_completed"`
+	ActiveWorkCount        int                `json:"active_work_count"`
+	CompletedWorkCount     int                `json:"completed_work_count"`
+	EstimatedAssistedHours float64            `json:"estimated_assisted_hours"`
+	AssistedFTEEquivalent  float64            `json:"assisted_fte_equivalent"`
+	BusinessUnitsActive    string             `json:"business_units_active"`
+	GovernedPercent        float64            `json:"governed_percent"`
+	HighRiskPrevented      int                `json:"high_risk_prevented"`
+	DepartmentMix          map[string]int     `json:"department_mix"`
+	IntentMix              map[string]int     `json:"intent_mix"`
+	CategoryMix            map[string]int     `json:"category_mix"`
+	CategoryTrends         map[string]float64 `json:"category_trends"`
+	PlatformMix            map[string]int     `json:"platform_mix"`
+	OutcomePulse           map[string]int     `json:"outcome_pulse"`
+	Timestamp              string             `json:"timestamp"`
+}
+
+// WorkCategoryMeta defines an extensible enterprise work category (BAP-477).
+type WorkCategoryMeta struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Color       string `json:"color"`
+	Icon        string `json:"icon"`
 }
 
 // IntentDrillDown represents category sub-breakdowns for CIO drill-down (BAP-523).
