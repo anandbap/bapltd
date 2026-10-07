@@ -6,6 +6,8 @@ and live session observability for Python AI agents.
 
 from bap_sdk.client import (
     BAPSession,
+    BAPHttpClient,
+    BAPResponse,
     BAPExecResult,
     BAPPolicyViolation,
     resolve_endpoints,
@@ -17,6 +19,8 @@ from bap_sdk.client import (
 __version__ = "0.1.0"
 __all__ = [
     "BAPSession",
+    "BAPHttpClient",
+    "BAPResponse",
     "BAPExecResult",
     "BAPPolicyViolation",
     "resolve_endpoints",

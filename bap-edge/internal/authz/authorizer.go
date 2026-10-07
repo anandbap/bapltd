@@ -165,13 +165,19 @@ func (a *Authorizer) EvaluateWithWorkspace(executable, fullCommand, args, worksp
 		},
 	}
 
+	decomp := Decompose(executable, fullCommand, args)
+
 	contextMap := cedar.RecordMap{
-		cedar.String("executable"):        cedar.String(normalizedExec),
-		cedar.String("full_command"):      cedar.String(normalizedFull),
-		cedar.String("args"):              cedar.String(normalizedArgs),
-		cedar.String("escapes_workspace"): cedar.Boolean(escapesWorkspace),
-		cedar.String("department"):        cedar.String(a.identity.Department),
-		cedar.String("user_email"):        cedar.String(a.identity.UserEmail),
+		cedar.String("executable"):         cedar.String(normalizedExec),
+		cedar.String("full_command"):       cedar.String(normalizedFull),
+		cedar.String("args"):               cedar.String(normalizedArgs),
+		cedar.String("escapes_workspace"):  cedar.Boolean(escapesWorkspace),
+		cedar.String("department"):         cedar.String(a.identity.Department),
+		cedar.String("user_email"):         cedar.String(a.identity.UserEmail),
+		cedar.String("action_canonical"):   cedar.String(decomp.CanonicalAction),
+		cedar.String("resource_canonical"): cedar.String(decomp.CanonicalResource),
+		cedar.String("action_type"):        cedar.String(decomp.ActionType),
+		cedar.String("target_entity"):      cedar.String(decomp.TargetEntity),
 	}
 
 	req := cedar.Request{

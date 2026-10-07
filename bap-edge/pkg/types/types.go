@@ -30,6 +30,8 @@ type ExecResponse struct {
 	Suggestion   string            `json:"suggestion,omitempty"`
 	Warning      string            `json:"warning,omitempty"`
 	Mode         string            `json:"mode,omitempty"`
-	DecisionOnly bool              `json:"decision_only,omitempty"`
-	Receipt      *ExecutionReceipt `json:"receipt,omitempty"`
+	DecisionOnly      bool              `json:"decision_only,omitempty"`
+	CanonicalAction   string            `json:"canonical_action,omitempty"`
+	CanonicalResource string            `json:"canonical_resource,omitempty"`
+	Receipt           *ExecutionReceipt `json:"receipt,omitempty"`
 }

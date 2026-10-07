@@ -30,11 +30,13 @@ type AuditEntry struct {
 	FullCommand  string    `json:"full_command"`
 	Decision     string    `json:"decision"` // "allow" or "deny"
 	Reason       string    `json:"reason,omitempty"`
-	DurationMs   int64     `json:"duration_ms"`
-	ExitCode     int       `json:"exit_code"`
-	Error        string    `json:"error,omitempty"`
-	PreviousHash string    `json:"previous_hash,omitempty"`
-	EntryHash    string    `json:"entry_hash,omitempty"`
+	DurationMs        int64     `json:"duration_ms"`
+	ExitCode          int       `json:"exit_code"`
+	Error             string    `json:"error,omitempty"`
+	CanonicalAction   string    `json:"canonical_action,omitempty"`
+	CanonicalResource string    `json:"canonical_resource,omitempty"`
+	PreviousHash      string    `json:"previous_hash,omitempty"`
+	EntryHash         string    `json:"entry_hash,omitempty"`
 }
 
 var mu sync.Mutex

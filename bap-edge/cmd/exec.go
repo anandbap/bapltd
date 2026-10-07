@@ -249,22 +249,32 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 	if uPrompt == "" {
 		uPrompt = os.Getenv("BAP_USER_PROMPT")
 	}
+	decomp := authz.Decompose(ec.executable, ec.fullCommand, ec.cmdArguments)
+	if resp.CanonicalAction == "" {
+		resp.CanonicalAction = decomp.CanonicalAction
+	}
+	if resp.CanonicalResource == "" {
+		resp.CanonicalResource = decomp.CanonicalResource
+	}
+
 	entry := audit.AuditEntry{
-		SessionID:   ec.sessionID,
-		UserPrompt:  uPrompt,
-		UserID:      uID,
-		UserEmail:   uEmail,
-		SPIFFEID:    spiffeID,
-		Timestamp:   ec.startTime.UTC(),
-		Source:      ec.source,
-		ClientPID:   os.Getpid(),
-		Executable:  ec.executable,
-		Arguments:   ec.cmdArguments,
-		FullCommand: ec.fullCommand,
-		Decision:    decision,
-		Reason:      resp.Reason,
-		DurationMs:  durationMs,
-		ExitCode:    code,
+		SessionID:         ec.sessionID,
+		UserPrompt:        uPrompt,
+		UserID:            uID,
+		UserEmail:         uEmail,
+		SPIFFEID:          spiffeID,
+		Timestamp:         ec.startTime.UTC(),
+		Source:            ec.source,
+		ClientPID:         os.Getpid(),
+		Executable:        ec.executable,
+		Arguments:         ec.cmdArguments,
+		FullCommand:       ec.fullCommand,
+		CanonicalAction:   decomp.CanonicalAction,
+		CanonicalResource: decomp.CanonicalResource,
+		Decision:          decision,
+		Reason:            resp.Reason,
+		DurationMs:        durationMs,
+		ExitCode:          code,
 	}
 	if ec.shadowDenied && entry.Reason == "" {
 		entry.Reason = fmt.Sprintf("[AUDIT MODE VIOLATION] %s", ec.shadowReason)

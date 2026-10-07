@@ -14,7 +14,7 @@ import sys
 import time
 import urllib.request
 import urllib.error
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 
 def _urlopen(request, **kwargs):
@@ -74,6 +74,33 @@ class BAPExecResult:
 
     def __repr__(self) -> str:
         return f"<BAPExecResult decision={self.decision} code={self.exit_code} latency={self.duration_ms}ms>"
+
+
+class BAPResponse:
+    """Encapsulates an HTTP response executed via BAPHttpClient with JIT authority grant."""
+    def __init__(self, status_code: int, text: str, headers: Dict[str, str], grant_token: Optional[str] = None):
+        self.status_code = status_code
+        self.text = text
+        self.headers = headers
+        self.grant_token = grant_token
+
+    @property
+    def ok(self) -> bool:
+        return 200 <= self.status_code < 300
+
+    @property
+    def content(self) -> bytes:
+        return self.text.encode("utf-8")
+
+    def json(self) -> Any:
+        return json.loads(self.text)
+
+    def raise_for_status(self) -> None:
+        if not self.ok:
+            raise urllib.error.HTTPError(None, self.status_code, self.text, self.headers, None)
+
+    def __repr__(self) -> str:
+        return f"<BAPResponse [{self.status_code}]>"
 
 
 INTENT_CLASSIFIER_VERSION = "bap-intent-rules-v1"
@@ -617,7 +644,13 @@ class BAPSession:
         self.is_active = False
         self.server_registered = False
 
-    def acquire_grant(self, scopes: Optional[List[str]] = None) -> str:
+    def acquire_grant(
+        self,
+        scopes: Optional[List[str]] = None,
+        action: Optional[str] = None,
+        resource: Optional[str] = None,
+        constraints: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """
         Acquires an ephemeral BAP authority grant (JWT-SVID) from the BAP Control Plane.
         Required when calling protected enterprise API Gateways (Envoy, Kong, bap-gateway).
@@ -629,7 +662,18 @@ class BAPSession:
             if credentials.get("server_url", "").rstrip("/") != self.server_url:
                 raise ValueError("Enrollment belongs to a different control plane")
             token = credentials["session_token"]
-            payload = {"agent_id": credentials["agent_id"], "binary_hash": credentials["binary_hash"], "scopes": scopes or ["api:read"]}
+            payload = {
+                "agent_id": credentials["agent_id"],
+                "binary_hash": credentials["binary_hash"],
+                "session_id": self.session_id,
+                "scopes": scopes or ["api:read"],
+            }
+            if action:
+                payload["action"] = action
+            if resource:
+                payload["resource"] = resource
+            if constraints:
+                payload["constraints"] = constraints
         except (OSError, ValueError, KeyError) as error:
             raise BAPPolicyViolation("acquire_grant", f"Enroll with bapedge register first; set BAP_CREDENTIALS to that credentials file: {error}") from error
         url = f"{self.server_url}/api/v1/grants/acquire"
@@ -752,9 +796,149 @@ class BAPSession:
             return wrapper
         return decorator
 
+    def client(self, base_url: Optional[str] = None, auto_grant: bool = True) -> "BAPHttpClient":
+        """Returns an automated HTTP client governed by BAP JIT authority grants."""
+        return BAPHttpClient(session=self, base_url=base_url, auto_grant=auto_grant)
+
+    def get(self, url: str, **kwargs) -> BAPResponse:
+        return self.client().get(url, **kwargs)
+
+    def post(self, url: str, data: Optional[Any] = None, json: Optional[Any] = None, **kwargs) -> BAPResponse:
+        return self.client().post(url, data=data, json=json, **kwargs)
+
+    def put(self, url: str, data: Optional[Any] = None, json: Optional[Any] = None, **kwargs) -> BAPResponse:
+        return self.client().put(url, data=data, json=json, **kwargs)
+
+    def patch(self, url: str, data: Optional[Any] = None, json: Optional[Any] = None, **kwargs) -> BAPResponse:
+        return self.client().patch(url, data=data, json=json, **kwargs)
+
+    def delete(self, url: str, **kwargs) -> BAPResponse:
+        return self.client().delete(url, **kwargs)
+
+    def request(self, method: str, url: str, **kwargs) -> BAPResponse:
+        return self.client().request(method, url, **kwargs)
+
     def __enter__(self) -> "BAPSession":
         return self.start()
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         reason = "exception: " + str(exc_val) if exc_val else "graceful completion"
         self.end(reason=reason)
+
+
+class BAPHttpClient:
+    """
+    Automatic Zero-Trust HTTP Client for BAP AI Agents.
+    Transparently deduces canonical action and resource from HTTP method and URL,
+    acquires a fine-grained JIT STS authority grant from BAP Control Plane,
+    injects authorization headers (Authorization & X-BAP-Grant-Token), and executes requests.
+    """
+    def __init__(self, session: BAPSession, base_url: Optional[str] = None, auto_grant: bool = True):
+        self.session = session
+        self.base_url = (base_url or "").rstrip("/")
+        self.auto_grant = auto_grant
+
+    @staticmethod
+    def deduce_action_and_resource(method: str, url: str) -> Tuple[str, str]:
+        """
+        Deterministically deduces canonical Cedar action and resource URI from HTTP method and URL.
+        Example:
+            GET https://api.corp.internal/v1/payments/123 -> ('http:get', 'https://api.corp.internal/v1/payments/123')
+            POST /api/v1/transfers -> ('http:post', '/api/v1/transfers')
+        """
+        canonical_action = f"http:{method.strip().lower()}"
+        canonical_resource = url.strip()
+        return canonical_action, canonical_resource
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        data: Optional[Any] = None,
+        json_data: Optional[Any] = None,
+        headers: Optional[Dict[str, str]] = None,
+        timeout: int = 10,
+        action: Optional[str] = None,
+        resource: Optional[str] = None,
+        scopes: Optional[List[str]] = None,
+        **kwargs
+    ) -> BAPResponse:
+        method = method.upper()
+        if self.base_url and not (url.startswith("http://") or url.startswith("https://")):
+            full_url = f"{self.base_url}/{url.lstrip('/')}"
+        else:
+            full_url = url
+
+        req_headers = dict(headers or {})
+        grant_token = None
+
+        if self.auto_grant:
+            c_action, c_resource = self.deduce_action_and_resource(method, full_url)
+            action = action or c_action
+            resource = resource or c_resource
+            try:
+                grant_token = self.session.acquire_grant(
+                    scopes=scopes or [f"api:{'read' if method in ('GET', 'HEAD', 'OPTIONS') else 'write'}"],
+                    action=action,
+                    resource=resource,
+                )
+                if grant_token:
+                    req_headers["Authorization"] = f"Bearer {grant_token}"
+                    req_headers["X-BAP-Grant-Token"] = grant_token
+            except Exception:
+                # If credentials not configured or offline, pass through without grant
+                pass
+
+        if self.session.session_id:
+            req_headers["X-BAP-Session-ID"] = self.session.session_id
+
+        body_bytes = None
+        if json_data is not None:
+            body_bytes = json.dumps(json_data).encode("utf-8")
+            if "Content-Type" not in req_headers:
+                req_headers["Content-Type"] = "application/json"
+        elif data is not None:
+            if isinstance(data, str):
+                body_bytes = data.encode("utf-8")
+            elif isinstance(data, bytes):
+                body_bytes = data
+            elif isinstance(data, dict):
+                body_bytes = json.dumps(data).encode("utf-8")
+                if "Content-Type" not in req_headers:
+                    req_headers["Content-Type"] = "application/json"
+
+        req = urllib.request.Request(
+            full_url,
+            data=body_bytes,
+            headers=req_headers,
+            method=method,
+        )
+
+        try:
+            with _urlopen(req, timeout=timeout) as resp:
+                status_code = resp.status
+                resp_text = resp.read().decode("utf-8")
+                resp_headers = dict(resp.headers)
+                return BAPResponse(status_code, resp_text, resp_headers, grant_token=grant_token)
+        except urllib.error.HTTPError as err:
+            err_text = ""
+            try:
+                err_text = err.read().decode("utf-8")
+            except Exception:
+                pass
+            return BAPResponse(err.code, err_text, dict(err.headers or {}), grant_token=grant_token)
+
+    def get(self, url: str, **kwargs) -> BAPResponse:
+        return self.request("GET", url, **kwargs)
+
+    def post(self, url: str, data: Optional[Any] = None, json: Optional[Any] = None, **kwargs) -> BAPResponse:
+        return self.request("POST", url, data=data, json_data=json, **kwargs)
+
+    def put(self, url: str, data: Optional[Any] = None, json: Optional[Any] = None, **kwargs) -> BAPResponse:
+        return self.request("PUT", url, data=data, json_data=json, **kwargs)
+
+    def patch(self, url: str, data: Optional[Any] = None, json: Optional[Any] = None, **kwargs) -> BAPResponse:
+        return self.request("PATCH", url, data=data, json_data=json, **kwargs)
+
+    def delete(self, url: str, **kwargs) -> BAPResponse:
+        return self.request("DELETE", url, **kwargs)
