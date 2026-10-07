@@ -368,3 +368,54 @@ func TestAPIFullLifecycle(t *testing.T) {
 	}
 	_ = intentCounts
 }
+
+func TestPEPSimulateEgressScenarios(t *testing.T) {
+	srv := setupTestServer()
+	srv.SetAdminSecurity("test-admin", true)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Set("X-BAP-Admin-Token", "test-admin")
+		srv.Handler().ServeHTTP(w, r)
+	}))
+	defer ts.Close()
+
+	client := ts.Client()
+
+	// 1. Unapproved tenant exfiltration scenario
+	body, _ := json.Marshal(map[string]string{"scenario": "unapproved_tenant"})
+	resp, err := client.Post(ts.URL+"/api/v1/pep/simulate", "application/json", bytes.NewReader(body))
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("simulate failed: %v", err)
+	}
+	var res1 map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&res1)
+	if res1["pep_decision"] != "DENY" || res1["error"] != "TenantMismatchBlocked" {
+		t.Errorf("expected DENY TenantMismatchBlocked, got: %+v", res1)
+	}
+	if res1["destination_tenant_id"] != "attacker-org" {
+		t.Errorf("expected attacker-org, got %v", res1["destination_tenant_id"])
+	}
+
+	// 2. External S3 bucket owner scenario
+	body, _ = json.Marshal(map[string]string{"scenario": "external_s3_bucket"})
+	resp, err = client.Post(ts.URL+"/api/v1/pep/simulate", "application/json", bytes.NewReader(body))
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("simulate failed: %v", err)
+	}
+	var res2 map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&res2)
+	if res2["pep_decision"] != "DENY" || res2["destination_tenant_id"] != "999999999999" {
+		t.Errorf("expected DENY for external s3 bucket, got: %+v", res2)
+	}
+
+	// 3. Approved tenant scenario
+	body, _ = json.Marshal(map[string]string{"scenario": "approved_tenant"})
+	resp, err = client.Post(ts.URL+"/api/v1/pep/simulate", "application/json", bytes.NewReader(body))
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("simulate failed: %v", err)
+	}
+	var res3 map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&res3)
+	if res3["pep_decision"] != "ALLOW" || res3["destination_tenant_id"] != "corp-org" {
+		t.Errorf("expected ALLOW for approved tenant, got: %+v", res3)
+	}
+}

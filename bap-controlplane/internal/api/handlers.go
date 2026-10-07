@@ -3716,6 +3716,48 @@ func (s *Server) handlePEPSimulate(w http.ResponseWriter, r *http.Request) {
 			},
 			"timestamp": time.Now().UTC(),
 		})
+	case "unapproved_tenant":
+		// BAP-530: PromptArmor multi-tenant exfiltration defense
+		writeJSON(w, http.StatusOK, map[string]any{
+			"scenario":              "unapproved_tenant",
+			"pep_decision":          "DENY",
+			"http_status":           403,
+			"error":                 "TenantMismatchBlocked",
+			"message":               "Blocked by Multi-Tenant Exfiltration Defense: Destination tenant identity is not approved.",
+			"destination_service":   "github",
+			"destination_tenant_id": "attacker-org",
+			"canonical_resource":    "github://attacker-org/repos/attacker-org/exfil-repo",
+			"security_rule":         "PromptArmor Defense: Same-domain multi-tenant egress to unauthorized tenants is forbidden.",
+			"security_proof":        "Blocked exfiltration to unapproved GitHub organization on trusted api.github.com domain.",
+			"timestamp":             time.Now().UTC(),
+		})
+	case "external_s3_bucket":
+		// BAP-530: S3 bucket owner header mismatch
+		writeJSON(w, http.StatusOK, map[string]any{
+			"scenario":              "external_s3_bucket",
+			"pep_decision":          "DENY",
+			"http_status":           403,
+			"error":                 "TenantMismatchBlocked",
+			"message":               "Blocked by Multi-Tenant Exfiltration Defense: Destination tenant identity is not approved.",
+			"destination_service":   "aws_s3",
+			"destination_tenant_id": "999999999999",
+			"canonical_resource":    "s3://attacker-bucket (account:999999999999)",
+			"security_rule":         "PromptArmor Defense: Upload to unapproved AWS account bucket is forbidden.",
+			"security_proof":        "External AWS S3 account blocked by Gateway PEP inspection.",
+			"timestamp":             time.Now().UTC(),
+		})
+	case "approved_tenant":
+		// BAP-530: Legitimate corporate tenant permitted
+		writeJSON(w, http.StatusOK, map[string]any{
+			"scenario":              "approved_tenant",
+			"pep_decision":          "ALLOW",
+			"http_status":           200,
+			"destination_service":   "github",
+			"destination_tenant_id": "corp-org",
+			"canonical_resource":    "github://corp-org/repos/corp-org/internal-tool",
+			"security_proof":        "Authorized egress to approved enterprise tenant.",
+			"timestamp":             time.Now().UTC(),
+		})
 	default:
 		writeError(w, http.StatusBadRequest, "Unknown simulation scenario: "+req.Scenario)
 	}

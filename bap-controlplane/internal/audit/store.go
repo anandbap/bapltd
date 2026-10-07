@@ -29,12 +29,14 @@ type Event struct {
 	IntentTags         []string `json:"intent_tags,omitempty"`
 	IntentConfidence   float64  `json:"intent_confidence,omitempty"`
 	IntentClassifier   string   `json:"intent_classifier,omitempty"`
-	PromptHash         string   `json:"prompt_hash,omitempty"`
-	PromptCaptured     bool     `json:"prompt_captured"`
-	DurationMs         int64    `json:"duration_ms,omitempty"`
-	ExitCode           int      `json:"exit_code"`
-	PreviousHash       string   `json:"previous_hash"`
-	EventHash          string   `json:"event_hash"`
+	PromptHash          string   `json:"prompt_hash,omitempty"`
+	PromptCaptured      bool     `json:"prompt_captured"`
+	DurationMs          int64    `json:"duration_ms,omitempty"`
+	ExitCode            int      `json:"exit_code"`
+	DestinationTenantID string   `json:"destination_tenant_id,omitempty"`
+	CanonicalResource   string   `json:"canonical_resource,omitempty"`
+	PreviousHash        string   `json:"previous_hash"`
+	EventHash           string   `json:"event_hash"`
 }
 
 type Store struct {

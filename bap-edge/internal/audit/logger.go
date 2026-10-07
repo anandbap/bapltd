@@ -42,6 +42,8 @@ type AuditEntry struct {
 	RootAgentID   string    `json:"root_agent_id,omitempty"`
 	ParentGrantID string    `json:"parent_grant_id,omitempty"`
 	GrantID       string    `json:"grant_id,omitempty"`
+	// Identity-Aware Egress Control (BAP-530)
+	DestinationTenantID string    `json:"destination_tenant_id,omitempty"`
 	PreviousHash      string    `json:"previous_hash,omitempty"`
 	EntryHash         string    `json:"entry_hash,omitempty"`
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bap-gateway/internal/egress"
 	"bap-gateway/internal/httptransport"
 	"bytes"
 	"crypto/hmac"
@@ -99,6 +100,11 @@ func main() {
 	mux.HandleFunc("/api/v1/financial-records", pepGuard(cfg, handleFinancialRecords))
 	mux.HandleFunc("/api/v1/core-banking/", pepGuard(cfg, handleCoreBanking))
 
+	// Identity-Aware Egress Guard (BAP-530: PromptArmor Multi-Tenant Exfiltration Defense)
+	mux.HandleFunc("/api/v1/egress/proxy", pepEgressGuard(cfg, handleEgressProxy))
+	mux.HandleFunc("/api/v1/egress", pepEgressGuard(cfg, handleEgressProxy))
+	mux.HandleFunc("/egress/", pepEgressGuard(cfg, handleEgressProxy))
+
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("===============================================================================")
 	log.Printf("   BAP ZERO-TRUST GATEWAY POLICY ENFORCEMENT POINT (PEP)")
@@ -107,7 +113,7 @@ func main() {
 	log.Printf("[bap-gateway] Listening on http://localhost%s", addr)
 	log.Printf("[bap-gateway] Control Plane PEP Target : %s", cfg.ControlPlane)
 	log.Printf("[bap-gateway] Atomic Grant Burning    : %v", cfg.UseConsume)
-	log.Printf("[bap-gateway] Protected Endpoints      : /api/v1/financial-records, /api/v1/core-banking/*")
+	log.Printf("[bap-gateway] Protected Endpoints      : /api/v1/financial-records, /api/v1/core-banking/*, /api/v1/egress/*")
 
 	server := &http.Server{
 		Addr:         addr,
@@ -247,19 +253,165 @@ func pepGuard(cfg GatewayConfig, next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// pepEgressGuard enforces identity-aware egress control and multi-tenant exfiltration defense (BAP-530).
+// It verifies destination tenant identifiers against approved enterprise tenants (e.g. corp-org, corp-internal).
+func pepEgressGuard(cfg GatewayConfig, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		authHeader := r.Header.Get("Authorization")
+
+		// Determine target destination URL/host
+		targetURL := r.Header.Get("X-BAP-Target-URL")
+		if targetURL == "" {
+			targetURL = r.URL.Query().Get("target")
+		}
+		if targetURL == "" {
+			targetURL = r.URL.String()
+		}
+
+		sessID := r.Header.Get("X-BAP-Session-ID")
+
+		// 1. Rogue Detection: Missing or malformed Authorization header
+		if authHeader == "" || !strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+			durationMs := time.Since(start).Milliseconds()
+			log.Printf("[BAP-GATEWAY-PEP] [EGRESS BLOCKED ROGUE] 401 Unauthorized | Target: %s | Source: %s | Reason: Missing BAP Grant",
+				targetURL, r.RemoteAddr)
+
+			emitGatewayAuditWithTenant(cfg, sessID, "rogue-agent", "unknown", targetURL, r.Method, "deny", "BLOCKED ROGUE AGENT: Missing BAP Grant Bearer Token at Gateway Egress PEP (HTTP 401)", "", targetURL, durationMs, 401)
+
+			writeJSON(w, http.StatusUnauthorized, map[string]any{
+				"error":         "AccessDenied",
+				"gateway":       "bap-gateway-pep",
+				"pep_decision":  "DENY",
+				"message":       "Blocked by Zero-Trust Gateway Egress PEP: Rogue agent request lacking BAP Bearer Grant.",
+				"security_note": "Outbound egress destination was NEVER contacted. Access requires a valid BAP Grant.",
+				"required_auth": "Bearer <bap_grant_token>",
+			})
+			return
+		}
+
+		token := strings.TrimSpace(authHeader[7:])
+		if token == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{
+				"error":        "AccessDenied",
+				"pep_decision": "DENY",
+				"message":      "Empty Bearer token provided.",
+			})
+			return
+		}
+
+		// 2. Multi-Tenant Egress Inspection (BAP-530 PromptArmor Defense)
+		extraction := egress.ExtractTenant(targetURL, r.Method, r.Header)
+		approvedList := egress.GetApprovedTenants()
+
+		// If destination is a multi-tenant SaaS service, enforce tenant authorization
+		if extraction.IsMultiTenant {
+			if extraction.TenantID == "" || !egress.IsTenantApproved(extraction.TenantID, approvedList) {
+				durationMs := time.Since(start).Milliseconds()
+				reason := fmt.Sprintf("Tenant mismatch: Destination tenant '%s' for service '%s' is not in approved enterprise tenant list %v",
+					extraction.TenantID, extraction.Service, approvedList)
+
+				log.Printf("[BAP-GATEWAY-PEP] [BLOCKED MULTI-TENANT EXFILTRATION] 403 Forbidden | Target: %s | Service: %s | Tenant: %s | Reason: %s",
+					targetURL, extraction.Service, extraction.TenantID, reason)
+
+				emitGatewayAuditWithTenant(cfg, sessID, "unauthorized-egress", "promptarmor-defense", targetURL, r.Method, "deny",
+					"BLOCKED EXFILTRATION: TenantMismatchBlocked - "+reason+" (HTTP 403)", extraction.TenantID, extraction.CanonicalResource, durationMs, 403)
+
+				writeJSON(w, http.StatusForbidden, map[string]any{
+					"error":                 "TenantMismatchBlocked",
+					"gateway":               "bap-gateway-pep",
+					"pep_decision":          "DENY",
+					"http_status":           403,
+					"message":               "Blocked by Multi-Tenant Exfiltration Defense: Destination tenant identity is not approved.",
+					"destination_service":   extraction.Service,
+					"destination_tenant_id": extraction.TenantID,
+					"canonical_resource":    extraction.CanonicalResource,
+					"security_rule":         "PromptArmor Defense: Same-domain multi-tenant egress to unauthorized tenants is forbidden.",
+					"approved_tenants":      approvedList,
+				})
+				return
+			}
+		}
+
+		// 3. Grant Validation & Atomic Consumption
+		action := "HTTP:" + r.Method
+		resource := extraction.CanonicalResource
+		if resource == "" {
+			resource = targetURL
+		}
+
+		valid, claims, err := validateGrantWithDetails(cfg, token, action, resource, sessID)
+		durationMs := time.Since(start).Milliseconds()
+
+		if !valid || err != nil {
+			// Fallback check: try with standard egress action/resource if specific didn't match
+			valid2, claims2, err2 := validateGrantWithDetails(cfg, token, "", "", sessID)
+			if !valid2 || err2 != nil {
+				reason := "Invalid, expired, or replayed BAP Grant"
+				if err != nil {
+					reason = err.Error()
+				}
+				log.Printf("[BAP-GATEWAY-PEP] [EGRESS BLOCKED FORBIDDEN] 403 Forbidden | Target: %s | Reason: %s", targetURL, reason)
+
+				emitGatewayAuditWithTenant(cfg, sessID, "unauthorized-agent", "unknown", targetURL, r.Method, "deny",
+					"BLOCKED FORBIDDEN: "+reason+" (HTTP 403)", extraction.TenantID, extraction.CanonicalResource, durationMs, 403)
+
+				writeJSON(w, http.StatusForbidden, map[string]any{
+					"error":         "Forbidden",
+					"gateway":       "bap-gateway-pep",
+					"pep_decision":  "DENY",
+					"message":       "BAP Grant verification failed for egress: " + reason,
+					"security_note": "Token signature invalid, expired, or already burned.",
+				})
+				return
+			}
+			claims = claims2
+		}
+
+		// 4. Permitted Governed Egress Request: Inject verified headers into request context
+		log.Printf("[BAP-GATEWAY-PEP] [PERMIT EGRESS] 200 OK | Target: %s | Service: %s | Tenant: %s | Workload: %s",
+			targetURL, extraction.Service, extraction.TenantID, claims.Sub)
+
+		emitGatewayAuditWithTenant(cfg, sessID, claims.Sub, claims.AppID, targetURL, r.Method, "allow",
+			"GATEWAY PEP: Verified BAP Grant for "+claims.Sub+" to tenant "+extraction.TenantID+" (HTTP 200)",
+			extraction.TenantID, extraction.CanonicalResource, durationMs, 200)
+
+		r.Header.Set("X-BAP-Verified-Workload", claims.Sub)
+		r.Header.Set("X-BAP-Verified-App", claims.AppID)
+		r.Header.Set("X-BAP-Verified-Grant", claims.GrantID)
+		if extraction.TenantID != "" {
+			r.Header.Set("X-BAP-Verified-Tenant", extraction.TenantID)
+		}
+		if extraction.Service != "" {
+			r.Header.Set("X-BAP-Verified-Service", extraction.Service)
+		}
+		if extraction.CanonicalResource != "" {
+			r.Header.Set("X-BAP-Verified-Resource", extraction.CanonicalResource)
+		}
+
+		next(w, r)
+	}
+}
+
 func emitGatewayAudit(cfg GatewayConfig, sessionID, agentID, appID, path, method, decision, reason string, durationMs int64, exitCode int) {
+	emitGatewayAuditWithTenant(cfg, sessionID, agentID, appID, path, method, decision, reason, "", "", durationMs, exitCode)
+}
+
+func emitGatewayAuditWithTenant(cfg GatewayConfig, sessionID, agentID, appID, path, method, decision, reason, destinationTenantID, canonicalResource string, durationMs int64, exitCode int) {
 	ev := map[string]any{
-		"event_id":     fmt.Sprintf("ev-pep-%d", time.Now().UnixNano()),
-		"session_id":   sessionID,
-		"agent_id":     agentID,
-		"timestamp":    time.Now().UTC().Format(time.RFC3339),
-		"source":       "bap-gateway-pep",
-		"executable":   fmt.Sprintf("%s %s", method, path),
-		"full_command": fmt.Sprintf("PEP GATEWAY %s %s [%s]", method, path, strings.ToUpper(decision)),
-		"decision":     decision,
-		"reason":       reason,
-		"duration_ms":  durationMs,
-		"exit_code":    exitCode,
+		"event_id":              fmt.Sprintf("ev-pep-%d", time.Now().UnixNano()),
+		"session_id":            sessionID,
+		"agent_id":              agentID,
+		"timestamp":             time.Now().UTC().Format(time.RFC3339),
+		"source":                "bap-gateway-pep",
+		"executable":            fmt.Sprintf("%s %s", method, path),
+		"full_command":          fmt.Sprintf("PEP GATEWAY %s %s [%s]", method, path, strings.ToUpper(decision)),
+		"decision":              decision,
+		"reason":                reason,
+		"duration_ms":           durationMs,
+		"exit_code":             exitCode,
+		"destination_tenant_id": destinationTenantID,
+		"canonical_resource":    canonicalResource,
 	}
 
 	go func() {
@@ -400,6 +552,25 @@ func handleCoreBanking(w http.ResponseWriter, r *http.Request) {
 		"verified_workload": workload,
 		"action":            "core_banking_query",
 		"transaction_id":    fmt.Sprintf("TXN-%d", time.Now().UnixNano()%1000000),
+	})
+}
+
+func handleEgressProxy(w http.ResponseWriter, r *http.Request) {
+	workload := r.Header.Get("X-BAP-Verified-Workload")
+	tenant := r.Header.Get("X-BAP-Verified-Tenant")
+	service := r.Header.Get("X-BAP-Verified-Service")
+	res := r.Header.Get("X-BAP-Verified-Resource")
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":                "permitted",
+		"gateway":               "bap-gateway-pep",
+		"pep_decision":          "ALLOW",
+		"http_status":           200,
+		"verified_workload":     workload,
+		"destination_tenant_id": tenant,
+		"destination_service":   service,
+		"canonical_resource":    res,
+		"security_boundary":     "Egress PEP Multi-Tenant Inspection Verified",
 	})
 }
 

@@ -125,4 +125,15 @@ forbid (
     )
 };
 
+// 4. Identity-Aware Egress Policy (BAP-530 PromptArmor Multi-Tenant Exfiltration Defense)
+// Permits outbound HTTP:Post when destination resource tenant matches approved enterprise identifiers.
+permit (
+    principal,
+    action == Action::"HTTP:Post",
+    resource
+) when {
+    ["corp-org", "corp-internal"].contains(resource.tenant_id)
+};
+
+
 

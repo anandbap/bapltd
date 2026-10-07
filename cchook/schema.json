@@ -6,6 +6,22 @@
       },
       "Command": {
         "memberOfTypes": []
+      },
+      "EgressTarget": {
+        "memberOfTypes": [],
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "tenant_id": {
+              "type": "String",
+              "required": false
+            },
+            "service": {
+              "type": "String",
+              "required": false
+            }
+          }
+        }
       }
     },
     "actions": {
@@ -38,6 +54,16 @@
               }
             }
           }
+        }
+      },
+      "HTTP:Post": {
+        "appliesTo": {
+          "principalTypes": [
+            "Agent"
+          ],
+          "resourceTypes": [
+            "EgressTarget"
+          ]
         }
       }
     }

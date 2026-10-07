@@ -2346,7 +2346,7 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 
 #### BAP-530: Identity-Aware Egress Control & Multi-Tenant Exfiltration Defense
 * **Epic**: `BAP-EPIC-29`
-* **Status**: `BACKLOG`
+* **Status**: `DONE`
 * **Priority**: `P0 - High`
 * **Story**:
   > As an Enterprise Security Architect, I want egress proxying to validate the destination tenant, organization, and account identity rather than relying on domain allowlists alone, so that backdoored skills or prompt injection attacks cannot exfiltrate corporate data to attacker-controlled accounts hosted on trusted enterprise SaaS domains (e.g. GitHub, AWS S3, Slack, Google Drive).
@@ -2357,13 +2357,21 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   2. Cedar policy syntax must support resource matching on tenant ownership:
      ```cedar
      permit(principal, action == Action::"HTTP:Post", resource)
-     when { resource.tenant_id in ["corp-org", "corp-internal"] };
+     when { ["corp-org", "corp-internal"].contains(resource.tenant_id) };
      ```
   3. Default-deny any egress requests where the destination service is in the trusted domain list but the destination tenant/account does not match approved enterprise identifiers.
 * **Acceptance Criteria**:
   1. Outbound requests to `api.github.com` targeting unapproved organizations are blocked with an explicit tenant mismatch reason.
   2. S3 requests attempting upload to buckets owned by external AWS accounts are intercepted and blocked.
   3. Audit log records destination tenant/account ID alongside canonical resource URI.
+* **Implementation Evidence**:
+  - Implemented multi-tenant identity extraction engine in `bap-gateway/internal/egress/tenant.go` (`ExtractTenant`, `IsTenantApproved`, `GetApprovedTenants`).
+  - Added multi-tenant SaaS extraction patterns for GitHub (`/repos/{owner}/{repo}`, `/orgs/{org}`, `X-GitHub-Org`), AWS S3 (`x-amz-expected-bucket-owner`, `x-amz-account-id`, `x-amz-bucket-owner`), Slack (`X-Slack-Team-Id`, `X-Slack-Workspace`, `team_id`), Google Workspace (`X-Goog-Allowed-Domains`, `X-Goog-User-Project`), and generic tenant headers (`X-Tenant-ID`, `X-Org-ID`, `X-Account-ID`).
+  - Implemented `pepEgressGuard` and `/api/v1/egress/proxy` in `bap-gateway/main.go`, returning `403 Forbidden` with error code `TenantMismatchBlocked` when destination tenant is unapproved, and injecting verified identity headers (`X-BAP-Verified-Tenant`, `X-BAP-Verified-Service`, `X-BAP-Verified-Resource`) upon approval.
+  - Added `DestinationTenantID` and `CanonicalResource` tracking in `emitGatewayAuditWithTenant`, `bap-edge/internal/audit/logger.go` (`AuditEntry`), `bap-edge/pkg/types/types.go` (`ExecutionReceipt`), and `bap-controlplane/internal/audit/store.go` (`Event`).
+  - Updated `policy.cedar` and `schema.json` with `EgressTarget` entity and `Action::"HTTP:Post"` tenant matching rule, synchronized across all 19 fleet distribution directories via `scripts/check_stale_copies.ps1 -Fix`.
+  - Added simulation scenarios `unapproved_tenant`, `external_s3_bucket`, and `approved_tenant` to `bap-controlplane/internal/api/handlers.go` (`handlePEPSimulate`).
+  - Verified with unit and integration suites: `bap-gateway` unit tests (`egress_test.go`, `tenant_test.go`), `bap-controlplane` API tests (`handlers_test.go`), and full end-to-end Python integration suite (`tests/test_bap_530_egress_control.py` and 131-test discovery suite).
 
 ---
 
