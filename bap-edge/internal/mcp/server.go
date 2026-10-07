@@ -12,6 +12,7 @@ import (
 
 	"bap-edge/internal/audit"
 	"bap-edge/internal/authz"
+	"bap-edge/internal/pinning"
 	"bap-edge/internal/sandbox"
 )
 
@@ -200,6 +201,17 @@ func handleRequest(w *bufio.Writer, req JSONRPCRequest, authorizer *authz.Author
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			sendError(w, req.ID, -32602, "Invalid params: "+err.Error())
 			return
+		}
+
+		// Pre-flight AIR Content Pinning check for MCP tools (BAP-531)
+		manifest, _ := pinning.LoadManifest("")
+		if manifest != nil && len(manifest.Assets) > 0 {
+			toolKey := fmt.Sprintf("mcp:%s", params.Name)
+			res := manifest.VerifyAsset(toolKey)
+			if res.Asset.ID != "" && !res.Matches {
+				sendToolError(w, req.ID, fmt.Sprintf("HashMismatchError: %s", res.Error))
+				return
+			}
 		}
 
 		switch params.Name {

@@ -2369,8 +2369,14 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 
 #### BAP-531: Content Pinning & Dynamic Tool Attestation (AIR Model)
 * **Epic**: `BAP-EPIC-29`
-* **Status**: `BACKLOG`
+* **Status**: `DONE`
 * **Priority**: `P0 - High`
+* **Implementation Evidence**:
+  - Implemented core pinning engine in `bap-edge/internal/pinning/pinning.go` supporting `PinManifest`, `ComputeFileHash` (SHA-256), `VerifyAsset`, and `DiscoverAssets`.
+  - Built CLI command `bapedge pin [list|verify|update|add|scan]` in `bap-edge/cmd/pin.go`.
+  - Integrated pre-flight AIR attestation in `bapedge exec` and `bapedge mcp`, blocking modified skills or drifted MCP tool schemas with `HashMismatchError`.
+  - Chained `ContentHash` directly into `AuditEntry` and tamper-evident cryptographic hash chain (`logger.go`, `transmitter.go`).
+  - Unit and integration tests passing (`internal/pinning/pinning_test.go`, `cmd/pin_test.go`).
 * **Story**:
   > As a Security Administrator, I want cryptographic content pinning for skill definition files, prompt instructions, and MCP tool manifests, so that an agent cannot silently execute modified or drifted tools without explicit re-attestation.
 * **Business Intent**:

@@ -17,6 +17,7 @@ import (
 	"bap-edge/internal/audit"
 	"bap-edge/internal/authz"
 	"bap-edge/internal/config"
+	"bap-edge/internal/pinning"
 	"bap-edge/internal/sandbox"
 	"bap-edge/pkg/types"
 )
@@ -38,6 +39,8 @@ type execContext struct {
 	forceJSON       bool
 	forceRaw        bool
 	userPrompt      string
+	skillName       string
+	contentHash     string
 }
 
 type sessionRiskState struct {
@@ -272,6 +275,7 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 		FullCommand:       ec.fullCommand,
 		CanonicalAction:   decomp.CanonicalAction,
 		CanonicalResource: decomp.CanonicalResource,
+		ContentHash:       ec.contentHash,
 		Decision:          decision,
 		Reason:            resp.Reason,
 		DurationMs:        durationMs,
@@ -329,6 +333,8 @@ func RunExec(args []string) {
 	checkOnlyFlag := fs.Bool("check-only", false, "Alias for --decision-only")
 	cmdB64Flag := fs.String("cmd-b64", "", "Base64-encoded command string (safe broker handoff)")
 	promptFlag := fs.String("prompt", os.Getenv("BAP_USER_PROMPT"), "User prompt driving the command (e.g. 'Investigate auth issue')")
+	skillFlag := fs.String("skill", os.Getenv("BAP_SKILL_NAME"), "Identifier of declaring skill for AIR content pinning (e.g. 'sql-analyzer')")
+	verifyPinsFlag := fs.Bool("verify-pins", true, "Verify cryptographic content hashes against pinning manifest (AIR Model)")
 
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing arguments: %v\n", err)
@@ -347,6 +353,7 @@ func RunExec(args []string) {
 		forceJSON:       *jsonFlag,
 		forceRaw:        *rawFlag,
 		userPrompt:      *promptFlag,
+		skillName:       *skillFlag,
 	}
 
 	cmdArgs := fs.Args()
@@ -412,6 +419,23 @@ func RunExec(args []string) {
 			Mode:    ec.enforcementMode,
 		}
 		ec.exit(resp, 1)
+	}
+
+	// Pre-flight AIR Content Pinning check (BAP-531):
+	// Re-verify that declaring skill, prompt, or referenced scripts haven't drifted from pinned hashes
+	if *verifyPinsFlag {
+		matchedHash, pinErr := checkContentPinning(ec, *skillFlag)
+		if pinErr != nil {
+			resp := types.ExecResponse{
+				Allowed: false,
+				Reason:  fmt.Sprintf("HashMismatchError: %v", pinErr),
+				Mode:    ec.enforcementMode,
+			}
+			ec.contentHash = matchedHash
+			ec.exit(resp, 1)
+			return
+		}
+		ec.contentHash = matchedHash
 	}
 
 	// 1. Initialize Cedar authorizer
@@ -688,4 +712,61 @@ func syncRevocationsFast(serverURL, policyPath string) {
 	if updated, err := json.MarshalIndent(existing, "", "  "); err == nil {
 		_ = os.WriteFile(statePath, updated, 0600)
 	}
+}
+
+func checkContentPinning(ec *execContext, skillName string) (string, error) {
+	manifestPath := pinning.LocalManifestPath()
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		manifestPath = pinning.DefaultManifestPath()
+		if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+			return "", nil // No pinning manifest installed on workstation yet
+		}
+	}
+
+	manifest, err := pinning.LoadManifest(manifestPath)
+	if err != nil || manifest == nil || len(manifest.Assets) == 0 {
+		return "", nil
+	}
+
+	// 1. If explicit skill was declared, verify it
+	if skillName != "" {
+		skillKey := skillName
+		if !strings.HasPrefix(skillKey, "skill:") {
+			skillKey = "skill:" + skillName
+		}
+		res := manifest.VerifyAsset(skillKey)
+		if res.Asset.ID != "" {
+			if !res.Matches {
+				return res.CurrentHash, fmt.Errorf("declaring skill %q failed content attestation: %s", skillName, res.Error)
+			}
+			return res.Asset.ExpectedHash, nil
+		}
+	}
+
+	// 2. Check if the executed command directly references any pinned file
+	cleanCmd := strings.ToLower(ec.fullCommand)
+	var matchedHash string
+	for _, a := range manifest.Assets {
+		baseName := strings.ToLower(filepath.Base(a.Path))
+		cleanAssetPath := strings.ToLower(filepath.ToSlash(a.Path))
+		if strings.Contains(cleanCmd, baseName) || strings.Contains(cleanCmd, cleanAssetPath) {
+			res := manifest.VerifyAsset(a.ID)
+			if !res.Matches {
+				return res.CurrentHash, fmt.Errorf("referenced asset %s (%s) has drifted: %s", a.ID, a.Path, res.Error)
+			}
+			matchedHash = a.ExpectedHash
+		}
+	}
+
+	// 3. Fast verify workspace-level skill files registered in manifest
+	for _, a := range manifest.Assets {
+		if a.AssetType == "skill" {
+			res := manifest.VerifyAsset(a.ID)
+			if !res.Matches {
+				return res.CurrentHash, fmt.Errorf("active skill %s on disk has drifted: %s", a.ID, res.Error)
+			}
+		}
+	}
+
+	return matchedHash, nil
 }

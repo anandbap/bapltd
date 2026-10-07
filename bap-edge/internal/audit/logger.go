@@ -35,6 +35,7 @@ type AuditEntry struct {
 	Error             string    `json:"error,omitempty"`
 	CanonicalAction   string    `json:"canonical_action,omitempty"`
 	CanonicalResource string    `json:"canonical_resource,omitempty"`
+	ContentHash       string    `json:"content_hash,omitempty"`
 	PreviousHash      string    `json:"previous_hash,omitempty"`
 	EntryHash         string    `json:"entry_hash,omitempty"`
 }
@@ -60,6 +61,9 @@ func ComputeEntryHash(entry AuditEntry, prevHash string) string {
 	h.Write([]byte(entry.FullCommand))
 	h.Write([]byte(entry.Decision))
 	h.Write([]byte(strconv.Itoa(entry.ExitCode)))
+	if entry.ContentHash != "" {
+		h.Write([]byte(entry.ContentHash))
+	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 
