@@ -3,6 +3,9 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -51,4 +54,39 @@ func getSysProcAttrDetached() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{
 		CreationFlags: createNoWindow | createNewProcessGroup,
 	}
+}
+
+func findOtherBapEdgePIDs() ([]int, error) {
+	snapshot, err := syscall.CreateToolhelp32Snapshot(syscall.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer syscall.CloseHandle(snapshot)
+
+	var entry syscall.ProcessEntry32
+	entry.Size = uint32(unsafe.Sizeof(entry))
+
+	if err := syscall.Process32First(snapshot, &entry); err != nil {
+		return nil, err
+	}
+
+	currentPID := os.Getpid()
+	currentExe := strings.ToLower(filepath.Base(os.Args[0]))
+
+	var pids []int
+	for {
+		pid := int(entry.ProcessID)
+		if pid != currentPID && pid > 0 {
+			exeName := strings.ToLower(syscall.UTF16ToString(entry.ExeFile[:]))
+			if exeName == "bapedge.exe" || exeName == "bap.exe" || exeName == "bap-daemon.exe" || exeName == currentExe {
+				pids = append(pids, pid)
+			}
+		}
+
+		err = syscall.Process32Next(snapshot, &entry)
+		if err != nil {
+			break
+		}
+	}
+	return pids, nil
 }

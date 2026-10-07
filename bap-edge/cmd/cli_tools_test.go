@@ -1,4 +1,4 @@
-﻿package cmd
+package cmd
 
 import (
 	"encoding/json"
@@ -107,4 +107,22 @@ func TestRunSweepLocal(t *testing.T) {
 	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
 		t.Errorf("expected dead marker %s to be swept and deleted", markerPath)
 	}
+}
+
+func TestCheckOtherBapEdgeInstances(t *testing.T) {
+	status := CheckOtherBapEdgeInstances()
+	// In the test process itself without a background daemon running,
+	// OtherRunning should typically be false, or if another test process is running,
+	// description should be populated.
+	if status.Description == "" {
+		t.Errorf("expected description to be non-empty")
+	}
+}
+
+func TestPerformSweep(t *testing.T) {
+	res, err := PerformSweep("http://127.0.0.1:9999", false)
+	if err != nil {
+		t.Fatalf("PerformSweep failed: %v", err)
+	}
+	_ = res
 }

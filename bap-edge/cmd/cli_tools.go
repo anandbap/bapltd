@@ -129,6 +129,7 @@ func RunStatus(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	serverFlag := fs.String("server", "", "Central BAP control plane URL")
 	jsonFlag := fs.Bool("json", false, "Output status in JSON format")
+	noSweepFlag := fs.Bool("no-sweep", false, "Disable automatic sweep and flush of pending spool")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -165,6 +166,28 @@ func RunStatus(args []string) error {
 			cpStatusText = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		}
 		_ = resp.Body.Close()
+	}
+
+	// Fallback probe: if explicit -server was not provided and primary URL is unreachable, try local fallbacks
+	if !cpConnected && *serverFlag == "" {
+		fallbacks := []string{"http://localhost:8080", "http://127.0.0.1:8080"}
+		for _, fb := range fallbacks {
+			if strings.TrimRight(serverURL, "/") == fb {
+				continue
+			}
+			fbStart := time.Now()
+			if resp, err := client.Get(fb + "/health"); err == nil {
+				if resp.StatusCode == http.StatusOK {
+					cpConnected = true
+					serverURL = fb
+					cpLatencyMs = time.Since(fbStart).Milliseconds()
+					cpStatusText = fmt.Sprintf("CONNECTED / ONLINE (%dms) [fallback to %s]", cpLatencyMs, fb)
+					_ = resp.Body.Close()
+					break
+				}
+				_ = resp.Body.Close()
+			}
+		}
 	}
 
 	// 2. Operating Mode & Daemon Detection (Degraded vs Enterprise Managed)
@@ -271,6 +294,34 @@ func RunStatus(args []string) error {
 	auditLogPath := audit.DefaultLogPath()
 	offlineEntries, _ := audit.ReadEntries(auditLogPath)
 	totalLogged := len(offlineEntries)
+
+	// Concurrency & Instance Check:
+	// Status should auto-trigger sweep ONLY when no other bap-edge is actively running,
+	// unless that other instance is unresponsive / dead.
+	otherStatus := CheckOtherBapEdgeInstances()
+	canAutoSync := !*noSweepFlag && cpConnected && (!otherStatus.OtherRunning || otherStatus.Unresponsive)
+	autoSweepTriggered := false
+	var autoSweepResult SweepResult
+
+	if canAutoSync && (totalLogged > 0 || staleCount > 0) {
+		autoSweepResult, _ = PerformSweep(serverURL, false)
+		autoSweepTriggered = true
+
+		// Re-read audit log after flush
+		offlineEntries, _ = audit.ReadEntries(auditLogPath)
+		totalLogged = len(offlineEntries)
+		if autoSweepResult.LocalSweptSessions > 0 {
+			staleCount = 0
+			var updatedList []sessionDetail
+			for _, s := range sessionList {
+				if s.Status == "ACTIVE" {
+					updatedList = append(updatedList, s)
+				}
+			}
+			sessionList = updatedList
+		}
+	}
+
 	allowedCount := 0
 	deniedCount := 0
 	for _, entry := range offlineEntries {
@@ -323,6 +374,16 @@ func RunStatus(args []string) error {
 				"allowed":                 allowedCount,
 				"denied":                  deniedCount,
 				"spool_backlog_unflushed": totalLogged,
+				"auto_sweep_triggered":    autoSweepTriggered,
+				"auto_flushed_records":    autoSweepResult.FlushedAuditCount,
+				"auto_swept_sessions":     autoSweepResult.LocalSweptSessions,
+				"concurrency_guard": map[string]any{
+					"can_auto_sync":    canAutoSync,
+					"other_running":    otherStatus.OtherRunning,
+					"unresponsive":     otherStatus.Unresponsive,
+					"active_pid":       otherStatus.ActivePID,
+					"instance_summary": otherStatus.Description,
+				},
 			},
 			"workspace": authz.GetWorkspaceRoot(),
 			"state_dir": state.Dir(),
@@ -405,12 +466,24 @@ func RunStatus(args []string) error {
 
 	// 4. Telemetry & Offline Spool
 	fmt.Println("\n  TELEMETRY & OFFLINE RESILIENCE:")
+	if autoSweepTriggered {
+		fmt.Printf("    • Auto-Sync:      ⚡ Auto-triggered sweep: %d pending audit record(s) synced to Control Plane\n", autoSweepResult.FlushedAuditCount)
+		if autoSweepResult.LocalSweptSessions > 0 {
+			fmt.Printf("                      🧹 Swept %d orphaned session marker(s)\n", autoSweepResult.LocalSweptSessions)
+		}
+	} else if otherStatus.OtherRunning && !otherStatus.Unresponsive && (totalLogged > 0 || staleCount > 0) {
+		fmt.Printf("    • Auto-Sync:      ⏸️  Deferred (%s; sync delegated to active instance)\n", otherStatus.Description)
+	}
 	fmt.Printf("    • Logged Events:  %d total (Allowed: %d, Denied: %d)\n", totalLogged, allowedCount, deniedCount)
 	if totalLogged == 0 {
 		fmt.Println("    • Spool Backlog:  0 pending entries (All audit logs ingested by Control Plane)")
 	} else {
-		fmt.Printf("    • Spool Backlog:  %d un-flushed entries pending network reconnection in %s\n", totalLogged, auditLogPath)
-		fmt.Println("                      Run 'bapedge sweep' to reconcile and flush immediately.")
+		if cpConnected {
+			fmt.Printf("    • Spool Backlog:  %d un-flushed entries in %s\n", totalLogged, auditLogPath)
+		} else {
+			fmt.Printf("    • Spool Backlog:  %d un-flushed entries pending network reconnection in %s\n", totalLogged, auditLogPath)
+			fmt.Println("                      (Control plane unreachable; will auto-sync on reconnect or run 'bapedge sweep')")
+		}
 	}
 
 	if staleCount > 0 {
@@ -424,6 +497,116 @@ func RunStatus(args []string) error {
 func isDaemonRunning() bool {
 	ds, err := ReadDaemonState()
 	return err == nil && ds != nil
+}
+
+// OtherInstanceStatus reports whether another bap-edge process is running and its responsiveness.
+type OtherInstanceStatus struct {
+	OtherRunning bool   `json:"other_running"`
+	Unresponsive bool   `json:"unresponsive"`
+	ActivePID    int    `json:"active_pid"`
+	Description  string `json:"description"`
+}
+
+// CheckOtherBapEdgeInstances verifies if any other bap-edge process (daemon, agent session, or CLI)
+// is actively executing on the system. Returns whether it is running and whether it is unresponsive.
+func CheckOtherBapEdgeInstances() OtherInstanceStatus {
+	// 1. Check bap-daemon
+	ds, err := ReadDaemonState()
+	if err == nil && ds != nil && ds.PID != os.Getpid() {
+		if !isProcessAlive(ds.PID) {
+			return OtherInstanceStatus{
+				OtherRunning: true,
+				Unresponsive: true,
+				ActivePID:    ds.PID,
+				Description:  fmt.Sprintf("bap-daemon (PID %d) is dead/orphaned", ds.PID),
+			}
+		}
+		// Daemon process is alive in OS table: check if it is responsive to IPC
+		client := httptransport.New(600 * time.Millisecond)
+		resp, err := client.Get(ds.URL + "/api/v1/daemon/status")
+		if err != nil || resp.StatusCode != http.StatusOK {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			return OtherInstanceStatus{
+				OtherRunning: true,
+				Unresponsive: true,
+				ActivePID:    ds.PID,
+				Description:  fmt.Sprintf("bap-daemon (PID %d) is unresponsive (IPC timed out / failed)", ds.PID),
+			}
+		}
+		_ = resp.Body.Close()
+		return OtherInstanceStatus{
+			OtherRunning: true,
+			Unresponsive: false,
+			ActivePID:    ds.PID,
+			Description:  fmt.Sprintf("bap-daemon (PID %d) is actively running and responsive", ds.PID),
+		}
+	}
+
+	// 2. Check for other bapedge OS processes
+	otherPIDs, err := findOtherBapEdgePIDs()
+	if err == nil && len(otherPIDs) > 0 {
+		var alivePIDs []int
+		for _, pid := range otherPIDs {
+			if isProcessAlive(pid) {
+				alivePIDs = append(alivePIDs, pid)
+			}
+		}
+		if len(alivePIDs) > 0 {
+			return OtherInstanceStatus{
+				OtherRunning: true,
+				Unresponsive: false,
+				ActivePID:    alivePIDs[0],
+				Description:  fmt.Sprintf("another bapedge instance is actively running (PID %d)", alivePIDs[0]),
+			}
+		}
+	}
+
+	// 3. Check for active agent sessions
+	sessionDirs := []string{state.SessionsDir(), filepath.Join(".bap", "sessions")}
+	for _, sDir := range sessionDirs {
+		entries, _ := os.ReadDir(sDir)
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || strings.HasPrefix(entry.Name(), "pid-") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(sDir, entry.Name()))
+			if err != nil {
+				continue
+			}
+			var sInfo struct {
+				SessionID string    `json:"session_id"`
+				PID       int       `json:"pid"`
+				StartedAt time.Time `json:"started_at"`
+			}
+			if json.Unmarshal(data, &sInfo) == nil && sInfo.PID > 0 && sInfo.PID != os.Getpid() {
+				if isProcessAlive(sInfo.PID) {
+					// Check if session has been stale / idle > 4 hours
+					if time.Since(sInfo.StartedAt) > 4*time.Hour {
+						return OtherInstanceStatus{
+							OtherRunning: true,
+							Unresponsive: true,
+							ActivePID:    sInfo.PID,
+							Description:  fmt.Sprintf("agent session %s (PID %d) is unresponsive/expired", sInfo.SessionID, sInfo.PID),
+						}
+					}
+					return OtherInstanceStatus{
+						OtherRunning: true,
+						Unresponsive: false,
+						ActivePID:    sInfo.PID,
+						Description:  fmt.Sprintf("agent session %s is actively running (PID %d)", sInfo.SessionID, sInfo.PID),
+					}
+				}
+			}
+		}
+	}
+
+	return OtherInstanceStatus{
+		OtherRunning: false,
+		Unresponsive: false,
+		Description:  "no other bap-edge instances running",
+	}
 }
 
 // RunWhy provides in-terminal Cedar policy explanation for any command (BAP-472).
@@ -506,6 +689,84 @@ func RunWhy(args []string) error {
 	return nil
 }
 
+// SweepResult contains summary statistics from a clean sweep operation.
+type SweepResult struct {
+	LocalSweptSessions  int   `json:"local_swept_sessions"`
+	FlushedAuditCount    int   `json:"flushed_audit_count"`
+	ServerSweptSessions  int   `json:"server_swept_sessions"`
+	ReconciledGrants     int   `json:"reconciled_grants"`
+	ControlPlaneError    error `json:"-"`
+}
+
+// PerformSweep reconciles orphaned local sessions, purges stale session markers,
+// and flushes offline audit records to the central control plane.
+func PerformSweep(serverURL string, force bool) (SweepResult, error) {
+	var res SweepResult
+	sessionSweepDirs := []string{state.SessionsDir(), filepath.Join(".bap", "sessions")}
+
+	for _, sessionsDir := range sessionSweepDirs {
+		entries, _ := os.ReadDir(sessionsDir)
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			p := filepath.Join(sessionsDir, entry.Name())
+			data, err := os.ReadFile(p)
+			if err != nil {
+				continue
+			}
+
+			var sInfo struct {
+				SessionID string `json:"session_id"`
+				PID       int    `json:"pid"`
+			}
+			if json.Unmarshal(data, &sInfo) == nil {
+				shouldPurge := force || (sInfo.PID > 0 && !isProcessAlive(sInfo.PID))
+				if shouldPurge {
+					_ = os.Remove(p)
+					if sInfo.SessionID != "" {
+						_ = os.Remove(sessionMarkerPath(sInfo.SessionID))
+						// Inform control plane of crash recovery
+						sweepPayload := map[string]any{
+							"session_id": sInfo.SessionID,
+							"reason":     "orphaned_crash_detected_by_edge_sweep",
+						}
+						_ = postJSONQuick(serverURL+"/api/v1/control/sweep", sweepPayload)
+					}
+					if sInfo.PID > 0 {
+						_ = os.Remove(sessionPIDMarkerPath(sInfo.PID))
+					}
+					res.LocalSweptSessions++
+				}
+			}
+		}
+	}
+
+	// Purge stale root markers
+	_ = os.Remove(".bap-session.json")
+	_ = os.Remove("../.bap-session.json")
+	_ = os.Remove(state.WorkspaceSessionPath())
+	_ = os.Remove(filepath.Join(".bap", "session.json"))
+	_ = os.Remove(".bap-prompt.txt")
+	_ = os.Remove("../.bap-prompt.txt")
+
+	// Flush any pending offline audit logs
+	if n, flushErr := audit.FlushOfflineAudit(serverURL, ""); flushErr == nil {
+		res.FlushedAuditCount = n
+	}
+
+	// Request central control plane sweep
+	sweepResp, cpErr := executeControlPlaneSweep(serverURL)
+	if cpErr == nil && sweepResp != nil {
+		res.ServerSweptSessions = sweepResp.SweptSessions
+		res.ReconciledGrants = sweepResp.ReconciledGrants
+	} else {
+		res.ControlPlaneError = cpErr
+	}
+
+	return res, nil
+}
+
 // RunSweep executes clean sweep and crash recovery routines (BAP-470).
 // Purges dead session markers, clears abandoned lockfiles, notifies control plane,
 // flushes offline audit entries, and rejoins the fleet in a pristine state.
@@ -528,86 +789,47 @@ func RunSweep(args []string) error {
 	}
 	serverURL = strings.TrimRight(serverURL, "/")
 
+	// If explicit server was not passed and configured URL is offline, probe local fallback
+	if *serverFlag == "" {
+		client := httptransport.New(1000 * time.Millisecond)
+		if resp, err := client.Get(serverURL + "/health"); err != nil || resp.StatusCode != http.StatusOK {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			fallbacks := []string{"http://localhost:8080", "http://127.0.0.1:8080"}
+			for _, fb := range fallbacks {
+				if strings.TrimRight(serverURL, "/") == fb {
+					continue
+				}
+				if fbResp, fbErr := client.Get(fb + "/health"); fbErr == nil && fbResp.StatusCode == http.StatusOK {
+					serverURL = fb
+					_ = fbResp.Body.Close()
+					break
+				}
+			}
+		} else {
+			_ = resp.Body.Close()
+		}
+	}
+
 	fmt.Println("================================================================================")
 	fmt.Println("  [BAP ZERO-TRUST] 🧹 Running Clean Sweep & Crash Recovery Reconciler")
 	fmt.Println("================================================================================")
 	fmt.Printf("  Control Plane:      %s\n", serverURL)
 	fmt.Println("--------------------------------------------------------------------------------")
 
-	sweptLocalSessions := 0
-	sessionSweepDirs := []string{state.SessionsDir(), filepath.Join(".bap", "sessions")}
-
-	for _, sessionsDir := range sessionSweepDirs {
-		entries, _ := os.ReadDir(sessionsDir)
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-				continue
-			}
-			p := filepath.Join(sessionsDir, entry.Name())
-			data, err := os.ReadFile(p)
-			if err != nil {
-				continue
-			}
-
-			var sInfo struct {
-				SessionID string `json:"session_id"`
-				PID       int    `json:"pid"`
-			}
-			if json.Unmarshal(data, &sInfo) == nil {
-				shouldPurge := *forceFlag || (sInfo.PID > 0 && !isProcessAlive(sInfo.PID))
-				if shouldPurge {
-					_ = os.Remove(p)
-					if sInfo.SessionID != "" {
-						_ = os.Remove(sessionMarkerPath(sInfo.SessionID))
-						// Inform control plane of crash recovery
-						sweepPayload := map[string]any{
-							"session_id": sInfo.SessionID,
-							"reason":     "orphaned_crash_detected_by_edge_sweep",
-						}
-						_ = postJSONQuick(serverURL+"/api/v1/control/sweep", sweepPayload)
-					}
-					if sInfo.PID > 0 {
-						_ = os.Remove(sessionPIDMarkerPath(sInfo.PID))
-					}
-					sweptLocalSessions++
-				}
-			}
-		}
+	res, err := PerformSweep(serverURL, *forceFlag)
+	if err != nil {
+		return fmt.Errorf("clean sweep failed: %w", err)
 	}
 
-	// Purge stale root markers
-	_ = os.Remove(".bap-session.json")
-	_ = os.Remove("../.bap-session.json")
-	_ = os.Remove(state.WorkspaceSessionPath())
-	_ = os.Remove(filepath.Join(".bap", "session.json"))
-	_ = os.Remove(".bap-prompt.txt")
-	_ = os.Remove("../.bap-prompt.txt")
-
-	// Flush any pending offline audit logs
-	flushedAudit := 0
-	n, flushErr := audit.FlushOfflineAudit(serverURL, "")
-	if flushErr == nil {
-		flushedAudit = n
-	} else {
-		fmt.Printf("  [!] Audit flush notice: %v\n", flushErr)
-	}
-
-	// Request central control plane sweep
-	serverSwept := 0
-	reconciledGrants := 0
-	sweepResp, err := executeControlPlaneSweep(serverURL)
-	if err == nil && sweepResp != nil {
-		serverSwept = sweepResp.SweptSessions
-		reconciledGrants = sweepResp.ReconciledGrants
-	}
-
-	fmt.Printf("  [✓] Swept %d orphaned/crashed local session markers\n", sweptLocalSessions)
-	fmt.Printf("  [✓] Flushed %d offline audit records to central tamper-evident ledger\n", flushedAudit)
-	if err == nil {
-		fmt.Printf("  [✓] Central Control Plane reconciled: %d idle sessions closed, %d stale grants expired\n", serverSwept, reconciledGrants)
+	fmt.Printf("  [✓] Swept %d orphaned/crashed local session markers\n", res.LocalSweptSessions)
+	fmt.Printf("  [✓] Flushed %d offline audit records to central tamper-evident ledger\n", res.FlushedAuditCount)
+	if res.ControlPlaneError == nil {
+		fmt.Printf("  [✓] Central Control Plane reconciled: %d idle sessions closed, %d stale grants expired\n", res.ServerSweptSessions, res.ReconciledGrants)
 		fmt.Println("  [✓] Workstation successfully rejoined fleet with clean state.")
 	} else {
-		fmt.Printf("  [!] Control plane sweep notice: %v (Local state swept successfully)\n", err)
+		fmt.Printf("  [!] Control plane sweep notice: %v (Local state swept successfully)\n", res.ControlPlaneError)
 	}
 
 	fmt.Println("================================================================================")
