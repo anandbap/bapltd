@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -124,10 +125,11 @@ func RunSetup(args []string) error {
 }
 
 // RunStatus provides terminal inspection of active sessions, Cedar policy bundle,
-// layered compliance, and offline spool backlog (BAP-472).
+// layered compliance, degraded operating mode, and offline spool backlog (BAP-472).
 func RunStatus(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	serverFlag := fs.String("server", "", "Central BAP control plane URL")
+	jsonFlag := fs.Bool("json", false, "Output status in JSON format")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -149,20 +151,40 @@ func RunStatus(args []string) error {
 		username = os.Getenv("USER")
 	}
 
-	fmt.Println("================================================================================")
-	fmt.Println("  [BAP ZERO-TRUST] 🛡️  Edge Workstation Status & Compliance Inspection")
-	fmt.Println("================================================================================")
-	fmt.Printf("  Host:             %s (%s/%s)\n", hostname, runtime.GOOS, runtime.GOARCH)
-	fmt.Printf("  User:             %s\n", username)
-	fmt.Printf("  Control Plane:    %s\n", serverURL)
-	fmt.Printf("  State Directory:  %s\n", state.Dir())
-	fmt.Printf("  Workspace Root:   %s\n", authz.GetWorkspaceRoot())
+	// 1. Live Control Plane Probe
+	probeStart := time.Now()
+	client := httptransport.New(1500 * time.Millisecond)
+	cpConnected := false
+	cpLatencyMs := int64(0)
+	cpStatusText := "DISCONNECTED / OFFLINE (Local Spool Active)"
+	if resp, err := client.Get(serverURL + "/health"); err == nil {
+		cpLatencyMs = time.Since(probeStart).Milliseconds()
+		if resp.StatusCode == http.StatusOK {
+			cpConnected = true
+			cpStatusText = fmt.Sprintf("CONNECTED / ONLINE (%dms)", cpLatencyMs)
+		} else {
+			cpStatusText = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		}
+		_ = resp.Body.Close()
+	}
 
-	// Enrolled Identity & Authentication Status
+	// 2. Operating Mode & Daemon Detection (Degraded vs Enterprise Managed)
+	daemonActive := isDaemonRunning()
+	operatingMode := "STANDALONE_USER_SPACE"
+	operatingModeDesc := "STANDALONE USER-SPACE (Degraded: Layer B child process supervision limited to unprivileged user tokens; zero admin rights required)"
+	if daemonActive {
+		operatingMode = "ENTERPRISE_MANAGED"
+		operatingModeDesc = "ENTERPRISE MANAGED (Full Kernel Supervision with bap-daemon attached)"
+	}
+
+	// 3. Enrolled Identity & Credentials
+	var creds StoredCredentials
+	enrolled := false
+	authModeLabel := "Unenrolled"
 	if credsData, err := os.ReadFile(DefaultCredentialsPath()); err == nil {
-		var creds StoredCredentials
 		if json.Unmarshal(credsData, &creds) == nil && creds.AgentID != "" {
-			authModeLabel := "One-Time Code (OTC)"
+			enrolled = true
+			authModeLabel = "One-Time Code (OTC)"
 			if creds.AuthMode == "oidc" {
 				idp := "Microsoft Entra ID"
 				if strings.EqualFold(creds.IdPProvider, "okta") {
@@ -172,31 +194,23 @@ func RunStatus(args []string) error {
 				}
 				authModeLabel = fmt.Sprintf("OIDC Federated (%s, MFA Enforced)", idp)
 			}
-			fmt.Printf("  Auth Mode:        %s\n", authModeLabel)
-			if creds.UserEmail != "" {
-				fmt.Printf("  Corporate User:   %s\n", creds.UserEmail)
-			}
-			if creds.Department != "" {
-				fmt.Printf("  Department:       %s\n", creds.Department)
-			}
-			if len(creds.Groups) > 0 {
-				fmt.Printf("  IdP Groups:       %v\n", creds.Groups)
-			}
-			fmt.Printf("  Agent Workload:   %s (App: %s)\n", creds.AgentID, creds.AppID)
 		}
-	} else {
-		fmt.Printf("  Enrollment:       Unenrolled (run 'bapedge login' or 'bapedge register')\n")
 	}
-	fmt.Println("--------------------------------------------------------------------------------")
 
-	// 1. Inspect Active Sessions
+	// 4. Inspect Active Sessions
 	sessionDirs := []string{state.SessionsDir(), filepath.Join(".bap", "sessions")}
 	activeCount := 0
 	staleCount := 0
 	seenSessionIDs := make(map[string]bool)
+	type sessionDetail struct {
+		SessionID string `json:"session_id"`
+		AppID     string `json:"app_id"`
+		PID       int    `json:"pid"`
+		Status    string `json:"status"`
+		Uptime    string `json:"uptime"`
+	}
+	var sessionList []sessionDetail
 
-	fmt.Println("  ACTIVE SESSIONS:")
-	foundSessions := false
 	for _, sDir := range sessionDirs {
 		entries, _ := os.ReadDir(sDir)
 		for _, entry := range entries {
@@ -219,7 +233,6 @@ func RunStatus(args []string) error {
 					continue
 				}
 				seenSessionIDs[sInfo.SessionID] = true
-				foundSessions = true
 				alive := isProcessAlive(sInfo.PID)
 				statusStr := "ACTIVE"
 				if !alive {
@@ -229,33 +242,150 @@ func RunStatus(args []string) error {
 					activeCount++
 				}
 				age := time.Since(sInfo.StartedAt).Round(time.Second)
-				fmt.Printf("    • [%s] Session: %-25s App: %-12s PID: %-7d Uptime: %s\n",
-					statusStr, sInfo.SessionID, sInfo.AppID, sInfo.PID, age)
+				sessionList = append(sessionList, sessionDetail{
+					SessionID: sInfo.SessionID,
+					AppID:     sInfo.AppID,
+					PID:       sInfo.PID,
+					Status:    statusStr,
+					Uptime:    age.String(),
+				})
 			}
 		}
 	}
-	if !foundSessions {
+
+	// 5. Inspect Policy Bundle
+	pStore := policystore.New(policystore.DefaultPolicyDir())
+	pState, pErr := pStore.LoadState()
+	policyVersion := uint64(0)
+	policyDigest := ""
+	killSwitch := false
+	if pErr == nil {
+		policyVersion = pState.Version
+		policyDigest = pState.Digest
+		killSwitch = pState.KillSwitch
+	} else if pData, err := os.ReadFile("policy.cedar"); err == nil {
+		digest := sha256.Sum256(pData)
+		policyDigest = "sha256:" + hex.EncodeToString(digest[:])
+	}
+
+	// 6. Inspect Offline Spool & Telemetry Metrics
+	auditLogPath := audit.DefaultLogPath()
+	offlineEntries, _ := audit.ReadEntries(auditLogPath)
+	totalLogged := len(offlineEntries)
+	allowedCount := 0
+	deniedCount := 0
+	for _, entry := range offlineEntries {
+		if entry.Decision == "allow" {
+			allowedCount++
+		} else if entry.Decision == "deny" {
+			deniedCount++
+		}
+	}
+
+	// JSON output mode
+	if *jsonFlag {
+		statusOutput := map[string]any{
+			"host":     hostname,
+			"platform": fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH),
+			"user":     username,
+			"operating_mode": map[string]any{
+				"mode":           operatingMode,
+				"degraded":       !daemonActive,
+				"daemon_running": daemonActive,
+				"description":    operatingModeDesc,
+				"admin_required": false,
+			},
+			"control_plane": map[string]any{
+				"url":        serverURL,
+				"connected":  cpConnected,
+				"latency_ms": cpLatencyMs,
+				"status":     cpStatusText,
+			},
+			"enrollment": map[string]any{
+				"enrolled":   enrolled,
+				"auth_mode":  authModeLabel,
+				"agent_id":   creds.AgentID,
+				"app_id":     creds.AppID,
+				"user_email": creds.UserEmail,
+				"department": creds.Department,
+			},
+			"sessions": map[string]any{
+				"active_count": activeCount,
+				"stale_count":  staleCount,
+				"items":        sessionList,
+			},
+			"policy": map[string]any{
+				"version":     policyVersion,
+				"digest":      policyDigest,
+				"kill_switch": killSwitch,
+			},
+			"telemetry": map[string]any{
+				"total_logged":            totalLogged,
+				"allowed":                 allowedCount,
+				"denied":                  deniedCount,
+				"spool_backlog_unflushed": totalLogged,
+			},
+			"workspace": authz.GetWorkspaceRoot(),
+			"state_dir": state.Dir(),
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(statusOutput)
+	}
+
+	// Terminal Text Output
+	fmt.Println("================================================================================")
+	fmt.Println("  [BAP ZERO-TRUST] 🛡️  Edge Workstation Status & Compliance Inspection")
+	fmt.Println("================================================================================")
+	fmt.Printf("  Host:             %s (%s/%s)\n", hostname, runtime.GOOS, runtime.GOARCH)
+	fmt.Printf("  User:             %s\n", username)
+	fmt.Printf("  Control Plane:    %s [%s]\n", serverURL, cpStatusText)
+	fmt.Printf("  Operating Mode:   %s\n", operatingModeDesc)
+	fmt.Printf("  Admin Rights Req: NO (100%% unprivileged user-space broker)\n")
+	fmt.Printf("  State Directory:  %s\n", state.Dir())
+	fmt.Printf("  Workspace Root:   %s\n", authz.GetWorkspaceRoot())
+
+	// Enrolled Identity
+	if enrolled {
+		fmt.Printf("  Auth Mode:        %s\n", authModeLabel)
+		if creds.UserEmail != "" {
+			fmt.Printf("  Corporate User:   %s\n", creds.UserEmail)
+		}
+		if creds.Department != "" {
+			fmt.Printf("  Department:       %s\n", creds.Department)
+		}
+		if len(creds.Groups) > 0 {
+			fmt.Printf("  IdP Groups:       %v\n", creds.Groups)
+		}
+		fmt.Printf("  Agent Workload:   %s (App: %s)\n", creds.AgentID, creds.AppID)
+	} else {
+		fmt.Printf("  Enrollment:       Unenrolled (run 'bapedge login' or 'bapedge register')\n")
+	}
+	fmt.Println("--------------------------------------------------------------------------------")
+
+	// 1. Inspect Active Sessions
+	fmt.Println("  ACTIVE SESSIONS:")
+	if len(sessionList) > 0 {
+		for _, s := range sessionList {
+			fmt.Printf("    • [%s] Session: %-25s App: %-12s PID: %-7d Uptime: %s\n",
+				s.Status, s.SessionID, s.AppID, s.PID, s.Uptime)
+		}
+	} else {
 		fmt.Println("    (No local agent sessions currently active)")
 	}
 
 	// 2. Inspect Cached Cedar Policy Bundle
 	fmt.Println("\n  POLICY BUNDLE & ZERO-TRUST CACHE:")
-	pStore := policystore.New(policystore.DefaultPolicyDir())
-	state, err := pStore.LoadState()
-	if err == nil {
-		fmt.Printf("    • Version:        v%d\n", state.Version)
-		fmt.Printf("    • Rules Digest:   %s\n", state.Digest)
-		fmt.Printf("    • Kill Switch:    %v\n", state.KillSwitch)
+	if policyVersion > 0 {
+		fmt.Printf("    • Version:        v%d\n", policyVersion)
+		fmt.Printf("    • Rules Digest:   %s\n", policyDigest)
+		fmt.Printf("    • Kill Switch:    %v\n", killSwitch)
 		fmt.Printf("    • Cache Path:     %s\n", policystore.DefaultPolicyDir())
+	} else if policyDigest != "" {
+		fmt.Println("    • Source:         Local policy.cedar")
+		fmt.Printf("    • Rules Digest:   %s\n", policyDigest)
 	} else {
-		// Fallback check for policy.cedar in current directory
-		if pData, err := os.ReadFile("policy.cedar"); err == nil {
-			digest := sha256.Sum256(pData)
-			fmt.Println("    • Source:         Local policy.cedar")
-			fmt.Printf("    • Rules Digest:   sha256:%s\n", hex.EncodeToString(digest[:]))
-		} else {
-			fmt.Println("    • Status:         No cached policy found (Default baseline active)")
-		}
+		fmt.Println("    • Status:         No cached policy found (Default baseline active)")
 	}
 
 	// 3. Inspect 3-Tier Layer Compliance
@@ -267,18 +397,20 @@ func RunStatus(args []string) error {
 	} else if runtime.GOOS == "darwin" {
 		kernelTech = "macOS Endpoint Security AUTH_EXEC & sandbox-exec"
 	}
-	fmt.Printf("    • Layer B (OS Kernel Boundary Sandbox):    COMPLIANT (%s)\n", kernelTech)
+	if daemonActive {
+		fmt.Printf("    • Layer B (OS Kernel Boundary Sandbox):    COMPLIANT (%s + bap-daemon kernel trace)\n", kernelTech)
+	} else {
+		fmt.Printf("    • Layer B (OS Kernel Boundary Sandbox):    DEGRADED (%s - Standalone User Token)\n", kernelTech)
+	}
 	fmt.Println("    • Layer C (Network Egress Pinning):        COMPLIANT (Gateway PEP perimeter backstop active)")
 
-	// 4. Inspect Offline Spool Backlog
-	fmt.Println("\n  OFFLINE AUDIT STORE & RESILIENCE:")
-	auditLogPath := audit.DefaultLogPath()
-	offlineEntries, _ := audit.ReadEntries(auditLogPath)
-	pendingCount := len(offlineEntries)
-	if pendingCount == 0 {
+	// 4. Telemetry & Offline Spool
+	fmt.Println("\n  TELEMETRY & OFFLINE RESILIENCE:")
+	fmt.Printf("    • Logged Events:  %d total (Allowed: %d, Denied: %d)\n", totalLogged, allowedCount, deniedCount)
+	if totalLogged == 0 {
 		fmt.Println("    • Spool Backlog:  0 pending entries (All audit logs ingested by Control Plane)")
 	} else {
-		fmt.Printf("    • Spool Backlog:  %d un-flushed entries pending network reconnection in %s\n", pendingCount, auditLogPath)
+		fmt.Printf("    • Spool Backlog:  %d un-flushed entries pending network reconnection in %s\n", totalLogged, auditLogPath)
 		fmt.Println("                      Run 'bapedge sweep' to reconcile and flush immediately.")
 	}
 
@@ -288,6 +420,21 @@ func RunStatus(args []string) error {
 
 	fmt.Println("================================================================================")
 	return nil
+}
+
+func isDaemonRunning() bool {
+	if pidStr := os.Getenv("BAP_DAEMON_PID"); pidStr != "" {
+		if pid, err := strconv.Atoi(pidStr); err == nil && isProcessAlive(pid) {
+			return true
+		}
+	}
+	daemonPidFile := filepath.Join(state.Dir(), "bap-daemon.pid")
+	if data, err := os.ReadFile(daemonPidFile); err == nil {
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && isProcessAlive(pid) {
+			return true
+		}
+	}
+	return false
 }
 
 // RunWhy provides in-terminal Cedar policy explanation for any command (BAP-472).
