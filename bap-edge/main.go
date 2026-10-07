@@ -27,6 +27,7 @@ Available Commands:
   exec      Evaluate command against Cedar policy and run in sandboxed kernel namespace
   check     Evaluate command against Cedar policy in decision-only mode (zero execution side effects)
   mcp       Run as Model Context Protocol (MCP) stdio server for Claude, Copilot, and Cursor
+  daemon    Start, stop, or query background supervisor daemon (bap-daemon)
   attest      Client test command: connect to attestation server and request OBO JWT
   verify-log  Verify cryptographic integrity and anti-tamper hash-chain of local audit log
   help        Display help information
@@ -34,6 +35,9 @@ Available Commands:
 Examples:
   bapedge setup --app claude-code
   bapedge status
+  bapedge daemon start
+  bapedge daemon status
+  bapedge daemon stop
   bapedge why "rm -rf /"
   bapedge why "git status"
   bapedge sweep
@@ -52,6 +56,13 @@ func main() {
 		if strings.Contains(strings.ToLower(os.Args[0]), "mcp") {
 			if err := cmd.RunMCP(nil); err != nil {
 				fmt.Fprintf(os.Stderr, "Error running MCP server: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+		if strings.Contains(strings.ToLower(os.Args[0]), "daemon") {
+			if err := cmd.RunDaemon([]string{"status"}); err != nil {
+				fmt.Fprintf(os.Stderr, "Error running daemon: %v\n", err)
 				os.Exit(1)
 			}
 			return
@@ -111,6 +122,11 @@ func main() {
 	case "mcp":
 		if err := cmd.RunMCP(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error running MCP server: %v\n", err)
+			os.Exit(1)
+		}
+	case "daemon":
+		if err := cmd.RunDaemon(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error running daemon: %v\n", err)
 			os.Exit(1)
 		}
 	case "attest":

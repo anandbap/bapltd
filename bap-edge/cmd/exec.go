@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"bap-edge/internal/httptransport"
 	"crypto/sha256"
 	"encoding/base64"
@@ -282,7 +283,19 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 		entry.Reason = "Blocked by security policy"
 	}
 	_ = audit.Log(&entry, ec.auditLogPath)
-	_, _, _ = audit.Transmit(entry, ec.serverURL, ec.auditLogPath)
+
+	daemonNotified := false
+	if ds, err := ReadDaemonState(); err == nil && ds != nil {
+		client := httptransport.New(200 * time.Millisecond)
+		body, _ := json.Marshal(entry)
+		if r, err := client.Post(ds.URL+"/api/v1/daemon/event", "application/json", bytes.NewReader(body)); err == nil {
+			daemonNotified = true
+			_ = r.Body.Close()
+		}
+	}
+	if !daemonNotified {
+		_, _, _ = audit.Transmit(entry, ec.serverURL, ec.auditLogPath)
+	}
 
 	exitWithResponse(resp, code, ec.forceJSON, ec.forceRaw, isAgentEnvironment(ec.source))
 }

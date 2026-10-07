@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -423,18 +422,8 @@ func RunStatus(args []string) error {
 }
 
 func isDaemonRunning() bool {
-	if pidStr := os.Getenv("BAP_DAEMON_PID"); pidStr != "" {
-		if pid, err := strconv.Atoi(pidStr); err == nil && isProcessAlive(pid) {
-			return true
-		}
-	}
-	daemonPidFile := filepath.Join(state.Dir(), "bap-daemon.pid")
-	if data, err := os.ReadFile(daemonPidFile); err == nil {
-		if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && isProcessAlive(pid) {
-			return true
-		}
-	}
-	return false
+	ds, err := ReadDaemonState()
+	return err == nil && ds != nil
 }
 
 // RunWhy provides in-terminal Cedar policy explanation for any command (BAP-472).
