@@ -61,6 +61,7 @@ This document represents the complete functional and non-functional requirements
    - [Epic 26: Cross-Platform Packaging & CI/CD Release Pipeline (BAP-EPIC-26)](#gap-4-cross-platform-packaging--cicd-release-pipeline)
    - [Epic 27: Fleet Telemetry Consistency, Dynamic Liveness Coupling & Unified State Architecture (BAP-EPIC-27)](#epic-27-fleet-telemetry-consistency-dynamic-liveness-coupling--unified-state-architecture-bap-epic-27)
    - [Epic 28: Agent Watch Persona Architecture, Canonical Activity Event & Live Enterprise Topology (BAP-EPIC-28)](#epic-28-agent-watch-persona-architecture-canonical-activity-event--live-enterprise-topology-bap-epic-28)
+   - [Epic 29: Beyond-Hook Enforcement & Enterprise Defense Hardening (BAP-EPIC-29)](#epic-29-beyond-hook-enforcement--enterprise-defense-hardening-bap-epic-29)
    - [Core Architectural Invariants & Adversarial Test Matrix](#core-architectural-invariants--adversarial-test-matrix)
 
 ---
@@ -96,6 +97,7 @@ This document represents the complete functional and non-functional requirements
 | `BAP-EPIC-26` | Cross-Platform Packaging & CI/CD Release Pipeline (BAP-500–BAP-504) | MVP Enterprise Pack | **DONE** |
 | `BAP-EPIC-27` | Fleet Telemetry Consistency, Dynamic Liveness Coupling & Unified State Architecture (BAP-510–BAP-513) | MVP Core & Telemetry | **DONE** |
 | `BAP-EPIC-28` | Agent Watch Persona Architecture, Canonical Activity Event & Live Enterprise Topology (BAP-520–BAP-525) | MVP Post-Pilot / v2.1 | **DONE** |
+| `BAP-EPIC-29` | Beyond-Hook Enforcement & Enterprise Defense Hardening (BAP-530–BAP-539) | Enterprise Hardening v2.2 | **BACKLOG** |
 
 ---
 
@@ -2329,4 +2331,222 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   8. Categories can evolve without major UI redesign.
   9. The experience works across multiple agent technologies, not only Claude Code.
   10. The resulting dashboard enables an executive to understand, within seconds: **How many agents are working, what kinds of work they are doing, and where AI is contributing to the organization.**
+
+---
+
+### Epic 29: Beyond-Hook Enforcement & Enterprise Defense Hardening (BAP-EPIC-29)
+**Summary**: Elevate BAP beyond user-space hooks and Model Context Protocol (MCP) wrappers into an operating-system-level zero-trust enforcement architecture. Addresses the systemic blind spots of agent harnesses: multi-tenant exfiltration (PromptArmor), hidden child processes (`npm postinstall`), dynamic skill drift, ambient credential leaks, symlink/AST evasion, subagent delegation lineage, and tamper resistance.
+
+**Architectural Resolutions (Option A Standard)**:
+1. **Tiered Fail-Closed Model**: Strict fail-closed attestation in Enterprise Fleet mode; when offline, developer endpoints fall back to local cached Cedar policy evaluation, but strictly fail-closed on external network egress and credential brokering.
+2. **Credential Process & Helper Integration**: BAP configures itself as the Git `credential.helper` and AWS `credential_process`, stripping standing environment credentials (`AWS_*`, `GITHUB_*`, `.env`) and dispensing JIT ephemeral credentials only for approved tool calls.
+3. **Two-Tier Process Supervision**: User-space `bapedge` (unprivileged Landlock on Linux and Windows Restricted Tokens) for lightweight developer onboarding + optional Enterprise Daemon (`bap-daemon` with eBPF/ETW) for deep child process ancestry supervision on managed corporate workstations.
+
+---
+
+#### BAP-530: Identity-Aware Egress Control & Multi-Tenant Exfiltration Defense
+* **Epic**: `BAP-EPIC-29`
+* **Status**: `BACKLOG`
+* **Priority**: `P0 - High`
+* **Story**:
+  > As an Enterprise Security Architect, I want egress proxying to validate the destination tenant, organization, and account identity rather than relying on domain allowlists alone, so that backdoored skills or prompt injection attacks cannot exfiltrate corporate data to attacker-controlled accounts hosted on trusted enterprise SaaS domains (e.g. GitHub, AWS S3, Slack, Google Drive).
+* **Business Intent**:
+  Mitigates the PromptArmor multi-tenant vulnerability where an allowlisted domain (`api.github.com` or `s3.amazonaws.com`) is abused by an agent uploading sensitive files to an attacker's private repository or bucket on the same service.
+* **Key Requirements**:
+  1. Inspect egress HTTP requests at the Gateway PEP / HTTP proxy layer for tenant identifiers (e.g., GitHub organization headers, AWS Account ID / Bucket owner headers, Slack workspace IDs, Google Workspace domain).
+  2. Cedar policy syntax must support resource matching on tenant ownership:
+     ```cedar
+     permit(principal, action == Action::"HTTP:Post", resource)
+     when { resource.tenant_id in ["corp-org", "corp-internal"] };
+     ```
+  3. Default-deny any egress requests where the destination service is in the trusted domain list but the destination tenant/account does not match approved enterprise identifiers.
+* **Acceptance Criteria**:
+  1. Outbound requests to `api.github.com` targeting unapproved organizations are blocked with an explicit tenant mismatch reason.
+  2. S3 requests attempting upload to buckets owned by external AWS accounts are intercepted and blocked.
+  3. Audit log records destination tenant/account ID alongside canonical resource URI.
+
+---
+
+#### BAP-531: Content Pinning & Dynamic Tool Attestation (AIR Model)
+* **Epic**: `BAP-EPIC-29`
+* **Status**: `BACKLOG`
+* **Priority**: `P0 - High`
+* **Story**:
+  > As a Security Administrator, I want cryptographic content pinning for skill definition files, prompt instructions, and MCP tool manifests, so that an agent cannot silently execute modified or drifted tools without explicit re-attestation.
+* **Business Intent**:
+  Implements the AI Incident Response (AIR) core insight: an agent approved under an initial tool definition or skill prompt must not be allowed to execute if the skill file (`SKILL.md`), system instructions, or MCP schema changes on disk or over the network.
+* **Key Requirements**:
+  1. Compute SHA-256 digests of all registered skills, system prompt templates, and MCP tool schemas during agent enrollment/discovery.
+  2. On every tool call or grant acquisition, re-verify the content digest of the target tool and its declaring skill.
+  3. Treat any content drift or hash mismatch as an invalidation event: immediately revoke active grants, block execution, and require administrator or user re-approval.
+* **Acceptance Criteria**:
+  1. Modifying a line in a skill's `SKILL.md` or MCP tool schema causes subsequent executions of that tool to be blocked with `HashMismatchError`.
+  2. Content hashes are recorded in BAP execution receipts for forensic verification.
+  3. Approved hash changes generate an audit event and require policy sync.
+
+---
+
+#### BAP-532: Delegation Lineage & Attenuated Multi-Agent Handoffs
+* **Epic**: `BAP-EPIC-29`
+* **Status**: `BACKLOG`
+* **Priority**: `P0 - High`
+* **Story**:
+  > As a CISO, I want subagent spawns and agent-to-agent delegations to cryptographically inherit their parent agent's authority grant and only ever narrow (attenuate) that authority, so that delegating work across autonomous swarms cannot escalate privileges or bypass boundaries.
+* **Business Intent**:
+  Prevents privilege escalation in multi-agent workflows (e.g. orchestrator spawning research or coding subagents). Authority must strictly monotonically decrease down the delegation tree.
+* **Key Requirements**:
+  1. When an agent invokes a subagent, the parent's `grant_id` and JWT-SVID claims are passed into the subagent's execution context.
+  2. The subagent's grant is minted as an attenuated child grant (macaroon / caveat-chained JWT-SVID) whose permitted scopes, paths, and resources are a strict mathematical subset of the parent's grant.
+  3. Subagents cannot request scopes or resources outside their parent's boundary.
+  4. Revoking the parent session or grant automatically and atomically revokes all descendant subagent grants across the fleet.
+* **Acceptance Criteria**:
+  1. Child subagent requesting a scope broader than its parent receives `403 Forbidden: PrivilegeEscalationBlocked`.
+  2. Revoking the root orchestrator immediately terminates all active descendant subagent processes.
+  3. Lineage tree (`root_agent_id -> subagent_id -> worker_id`) is captured in audit receipts and displayed in the live topology.
+
+---
+
+#### BAP-533: Robust AST Command Parsing & Canonical Symlink Resolution
+* **Epic**: `BAP-EPIC-29`
+* **Status**: `BACKLOG`
+* **Priority**: `P1 - Medium`
+* **Story**:
+  > As a Security Engineer, I want the BAP tool decomposer to parse commands using abstract syntax tree (AST) grammar and resolve all filesystem symlinks to canonical paths, so that command obfuscation, subshell chaining, path traversal, and symlink evasions are completely neutralized.
+* **Business Intent**:
+  Regex and string-splitting parsers can be bypassed by shell tricks (e.g., `cat /path/../.env`, `ln -s /etc/shadow link && cat link`, nested backticks, subshells `$(curl ...)`). AST-level tokenization ensures true semantic understanding.
+* **Key Requirements**:
+  1. Integrate a POSIX/Bash AST parser (e.g. `mvdan/sh`) into `bap-edge` to parse compound commands, pipes (`|`), redirections (`>`), subshells (`$(...)`, `` `...` ``), and logical operators (`&&`, `||`).
+  2. Every file path in command arguments must be evaluated via `filepath.EvalSymlinks` to its real canonical filesystem destination before Cedar policy matching.
+  3. Decompose and evaluate every node in an AST tree; if any sub-command or redirected path violates policy, block the entire pipeline.
+* **Acceptance Criteria**:
+  1. `cat /app/subdir/../.env` resolves to `.env` and is blocked by secret disclosure policy.
+  2. Reading through a symlink pointing to a forbidden file (`~/.ssh/id_rsa`) is evaluated against the target path and denied.
+  3. Compound pipeline `git status && curl untrusted.site` evaluates both commands independently, allowing git but blocking curl before execution begins.
+
+---
+
+#### BAP-534: Process-Level Supervision & Child Ancestry Tracking (Two-Tier Model)
+* **Epic**: `BAP-EPIC-29`
+* **Status**: `BACKLOG`
+* **Priority**: `P1 - Medium`
+* **Story**:
+  > As an Endpoint Security Lead, I want process-level supervision that monitors and bounds child processes spawned by permitted parent commands (e.g. `npm test` triggering `postinstall` scripts or compilers), so that malicious payloads cannot escape hook-level visibility.
+* **Business Intent**:
+  Harness hooks only observe top-level tool invocations. Malicious dependencies or compromised packages spawn hidden child processes that bypass user-space hooks unless OS process trees are bound to the same sandbox.
+* **Key Requirements**:
+  1. **Tier 1 (Lightweight User-Space)**: Use OS-native process containment (Windows Job Objects with restricted tokens, Linux unprivileged Landlock / user namespaces) so child processes inherit the restricted token and cannot escape.
+  2. **Tier 2 (Managed Enterprise Daemon)**: Optional privileged `bap-daemon` collecting kernel-level process creation events (ETW on Windows, eBPF on Linux, Endpoint Security framework on macOS) correlating every child PID back to the original `BAP_SESSION_ID`.
+  3. Enforce execution whitelist on child processes: if an approved command (`npm`) attempts to spawn unapproved executables (`curl`, `nc`, `powershell`), immediately kill the process tree.
+* **Acceptance Criteria**:
+  1. A malicious `postinstall` script inside `npm install` attempting to run `curl` is terminated at the OS process level.
+  2. Child processes are constrained to the same Windows Job Object / Landlock boundaries as the parent `bapedge` broker.
+  3. Process tree ancestry (`bapedge -> npm -> node -> child.exe`) is recorded in audit logs.
+
+---
+
+#### BAP-535: Credential Shielding & JIT Secret Brokering
+* **Epic**: `BAP-EPIC-29`
+* **Status**: `BACKLOG`
+* **Priority**: `P1 - Medium`
+* **Story**:
+  > As a CISO, I want ambient standing credentials completely shielded from agent processes and short-lived credentials brokered just-in-time via native CLI credential helpers, so that agents cannot read long-lived developer secrets from the environment or home directory.
+* **Business Intent**:
+  AI agents executing in developer environments routinely have ambient access to standing secrets (`$AWS_SECRET_ACCESS_KEY`, `$GITHUB_TOKEN`, `~/.aws/credentials`, `~/.ssh/id_rsa`). Stripping ambient secrets and acting as the official credential helper guarantees bounded, auditable credential issuance.
+* **Key Requirements**:
+  1. Strip sensitive environment variables from agent subprocess environments (`AWS_*`, `GITHUB_*`, `OPENAI_*`, `ANTHROPIC_*`, `*_TOKEN`, `*_KEY`).
+  2. Configure BAP as the official Git `credential.helper` and AWS `credential_process`:
+     - When `git` or `aws` needs credentials, it queries BAP locally.
+     - BAP verifies the session, evaluates Cedar policy, acquires a short-lived ephemeral STS token, and returns it to the CLI.
+  3. Implement output stream scanning: scan tool stdout/stderr for accidental secret leakage (regex for AWS keys, private keys, high-entropy tokens) and redact before returning to the model harness.
+* **Acceptance Criteria**:
+  1. Agent running `python -c "import os; print(os.environ.get('AWS_SECRET_ACCESS_KEY'))"` prints empty string.
+  2. Legitimate `aws s3` CLI command receives JIT 15-minute STS credentials via `credential_process` without developer needing standing keys in `~/.aws/credentials`.
+  3. Outputs containing detected private keys or API tokens are automatically redacted with `[BAP_REDACTED_SECRET]`.
+
+---
+
+#### BAP-536: Standing Adversarial Regression & Continuous Add-on Scanning Suite
+* **Epic**: `BAP-EPIC-29`
+* **Status**: `BACKLOG`
+* **Priority**: `P1 - Medium`
+* **Story**:
+  > As a SecOps Lead, I want a standing automated adversarial regression suite executed in CI/CD before any policy or agent release, plus continuous re-scanning of installed skills and extensions, so that policy regressions and prompt injection bypasses are caught before deployment.
+* **Business Intent**:
+  Ensures ongoing security assurance against evolving agent jailbreaks, indirect prompt injections, and extension tampering across the agent ecosystem (aligning with OWASP Top 10 for LLMs & Agentic AI).
+* **Key Requirements**:
+  1. Implement a comprehensive automated test harness in CI/CD executing:
+     - Indirect prompt injection attacks embedded in untrusted repo files.
+     - Header spoofing and bypass attempts against Gateway PEP.
+     - Same-domain multi-tenant exfiltration probes.
+     - Hook tampering and bypass attempts (corrupted hook configs, silent crashes).
+  2. Continuous background scanner periodically validating installed skills, MCP configurations, and IDE plugins against known CVEs and malicious patterns.
+* **Acceptance Criteria**:
+  1. CI/CD pipeline runs full adversarial regression matrix before allowing policy bundle compilation.
+  2. Any bypass attempt succeeding in CI/CD halts the build and generates a high-severity test failure.
+  3. Weekly scheduled scan of installed extensions alerts on newly detected unauthorized skills.
+
+---
+
+#### BAP-537: Tamper Resistance & Tiered Fail-Closed Quarantining
+* **Epic**: `BAP-EPIC-29`
+* **Status**: `BACKLOG`
+* **Priority**: `P2 - Medium`
+* **Story**:
+  > As an IT Administrator, I want MDM-enforced managed settings, file-integrity monitoring on hook binaries, and a heartbeat watchdog that quarantines endpoints if governance hooks go silent, so that developers or malicious scripts cannot disable BAP protections.
+* **Business Intent**:
+  Prevents local tampering with BAP components (e.g. killing `bapedge`, deleting `.bapstate`, disabling Claude Code hooks) while respecting offline developer mobility.
+* **Key Requirements**:
+  1. Deploy BAP configurations and binaries under administrative/MDM-managed paths (`C:\Program Files\BAP` or `/opt/bap`) with read-only permissions for standard users.
+  2. File-integrity monitoring (FIM) continuously verifying binary hashes of `bapedge` and hook interceptors.
+  3. **Tiered Fail-Closed Enforcement**:
+     - When enrolled in Enterprise Fleet mode, missing heartbeats or tampered hooks trigger immediate local quarantine (fleet revokes all STS grants; device blocked from enterprise API gateways).
+     - When offline, local execution is governed by cached Cedar policies, but all external network egress and credential requests strictly fail-closed.
+* **Acceptance Criteria**:
+  1. Deleting or modifying a hook script causes the agent execution broker to fail-closed and reject subsequent tool calls.
+  2. If an enterprise device goes silent for > 3 heartbeat intervals, the Control Plane marks the device quarantined and rejects all grant requests.
+  3. Offline devices remain capable of local building/testing while blocked from enterprise cloud egress.
+
+---
+
+#### BAP-538: Incident Forensics, Replay & Automated Snapshot Rollback
+* **Epic**: `BAP-EPIC-29`
+* **Status**: `BACKLOG`
+* **Priority**: `P2 - Medium`
+* **Story**:
+  > As a SOC Analyst, I want enterprise SIEM/SOAR streaming, cryptographic replay forensics, and automated filesystem rollback, so that unauthorized file modifications caught post-execution can be rolled back instantly without manual intervention.
+* **Business Intent**:
+  Closes the incident response loop when an adversarial or hallucinated action causes unauthorized changes before a human notices. Enables point-in-time recovery and auditable SOC forensics.
+* **Key Requirements**:
+  1. Export real-time security events to enterprise SIEM/SOAR platforms (Splunk, Microsoft Sentinel, Datadog) via HTTPS webhooks / syslog CEF format.
+  2. Capture filesystem pre-execution states (via isolated Git worktrees, volume shadow copies, or copy-on-write snapshot checkpoints) for mutating tool calls.
+  3. Provide 1-click or automated rollback CLI / API:
+     ```powershell
+     bapedge rollback --session-id <sess_id> --to-receipt <rcpt_id>
+     ```
+  4. Execution replay forensic viewer matching exact inputs, tool calls, and outputs using signed execution receipts.
+* **Acceptance Criteria**:
+  1. Destructive file change by an agent can be rolled back to pre-execution state in < 1 second using `bapedge rollback`.
+  2. SIEM webhook receives structured CEF/JSON event within 500ms of any policy violation or emergency freeze.
+  3. Forensic replay proves cryptographic receipt chain integrity end-to-end.
+
+---
+
+#### BAP-539: Multi-Harness Adapters & SaaS Delegated Token Governance
+* **Epic**: `BAP-EPIC-29`
+* **Status**: `BACKLOG`
+* **Priority**: `P2 - Low`
+* **Story**:
+  > As an Enterprise Architect, I want unified BAP adapters for Cursor, Gemini CLI, browser agents (Playwright), and SaaS-embedded agents (Salesforce, Workato), so that zero-trust bounded authority applies across the entire corporate AI ecosystem, not only Claude Code.
+* **Business Intent**:
+  Extends BAP's governance footprint beyond developer CLI tools into the broader ecosystem of IDE extensions, autonomous browser automation, and enterprise SaaS agents.
+* **Key Requirements**:
+  1. Build lightweight adapters for:
+     - **Cursor**: Workspace extension intercepting terminal and tool calls.
+     - **Gemini CLI**: Interceptor hook matching standard BAP mission contract.
+     - **Browser Agents**: CDP / Playwright proxy enforcing URL allowlists, tenant matching, and DOM interaction limits.
+  2. Implement SaaS delegated-token governance: govern OAuth tokens issued to cloud-hosted agents, binding tokens to short-lived BAP authority policies.
+* **Acceptance Criteria**:
+  1. Cursor and Gemini CLI report standardized `CanonicalActivityEvent` telemetry to Agent Watch dashboard.
+  2. Browser agent attempting to navigate to unapproved domain or upload credentials is intercepted and blocked.
+  3. SaaS OAuth tokens cannot be reused outside of attested BAP session contexts.
 
