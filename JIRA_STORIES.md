@@ -2394,8 +2394,23 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 
 #### BAP-532: Delegation Lineage & Attenuated Multi-Agent Handoffs
 * **Epic**: `BAP-EPIC-29`
-* **Status**: `BACKLOG`
+* **Status**: `DONE`
 * **Priority**: `P0 - High`
+* **Implementation Evidence**:
+  - Implemented cryptographic delegation and monotonic authority attenuation in `bap-controlplane/internal/authz/grants.go` via `VerifyAttenuation`, `DelegateAttenuatedChild`, and recursive cascading revocation (`RevokeGrant`, `IsGrantRevoked`).
+  - Added Control Plane REST API endpoints in `bap-controlplane/internal/api/handlers.go` and `activity.go`:
+    - `POST /api/v1/grants/delegate`: Mints caveat-chained attenuated child grants with clamped TTL; strictly rejects broadening with `403 Forbidden: PrivilegeEscalationBlocked`.
+    - `POST /api/v1/grants/revoke`: Cascades revocation to all descendant grants across the fleet.
+    - `GET /api/activity/lineage` & `GET /api/v1/activity/lineage`: Exposes active multi-agent delegation lineages and depth records.
+    - Cascading termination in `handleTargetedKillAgent` (`action == "revoke"` and `action == "stop"`) and `handleRevoke`: Terminates all descendant subagent processes (`killProcessPID`) and invalidates grants. Descendant heartbeats are rejected with `status: revoked, action: terminate`.
+    - Live topology integration: `buildLiveTopologyTree()` in `internal/api/activity.go` attaches delegation lineage child nodes to team nodes.
+  - Updated `bap-controlplane/internal/session/store.go` with lineage tracking, `GetDescendants(target)`, and fleet-wide cascading session revocation.
+  - Implemented `bap-edge` client tooling and execution provenance:
+    - Added `bapedge delegate [mint|run|status|tree]` CLI in `bap-edge/cmd/delegate.go` and registered in `bap-edge/main.go`.
+    - Injected delegation environment variables into child processes (`BAP_DELEGATION_LINEAGE`, `BAP_LINEAGE_TREE`, `BAP_ROOT_AGENT_ID`, `BAP_PARENT_GRANT_ID`, `BAP_GRANT_ID`, `BAP_GRANT_TOKEN`).
+    - Captured lineage in `ExecutionReceipt` (`pkg/types/types.go`) and `AuditEntry` (`internal/audit/logger.go`), incorporating `LineageTree` into tamper-evident hash chaining (`ComputeEntryHash`).
+  - Enhanced Gateway PEP (`bap-gateway/main.go`) to extract lineage claims and forward upstream headers (`X-BAP-Verified-Lineage`, `X-BAP-Verified-Root-Agent`, `X-BAP-Verified-Parent-Grant`).
+  - Verification: 100% test coverage across `bap-controlplane` (`delegation_test.go`, `delegation_api_test.go`), `bap-edge` (`delegate_test.go`), and `bap-gateway`.
 * **Story**:
   > As a CISO, I want subagent spawns and agent-to-agent delegations to cryptographically inherit their parent agent's authority grant and only ever narrow (attenuate) that authority, so that delegating work across autonomous swarms cannot escalate privileges or bypass boundaries.
 * **Business Intent**:

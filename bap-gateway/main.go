@@ -39,6 +39,10 @@ type ConsumeResponse struct {
 	PolicyVersion string   `json:"policy_version,omitempty"`
 	Scopes        []string `json:"scopes"`
 	ExpiresAt     int64    `json:"expires_at"`
+	Lineage       []string `json:"lineage,omitempty"`
+	LineageTree   string   `json:"lineage_tree,omitempty"`
+	RootAgentID   string   `json:"root_agent_id,omitempty"`
+	ParentGrantID string   `json:"parent_grant_id,omitempty"`
 }
 
 type TokenClaims struct {
@@ -55,6 +59,14 @@ type TokenClaims struct {
 	PolicyVersion string   `json:"policy_version,omitempty"`
 	Scopes        []string `json:"scopes"`
 	Exp           int64    `json:"exp"`
+	// Delegation Lineage & Attenuation (BAP-532)
+	ParentGrantID string   `json:"parent_grant_id,omitempty"`
+	RootGrantID   string   `json:"root_grant_id,omitempty"`
+	RootAgentID   string   `json:"root_agent_id,omitempty"`
+	ParentAgentID string   `json:"parent_agent_id,omitempty"`
+	Lineage       []string `json:"lineage,omitempty"`
+	LineageTree   string   `json:"lineage_tree,omitempty"`
+	Depth         int      `json:"depth,omitempty"`
 }
 
 func main() {
@@ -221,6 +233,15 @@ func pepGuard(cfg GatewayConfig, next http.HandlerFunc) http.HandlerFunc {
 		if claims.Resource != "" {
 			r.Header.Set("X-BAP-Verified-Resource", claims.Resource)
 		}
+		if claims.LineageTree != "" {
+			r.Header.Set("X-BAP-Verified-Lineage", claims.LineageTree)
+		}
+		if claims.RootAgentID != "" {
+			r.Header.Set("X-BAP-Verified-Root-Agent", claims.RootAgentID)
+		}
+		if claims.ParentGrantID != "" {
+			r.Header.Set("X-BAP-Verified-Parent-Grant", claims.ParentGrantID)
+		}
 
 		next(w, r)
 	}
@@ -294,6 +315,10 @@ func validateGrantWithDetails(cfg GatewayConfig, token, action, resource, sessio
 						PolicyVersion: consumeResp.PolicyVersion,
 						Scopes:        consumeResp.Scopes,
 						Exp:           consumeResp.ExpiresAt,
+						Lineage:       consumeResp.Lineage,
+						LineageTree:   consumeResp.LineageTree,
+						RootAgentID:   consumeResp.RootAgentID,
+						ParentGrantID: consumeResp.ParentGrantID,
 					}
 					return true, claims, nil
 				}

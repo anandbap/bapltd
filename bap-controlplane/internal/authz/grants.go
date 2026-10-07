@@ -24,6 +24,10 @@ type TokenMinter struct {
 	defaultTTL     time.Duration
 	mu             sync.Mutex
 	consumedGrants map[string]*grantUsage
+	revokedGrants  map[string]string   // grantID -> reason
+	grantChildren  map[string][]string // parentGrantID -> []childGrantID
+	grantParent    map[string]string   // childGrantID -> parentGrantID
+	grantRoot      map[string]string   // childGrantID -> rootGrantID
 }
 
 func NewTokenMinter(secretKey string, defaultTTL time.Duration) *TokenMinter {
@@ -34,6 +38,10 @@ func NewTokenMinter(secretKey string, defaultTTL time.Duration) *TokenMinter {
 		signingKey:     []byte(secretKey),
 		defaultTTL:     defaultTTL,
 		consumedGrants: make(map[string]*grantUsage),
+		revokedGrants:  make(map[string]string),
+		grantChildren:  make(map[string][]string),
+		grantParent:    make(map[string]string),
+		grantRoot:      make(map[string]string),
 	}
 	go tm.cleanupLoop()
 	return tm
@@ -74,6 +82,16 @@ type GrantClaims struct {
 	Groups        []string                `json:"groups,omitempty"`
 	AuthMode      string                  `json:"auth_mode,omitempty"`
 	IdPProvider   string                  `json:"idp_provider,omitempty"`
+	// Delegation Lineage & Attenuation (BAP-532)
+	ParentGrantID   string                  `json:"parent_grant_id,omitempty"`
+	ParentSessionID string                  `json:"parent_session_id,omitempty"`
+	RootGrantID     string                  `json:"root_grant_id,omitempty"`
+	RootAgentID     string                  `json:"root_agent_id,omitempty"`
+	ParentAgentID string                  `json:"parent_agent_id,omitempty"`
+	Lineage       []string                `json:"lineage,omitempty"`
+	LineageTree   string                  `json:"lineage_tree,omitempty"`
+	Caveats       []string                `json:"caveats,omitempty"`
+	Depth         int                     `json:"depth,omitempty"`
 	Iss           string                  `json:"iss"`
 	Aud           string                  `json:"aud"`
 	Iat           int64                   `json:"iat"`
@@ -205,6 +223,21 @@ func (tm *TokenMinter) Verify(tokenStr string) (*GrantClaims, error) {
 		return nil, fmt.Errorf("token has expired")
 	}
 
+	// Check if this grant or its parent/root has been revoked (BAP-532)
+	if isRevoked, reason := tm.IsGrantRevoked(claims.GrantID); isRevoked {
+		return nil, fmt.Errorf("grant %s is revoked: %s", claims.GrantID, reason)
+	}
+	if claims.ParentGrantID != "" {
+		if isRevoked, reason := tm.IsGrantRevoked(claims.ParentGrantID); isRevoked {
+			return nil, fmt.Errorf("parent grant %s is revoked: %s", claims.ParentGrantID, reason)
+		}
+	}
+	if claims.RootGrantID != "" {
+		if isRevoked, reason := tm.IsGrantRevoked(claims.RootGrantID); isRevoked {
+			return nil, fmt.Errorf("root grant %s is revoked: %s", claims.RootGrantID, reason)
+		}
+	}
+
 	return &claims, nil
 }
 
@@ -309,3 +342,294 @@ func (tm *TokenMinter) ConsumeWithDetails(tokenStr, action, resource, sessionID 
 
 	return claims, nil
 }
+
+// RevokeGrant atomically revokes a grant and all descendant child grants across the fleet (BAP-532).
+func (tm *TokenMinter) RevokeGrant(grantID, reason string) []string {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	return tm.revokeGrantLocked(grantID, reason)
+}
+
+func (tm *TokenMinter) revokeGrantLocked(grantID, reason string) []string {
+	if grantID == "" {
+		return nil
+	}
+	var revoked []string
+	if _, already := tm.revokedGrants[grantID]; !already {
+		tm.revokedGrants[grantID] = reason
+		revoked = append(revoked, grantID)
+	}
+
+	// Recursively revoke all children
+	if children, exists := tm.grantChildren[grantID]; exists {
+		for _, childID := range children {
+			childRevoked := tm.revokeGrantLocked(childID, fmt.Sprintf("cascading revocation from parent grant %s: %s", grantID, reason))
+			revoked = append(revoked, childRevoked...)
+		}
+	}
+	return revoked
+}
+
+// IsGrantRevoked checks if a grant, or any ancestor in its delegation lineage, has been revoked.
+func (tm *TokenMinter) IsGrantRevoked(grantID string) (bool, string) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	if reason, ok := tm.revokedGrants[grantID]; ok {
+		return true, reason
+	}
+	if parentID, ok := tm.grantParent[grantID]; ok && parentID != "" {
+		if reason, ok := tm.revokedGrants[parentID]; ok {
+			return true, fmt.Sprintf("parent grant %s revoked: %s", parentID, reason)
+		}
+	}
+	if rootID, ok := tm.grantRoot[grantID]; ok && rootID != "" {
+		if reason, ok := tm.revokedGrants[rootID]; ok {
+			return true, fmt.Sprintf("root grant %s revoked: %s", rootID, reason)
+		}
+	}
+	return false, ""
+}
+
+// ListRevokedGrants returns all currently revoked grant IDs.
+func (tm *TokenMinter) ListRevokedGrants() map[string]string {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	res := make(map[string]string, len(tm.revokedGrants))
+	for k, v := range tm.revokedGrants {
+		res[k] = v
+	}
+	return res
+}
+
+// VerifyAttenuation strictly verifies that child authority is a mathematical subset of parent authority (BAP-532).
+// Monotonic attenuation rule: child scopes, resource, and action can only narrow or match parent, never broaden.
+func VerifyAttenuation(parentScopes, childScopes []string, parentResource, childResource, parentAction, childAction string) error {
+	// 1. Scopes Attenuation: every child scope MUST be permitted by parent scopes
+	if len(parentScopes) > 0 {
+		if len(childScopes) == 0 {
+			return fmt.Errorf("PrivilegeEscalationBlocked: child subagent requested empty scopes while parent has bounded scopes")
+		}
+		for _, cs := range childScopes {
+			allowed := false
+			for _, ps := range parentScopes {
+				if ps == "*" {
+					allowed = true
+					break
+				}
+				if ps == cs {
+					allowed = true
+					break
+				}
+				// Wildcard prefix matching: e.g. parent "fs:*" covers child "fs:read"
+				if strings.HasSuffix(ps, "*") && strings.HasPrefix(cs, strings.TrimSuffix(ps, "*")) {
+					allowed = true
+					break
+				}
+				if ps == "admin:all" {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return fmt.Errorf("PrivilegeEscalationBlocked: child subagent requested scope %q which is outside parent boundary %v", cs, parentScopes)
+			}
+		}
+	}
+
+	// 2. Resource Attenuation: child cannot broaden parent's resource
+	if parentResource != "" && parentResource != "*" {
+		if childResource == "" || childResource == "*" {
+			return fmt.Errorf("PrivilegeEscalationBlocked: child subagent cannot broaden resource from %q to wildcard or empty", parentResource)
+		}
+		if strings.HasSuffix(parentResource, "/*") {
+			base := strings.TrimSuffix(parentResource, "/*")
+			if !strings.HasPrefix(childResource, base) {
+				return fmt.Errorf("PrivilegeEscalationBlocked: child subagent resource %q violates parent boundary %q", childResource, parentResource)
+			}
+		} else if strings.HasSuffix(parentResource, "*") {
+			base := strings.TrimSuffix(parentResource, "*")
+			if !strings.HasPrefix(childResource, base) {
+				return fmt.Errorf("PrivilegeEscalationBlocked: child subagent resource %q violates parent boundary %q", childResource, parentResource)
+			}
+		} else {
+			if childResource != parentResource && !strings.HasPrefix(childResource, parentResource+"/") {
+				return fmt.Errorf("PrivilegeEscalationBlocked: child subagent resource %q exceeds parent resource boundary %q", childResource, parentResource)
+			}
+		}
+	}
+
+	// 3. Action Attenuation: child cannot broaden parent's action
+	if parentAction != "" && parentAction != "*" {
+		if childAction == "" || childAction == "*" {
+			return fmt.Errorf("PrivilegeEscalationBlocked: child subagent cannot broaden action from %q to wildcard", parentAction)
+		}
+		if !strings.EqualFold(parentAction, childAction) {
+			return fmt.Errorf("PrivilegeEscalationBlocked: child subagent action %q exceeds parent action %q", childAction, parentAction)
+		}
+	}
+
+	return nil
+}
+
+// DelegateAttenuatedChild mints an attenuated child grant (macaroon / caveat-chained JWT-SVID)
+// cryptographically derived from a valid parent grant (BAP-532).
+func (tm *TokenMinter) DelegateAttenuatedChild(
+	parentToken string,
+	childAgent *types.RegisteredAgent,
+	requestedScopes []string,
+	sessionID string,
+	action string,
+	resource string,
+	constraints *types.GrantConstraints,
+	ttlMins int,
+) (string, time.Time, string, *GrantClaims, error) {
+	parentClaims, err := tm.Verify(parentToken)
+	if err != nil {
+		return "", time.Time{}, "", nil, fmt.Errorf("invalid parent grant token: %w", err)
+	}
+
+	// Verify parent grant is not revoked
+	if isRevoked, reason := tm.IsGrantRevoked(parentClaims.GrantID); isRevoked {
+		return "", time.Time{}, "", nil, fmt.Errorf("parent grant %s is revoked: %s", parentClaims.GrantID, reason)
+	}
+
+	// Monotonic Attenuation check
+	childScopes := requestedScopes
+	if len(childScopes) == 0 {
+		childScopes = parentClaims.Scopes
+	}
+	childResource := resource
+	if childResource == "" {
+		childResource = parentClaims.Resource
+	}
+	childAction := action
+	if childAction == "" {
+		childAction = parentClaims.Action
+	}
+
+	if err := VerifyAttenuation(parentClaims.Scopes, childScopes, parentClaims.Resource, childResource, parentClaims.Action, childAction); err != nil {
+		return "", time.Time{}, "", nil, err
+	}
+
+	// Calculate expiration: child cannot exceed parent TTL
+	now := time.Now().UTC()
+	childTTL := tm.defaultTTL
+	if ttlMins > 0 {
+		childTTL = time.Duration(ttlMins) * time.Minute
+	}
+	expiresAt := now.Add(childTTL)
+	parentExp := time.Unix(parentClaims.Exp, 0).UTC()
+	if expiresAt.After(parentExp) {
+		expiresAt = parentExp
+	}
+
+	idBytes := make([]byte, 8)
+	if _, err := rand.Read(idBytes); err != nil {
+		return "", time.Time{}, "", nil, fmt.Errorf("failed to generate random token id: %w", err)
+	}
+	childGrantID := fmt.Sprintf("grant-child-%x", idBytes)
+
+	rootGrantID := parentClaims.RootGrantID
+	if rootGrantID == "" {
+		rootGrantID = parentClaims.GrantID
+	}
+	rootAgentID := parentClaims.RootAgentID
+	if rootAgentID == "" {
+		rootAgentID = parentClaims.Sub
+	}
+
+	lineage := make([]string, 0, len(parentClaims.Lineage)+2)
+	if len(parentClaims.Lineage) == 0 {
+		lineage = append(lineage, rootAgentID)
+	} else {
+		lineage = append(lineage, parentClaims.Lineage...)
+	}
+	childAgentID := childAgent.AgentID
+	if childAgentID == "" {
+		childAgentID = childAgent.AgentName
+	}
+	if childAgentID == "" {
+		childAgentID = "subagent"
+	}
+	lineage = append(lineage, childAgentID)
+	lineageTree := strings.Join(lineage, " -> ")
+
+	// Macaroon caveat attenuation chaining
+	caveats := make([]string, 0, len(parentClaims.Caveats)+2)
+	caveats = append(caveats, parentClaims.Caveats...)
+	caveat := fmt.Sprintf("attenuated:depth=%d;scopes=%s", parentClaims.Depth+1, strings.Join(childScopes, ","))
+	caveats = append(caveats, caveat)
+
+	sub := childAgent.AgentID
+	if childAgent.SPIFFEID != "" {
+		sub = childAgent.SPIFFEID
+	}
+	if sub == "" {
+		sub = childAgentID
+	}
+
+	claims := GrantClaims{
+		GrantID:       childGrantID,
+		Sub:           sub,
+		AppID:         childAgent.AppID,
+		InstanceID:    childAgent.InstanceID,
+		SPIFFEID:      childAgent.SPIFFEID,
+		AgentName:     childAgent.AgentName,
+		EnvProfile:    string(childAgent.EnvProfile),
+		BinaryHash:    childAgent.EnrolledBinaryHash,
+		SessionID:     sessionID,
+		Action:        childAction,
+		Resource:      childResource,
+		Constraints:   constraints,
+		PolicyVersion: parentClaims.PolicyVersion,
+		Scopes:        childScopes,
+		UserEmail:     parentClaims.UserEmail,
+		Department:    parentClaims.Department,
+		Groups:        parentClaims.Groups,
+		AuthMode:      parentClaims.AuthMode,
+		IdPProvider:   parentClaims.IdPProvider,
+		ParentGrantID:   parentClaims.GrantID,
+		ParentSessionID: parentClaims.SessionID,
+		RootGrantID:     rootGrantID,
+		RootAgentID:     rootAgentID,
+		ParentAgentID:   parentClaims.Sub,
+		Lineage:         lineage,
+		LineageTree:     lineageTree,
+		Caveats:         caveats,
+		Depth:           parentClaims.Depth + 1,
+		Iss:             "bap-controlplane",
+		Aud:             "bap-edge-broker",
+		Iat:           now.Unix(),
+		Exp:           expiresAt.Unix(),
+	}
+
+	header := map[string]string{
+		"alg": "HS256",
+		"typ": "JWT",
+	}
+	headerJSON, _ := json.Marshal(header)
+	headerB64 := base64.RawURLEncoding.EncodeToString(headerJSON)
+
+	claimsJSON, _ := json.Marshal(claims)
+	claimsB64 := base64.RawURLEncoding.EncodeToString(claimsJSON)
+
+	unsignedToken := headerB64 + "." + claimsB64
+	mac := hmac.New(sha256.New, tm.signingKey)
+	mac.Write([]byte(unsignedToken))
+	sigB64 := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+
+	jwtToken := unsignedToken + "." + sigB64
+
+	// Track hierarchy in minter
+	tm.mu.Lock()
+	tm.grantChildren[parentClaims.GrantID] = append(tm.grantChildren[parentClaims.GrantID], childGrantID)
+	tm.grantParent[childGrantID] = parentClaims.GrantID
+	tm.grantRoot[childGrantID] = rootGrantID
+	tm.mu.Unlock()
+
+	return jwtToken, expiresAt, childGrantID, &claims, nil
+}
+

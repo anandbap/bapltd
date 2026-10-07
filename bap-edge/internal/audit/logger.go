@@ -36,6 +36,12 @@ type AuditEntry struct {
 	CanonicalAction   string    `json:"canonical_action,omitempty"`
 	CanonicalResource string    `json:"canonical_resource,omitempty"`
 	ContentHash       string    `json:"content_hash,omitempty"`
+	// Delegation Lineage & Attenuation (BAP-532)
+	Lineage       []string  `json:"lineage,omitempty"`
+	LineageTree   string    `json:"lineage_tree,omitempty"`
+	RootAgentID   string    `json:"root_agent_id,omitempty"`
+	ParentGrantID string    `json:"parent_grant_id,omitempty"`
+	GrantID       string    `json:"grant_id,omitempty"`
 	PreviousHash      string    `json:"previous_hash,omitempty"`
 	EntryHash         string    `json:"entry_hash,omitempty"`
 }
@@ -63,6 +69,15 @@ func ComputeEntryHash(entry AuditEntry, prevHash string) string {
 	h.Write([]byte(strconv.Itoa(entry.ExitCode)))
 	if entry.ContentHash != "" {
 		h.Write([]byte(entry.ContentHash))
+	}
+	if entry.LineageTree != "" {
+		h.Write([]byte(entry.LineageTree))
+	}
+	if entry.RootAgentID != "" {
+		h.Write([]byte(entry.RootAgentID))
+	}
+	if entry.GrantID != "" {
+		h.Write([]byte(entry.GrantID))
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

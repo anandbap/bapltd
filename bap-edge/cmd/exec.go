@@ -195,6 +195,24 @@ func generateExecutionReceipt(ec *execContext, result string, exitCode int) *typ
 	rSum := sha256.Sum256([]byte(receiptSeed))
 	receiptID := fmt.Sprintf("rcpt-%x-%d", rSum[:6], ts.Unix())
 
+	lineageRaw := os.Getenv("BAP_DELEGATION_LINEAGE")
+	var lineage []string
+	if lineageRaw != "" {
+		for _, part := range strings.Split(lineageRaw, ",") {
+			p := strings.TrimSpace(part)
+			if p != "" {
+				lineage = append(lineage, p)
+			}
+		}
+	}
+	lineageTree := os.Getenv("BAP_LINEAGE_TREE")
+	if lineageTree == "" && len(lineage) > 0 {
+		lineageTree = strings.Join(lineage, " -> ")
+	}
+	rootAgentID := os.Getenv("BAP_ROOT_AGENT_ID")
+	parentGrantID := os.Getenv("BAP_PARENT_GRANT_ID")
+	grantID := os.Getenv("BAP_GRANT_ID")
+
 	return &types.ExecutionReceipt{
 		ReceiptID:      receiptID,
 		RequestHash:    requestHash,
@@ -206,6 +224,11 @@ func generateExecutionReceipt(ec *execContext, result string, exitCode int) *typ
 		SessionID:      ec.sessionID,
 		Timestamp:      ts,
 		Result:         result,
+		Lineage:        lineage,
+		LineageTree:    lineageTree,
+		RootAgentID:    rootAgentID,
+		ParentGrantID:  parentGrantID,
+		GrantID:        grantID,
 	}
 }
 
@@ -280,6 +303,11 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 		Reason:            resp.Reason,
 		DurationMs:        durationMs,
 		ExitCode:          code,
+		Lineage:           resp.Receipt.Lineage,
+		LineageTree:       resp.Receipt.LineageTree,
+		RootAgentID:       resp.Receipt.RootAgentID,
+		ParentGrantID:     resp.Receipt.ParentGrantID,
+		GrantID:           resp.Receipt.GrantID,
 	}
 	if ec.shadowDenied && entry.Reason == "" {
 		entry.Reason = fmt.Sprintf("[AUDIT MODE VIOLATION] %s", ec.shadowReason)

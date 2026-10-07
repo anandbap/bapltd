@@ -69,15 +69,34 @@ type IntentDrillDown struct {
 	Subtypes map[string]int `json:"subtypes"`
 }
 
-// BusinessUnitTopologyNode represents a branch in the enterprise activity topology (BAP-524).
+// BusinessUnitTopologyNode represents a branch in the enterprise activity topology (BAP-524, BAP-532).
 type BusinessUnitTopologyNode struct {
 	ID             string                      `json:"id"`
 	Name           string                      `json:"name"`
-	Type           string                      `json:"type"` // "root", "division", "team", "agent_platform"
+	Type           string                      `json:"type"` // "root", "division", "team", "agent_platform", "orchestrator", "subagent", "worker"
 	ActiveSessions int                         `json:"active_sessions"`
 	RiskPosture    string                      `json:"risk_posture"` // "healthy", "warning", "critical"
 	Children       []*BusinessUnitTopologyNode `json:"children,omitempty"`
 	PlatformCounts map[string]int              `json:"platform_counts,omitempty"`
+	Lineage        []string                    `json:"lineage,omitempty"`
+	LineageTree    string                      `json:"lineage_tree,omitempty"`
+	ParentAgentID  string                      `json:"parent_agent_id,omitempty"`
+	RootAgentID    string                      `json:"root_agent_id,omitempty"`
+	GrantID        string                      `json:"grant_id,omitempty"`
+}
+
+// DelegationLineageRecord represents an active multi-agent delegation tree (BAP-532).
+type DelegationLineageRecord struct {
+	RootAgentID    string    `json:"root_agent_id"`
+	RootGrantID    string    `json:"root_grant_id,omitempty"`
+	RootSessionID  string    `json:"root_session_id,omitempty"`
+	Lineage        []string  `json:"lineage"`
+	LineageTree    string    `json:"lineage_tree"`
+	CurrentAgentID string    `json:"current_agent_id"`
+	Depth          int       `json:"depth"`
+	Scopes         []string  `json:"scopes"`
+	Status         string    `json:"status"` // "active", "revoked", "closed"
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // IntentDeviationReport models the Intent -> Action contract evaluation (BAP-525).

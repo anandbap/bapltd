@@ -19,6 +19,13 @@ type ExecutionReceipt struct {
 	SessionID      string    `json:"session_id,omitempty"`
 	Timestamp      time.Time `json:"timestamp"`
 	Result         string    `json:"result"` // e.g. "ALLOWED_EXECUTED", "DENIED_POLICY", "DENIED_TAMPER", "EXECUTION_FAILED", "DECISION_ONLY"
+
+	// Delegation Lineage & Attenuation (BAP-532)
+	Lineage       []string `json:"lineage,omitempty"`
+	LineageTree   string   `json:"lineage_tree,omitempty"`
+	RootAgentID   string   `json:"root_agent_id,omitempty"`
+	ParentGrantID string   `json:"parent_grant_id,omitempty"`
+	GrantID       string   `json:"grant_id,omitempty"`
 }
 
 // ExecResponse is output by the exec command.

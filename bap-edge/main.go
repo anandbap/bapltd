@@ -29,6 +29,7 @@ Available Commands:
   mcp       Run as Model Context Protocol (MCP) stdio server for Claude, Copilot, and Cursor
   daemon    Start, stop, or query background supervisor daemon (bap-daemon)
   pin       Cryptographically pin, verify, and re-attest skills, prompt instructions, and MCP tools (BAP-531)
+  delegate  Mint attenuated child grants and execute subagents with delegation lineage (BAP-532)
   attest      Client test command: connect to attestation server and request OBO JWT
   verify-log  Verify cryptographic integrity and anti-tamper hash-chain of local audit log
   help        Display help information
@@ -133,6 +134,11 @@ func main() {
 	case "pin":
 		if err := cmd.RunPin(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error in pin: %v\n", err)
+			os.Exit(1)
+		}
+	case "delegate", "subagent":
+		if err := cmd.RunDelegate(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error in delegation: %v\n", err)
 			os.Exit(1)
 		}
 	case "attest":

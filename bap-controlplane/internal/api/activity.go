@@ -1386,6 +1386,28 @@ func (s *Server) buildLiveTopologyTree() *types.BusinessUnitTopologyNode {
 		if sess.DeniedCount > 0 {
 			teamNode.RiskPosture = "warning"
 		}
+		if sess.LineageTree != "" || len(sess.Lineage) > 0 {
+			subNodeType := "subagent"
+			if sess.ParentAgentID == "" || sess.ParentSessionID == "" {
+				subNodeType = "orchestrator"
+			}
+			lineageNode := &types.BusinessUnitTopologyNode{
+				ID:             "lineage-" + sess.SessionID,
+				Name:           sess.AgentName,
+				Type:           subNodeType,
+				ActiveSessions: 1,
+				RiskPosture:    "healthy",
+				Lineage:        sess.Lineage,
+				LineageTree:    sess.LineageTree,
+				ParentAgentID:  sess.ParentAgentID,
+				RootAgentID:    sess.RootAgentID,
+				GrantID:        sess.GrantID,
+			}
+			if sess.DeniedCount > 0 {
+				lineageNode.RiskPosture = "warning"
+			}
+			teamNode.Children = append(teamNode.Children, lineageNode)
+		}
 	}
 
 	// If no sessions, check registered agents
@@ -1571,4 +1593,43 @@ func (s *Server) handleActivityDeviation(w http.ResponseWriter, r *http.Request)
 	rep := s.evaluateIntentDeviation(intent, action, tool, resource)
 	rep.SessionID = sessionID
 	writeJSON(w, http.StatusOK, rep)
+}
+
+// GET /api/activity/lineage & /api/v1/activity/lineage (BAP-532)
+func (s *Server) handleActivityLineage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var records []types.DelegationLineageRecord
+	if s.sessionStore != nil {
+		for _, sess := range s.sessionStore.List(0) {
+			if len(sess.Lineage) > 0 || sess.LineageTree != "" {
+				lin := sess.Lineage
+				if len(lin) == 0 && sess.LineageTree != "" {
+					parts := strings.Split(sess.LineageTree, " -> ")
+					for _, p := range parts {
+						lin = append(lin, strings.TrimSpace(p))
+					}
+				}
+				records = append(records, types.DelegationLineageRecord{
+					RootAgentID:    sess.RootAgentID,
+					RootGrantID:    sess.ParentGrantID,
+					RootSessionID:  sess.ParentSessionID,
+					Lineage:        lin,
+					LineageTree:    sess.LineageTree,
+					CurrentAgentID: sess.AgentName,
+					Depth:          len(lin),
+					Status:         sess.Status,
+					UpdatedAt:      sess.LastActiveAt,
+				})
+			}
+		}
+	}
+
+	s.writeTelemetry(w, r, map[string]any{
+		"count":    len(records),
+		"lineages": records,
+	})
 }

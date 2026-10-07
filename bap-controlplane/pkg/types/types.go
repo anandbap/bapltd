@@ -112,15 +112,18 @@ type GrantConstraints struct {
 }
 
 type AcquireGrantRequest struct {
-	AgentID     string            `json:"agent_id"`
-	BinaryHash  string            `json:"binary_hash"`
-	Signature   string            `json:"signature,omitempty"`
-	Timestamp   int64             `json:"timestamp"`
-	SessionID   string            `json:"session_id,omitempty"`
-	Action      string            `json:"action,omitempty"`
-	Resource    string            `json:"resource,omitempty"`
-	Constraints *GrantConstraints `json:"constraints,omitempty"`
-	Scopes      []string          `json:"scopes,omitempty"`
+	AgentID       string            `json:"agent_id"`
+	BinaryHash    string            `json:"binary_hash"`
+	Signature     string            `json:"signature,omitempty"`
+	Timestamp     int64             `json:"timestamp"`
+	SessionID     string            `json:"session_id,omitempty"`
+	Action        string            `json:"action,omitempty"`
+	Resource      string            `json:"resource,omitempty"`
+	Constraints   *GrantConstraints `json:"constraints,omitempty"`
+	Scopes        []string          `json:"scopes,omitempty"`
+	ParentToken   string            `json:"parent_token,omitempty"`
+	ParentGrantID string            `json:"parent_grant_id,omitempty"`
+	Lineage       []string          `json:"lineage,omitempty"`
 }
 
 type AcquireGrantResponse struct {
@@ -135,6 +138,47 @@ type AcquireGrantResponse struct {
 	Resource      string            `json:"resource,omitempty"`
 	PolicyVersion string            `json:"policy_version,omitempty"`
 	Constraints   *GrantConstraints `json:"constraints,omitempty"`
+	ParentGrantID string            `json:"parent_grant_id,omitempty"`
+	RootGrantID   string            `json:"root_grant_id,omitempty"`
+	RootAgentID   string            `json:"root_agent_id,omitempty"`
+	Lineage       []string          `json:"lineage,omitempty"`
+	LineageTree   string            `json:"lineage_tree,omitempty"`
+	Depth         int               `json:"depth,omitempty"`
+}
+
+// DelegateGrantRequest models requests to mint an attenuated child grant (BAP-532).
+type DelegateGrantRequest struct {
+	ParentToken     string            `json:"parent_token"`
+	ParentGrantID   string            `json:"parent_grant_id,omitempty"`
+	ChildAgentID    string            `json:"child_agent_id"`
+	ChildAppID      string            `json:"child_app_id,omitempty"`
+	SessionID       string            `json:"session_id,omitempty"`
+	RequestedScopes []string          `json:"requested_scopes,omitempty"`
+	Scopes          []string          `json:"scopes,omitempty"`
+	Action          string            `json:"action,omitempty"`
+	Resource        string            `json:"resource,omitempty"`
+	Constraints     *GrantConstraints `json:"constraints,omitempty"`
+	TTLMins         int               `json:"ttl_minutes,omitempty"`
+}
+
+// DelegateGrantResponse returns the attenuated child grant and delegation lineage (BAP-532).
+type DelegateGrantResponse struct {
+	Token         string            `json:"token"`
+	TokenType     string            `json:"token_type"`
+	GrantID       string            `json:"grant_id"`
+	ParentGrantID string            `json:"parent_grant_id"`
+	RootGrantID   string            `json:"root_grant_id"`
+	RootAgentID   string            `json:"root_agent_id"`
+	ParentAgentID string            `json:"parent_agent_id"`
+	Lineage       []string          `json:"lineage"`
+	LineageTree   string            `json:"lineage_tree"`
+	ExpiresAt     time.Time         `json:"expires_at"`
+	TTLSecs       int               `json:"expires_in"`
+	Scopes        []string          `json:"scopes"`
+	SessionID     string            `json:"session_id,omitempty"`
+	Action        string            `json:"action,omitempty"`
+	Resource      string            `json:"resource,omitempty"`
+	Depth         int               `json:"depth"`
 }
 
 // DevOTCRequest allows unauthenticated developers in dev mode to request an instant OTC.

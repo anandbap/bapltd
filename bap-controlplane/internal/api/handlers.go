@@ -261,7 +261,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/agents/register", s.handleRegisterEdge)
 	s.mux.HandleFunc("/api/v1/agents/register-edge", s.handleRegisterEdge)
 	s.mux.HandleFunc("/api/v1/grants/acquire", s.handleAcquireGrant)
+	s.mux.HandleFunc("/api/v1/grants/delegate", s.handleDelegateGrant)
 	s.mux.HandleFunc("/api/v1/grants/consume", s.handleConsumeGrant)
+	s.mux.HandleFunc("/api/v1/grants/revoke", s.requireAdminAuth(s.handleRevokeGrant))
 	s.mux.HandleFunc("/api/v1/instances/heartbeat", s.handleHeartbeat)
 	s.mux.HandleFunc("/api/v1/agents", s.handleListAgents)
 	s.mux.HandleFunc("/api/v1/policy/bundle", s.handleGetPolicyBundle)
@@ -364,6 +366,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/activity/ingest", s.handleActivityIngest)
 	s.mux.HandleFunc("/api/activity/deviation", s.handleActivityDeviation)
 	s.mux.HandleFunc("/api/activity/categories", s.handleActivityCategories)
+	s.mux.HandleFunc("/api/activity/lineage", s.handleActivityLineage)
 
 	s.mux.HandleFunc("/api/v1/activity/live", s.handleActivityLive)
 	s.mux.HandleFunc("/api/v1/activity/summary", s.handleActivitySummary)
@@ -374,6 +377,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/activity/ingest", s.handleActivityIngest)
 	s.mux.HandleFunc("/api/v1/activity/deviation", s.handleActivityDeviation)
 	s.mux.HandleFunc("/api/v1/activity/categories", s.handleActivityCategories)
+	s.mux.HandleFunc("/api/v1/activity/lineage", s.handleActivityLineage)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
@@ -904,6 +908,30 @@ func (s *Server) handleAcquireGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Verify attenuation if requested under a parent grant (BAP-532)
+	parentToken := req.ParentToken
+	if parentToken != "" {
+		parentClaims, pErr := s.minter.Verify(parentToken)
+		if pErr != nil {
+			writeError(w, http.StatusUnauthorized, "Invalid parent grant token: "+pErr.Error())
+			return
+		}
+		if isRev, reason := s.minter.IsGrantRevoked(parentClaims.GrantID); isRev {
+			writeError(w, http.StatusForbidden, "Parent grant is revoked: "+reason)
+			return
+		}
+		if attErr := authz.VerifyAttenuation(parentClaims.Scopes, req.Scopes, parentClaims.Resource, req.Resource, parentClaims.Action, req.Action); attErr != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error":   "PrivilegeEscalationBlocked",
+				"message": attErr.Error(),
+				"status":  "forbidden",
+			})
+			return
+		}
+	}
+
 	// Mint short-lived Bounded Authority token
 	bundle := s.policyStore.GetBundle()
 	policyVersion := fmt.Sprintf("v%d-%s", bundle.Version, bundle.Digest)
@@ -941,6 +969,171 @@ func (s *Server) handleAcquireGrant(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// BAP-532: handleDelegateGrant mints an attenuated child grant from a parent grant
+func (s *Server) handleDelegateGrant(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req types.DelegateGrantRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request JSON: "+err.Error())
+		return
+	}
+
+	parentToken := req.ParentToken
+	if parentToken == "" {
+		authHeader := r.Header.Get("Authorization")
+		if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+			parentToken = strings.TrimSpace(authHeader[7:])
+		}
+	}
+	if parentToken == "" {
+		writeError(w, http.StatusBadRequest, "parent_token is required for delegation")
+		return
+	}
+
+	childAgentID := req.ChildAgentID
+	if childAgentID == "" {
+		writeError(w, http.StatusBadRequest, "child_agent_id is required")
+		return
+	}
+
+	if s.policyStore.GetBundle().KillSwitch {
+		writeError(w, http.StatusForbidden, "Fleet is frozen")
+		return
+	}
+
+	childAgent, err := s.registry.Get(childAgentID)
+	if err != nil || childAgent == nil {
+		childAppID := req.ChildAppID
+		if childAppID == "" {
+			childAppID = "subagent"
+		}
+		childAgent = &types.RegisteredAgent{
+			AgentID:    childAgentID,
+			AgentName:  childAgentID,
+			AppID:      childAppID,
+			InstanceID: req.SessionID,
+			Status:     types.StatusActive,
+		}
+	}
+
+	requestedScopes := req.RequestedScopes
+	if len(requestedScopes) == 0 {
+		requestedScopes = req.Scopes
+	}
+
+	token, expiresAt, childGrantID, childClaims, err := s.minter.DelegateAttenuatedChild(
+		parentToken,
+		childAgent,
+		requestedScopes,
+		req.SessionID,
+		req.Action,
+		req.Resource,
+		req.Constraints,
+		req.TTLMins,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "PrivilegeEscalationBlocked") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error":   "PrivilegeEscalationBlocked",
+				"message": err.Error(),
+				"status":  "forbidden",
+			})
+			return
+		}
+		writeError(w, http.StatusForbidden, "Delegation rejected: "+err.Error())
+		return
+	}
+
+	if req.SessionID != "" && s.sessionStore != nil {
+		_, _ = s.sessionStore.Start(session.SessionStartRequest{
+			SessionID:       req.SessionID,
+			AppID:           childAgent.AppID,
+			InstanceID:      childAgent.InstanceID,
+			AgentName:       childAgent.AgentName,
+			ParentSessionID: childClaims.ParentSessionID,
+			ParentAgentID:   childClaims.ParentAgentID,
+			ParentGrantID:   childClaims.ParentGrantID,
+			RootAgentID:     childClaims.RootAgentID,
+			GrantID:         childGrantID,
+			Lineage:         childClaims.Lineage,
+			LineageTree:     childClaims.LineageTree,
+		})
+	}
+
+	now := time.Now().UTC()
+	s.auditStore.Ingest([]audit.Event{
+		{
+			Source:      "bap-controlplane",
+			SessionID:   req.SessionID,
+			Executable:  "bapcontrolplane",
+			FullCommand: fmt.Sprintf("DELEGATE_GRANT root=%s parent=%s child=%s lineage=%s", childClaims.RootAgentID, childClaims.ParentAgentID, childClaims.Sub, childClaims.LineageTree),
+			Decision:    "allow",
+			Reason:      fmt.Sprintf("Attenuated child grant minted for %s within parent boundary (Lineage: %s)", childClaims.Sub, childClaims.LineageTree),
+			DurationMs:  1,
+			Timestamp:   now.Format(time.RFC3339),
+			ExitCode:    0,
+		},
+	})
+
+	resp := types.DelegateGrantResponse{
+		Token:         token,
+		TokenType:     "Bearer",
+		GrantID:       childGrantID,
+		ParentGrantID: childClaims.ParentGrantID,
+		RootGrantID:   childClaims.RootGrantID,
+		RootAgentID:   childClaims.RootAgentID,
+		ParentAgentID: childClaims.ParentAgentID,
+		Lineage:       childClaims.Lineage,
+		LineageTree:   childClaims.LineageTree,
+		ExpiresAt:     expiresAt,
+		TTLSecs:       int(time.Until(expiresAt).Seconds()),
+		Scopes:        childClaims.Scopes,
+		SessionID:     childClaims.SessionID,
+		Action:        childClaims.Action,
+		Resource:      childClaims.Resource,
+		Depth:         childClaims.Depth,
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// BAP-532: handleRevokeGrant revokes a grant and all its descendants across the fleet
+func (s *Server) handleRevokeGrant(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req struct {
+		GrantID string `json:"grant_id"`
+		Reason  string `json:"reason,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.GrantID == "" {
+		writeError(w, http.StatusBadRequest, "grant_id is required")
+		return
+	}
+	reason := req.Reason
+	if reason == "" {
+		reason = "Grant revoked by administrator"
+	}
+
+	revokedGrants := s.minter.RevokeGrant(req.GrantID, reason)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"grant_id":       req.GrantID,
+		"revoked_grants": revokedGrants,
+		"revoked_count":  len(revokedGrants),
+		"status":         "revoked",
+		"message":        fmt.Sprintf("Grant %s and %d descendant grants successfully revoked across fleet.", req.GrantID, len(revokedGrants)),
+	})
+}
+
 func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -959,6 +1152,19 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	if err := s.registry.Revoke(payload.AgentID); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
+	}
+
+	// BAP-532: Cascade revocation to all descendant subagents across the fleet
+	if s.sessionStore != nil {
+		for _, desc := range s.sessionStore.GetDescendants(payload.AgentID) {
+			_ = s.sessionStore.RevokeSession(desc.SessionID, "Root orchestrator "+payload.AgentID+" revoked")
+			if desc.GrantID != "" && s.minter != nil {
+				s.minter.RevokeGrant(desc.GrantID, "Root orchestrator "+payload.AgentID+" revoked")
+			}
+			if desc.ClientPID > 0 {
+				killProcessPID(desc.ClientPID)
+			}
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{
@@ -1005,16 +1211,20 @@ func (s *Server) handleConsumeGrant(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"consumed":       true,
-		"grant_id":       claims.GrantID,
-		"agent_id":       claims.Sub,
-		"app_id":         claims.AppID,
-		"session_id":     claims.SessionID,
-		"action":         claims.Action,
-		"resource":       claims.Resource,
-		"policy_version": claims.PolicyVersion,
-		"scopes":         claims.Scopes,
-		"expires_at":     claims.Exp,
+		"consumed":        true,
+		"grant_id":        claims.GrantID,
+		"agent_id":        claims.Sub,
+		"app_id":          claims.AppID,
+		"session_id":      claims.SessionID,
+		"action":          claims.Action,
+		"resource":        claims.Resource,
+		"policy_version":  claims.PolicyVersion,
+		"scopes":          claims.Scopes,
+		"expires_at":      claims.Exp,
+		"lineage":         claims.Lineage,
+		"lineage_tree":    claims.LineageTree,
+		"root_agent_id":   claims.RootAgentID,
+		"parent_grant_id": claims.ParentGrantID,
 	})
 }
 
@@ -1050,16 +1260,26 @@ func (s *Server) handleEnvoyExtAuthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-BAP-Decision", "ALLOW")
 	w.Header().Set("X-BAP-Verified-Workload", claims.Sub)
 	w.Header().Set("X-BAP-Verified-App", claims.AppID)
+	if claims.LineageTree != "" {
+		w.Header().Set("X-BAP-Verified-Lineage", claims.LineageTree)
+	}
+	if claims.RootAgentID != "" {
+		w.Header().Set("X-BAP-Verified-Root-Agent", claims.RootAgentID)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":         "authorized",
-		"workload":       claims.Sub,
-		"app_id":         claims.AppID,
-		"grant_id":       claims.GrantID,
-		"session_id":     claims.SessionID,
-		"action":         claims.Action,
-		"resource":       claims.Resource,
-		"policy_version": claims.PolicyVersion,
-		"scopes":         claims.Scopes,
+		"status":          "authorized",
+		"workload":        claims.Sub,
+		"app_id":          claims.AppID,
+		"grant_id":        claims.GrantID,
+		"session_id":      claims.SessionID,
+		"action":          claims.Action,
+		"resource":        claims.Resource,
+		"policy_version":  claims.PolicyVersion,
+		"scopes":          claims.Scopes,
+		"lineage":         claims.Lineage,
+		"lineage_tree":    claims.LineageTree,
+		"root_agent_id":   claims.RootAgentID,
+		"parent_grant_id": claims.ParentGrantID,
 	})
 }
 
@@ -1243,7 +1463,25 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if sess, err := s.sessionStore.Get(id); err == nil {
-			if sess.Status == "revoked" || s.sessionStore.IsUserRevoked(sess.UserID) || s.sessionStore.IsUserRevoked(sess.UserEmail) {
+			parentRevoked := false
+			if sess.ParentSessionID != "" && s.sessionStore.IsRevoked(sess.ParentSessionID) {
+				parentRevoked = true
+			}
+			if sess.RootAgentID != "" && (s.sessionStore.IsRevoked(sess.RootAgentID) || (s.registry != nil && s.registry.IsRevoked(sess.RootAgentID))) {
+				parentRevoked = true
+			}
+			if sess.GrantID != "" && s.minter != nil {
+				if isRev, _ := s.minter.IsGrantRevoked(sess.GrantID); isRev {
+					parentRevoked = true
+				}
+			}
+			if sess.ParentGrantID != "" && s.minter != nil {
+				if isRev, _ := s.minter.IsGrantRevoked(sess.ParentGrantID); isRev {
+					parentRevoked = true
+				}
+			}
+			if sess.Status == "revoked" || parentRevoked || s.sessionStore.IsUserRevoked(sess.UserID) || s.sessionStore.IsUserRevoked(sess.UserEmail) {
+				_ = s.sessionStore.RevokeSession(id, "Parent authority or session revoked by administrator")
 				writeJSON(w, http.StatusOK, map[string]any{
 					"id":         id,
 					"session_id": id,
@@ -2369,6 +2607,25 @@ func (s *Server) handleTargetedKillAgent(w http.ResponseWriter, r *http.Request)
 			killProcessPID(targetSession.ClientPID)
 		}
 
+		// BAP-532: Cascade termination to all active descendant subagent processes on stop
+		if s.sessionStore != nil {
+			targetsToCheck := []string{target}
+			if sessionTarget != "" && sessionTarget != target {
+				targetsToCheck = append(targetsToCheck, sessionTarget)
+			}
+			if agentTarget != "" && agentTarget != target {
+				targetsToCheck = append(targetsToCheck, agentTarget)
+			}
+			for _, tVal := range targetsToCheck {
+				for _, desc := range s.sessionStore.GetDescendants(tVal) {
+					_ = s.sessionStore.End(desc.SessionID, fmt.Sprintf("Root orchestrator %s stopped", target))
+					if desc.ClientPID > 0 {
+						killProcessPID(desc.ClientPID)
+					}
+				}
+			}
+		}
+
 		now := time.Now().UTC()
 		s.auditStore.Ingest([]audit.Event{
 			{
@@ -2518,6 +2775,44 @@ func (s *Server) handleTargetedKillAgent(w http.ResponseWriter, r *http.Request)
 	// Directly terminate the local workload process if client PID is recorded
 	if targetSession != nil && targetSession.ClientPID > 0 {
 		killProcessPID(targetSession.ClientPID)
+	}
+
+	// BAP-532: Cascade termination to all active descendant subagent processes and revoke their grants across fleet
+	if s.sessionStore != nil {
+		targetsToCheck := []string{target}
+		if sessionTarget != "" && sessionTarget != target {
+			targetsToCheck = append(targetsToCheck, sessionTarget)
+		}
+		if agentTarget != "" && agentTarget != target {
+			targetsToCheck = append(targetsToCheck, agentTarget)
+		}
+		for _, tVal := range targetsToCheck {
+			for _, desc := range s.sessionStore.GetDescendants(tVal) {
+				_ = s.sessionStore.RevokeSession(desc.SessionID, fmt.Sprintf("Root orchestrator %s revoked", target))
+				if desc.GrantID != "" && s.minter != nil {
+					s.minter.RevokeGrant(desc.GrantID, fmt.Sprintf("Root orchestrator %s revoked", target))
+				}
+				if desc.ClientPID > 0 {
+					killProcessPID(desc.ClientPID)
+				}
+				s.auditStore.Ingest([]audit.Event{
+					{
+						Source:      "bap-controlplane",
+						SessionID:   desc.SessionID,
+						Executable:  "bapcontrolplane",
+						FullCommand: fmt.Sprintf("TERMINATE_DESCENDANT_SUBAGENT pid=%d root=%s", desc.ClientPID, target),
+						Decision:    "deny",
+						Reason:      fmt.Sprintf("Descendant subagent %s (PID %d, Lineage: %s) terminated due to root orchestrator %s revocation.", desc.SessionID, desc.ClientPID, desc.LineageTree, target),
+						DurationMs:  1,
+						Timestamp:   time.Now().UTC().Format(time.RFC3339),
+						ExitCode:    1,
+					},
+				})
+			}
+		}
+	}
+	if targetSession != nil && targetSession.GrantID != "" && s.minter != nil {
+		s.minter.RevokeGrant(targetSession.GrantID, "Targeted revoke of session "+target)
 	}
 
 	// Write marker tombstone so local edge hooks immediately know

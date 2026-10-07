@@ -43,6 +43,14 @@ type Session struct {
 	IntentHistory    []string      `json:"intent_history,omitempty"`
 	PromptCount      int           `json:"prompt_count,omitempty"`
 	Events           []audit.Event `json:"events,omitempty"`
+	// Delegation Lineage (BAP-532)
+	ParentSessionID  string        `json:"parent_session_id,omitempty"`
+	ParentAgentID    string        `json:"parent_agent_id,omitempty"`
+	ParentGrantID    string        `json:"parent_grant_id,omitempty"`
+	RootAgentID      string        `json:"root_agent_id,omitempty"`
+	GrantID          string        `json:"grant_id,omitempty"`
+	Lineage          []string      `json:"lineage,omitempty"`
+	LineageTree      string        `json:"lineage_tree,omitempty"`
 }
 
 // IntentContext is mission context produced deterministically at BAP Edge.
@@ -65,17 +73,24 @@ type IntentContext struct {
 
 // SessionStartRequest contains fields to initiate a session.
 type SessionStartRequest struct {
-	SessionID  string        `json:"session_id,omitempty"`
-	AppID      string        `json:"app_id"`
-	InstanceID string        `json:"instance_id,omitempty"`
-	AgentName  string        `json:"agent_name,omitempty"`
-	UserID     string        `json:"user_id,omitempty"`
-	UserEmail  string        `json:"user_email,omitempty"`
-	SPIFFEID   string        `json:"spiffe_id,omitempty"`
-	ClientPID  int           `json:"client_pid,omitempty"`
-	Hostname   string        `json:"hostname,omitempty"`
-	UserPrompt string        `json:"user_prompt,omitempty"`
-	Intent     IntentContext `json:"intent,omitempty"`
+	SessionID       string        `json:"session_id,omitempty"`
+	AppID           string        `json:"app_id"`
+	InstanceID      string        `json:"instance_id,omitempty"`
+	AgentName       string        `json:"agent_name,omitempty"`
+	UserID          string        `json:"user_id,omitempty"`
+	UserEmail       string        `json:"user_email,omitempty"`
+	SPIFFEID        string        `json:"spiffe_id,omitempty"`
+	ClientPID       int           `json:"client_pid,omitempty"`
+	Hostname        string        `json:"hostname,omitempty"`
+	UserPrompt      string        `json:"user_prompt,omitempty"`
+	Intent          IntentContext `json:"intent,omitempty"`
+	ParentSessionID string        `json:"parent_session_id,omitempty"`
+	ParentAgentID   string        `json:"parent_agent_id,omitempty"`
+	ParentGrantID   string        `json:"parent_grant_id,omitempty"`
+	RootAgentID     string        `json:"root_agent_id,omitempty"`
+	GrantID         string        `json:"grant_id,omitempty"`
+	Lineage         []string      `json:"lineage,omitempty"`
+	LineageTree     string        `json:"lineage_tree,omitempty"`
 }
 
 // CanonicalIntentCategories lists all recognized mission categories.
@@ -309,6 +324,29 @@ func (s *Store) Start(req SessionStartRequest) (*Session, error) {
 		if req.InstanceID != "" {
 			existing.InstanceID = req.InstanceID
 		}
+		if req.ParentSessionID != "" {
+			existing.ParentSessionID = req.ParentSessionID
+		}
+		if req.ParentAgentID != "" {
+			existing.ParentAgentID = req.ParentAgentID
+		}
+		if req.ParentGrantID != "" {
+			existing.ParentGrantID = req.ParentGrantID
+		}
+		if req.RootAgentID != "" {
+			existing.RootAgentID = req.RootAgentID
+		}
+		if req.GrantID != "" {
+			existing.GrantID = req.GrantID
+		}
+		if len(req.Lineage) > 0 {
+			existing.Lineage = req.Lineage
+		}
+		if req.LineageTree != "" {
+			existing.LineageTree = req.LineageTree
+		} else if len(req.Lineage) > 0 && existing.LineageTree == "" {
+			existing.LineageTree = strings.Join(req.Lineage, " -> ")
+		}
 		if req.UserPrompt != "" || req.Intent.Primary != "" {
 			existing.UserPrompt = req.UserPrompt
 			existing.Intent = normalizeIntent(req.Intent, req.UserPrompt)
@@ -351,22 +389,27 @@ func (s *Store) Start(req SessionStartRequest) (*Session, error) {
 		s.recordIntentLocked(sessionID, normIntent.Primary, now)
 	}
 
+	lineageTree := req.LineageTree
+	if lineageTree == "" && len(req.Lineage) > 0 {
+		lineageTree = strings.Join(req.Lineage, " -> ")
+	}
+
 	sess := &Session{
-		SessionID:     sessionID,
-		AppID:         appID,
-		InstanceID:    req.InstanceID,
-		AgentName:     agentName,
-		UserID:        userID,
-		UserEmail:     userEmail,
-		SPIFFEID:      spiffeID,
-		Status:        "active",
-		StartedAt:     now,
-		LastActiveAt:  now,
-		ClientPID:     req.ClientPID,
-		Hostname:      req.Hostname,
-		TotalEvents:   0,
-		AllowedCount:  0,
-		DeniedCount:   0,
+		SessionID:        sessionID,
+		AppID:            appID,
+		InstanceID:       req.InstanceID,
+		AgentName:        agentName,
+		UserID:           userID,
+		UserEmail:        userEmail,
+		SPIFFEID:         spiffeID,
+		Status:           "active",
+		StartedAt:        now,
+		LastActiveAt:     now,
+		ClientPID:        req.ClientPID,
+		Hostname:         req.Hostname,
+		TotalEvents:      0,
+		AllowedCount:     0,
+		DeniedCount:      0,
 		Events:           make([]audit.Event, 0),
 		UserPrompt:       req.UserPrompt,
 		PromptRiskScore:  normIntent.PromptRiskScore,
@@ -376,6 +419,13 @@ func (s *Store) Start(req SessionStartRequest) (*Session, error) {
 		Intent:           normIntent,
 		IntentHistory:    hist,
 		PromptCount:      promptCount,
+		ParentSessionID:  req.ParentSessionID,
+		ParentAgentID:    req.ParentAgentID,
+		ParentGrantID:    req.ParentGrantID,
+		RootAgentID:      req.RootAgentID,
+		GrantID:          req.GrantID,
+		Lineage:          req.Lineage,
+		LineageTree:      lineageTree,
 	}
 
 	s.sessions[sessionID] = sess
@@ -407,15 +457,15 @@ func (s *Store) End(sessionID string, reason string) error {
 	return nil
 }
 
-// RevokeSession explicitly revokes a session by exact ID.
+// RevokeSession explicitly revokes a session by exact ID and cascades to all descendant sessions across the fleet (BAP-532).
 func (s *Store) RevokeSession(sessionID string, reason string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	now := time.Now().UTC()
 	sess, found := s.sessions[sessionID]
 	if !found {
 		// Even if not found, create a placeholder revoked session to prevent future enrollment
-		now := time.Now().UTC()
 		s.sessions[sessionID] = &Session{
 			SessionID:    sessionID,
 			AppID:        "unknown",
@@ -429,12 +479,62 @@ func (s *Store) RevokeSession(sessionID string, reason string) error {
 		return nil
 	}
 
-	now := time.Now().UTC()
 	sess.Status = "revoked"
 	sess.CloseReason = reason
 	sess.LastActiveAt = now
 	s.saveSessionToDB(sess)
+
+	// Cascading revocation to all descendant sessions across the fleet (BAP-532)
+	for _, other := range s.sessions {
+		if other.SessionID == sessionID || other.Status == "revoked" {
+			continue
+		}
+		isDescendant := false
+		if other.ParentSessionID == sessionID || other.RootAgentID == sessionID || other.ParentAgentID == sessionID {
+			isDescendant = true
+		}
+		for _, lin := range other.Lineage {
+			if lin == sessionID {
+				isDescendant = true
+				break
+			}
+		}
+		if isDescendant {
+			other.Status = "revoked"
+			other.CloseReason = fmt.Sprintf("Cascading revocation from parent session %s: %s", sessionID, reason)
+			other.LastActiveAt = now
+			s.saveSessionToDB(other)
+		}
+	}
+
 	return nil
+}
+
+// GetDescendants returns all descendant sessions of a target root/parent (BAP-532).
+func (s *Store) GetDescendants(target string) []*Session {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var res []*Session
+	for _, sess := range s.sessions {
+		if sess.SessionID == target {
+			continue
+		}
+		isDesc := false
+		if sess.ParentSessionID == target || sess.ParentAgentID == target || sess.RootAgentID == target {
+			isDesc = true
+		}
+		for _, lin := range sess.Lineage {
+			if lin == target {
+				isDesc = true
+				break
+			}
+		}
+		if isDesc {
+			res = append(res, sess)
+		}
+	}
+	return res
 }
 
 // ListRevoked returns a slice of all currently revoked session IDs.

@@ -196,6 +196,18 @@ func (s *Store) Revoke(agentID string) error {
 	return nil
 }
 
+// IsRevoked checks if an agent has been revoked (BAP-532).
+func (s *Store) IsRevoked(agentID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	agent, exists := s.agents[agentID]
+	if !exists {
+		return false
+	}
+	return agent.Status == types.StatusRevoked
+}
+
 func (s *Store) RevokeApp(appID string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
