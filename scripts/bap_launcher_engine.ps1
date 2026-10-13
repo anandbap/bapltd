@@ -500,6 +500,7 @@ function Invoke-BapGovernedSession {
     $MutexArg = $null
     $ParentPidArg = 0
     $ParentTicksArg = [int64]0
+    $UserPrompt = $env:BAP_USER_PROMPT
     $ForwardArgs = @()
 
     for ($i = 0; $i -lt $ScriptRawArgs.Count; $i++) {
@@ -511,6 +512,13 @@ function Invoke-BapGovernedSession {
         if ($a -eq '--bap-parent-start-ticks') { $i++; $ParentTicksArg = [int64]$ScriptRawArgs[$i]; continue }
         if ($a -eq '--server' -or $a -eq '-ServerUrl') { $i++; $ServerUrl = [string]$ScriptRawArgs[$i]; $ServerExplicit = $true; continue }
         if ($a -like '--server=*') { $ServerUrl = $a.Substring('--server='.Length); $ServerExplicit = $true; continue }
+        if ($a -eq '--prompt' -or $a -eq '-p' -or $a -eq '-Prompt') {
+            if (($i + 1) -lt $ScriptRawArgs.Count) {
+                $UserPrompt = [string]$ScriptRawArgs[$i + 1]
+            }
+        }
+        if ($a -like '--prompt=*') { $UserPrompt = $a.Substring('--prompt='.Length) }
+        if ($a -like '-p=*') { $UserPrompt = $a.Substring('-p='.Length) }
         $ForwardArgs += $a
     }
 
@@ -709,15 +717,53 @@ function Invoke-BapGovernedSession {
         $env:BAP_SESSION_ID = $SessionId
         $env:BAP_SERVER_URL = $ServerUrl
         $env:LTD_SOURCE = $AgentId
+        if (-not [string]::IsNullOrWhiteSpace($UserPrompt)) {
+            $env:BAP_USER_PROMPT = $UserPrompt
+        }
 
         if (-not [string]::IsNullOrWhiteSpace($BapEdgeBin)) {
             Write-Host "[*] Enrolling session '$SessionId' with BAP Edge..." -ForegroundColor Cyan
-            & $BapEdgeBin session-start --server $ServerUrl --session-id $SessionId --app-id $AgentId
+            $startParams = @("session-start", "--server", $ServerUrl, "--session-id", $SessionId, "--app-id", $AgentId)
+            if (-not [string]::IsNullOrWhiteSpace($UserPrompt)) {
+                $startParams += @("--prompt", $UserPrompt)
+            }
+            & $BapEdgeBin @startParams
             if ($LASTEXITCODE -eq 0) {
                 Write-Host "[+] Session enrolled successfully in BAP Live Radar!" -ForegroundColor Green
             } else {
                 Write-Warning "bapedge session-start returned $LASTEXITCODE. Continuing under local zero-trust policy."
             }
+        }
+
+        # Transmit prompt telemetry so it immediately surfaces on Dashboard Live Radar & Timeline
+        if (-not [string]::IsNullOrWhiteSpace($UserPrompt) -and -not [string]::IsNullOrWhiteSpace($ServerUrl)) {
+            try {
+                $shaBytes = [System.Security.Cryptography.SHA256]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($UserPrompt))
+                $pHash = -join ($shaBytes | ForEach-Object { $_.ToString('x2') })
+                $promptPayload = @{
+                    session_id             = $SessionId
+                    user_prompt            = $UserPrompt
+                    producer               = "bap-agent"
+                    prompt_hash            = $pHash
+                    prompt_capture_enabled = $true
+                    intent                 = @{
+                        primary            = "INVESTIGATION"
+                        secondary          = @()
+                        tags               = @()
+                        confidence         = 0.90
+                        classifier_version = "bap-edge-rules-v1"
+                        source             = "bap-agent"
+                    }
+                } | ConvertTo-Json -Compress
+
+                $curl = Resolve-BinaryPath -Paths @() -Commands @('curl.exe')
+                if (-not [string]::IsNullOrWhiteSpace($curl)) {
+                    $curlArgs = @('-s', '--max-time', '2', '--connect-timeout', '1')
+                    if ($ServerUrl -like 'https://*') { $curlArgs += '-k' }
+                    $curlArgs += @('-X', 'POST', "$ServerUrl/api/v1/sessions/prompt", '-H', 'Content-Type: application/json', '-d', $promptPayload)
+                    & $curl @curlArgs *> $null
+                }
+            } catch { }
         }
 
         if ($null -ne $RecoveryRecord) {
@@ -797,3 +843,4 @@ function Invoke-BapGovernedSession {
 
     exit $ExitCode
 }
+
