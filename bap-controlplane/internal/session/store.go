@@ -2,6 +2,7 @@ package session
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -260,6 +261,10 @@ func normalizeIntent(intent IntentContext, prompt ...string) IntentContext {
 		intent.IsHighRisk = analysis.IsHighRisk
 		if len(analysis.Evidence) > 0 {
 			intent.Evidence = append(intent.Evidence, analysis.Evidence...)
+		}
+		if intent.PromptHash == "" {
+			h := sha256.Sum256([]byte(strings.TrimSpace(prompt[0])))
+			intent.PromptHash = hex.EncodeToString(h[:])
 		}
 	}
 	if intent.Primary == "" {
@@ -881,8 +886,27 @@ func (s *Store) SetPromptAndIntent(sessionID, prompt string, intent IntentContex
 	}
 
 	now := time.Now().UTC()
+	normalized := normalizeIntent(intent, prompt)
+	if normalized.PromptHash == "" && intent.PromptHash != "" {
+		normalized.PromptHash = intent.PromptHash
+	}
+
+	// Cryptographic idempotency check: If prompt_hash matches the active prompt for this session,
+	// do not duplicate intent history, category counts, or prompt count.
+	if normalized.PromptHash != "" && sess.Intent.PromptHash == normalized.PromptHash {
+		sess.LastActiveAt = now
+		if sess.Status == "closed" && sess.CloseReason == "idle_timeout" {
+			sess.Status = "active"
+			sess.EndedAt = nil
+			sess.CloseReason = ""
+		}
+		s.saveSessionToDB(sess)
+		cp := *sess
+		return &cp, nil
+	}
+
 	sess.UserPrompt = prompt
-	sess.Intent = normalizeIntent(intent, prompt)
+	sess.Intent = normalized
 	sess.PromptRiskScore = sess.Intent.PromptRiskScore
 	sess.PromptRiskLevel = sess.Intent.PromptRiskLevel
 	sess.InjectionSignals = sess.Intent.InjectionSignals

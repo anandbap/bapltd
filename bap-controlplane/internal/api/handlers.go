@@ -1981,6 +1981,13 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "Session authority has been revoked by administrator. Prompts are blocked.")
 		return
 	}
+	prevHash := ""
+	if cur, err := s.sessionStore.Get(req.SessionID); err == nil && cur != nil {
+		prevHash = cur.Intent.PromptHash
+	}
+	if req.Intent.PromptHash == "" && req.PromptHash != "" {
+		req.Intent.PromptHash = req.PromptHash
+	}
 	sess, err := s.sessionStore.SetPromptAndIntent(req.SessionID, req.UserPrompt, req.Intent)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "Failed to update prompt: "+err.Error())
@@ -1990,9 +1997,9 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "User access has been revoked by administrator. Prompts are blocked.")
 		return
 	}
-	// Always log the normalized intent. Raw prompt text is optional and follows
-	// the independently configured endpoint privacy policy.
-	if s.auditStore != nil {
+	isDuplicatePrompt := prevHash != "" && req.PromptHash != "" && prevHash == req.PromptHash
+	// Always log the normalized intent for newly observed prompts. Skip duplicate audit event if identical prompt was already ingested.
+	if s.auditStore != nil && !isDuplicatePrompt {
 		_, _ = s.auditStore.Ingest([]audit.Event{{
 			EventID:          fmt.Sprintf("ev-prompt-%d", time.Now().UnixNano()),
 			SessionID:        req.SessionID,
@@ -2015,9 +2022,11 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 		}})
 	}
 
-	// Emit canonical AgentActivityEvent to stream live workforce pulse
-	actEv := s.sessionToActivityEvent(sess)
-	s.IngestActivity(actEv)
+	if !isDuplicatePrompt {
+		// Emit canonical AgentActivityEvent to stream live workforce pulse
+		actEv := s.sessionToActivityEvent(sess)
+		s.IngestActivity(actEv)
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":            "updated",

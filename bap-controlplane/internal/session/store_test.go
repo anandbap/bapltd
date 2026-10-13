@@ -248,6 +248,21 @@ func TestIntentCumulativeTrackingAndPersistence(t *testing.T) {
 		t.Fatalf("expected 3 prompt history entries, got %#v", agentSess.IntentHistory)
 	}
 
+	// 4b. Idempotency test: Re-submitting identical prompt must NOT increment counts or duplicate history
+	_, err = store.SetPromptAndIntent("sess-agent-1", "Fix database null pointer", IntentContext{Primary: "BUG_FIX"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	countsPostReplay, totalPostReplay := store.GetIntentStats()
+	if totalPostReplay != 3 || countsPostReplay["BUG_FIX"] != 2 {
+		t.Fatalf("expected idempotent re-submission: total=3, BUG_FIX=2; got total=%d, counts=%v", totalPostReplay, countsPostReplay)
+	}
+	agentSessAfterReplay, _ := store.Get("sess-agent-1")
+	if agentSessAfterReplay.PromptCount != 3 || len(agentSessAfterReplay.IntentHistory) != 3 {
+		t.Fatalf("expected PromptCount=3 and IntentHistory len 3 after replay, got count=%d, hist=%v",
+			agentSessAfterReplay.PromptCount, agentSessAfterReplay.IntentHistory)
+	}
+
 	// 5. Close and reload from SQLite DB to test persistence
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
