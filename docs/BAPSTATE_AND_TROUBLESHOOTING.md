@@ -32,6 +32,9 @@ When any BAP module initializes, it resolves the active `.bapstate` directory us
 ├── audit.jsonl             # Append-only SHA-256 hash-chained audit & offline resilience spool
 ├── credentials.json        # Enrolled agent identity, session tokens, SPIFFE ID, OIDC/OTC claims
 ├── config.json             # Central endpoints (control plane URL, gateway PEP, Envoy proxy)
+├── pins.json               # Cryptographic content pinning manifest (SHA-256 hashes of skills, prompts, MCP tools)
+├── daemon.json             # Active bap-daemon loopback IPC endpoint, port, capability matrix, and state
+├── bap-daemon.pid          # Process ID marker for background edge supervisor
 ├── policy/                 # Cached Cedar policy bundle
 │   ├── policy.cedar        # Authoritative Cedar policy rules
 │   ├── schema.json         # Cedar entity schema
@@ -68,13 +71,25 @@ bapedge status
 ```
 
 **Key Fields in Output**:
-- **Control Plane**: URL of central policy server (e.g. `https://bap-controlplane.onrender.com`).
+- **Control Plane**: Live connectivity probe and latency (with automatic fallback to `http://localhost:8080` if primary endpoint is down).
+- **Operating Mode**: Detects `STANDALONE_USER_SPACE` (Degraded: zero admin rights required) vs `ENTERPRISE_MANAGED` (with attached `bap-daemon`).
 - **State Directory**: Path to active `.bapstate` directory (e.g. `C:\Users\User\.bapstate`).
 - **Auth Mode**: Authentication mechanism (`One-Time Code (OTC)` or `OIDC Federated (Entra/Okta)`).
 - **Active Sessions**: Lists running agent processes, PIDs, uptime, and flags dead/orphaned processes.
 - **Policy Bundle**: Version number, rules SHA-256 digest, and emergency kill-switch status.
 - **3-Tier Layers**: Status of Process Interception (Layer A), Kernel Sandbox (Layer B), and Gateway Egress (Layer C).
-- **Spool Backlog**: Count of offline audit entries awaiting transmission to the central control plane.
+- **Auto-Sync / Spool Backlog**: Automatically triggers a clean sweep & flush if pending offline entries exist, the control plane is reachable, and no other `bap-edge` process is actively executing (concurrency-guarded).
+
+```bash
+# Standard status inspection with auto-sweep
+bapedge status
+
+# Read-only status inspection without auto-syncing spool
+bapedge status --no-sweep
+
+# Machine-readable JSON output
+bapedge status -json
+```
 
 ---
 
@@ -161,6 +176,62 @@ Displays all configured central endpoints and indicates whether they were resolv
 
 ```bash
 bapedge endpoints
+```
+
+---
+
+### 2.8 `bapedge daemon` (Background Supervisor & Local IPC Hub)
+Manages the background edge supervisor process (`bap-daemon`), providing low-latency loopback IPC (`127.0.0.1:<port>`), background audit spool flushing, agent session tracking, and privilege-level capability matrix detection (BAP-533).
+
+#### Two-Tier Capability Modes:
+- **`DEGRADED` (Standard Non-Elevated User)**: Automatically detects when running without administrator / root privileges (`TokenElevation` on Windows, `UID != 0` on Unix). Disarms kernel eBPF and driver packet filtering while maintaining full user-mode containment (Windows Job Objects / Landlock, IPC hub, and background spooling). **Zero admin rights required.**
+- **`OPTIMAL` (Elevated Administrator / Root)**: Activates full OS-level telemetry and kernel probes.
+
+#### Commands:
+```bash
+# Launch background supervisor (detached)
+bapedge daemon start
+
+# Launch in foreground for interactive debugging
+bapedge daemon start -foreground
+
+# Inspect daemon health, PID, loopback port, capability matrix, and IPC metrics
+bapedge daemon status
+
+# Output daemon status in machine-readable JSON
+bapedge daemon status -json
+
+# Stop the background supervisor cleanly
+bapedge daemon stop
+```
+
+---
+
+### 2.9 `bapedge pin` (Content Pinning & Dynamic Tool Attestation - AIR Model)
+Implements the AI Incident Response (AIR Model - BAP-531) core insight: an agent approved under an initial skill definition or prompt must never execute if the underlying file (`SKILL.md`), prompt instructions (`CLAUDE.md`), or MCP schema changes on disk without explicit re-attestation.
+
+#### Fail-Closed Invalidation:
+When any pinned skill or tool file is modified or tampered with on disk, `bapedge exec` and `bapedge mcp` immediately fail closed with `HashMismatchError`, revoking active grants and blocking execution.
+
+#### Commands:
+```bash
+# Auto-discover and pin workspace skills, prompts, and MCP configs
+bapedge pin scan
+
+# List all cryptographically pinned assets with SHA-256 digests
+bapedge pin list
+
+# Re-verify all pinned assets against disk state (detects tampering/drift)
+bapedge pin verify
+
+# Pin an individual custom skill, prompt, or script
+bapedge pin add .claude/skills/deploy/SKILL.md --id skill:deploy
+
+# Re-attest and update hash after human approval of intentional modifications
+bapedge pin update skill:deploy
+
+# Re-attest all pinned assets across the workspace
+bapedge pin update --all
 ```
 
 ---

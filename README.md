@@ -319,23 +319,25 @@ Idempotently configures local agent settings, sets `dangerouslySkipPermissions: 
 ```
 
 #### 2. In-Terminal Workstation Inspection (`bapedge status`)
-Inspects active local sessions, cached Cedar policy version, 3-tier layer compliance, and offline audit spool backlog:
+Inspects active local sessions, cached Cedar policy version, 3-tier layer compliance, operating mode, and offline audit spool backlog (with automatic sweep & flush on pending messages):
 ```powershell
 .\dist\windows-amd64\bapedge.exe status
 ```
 **Output:**
 ```text
   Host:             DESKTOP (windows/amd64)
-  Control Plane:    https://localhost:8443
+  Control Plane:    http://localhost:8080 [CONNECTED / ONLINE (1ms)]
+  Operating Mode:   STANDALONE USER-SPACE (Degraded: zero admin rights required)
   POLICY BUNDLE & ZERO-TRUST CACHE:
     • Version:        v1
     • Rules Digest:   d70701d094...
     • Kill Switch:    false
   3-TIER LAYER COMPLIANCE STATUS:
     • Layer A (Process Interception Hooks):    COMPLIANT (bapedge exec PreToolUse hook wired)
-    • Layer B (OS Kernel Boundary Sandbox):    COMPLIANT (Windows Job Objects & Restricted Tokens)
+    • Layer B (OS Kernel Boundary Sandbox):    DEGRADED (Windows Job Objects & Restricted Tokens - Standalone User Token)
     • Layer C (Network Egress Pinning):        COMPLIANT (Gateway PEP perimeter backstop active)
-  OFFLINE AUDIT STORE & RESILIENCE:
+  TELEMETRY & OFFLINE RESILIENCE:
+    • Auto-Sync:      ⚡ Auto-triggered sweep: 0 pending audit record(s) synced to Control Plane
     • Spool Backlog:  0 pending entries (All audit logs ingested by Control Plane)
 ```
 
@@ -413,6 +415,63 @@ Epic 28 transforms the administrative console into a persona-driven governance e
 - Cryptographically tracks the 8-stage execution chain:
   $$\text{Human Intent} \to \text{Interpretation} \to \text{Plan} \to \text{Capability} \to \text{Policy Gate} \to \text{ZSP Grant} \to \text{Observed Action} \to \text{Outcome}$$
 - Automated **Critical Intent Deviation Detection**: Blocks side-effects when an agent performs actions inconsistent with declared human purpose (e.g. `PRODUCTION_DIAGNOSIS` attempting customer database modifications).
+
+---
+
+### 11. Beyond-Hook Enforcement, Daemon Supervision & Content Pinning (Epic 29)
+
+Epic 29 elevates BAP beyond cooperative hooks and MCP wrappers into operating-system-level zero-trust enforcement, addressing multi-tenant prompt injection, hidden child processes, and dynamic skill drift:
+
+#### 1. Background Supervisor & Two-Tier Execution (`bapedge daemon`)
+Manages `bap-daemon`, a local background supervisor with dynamic loopback HTTP IPC (`127.0.0.1:<port>`), sub-2ms telemetry ingestion, automatic background spool flushing, and attached agent session tracking:
+- **Degraded Mode (Standard Non-Elevated User)**: Automatically detects when running without administrator / root rights (`TokenElevation` on Windows, `UID != 0` on Unix). Disarms kernel eBPF probes and driver packet filtering while maintaining robust user-mode containment (Windows Job Objects / Landlock, IPC hub, and background spooling). **Zero admin rights required.**
+- **Optimal Mode (Elevated Administrator / Root)**: Activates full OS-level telemetry and kernel probes.
+
+```powershell
+# Start daemon in background (detached process)
+.\bapedge.exe daemon start
+
+# Start in foreground for interactive log monitoring
+.\bapedge.exe daemon start -foreground
+
+# Query capability matrix, connected control plane, and IPC message throughput
+.\bapedge.exe daemon status
+
+# Output status in machine-readable JSON
+.\bapedge.exe daemon status -json
+
+# Stop daemon cleanly
+.\bapedge.exe daemon stop
+```
+
+#### 2. Content Pinning & Dynamic Tool Attestation (`bapedge pin` — AIR Model)
+Implements the AI Incident Response (AIR Model - BAP-531) core insight: an agent approved under an initial skill definition or prompt must never execute if the underlying file (`SKILL.md`), prompt template (`CLAUDE.md`), or MCP schema changes on disk without explicit re-attestation:
+- **Fail-Closed on Drift**: If an attacker or dynamic prompt injection modifies a skill's `SKILL.md` or an MCP tool schema, `bapedge exec` and `bapedge mcp` immediately fail closed with `HashMismatchError`, revoking active grants and blocking execution.
+- **Tamper-Evident Receipts**: The validated `ContentHash` is recorded directly inside `AuditEntry` and chained into BAP's sequential SHA-256 cryptographic ledger.
+
+```powershell
+# Auto-discover and pin workspace skills, prompt templates, and manifests
+.\bapedge.exe pin scan
+
+# List pinned assets with SHA-256 digests and attestation metadata
+.\bapedge.exe pin list
+
+# Re-verify all pinned assets against disk state (alerts on drift)
+.\bapedge.exe pin verify
+
+# Pin an individual custom skill, prompt, or script
+.\bapedge.exe pin add .claude/skills/deploy/SKILL.md --id skill:deploy
+
+# Re-attest and update hash after human approval of intentional modifications
+.\bapedge.exe pin update skill:deploy
+
+# Re-attest all pinned assets across the workspace
+.\bapedge.exe pin update --all
+```
+
+#### 3. Intelligent Auto-Sweep & Concurrency Guard
+- `bapedge status` automatically detects pending offline audit entries in `.bapstate/audit.jsonl` and triggers an immediate sweep & flush to the control plane.
+- **Concurrency Guard**: If `bap-daemon` or another `bap-edge` executor is actively running and responsive, `bapedge status` defers the sync so as not to contend with active spooling—unless that instance is dead or unresponsive, in which case it performs crash recovery.
 
 ---
 
