@@ -473,6 +473,13 @@ Implements the AI Incident Response (AIR Model - BAP-531) core insight: an agent
 - `bapedge status` automatically detects pending offline audit entries in `.bapstate/audit.jsonl` and triggers an immediate sweep & flush to the control plane.
 - **Concurrency Guard**: If `bap-daemon` or another `bap-edge` executor is actively running and responsive, `bapedge status` defers the sync so as not to contend with active spooling—unless that instance is dead or unresponsive, in which case it performs crash recovery.
 
+#### 4. Robust AST Command Parsing & Canonical Symlink Resolution (BAP-533)
+Standard string-splitting and regex decomposers are notoriously susceptible to command obfuscation, subshell embedding, directory traversal, and symlink evasion. `bap-edge` incorporates a pure Go shell grammar AST tokenizer and canonical path resolver:
+- **Compound Pipeline Decomposition**: Parses operators (`&&`, `||`, `;`, `&`, `|`) into distinct atomic execution nodes.
+- **Recursive Subshell Parsing**: Automatically extracts and evaluates embedded command substitutions (`$(curl ...)` and `` `...` ``) before any command runs.
+- **Canonical Symlink Resolution**: Resolves all path arguments and I/O redirection targets (`>`, `>>`, `<`) via `filepath.Clean` and `filepath.EvalSymlinks` to their real filesystem destinations. Accessing sensitive files (`.env`, `~/.ssh`, `~/.aws`, `/etc/shadow`) through symlinks or relative traversal (`/app/subdir/../.env`) is evaluated against the target path and blocked.
+- **Fail-Closed Pipeline Gating**: In compound pipelines (e.g. `git status && curl untrusted.site`), each node is evaluated independently against Cedar policy. If **any** sub-command, subshell, or redirected path violates security policy, the entire pipeline is denied immediately—preventing execution of any part of the command.
+
 ---
 
 ## 📂 Repository Structure

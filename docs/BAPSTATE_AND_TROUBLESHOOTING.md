@@ -465,3 +465,35 @@ All BAP audit records, session markers, and API telemetry format strictly in **U
    (Invoke-RestMethod -Uri "http://localhost:8080/api/v1/inspector/data").central_events[-1].timestamp
    ```
    Timestamps will align identically across all distributed workstations.
+
+---
+
+### Playbook 10: Troubleshooting AST Command Parsing & Symlink Traversal Denials (BAP-533)
+
+**Symptom**:
+A compound command or file inspection is blocked with denial reasons like:
+```text
+Denial on 'curl untrusted.site': Explicit deny or default deny
+Denial on '/app/subdir/../.env': Access to environment secret file (.env) is blocked by secret disclosure policy
+Denial on 'safe_link.txt': Access to private SSH credentials is blocked by security policy
+Denial on redirection target '.env': Access to environment secret file (.env) is blocked by secret disclosure policy
+```
+
+**Root Cause**:
+- **Compound Pipeline Chaining**: In commands like `git status && curl ...` or `cat log | nc ...`, BAP's AST parser decomposes every pipeline segment. If any sub-command violates policy, the entire pipeline is blocked fail-closed before any command executes.
+- **Subshell Embedding**: BAP extracts command substitutions `$(...)` and `` `...` ``. If an agent attempts to execute an unpermitted command inside an argument (e.g. `echo $(curl evil.com)`), the inner command is caught and blocked.
+- **Directory Traversal & Symlinks**: BAP canonicalizes all path targets via `filepath.Clean` and `filepath.EvalSymlinks`. Aliases, symlinks, or relative traversals pointing to `.env`, `~/.ssh/id_rsa`, `~/.aws/credentials`, or `/etc/shadow` are evaluated against the true physical file path.
+
+**Verification Steps**:
+1. Test command evaluation using decision-only mode without executing:
+   ```powershell
+   .\bapedge.exe exec --decision-only -- "cat path/to/target"
+   ```
+2. Inspect the audit log for decomposed canonical actions and reasons:
+   ```powershell
+   Get-Content "$HOME\.bapstate\audit.jsonl" -Tail 1 | ConvertFrom-Json | Select-Object executable, full_command, action_canonical, resource_canonical, decision, reason
+   ```
+3. To inspect symlink destination directly on the host:
+   - **Windows**: `Get-Item path\to\file | Select-Object -ExpandProperty Target`
+   - **Linux/macOS**: `readlink -f path/to/file`
+

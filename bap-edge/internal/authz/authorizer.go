@@ -130,16 +130,148 @@ func (a *Authorizer) Evaluate(executable, fullCommand, args string) (bool, strin
 }
 
 // EvaluateWithWorkspace evaluates whether executing the given command is permitted
-// within the specified workspaceRoot directory boundary.
+// within the specified workspaceRoot directory boundary using AST parsing and canonical symlink resolution.
 func (a *Authorizer) EvaluateWithWorkspace(executable, fullCommand, args, workspaceRoot string) (bool, string, error) {
+	cmdToParse := fullCommand
+	if cmdToParse == "" && executable != "" {
+		cmdToParse = executable
+		if args != "" {
+			cmdToParse = executable + " " + args
+		}
+	}
+
+	pipeline, err := ParseAST(cmdToParse)
+	if err != nil || pipeline == nil || len(pipeline.Nodes) == 0 {
+		return a.evaluateAtomicNode(executable, fullCommand, args, workspaceRoot, "", CheckCommandWorkspaceEscape(workspaceRoot, fullCommand))
+	}
+
+	cleanRoot := filepath.Clean(workspaceRoot)
+	currentDir := cleanRoot
+	overallEscapes := false
+	if workspaceRoot != "" {
+		overallEscapes = CheckCommandWorkspaceEscape(workspaceRoot, cmdToParse)
+	}
+
+	var evaluateNode func(n *ASTNode) (bool, string, error)
+	evaluateNode = func(n *ASTNode) (bool, string, error) {
+		// 1. Evaluate nested subcommands in command substitutions $(...) and `...`
+		for _, sub := range n.SubCommands {
+			allowed, reason, err := evaluateNode(sub)
+			if err != nil {
+				return false, "", err
+			}
+			if !allowed {
+				return false, fmt.Sprintf("Denial in subshell '%s': %s", sub.FullCommand, reason), nil
+			}
+		}
+
+		nodeExec := n.Executable
+		if nodeExec == "" {
+			nodeExec = executable
+		}
+		nodeFull := n.FullCommand
+		nodeArgs := ""
+		if len(n.Args) > 1 {
+			nodeArgs = strings.Join(n.Args[1:], " ")
+		}
+
+		nodeEscapes := overallEscapes
+
+		// Track directory changes across pipeline (cd, chdir, pushd)
+		first := strings.ToLower(nodeExec)
+		if first == "cd" || first == "chdir" || first == "pushd" {
+			if len(n.Args) >= 2 {
+				target := strings.Trim(n.Args[1], "\"'")
+				if strings.EqualFold(target, "/d") && len(n.Args) >= 3 {
+					target = strings.Trim(n.Args[2], "\"'")
+				}
+				if target == "" || target == "~" {
+					nodeEscapes = true
+				} else {
+					var nextAbs string
+					if filepath.IsAbs(target) {
+						nextAbs = filepath.Clean(target)
+					} else {
+						nextAbs = filepath.Clean(filepath.Join(currentDir, target))
+					}
+					if IsPathOutsideWorkspace(cleanRoot, nextAbs) {
+						nodeEscapes = true
+					} else {
+						currentDir = nextAbs
+						nodeEscapes = false
+					}
+				}
+			}
+		}
+
+		var canonicalTarget string
+		for i, arg := range n.Args {
+			if i == 0 || strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "/") {
+				continue
+			}
+
+			canonical := ResolveCanonicalPath(arg, currentDir)
+			if canonicalTarget == "" {
+				canonicalTarget = canonical
+			}
+
+			// Canonical workspace escape check (e.g., symlink pointing outside workspace)
+			if workspaceRoot != "" && IsPathOutsideWorkspaceCanonical(workspaceRoot, canonical) {
+				nodeEscapes = true
+			}
+
+			// Secret path inspection (.env, .ssh, ~/.aws, /etc/shadow)
+			if isForbidden, secretReason := IsForbiddenSecretPath(canonical); isForbidden {
+				if nodeExec != "ls" && nodeExec != "dir" {
+					return false, fmt.Sprintf("Denial on '%s': %s", arg, secretReason), nil
+				}
+			}
+		}
+
+		// 2. Evaluate Redirections
+		for _, r := range n.Redirections {
+			if r.Target == "" {
+				continue
+			}
+			canonical := ResolveCanonicalPath(r.Target, currentDir)
+			if workspaceRoot != "" && IsPathOutsideWorkspaceCanonical(workspaceRoot, canonical) {
+				return false, fmt.Sprintf("Denial on redirection target '%s': Path escapes workspace boundary", r.Target), nil
+			}
+			if isForbidden, secretReason := IsForbiddenSecretPath(canonical); isForbidden {
+				return false, fmt.Sprintf("Denial on redirection target '%s': %s", r.Target, secretReason), nil
+			}
+		}
+
+		// 3. Evaluate Cedar policy on the atomic command
+		allowed, reason, err := a.evaluateAtomicNode(nodeExec, nodeFull, nodeArgs, workspaceRoot, canonicalTarget, nodeEscapes)
+		if err != nil {
+			return false, "", err
+		}
+		if !allowed {
+			return false, fmt.Sprintf("Denial on '%s': %s", nodeFull, reason), nil
+		}
+
+		return true, "", nil
+	}
+
+	for _, n := range pipeline.Nodes {
+		allowed, reason, err := evaluateNode(n)
+		if err != nil {
+			return false, "", err
+		}
+		if !allowed {
+			// Fail-closed on first violating node in the pipeline
+			return false, reason, nil
+		}
+	}
+
+	return true, "", nil
+}
+
+func (a *Authorizer) evaluateAtomicNode(executable, fullCommand, args, workspaceRoot, canonicalTarget string, escapesWorkspace bool) (bool, string, error) {
 	normalizedExec := strings.ToLower(executable)
 	normalizedFull := strings.ToLower(fullCommand)
 	normalizedArgs := strings.ToLower(args)
-
-	escapesWorkspace := false
-	if workspaceRoot != "" {
-		escapesWorkspace = CheckCommandWorkspaceEscape(workspaceRoot, fullCommand)
-	}
 
 	principalUID := cedar.NewEntityUID("Agent", "Local")
 
@@ -166,6 +298,10 @@ func (a *Authorizer) EvaluateWithWorkspace(executable, fullCommand, args, worksp
 	}
 
 	decomp := Decompose(executable, fullCommand, args)
+	if canonicalTarget != "" && (decomp.ActionType == "read" || decomp.ActionType == "write" || decomp.ActionType == "delete") {
+		decomp.TargetEntity = canonicalTarget
+		decomp.CanonicalResource = "file://" + filepath.ToSlash(canonicalTarget)
+	}
 
 	contextMap := cedar.RecordMap{
 		cedar.String("executable"):         cedar.String(normalizedExec),

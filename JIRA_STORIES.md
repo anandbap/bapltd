@@ -2437,20 +2437,26 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 
 #### BAP-533: Robust AST Command Parsing & Canonical Symlink Resolution
 * **Epic**: `BAP-EPIC-29`
-* **Status**: `BACKLOG`
+* **Status**: `DONE`
 * **Priority**: `P1 - Medium`
 * **Story**:
   > As a Security Engineer, I want the BAP tool decomposer to parse commands using abstract syntax tree (AST) grammar and resolve all filesystem symlinks to canonical paths, so that command obfuscation, subshell chaining, path traversal, and symlink evasions are completely neutralized.
 * **Business Intent**:
   Regex and string-splitting parsers can be bypassed by shell tricks (e.g., `cat /path/../.env`, `ln -s /etc/shadow link && cat link`, nested backticks, subshells `$(curl ...)`). AST-level tokenization ensures true semantic understanding.
 * **Key Requirements**:
-  1. Integrate a POSIX/Bash AST parser (e.g. `mvdan/sh`) into `bap-edge` to parse compound commands, pipes (`|`), redirections (`>`), subshells (`$(...)`, `` `...` ``), and logical operators (`&&`, `||`).
-  2. Every file path in command arguments must be evaluated via `filepath.EvalSymlinks` to its real canonical filesystem destination before Cedar policy matching.
-  3. Decompose and evaluate every node in an AST tree; if any sub-command or redirected path violates policy, block the entire pipeline.
+  1. Integrate a POSIX/Bash AST parser into `bap-edge` (`internal/authz/ast.go`) to parse compound commands, pipes (`|`), redirections (`>`), subshells (`$(...)`, `` `...` ``), and logical operators (`&&`, `||`, `;`, `&`).
+  2. Every file path in command arguments and redirections is evaluated via `ResolveCanonicalPath` (`filepath.Clean` and `filepath.EvalSymlinks`) to its real canonical filesystem destination before Cedar policy matching (`internal/authz/canonical_path.go`).
+  3. Decompose and evaluate every node in an AST tree; if any sub-command, subshell, or redirected path violates policy, block the entire pipeline fail-closed before execution begins.
 * **Acceptance Criteria**:
-  1. `cat /app/subdir/../.env` resolves to `.env` and is blocked by secret disclosure policy.
-  2. Reading through a symlink pointing to a forbidden file (`~/.ssh/id_rsa`) is evaluated against the target path and denied.
-  3. Compound pipeline `git status && curl untrusted.site` evaluates both commands independently, allowing git but blocking curl before execution begins.
+  1. `cat /app/subdir/../.env` resolves to `.env` and is blocked by secret disclosure policy. -> Verified in `bap533_ast_test.go:AC1_PathTraversalToSecretBlocked`.
+  2. Reading through a symlink pointing to a forbidden file (`~/.ssh/id_rsa` or sensitive path) is evaluated against the target path and denied. -> Verified in `bap533_ast_test.go:AC2_SymlinkPointingToForbiddenSecretEvaluatedAndDenied`.
+  3. Compound pipeline `git status && curl untrusted.site` evaluates both commands independently, allowing git but blocking curl before execution begins. -> Verified in `bap533_ast_test.go:AC3_CompoundPipelineFailClosed`.
+* **Implementation Artifacts**:
+  - `bap-edge/internal/authz/ast.go`: Pure Go shell grammar tokenizer and AST pipeline builder with quote preservation, subshell recursion, and redirection parsing.
+  - `bap-edge/internal/authz/canonical_path.go`: Path cleaner, symlink evaluator (`filepath.EvalSymlinks`), directory traversal escape detector, and sensitive secret path matcher.
+  - `bap-edge/internal/authz/decomposer.go`: Upgraded with normalized file path extraction and `DecomposePipeline`.
+  - `bap-edge/internal/authz/authorizer.go`: Multi-node AST evaluation in `EvaluateWithWorkspace` with fail-closed pipeline gating and sequential directory tracking.
+  - `bap-edge/internal/authz/bap533_ast_test.go`: Comprehensive test suite verifying all 3 acceptance criteria, subshell injection, redirection to secrets, and piped exfiltration.
 
 ---
 

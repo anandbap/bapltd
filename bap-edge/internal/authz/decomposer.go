@@ -506,10 +506,69 @@ func extractFirstFileTarget(tokens []string) string {
 	for i := 1; i < len(tokens); i++ {
 		t := tokens[i]
 		if !strings.HasPrefix(t, "-") {
-			return t
+			return filepath.ToSlash(filepath.Clean(t))
 		}
 	}
 	return "local"
+}
+
+// DecomposePipeline parses a compound or single shell command into an AST
+// and decomposes all atomic commands, subshells, and redirections.
+func DecomposePipeline(fullCommand, workspaceRoot string) ([]DecomposedAction, error) {
+	pipeline, err := ParseAST(fullCommand)
+	if err != nil {
+		return nil, err
+	}
+
+	var actions []DecomposedAction
+	var collectNode func(n *ASTNode)
+	collectNode = func(n *ASTNode) {
+		if n == nil {
+			return
+		}
+
+		// 1. Decompose node itself
+		exec := n.Executable
+		if exec != "" {
+			fullCmd := n.FullCommand
+			args := ""
+			if len(n.Args) > 1 {
+				args = strings.Join(n.Args[1:], " ")
+			}
+			actions = append(actions, Decompose(exec, fullCmd, args))
+		}
+
+		// 2. Decompose redirections
+		for _, r := range n.Redirections {
+			target := r.Target
+			if target != "" {
+				canonical := ResolveCanonicalPath(target, workspaceRoot)
+				actType := "write"
+				action := "fs:file:write"
+				if r.Operator == "<" {
+					actType = "read"
+					action = "fs:file:read"
+				}
+				actions = append(actions, DecomposedAction{
+					CanonicalAction:   action,
+					CanonicalResource: "file://" + filepath.ToSlash(canonical),
+					ActionType:        actType,
+					TargetEntity:      canonical,
+				})
+			}
+		}
+
+		// 3. Decompose nested subcommands recursively
+		for _, sub := range n.SubCommands {
+			collectNode(sub)
+		}
+	}
+
+	for _, n := range pipeline.Nodes {
+		collectNode(n)
+	}
+
+	return actions, nil
 }
 
 func tokenize(cmd string) []string {
@@ -523,4 +582,5 @@ func tokenize(cmd string) []string {
 	}
 	return clean
 }
+
 
