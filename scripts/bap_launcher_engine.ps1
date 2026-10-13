@@ -1,0 +1,799 @@
+# BAP Universal Zero-Trust Transactional Launcher Engine
+# ========================================================
+# Provides the transactional lifecycle engine for all BAP agent launchers:
+# - Pre-initializes hooks, MCP configurations, and governance rules.
+# - Preserves original developer files transactionally with same-directory backups.
+# - Coordinates multi-session concurrency per workspace via Named Mutex & reference counting.
+# - Preflights & auto-starts local BAP Control Plane if offline.
+# - Enrolls/ends session via bapedge session-start / session-end.
+# - Detached background watchdog guards configuration against tampering.
+# - Automatic recovery from crashed or stale sessions on launch.
+# - Atomically restores original files when the last session exits.
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+
+function Write-AtomicText {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Text
+    )
+    $dir = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($dir) -and -not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $tmp = "$Path.tmp.$PID.$([Guid]::NewGuid().ToString('N'))"
+    try {
+        [System.IO.File]::WriteAllText($tmp, $Text, $Utf8NoBom)
+        Move-Item -LiteralPath $tmp -Destination $Path -Force
+    }
+    finally {
+        if (Test-Path -LiteralPath $tmp) {
+            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Write-AtomicBytes {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][byte[]]$Bytes
+    )
+    $dir = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($dir) -and -not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $tmp = "$Path.tmp.$PID.$([Guid]::NewGuid().ToString('N'))"
+    try {
+        [System.IO.File]::WriteAllBytes($tmp, $Bytes)
+        Move-Item -LiteralPath $tmp -Destination $Path -Force
+    }
+    finally {
+        if (Test-Path -LiteralPath $tmp) {
+            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Write-JsonAtomic {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)]$Object
+    )
+    $json = $Object | ConvertTo-Json -Depth 20
+    Write-AtomicText -Path $Path -Text $json
+}
+
+function Get-FileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $null
+    }
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
+}
+
+function Resolve-BinaryPath {
+    param(
+        [string[]]$Paths,
+        [string[]]$Commands
+    )
+    foreach ($p in $Paths) {
+        if (-not [string]::IsNullOrWhiteSpace($p) -and (Test-Path -LiteralPath $p -PathType Leaf)) {
+            return (Resolve-Path -LiteralPath $p).Path
+        }
+    }
+    foreach ($name in $Commands) {
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -ne $cmd) {
+            if ($cmd.PSObject.Properties.Name -contains 'Source' -and -not [string]::IsNullOrWhiteSpace([string]$cmd.Source)) {
+                return [string]$cmd.Source
+            }
+            if ($cmd.PSObject.Properties.Name -contains 'Path' -and -not [string]::IsNullOrWhiteSpace([string]$cmd.Path)) {
+                return [string]$cmd.Path
+            }
+            return $name
+        }
+    }
+    return $null
+}
+
+function Get-WorkspaceMutexName {
+    param(
+        [Parameter(Mandatory = $true)][string]$Workspace,
+        [string]$AgentPrefix = "bap"
+    )
+    $normalized = [System.IO.Path]::GetFullPath($Workspace).TrimEnd('\').ToLowerInvariant()
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($normalized)
+        $hash = $sha.ComputeHash($bytes)
+        $hex = -join ($hash | ForEach-Object { $_.ToString('x2') })
+        return "Local\BAP_${AgentPrefix}_$($hex.Substring(0, 20))"
+    }
+    finally {
+        $sha.Dispose()
+    }
+}
+
+function Acquire-BapMutex {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [int]$TimeoutMs = 0
+    )
+    $createdNew = $false
+    $mutex = [System.Threading.Mutex]::new($false, $Name, [ref]$createdNew)
+    $acquired = $false
+    try {
+        try {
+            $acquired = $mutex.WaitOne($TimeoutMs)
+        }
+        catch [System.Threading.AbandonedMutexException] {
+            $acquired = $true
+        }
+        if (-not $acquired) {
+            $mutex.Dispose()
+            return $null
+        }
+        return $mutex
+    }
+    catch {
+        $mutex.Dispose()
+        throw
+    }
+}
+
+function Release-BapMutex {
+    param($Mutex)
+    if ($null -eq $Mutex) { return }
+    try { $Mutex.ReleaseMutex() } catch { }
+    try { $Mutex.Dispose() } catch { }
+}
+
+function Get-RecoveryMirrorPath {
+    param([Parameter(Mandatory = $true)][string]$ManifestPath)
+    return (Join-Path (Split-Path -Parent $ManifestPath) '.bap-lock.json')
+}
+
+function Write-RecoveryRecord {
+    param(
+        [Parameter(Mandatory = $true)]$Record,
+        [Parameter(Mandatory = $true)][string]$ManifestPath
+    )
+    $mirror = Get-RecoveryMirrorPath -ManifestPath $ManifestPath
+    Write-JsonAtomic -Path $ManifestPath -Object $Record
+    Write-JsonAtomic -Path $mirror -Object $Record
+}
+
+function Read-RecoveryRecord {
+    param([Parameter(Mandatory = $true)][string]$ManifestPath)
+    $mirror = Get-RecoveryMirrorPath -ManifestPath $ManifestPath
+    foreach ($candidate in @($ManifestPath, $mirror)) {
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+        try {
+            return (Get-Content -LiteralPath $candidate -Raw -Encoding UTF8 | ConvertFrom-Json)
+        }
+        catch { }
+    }
+    return $null
+}
+
+function Test-ProcessIdentity {
+    param(
+        [int]$ProcessId,
+        [int64]$StartTicks
+    )
+    $p = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if ($null -eq $p) { return $false }
+    try {
+        return ($p.StartTime.ToUniversalTime().Ticks -eq $StartTicks)
+    }
+    catch {
+        return $true
+    }
+}
+
+function Invoke-BapSessionEnd {
+    param([Parameter(Mandatory = $true)]$Record)
+    if (-not [bool]$Record.session_active) { return }
+    try {
+        $edge = [string]$Record.bapedge_bin
+        if (-not [string]::IsNullOrWhiteSpace($edge) -and (Test-Path -LiteralPath $edge)) {
+            & $edge session-end --server ([string]$Record.server_url) --session-id ([string]$Record.session_id) *> $null
+            return
+        }
+    }
+    catch { }
+
+    try {
+        $curl = Resolve-BinaryPath -Paths @() -Commands @('curl.exe')
+        if (-not [string]::IsNullOrWhiteSpace($curl)) {
+            $payload = @{
+                session_id = [string]$Record.session_id
+                reason     = 'BAP session teardown'
+            } | ConvertTo-Json -Compress
+            $curlArgs = @('-s', '--max-time', '2', '--connect-timeout', '2')
+            if ([string]$Record.server_url -like 'https://*') { $curlArgs += '-k' }
+            $curlArgs += @('-X', 'POST', "$([string]$Record.server_url)/api/v1/sessions/end", '-H', 'Content-Type: application/json', '-d', $payload)
+            & $curl @curlArgs *> $null
+        }
+    }
+    catch { }
+}
+
+function Restore-TrackedEntry {
+    param([Parameter(Mandatory = $true)]$Entry)
+    $path = [string]$Entry.path
+    $backup = [string]$Entry.backup
+    $existed = [bool]$Entry.existed
+    $origHash = [string]$Entry.original_sha256
+
+    if ($existed) {
+        if (Test-Path -LiteralPath $backup -PathType Leaf) {
+            $retries = 10
+            while ($retries -gt 0) {
+                try {
+                    if (Test-Path -LiteralPath $path) {
+                        Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+                    }
+                    Move-Item -LiteralPath $backup -Destination $path -Force -ErrorAction Stop
+                    break
+                }
+                catch {
+                    $retries--
+                    if ($retries -le 0) { throw }
+                    Start-Sleep -Milliseconds 150
+                }
+            }
+            return $true
+        }
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            $curHash = Get-FileSha256 -Path $path
+            if ($curHash -eq $origHash) { return $true }
+        }
+        Write-Warning "Could not prove restoration of original file: $path"
+        return $false
+    }
+    else {
+        if (Test-Path -LiteralPath $path) {
+            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        }
+        return $true
+    }
+}
+
+function Restore-BapSessionState {
+    param(
+        [Parameter(Mandatory = $true)][string]$ManifestPath,
+        [string]$Reason = 'cleanup'
+    )
+    $record = Read-RecoveryRecord -ManifestPath $ManifestPath
+    if ($null -eq $record) { return $true }
+
+    Write-Host "[*] Restoring BAP session transaction ($Reason)..." -ForegroundColor Yellow
+    Invoke-BapSessionEnd -Record $record
+
+    $allOk = $true
+    if ($record.PSObject.Properties.Name -contains 'tracked_files' -and $null -ne $record.tracked_files) {
+        foreach ($entry in $record.tracked_files) {
+            try {
+                $ok = Restore-TrackedEntry -Entry $entry
+                if (-not $ok) { $allOk = $false }
+            }
+            catch {
+                Write-Warning "Failed restoring file: $($entry.path): $($_.Exception.Message)"
+                $allOk = $false
+            }
+        }
+    }
+
+    if ($allOk) {
+        $mirror = Get-RecoveryMirrorPath -ManifestPath $ManifestPath
+        Remove-Item -LiteralPath $ManifestPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $mirror -Force -ErrorAction SilentlyContinue
+        Write-Host "[+] All developer configuration files cleanly restored." -ForegroundColor Green
+    }
+    return $allOk
+}
+
+function Repair-GuardedFiles {
+    param([Parameter(Mandatory = $true)]$Record)
+    if ($record.PSObject.Properties.Name -contains 'tracked_files' -and $null -ne $record.tracked_files) {
+        foreach ($entry in $record.tracked_files) {
+            $p = [string]$entry.path
+            $expHash = [string]$entry.bap_sha256
+            $b64 = [string]$entry.bap_content_b64
+            if ([string]::IsNullOrWhiteSpace($b64) -or [string]::IsNullOrWhiteSpace($expHash)) { continue }
+
+            $needsRepair = $false
+            if (-not (Test-Path -LiteralPath $p -PathType Leaf)) {
+                $needsRepair = $true
+            } else {
+                $cur = Get-FileSha256 -Path $p
+                if ($cur -ne $expHash) { $needsRepair = $true }
+            }
+
+            if ($needsRepair) {
+                $bytes = [Convert]::FromBase64String($b64)
+                Write-AtomicBytes -Path $p -Bytes $bytes
+            }
+        }
+    }
+}
+
+function Test-TcpPortOpen {
+    param([string]$HostName, [int]$Port, [int]$TimeoutMs = 600)
+    $client = [System.Net.Sockets.TcpClient]::new()
+    try {
+        $iar = $client.BeginConnect($HostName, $Port, $null, $null)
+        if (-not $iar.AsyncWaitHandle.WaitOne($TimeoutMs, $false)) { return $false }
+        $client.EndConnect($iar)
+        return $client.Connected
+    }
+    catch { return $false }
+    finally { $client.Close() }
+}
+
+function Test-ControlPlaneOnline {
+    param([string]$Url)
+    try {
+        $curl = Resolve-BinaryPath -Paths @() -Commands @('curl.exe')
+        if ([string]::IsNullOrWhiteSpace($curl)) { return $false }
+        $argsList = @('-s', '--max-time', '3', '--connect-timeout', '2')
+        if ($Url -like 'https://*') { $argsList += '-k' }
+        $argsList += @('-X', 'GET', "$Url/api/v1/health")
+        $res = (& $curl @argsList 2>$null | Out-String)
+        return ($res -match '(?i)\b(ok|healthy|ltd-service)\b')
+    }
+    catch { return $false }
+}
+
+function Ensure-ControlPlaneRunning {
+    param(
+        [string]$ServerUrl,
+        [string]$RepoRoot
+    )
+    $uri = [Uri]$ServerUrl
+    $isLocal = @('localhost', '127.0.0.1', '::1') -contains $uri.Host
+
+    if ($isLocal) {
+        $portOpen = Test-TcpPortOpen -HostName $uri.Host -Port $uri.Port
+        if (-not $portOpen) {
+            $cpCandidates = @(
+                (Join-Path $RepoRoot 'dist\windows-amd64\bapcontrolplane.exe'),
+                (Join-Path $RepoRoot 'dist\windows-amd64\controlplane\bapcontrolplane.exe'),
+                (Join-Path $RepoRoot 'bap-controlplane\bapcontrolplane.exe')
+            )
+            $cpBin = Resolve-BinaryPath -Paths $cpCandidates -Commands @('bapcontrolplane.exe')
+            if (-not [string]::IsNullOrWhiteSpace($cpBin)) {
+                Write-Host "[*] Auto-starting local BAP Control Plane on port $($uri.Port)..." -ForegroundColor Yellow
+                $cpArgs = @('-port', [string]$uri.Port, '-ttl', '30', '-trust-domain', 'bap.internal')
+                if ($uri.Scheme -eq 'https') { $cpArgs += '-https' }
+                Start-Process -FilePath $cpBin -ArgumentList $cpArgs -WindowStyle Hidden | Out-Null
+                Start-Sleep -Seconds 2
+            }
+        }
+    }
+
+    if (Test-ControlPlaneOnline -Url $ServerUrl) {
+        Write-Host "[+] BAP Control Plane verified online ($ServerUrl)." -ForegroundColor Green
+    } else {
+        Write-Warning "BAP Control Plane ($ServerUrl) did not respond. Local Edge will operate in resilient offline mode."
+    }
+}
+
+function Start-DetachedWatchdog {
+    param(
+        [string]$ScriptPath,
+        [string]$ManifestPath,
+        [string]$MutexName,
+        [int]$ParentPid,
+        [int64]$ParentTicks
+    )
+    $psExe = (Get-Process -Id $PID).Path
+    $qScript = '"' + $ScriptPath.Replace('"', '""') + '"'
+    $qManifest = '"' + $ManifestPath.Replace('"', '""') + '"'
+    $qMutex = '"' + $MutexName.Replace('"', '""') + '"'
+
+    $wdArgs = @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $qScript,
+        '--bap-watchdog',
+        '--bap-manifest', $qManifest,
+        '--bap-mutex', $qMutex,
+        '--bap-parent-pid', [string]$ParentPid,
+        '--bap-parent-start-ticks', [string]$ParentTicks
+    )
+
+    $p = Start-Process -FilePath $psExe -ArgumentList $wdArgs -WindowStyle Hidden -PassThru
+    Start-Sleep -Milliseconds 150
+    if ($p.HasExited) {
+        throw "Failed to start detached session guard watchdog."
+    }
+    return $p
+}
+
+function Run-WatchdogLoop {
+    param(
+        [string]$ManifestPath,
+        [string]$MutexName,
+        [int]$ParentPid,
+        [int64]$ParentTicks
+    )
+    while ($true) {
+        $r = Read-RecoveryRecord -ManifestPath $ManifestPath
+        if ($null -eq $r) { break }
+        if ($r.PSObject.Properties.Name -contains 'state' -and ($r.state -eq 'Cleaning' -or $r.state -eq 'Complete')) {
+            break
+        }
+
+        $anyAlive = $false
+        if ($r.PSObject.Properties.Name -contains 'active_sessions' -and $null -ne $r.active_sessions) {
+            foreach ($s in $r.active_sessions) {
+                $pidVal = [int]($s.launcher_pid)
+                if ($pidVal -gt 0) {
+                    $pr = Get-Process -Id $pidVal -ErrorAction SilentlyContinue
+                    if ($null -ne $pr -and -not $pr.HasExited) {
+                        $anyAlive = $true
+                        break
+                    }
+                }
+            }
+        }
+        elseif (Test-ProcessIdentity -ProcessId $ParentPid -StartTicks $ParentTicks) {
+            $anyAlive = $true
+        }
+
+        if (-not $anyAlive) { break }
+
+        try { Repair-GuardedFiles -Record $r } catch { }
+        Start-Sleep -Milliseconds 800
+    }
+
+    Start-Sleep -Milliseconds 500
+    $wdMutex = Acquire-BapMutex -Name $MutexName -TimeoutMs 15000
+    if ($null -eq $wdMutex) { exit 94 }
+    try {
+        if ((Test-Path -LiteralPath $ManifestPath) -or (Test-Path -LiteralPath (Get-RecoveryMirrorPath -ManifestPath $ManifestPath))) {
+            $r = Read-RecoveryRecord -ManifestPath $ManifestPath
+            $stillAlive = $false
+            if ($null -ne $r -and $r.PSObject.Properties.Name -contains 'active_sessions' -and $null -ne $r.active_sessions) {
+                foreach ($s in $r.active_sessions) {
+                    $pId = [int]($s.launcher_pid)
+                    if ($pId -gt 0) {
+                        $pr = Get-Process -Id $pId -ErrorAction SilentlyContinue
+                        if ($null -ne $pr -and -not $pr.HasExited) { $stillAlive = $true; break }
+                    }
+                }
+            }
+            if (-not $stillAlive) {
+                [void](Restore-BapSessionState -ManifestPath $ManifestPath -Reason 'all launcher sessions terminated')
+            }
+        }
+    }
+    finally {
+        Release-BapMutex -Mutex $wdMutex
+    }
+    exit 0
+}
+
+# -----------------------------------------------------------------------------
+# Main Universal Transactional Execution Broker
+# -----------------------------------------------------------------------------
+function Invoke-BapGovernedSession {
+    param(
+        [Parameter(Mandatory = $true)][string]$AgentId,        # 'claude-code', 'copilot', 'antigravity'
+        [Parameter(Mandatory = $true)][string]$AgentMode,      # 'cli' or 'ide'
+        [Parameter(Mandatory = $true)][string]$DisplayName,    # e.g. "GitHub Copilot (VS Code IDE Mode)"
+        [Parameter(Mandatory = $true)][string[]]$CandidateExecutables,
+        [Parameter(Mandatory = $true)][scriptblock]$ConfigureFiles, # callback: ($Workspace, $SessionId) -> @( @{ Path; Content } )
+        [string[]]$ScriptRawArgs = @(),
+        [string]$CallingScript = $PSCommandPath
+    )
+
+    # 1. Parse Launcher/Watchdog mode
+    $Mode = 'Launcher'
+    $ServerUrl = $null
+    $ServerExplicit = $false
+    $ManifestArg = $null
+    $MutexArg = $null
+    $ParentPidArg = 0
+    $ParentTicksArg = [int64]0
+    $ForwardArgs = @()
+
+    for ($i = 0; $i -lt $ScriptRawArgs.Count; $i++) {
+        $a = [string]$ScriptRawArgs[$i]
+        if ($a -eq '--bap-watchdog') { $Mode = 'Watchdog'; continue }
+        if ($a -eq '--bap-manifest') { $i++; $ManifestArg = [string]$ScriptRawArgs[$i]; continue }
+        if ($a -eq '--bap-mutex') { $i++; $MutexArg = [string]$ScriptRawArgs[$i]; continue }
+        if ($a -eq '--bap-parent-pid') { $i++; $ParentPidArg = [int]$ScriptRawArgs[$i]; continue }
+        if ($a -eq '--bap-parent-start-ticks') { $i++; $ParentTicksArg = [int64]$ScriptRawArgs[$i]; continue }
+        if ($a -eq '--server' -or $a -eq '-ServerUrl') { $i++; $ServerUrl = [string]$ScriptRawArgs[$i]; $ServerExplicit = $true; continue }
+        if ($a -like '--server=*') { $ServerUrl = $a.Substring('--server='.Length); $ServerExplicit = $true; continue }
+        $ForwardArgs += $a
+    }
+
+    # Watchdog child execution
+    if ($Mode -eq 'Watchdog') {
+        Run-WatchdogLoop -ManifestPath $ManifestArg -MutexName $MutexArg -ParentPid $ParentPidArg -ParentTicks $ParentTicksArg
+        exit 0
+    }
+
+    # 2. Setup Workspace Context
+    $Workspace = [System.IO.Path]::GetFullPath((Get-Location).Path)
+    $RepoRoot = $Workspace
+    $ScriptDir = Split-Path -Parent $CallingScript
+    if (Test-Path (Join-Path $ScriptDir 'bap-controlplane')) {
+        $RepoRoot = $ScriptDir
+    } elseif (Test-Path (Join-Path (Split-Path -Parent $ScriptDir) 'bap-controlplane')) {
+        $RepoRoot = Split-Path -Parent $ScriptDir
+    }
+
+    $BapStateDir = Join-Path $Workspace '.bapstate'
+    if (-not (Test-Path -LiteralPath $BapStateDir)) {
+        New-Item -ItemType Directory -Path $BapStateDir -Force | Out-Null
+    }
+
+    $ManifestPath = Join-Path $BapStateDir "recovery-$AgentId-$AgentMode.json"
+    $MirrorPath = Get-RecoveryMirrorPath -ManifestPath $ManifestPath
+    $MutexName = Get-WorkspaceMutexName -Workspace $Workspace -AgentPrefix "$AgentId-$AgentMode"
+    $SessionId = "sess-$AgentId-$AgentMode-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
+
+    $parentProc = Get-Process -Id $PID
+    $ParentTicks = $parentProc.StartTime.ToUniversalTime().Ticks
+    $PowerShellExe = $parentProc.Path
+
+    if ([string]::IsNullOrWhiteSpace($ServerUrl)) {
+        $ServerUrl = $env:BAP_SERVER_URL
+    }
+    if ([string]::IsNullOrWhiteSpace($ServerUrl)) {
+        $ServerUrl = 'http://localhost:8080'
+    }
+    $ServerUrl = $ServerUrl.TrimEnd('/')
+
+    $isSecondary = $false
+    $RecoveryRecord = $null
+    $ExitCode = 0
+
+    try {
+        try {
+            $Host.UI.RawUI.WindowTitle = "$DisplayName (Governed by BAP Zero-Trust)"
+        } catch { }
+
+        Write-Host "===============================================================================" -ForegroundColor Cyan
+        Write-Host "  BOUNDED AUTHORITY PLANE (BAP) - ZERO-TRUST LAUNCHER: $DisplayName" -ForegroundColor Cyan
+        Write-Host "===============================================================================" -ForegroundColor Cyan
+        Write-Host "[*] Workspace Target : $Workspace"
+        Write-Host "[*] Active Session ID: $SessionId"
+        Write-Host "[*] Identity Agent   : $AgentId (Mode: $AgentMode)"
+        Write-Host ""
+
+        # 3. Coordinate Multi-Session Custody via Mutex
+        $coordMutex = Acquire-BapMutex -Name $MutexName -TimeoutMs 5000
+        if ($null -eq $coordMutex) {
+            throw "Could not acquire workspace coordination lock ($MutexName) within 5 seconds."
+        }
+
+        try {
+            if ((Test-Path -LiteralPath $ManifestPath) -or (Test-Path -LiteralPath $MirrorPath)) {
+                $existing = Read-RecoveryRecord -ManifestPath $ManifestPath
+                if ($null -ne $existing) {
+                    $surviving = @()
+                    if ($existing.PSObject.Properties.Name -contains 'active_sessions' -and $null -ne $existing.active_sessions) {
+                        foreach ($s in $existing.active_sessions) {
+                            $spid = [int]($s.launcher_pid)
+                            if ($spid -gt 0) {
+                                $pr = Get-Process -Id $spid -ErrorAction SilentlyContinue
+                                if ($null -ne $pr -and -not $pr.HasExited) { $surviving += $s }
+                            }
+                        }
+                    }
+
+                    if ($surviving.Count -gt 0) {
+                        # Join active workspace session group
+                        $isSecondary = $true
+                        $existing.active_sessions = @($surviving) + @([ordered]@{
+                            launcher_pid         = [int]$PID
+                            launcher_start_ticks = [int64]$ParentTicks
+                            session_id           = [string]$SessionId
+                            agent_id             = [string]$AgentId
+                            mode                 = [string]$AgentMode
+                        })
+                        $existing.state = 'Active'
+                        Write-RecoveryRecord -Record $existing -ManifestPath $ManifestPath
+                        $RecoveryRecord = $existing
+                        Write-Host "[+] Joined active BAP-governed workspace ($($existing.active_sessions.Count) active sessions)." -ForegroundColor Green
+                    } else {
+                        Write-Host "[!] Stale session detected from prior crash. Running recovery..." -ForegroundColor Yellow
+                        [void](Restore-BapSessionState -ManifestPath $ManifestPath -Reason 'stale session cleanup')
+                    }
+                }
+            }
+        }
+        finally {
+            Release-BapMutex -Mutex $coordMutex
+        }
+
+        # 4. Preflight Control Plane
+        Ensure-ControlPlaneRunning -ServerUrl $ServerUrl -RepoRoot $RepoRoot
+
+        # 5. Resolve Edge Daemon and Interceptor
+        $edgeCandidates = @(
+            (Join-Path $RepoRoot 'dist\windows-amd64\bapedge.exe'),
+            (Join-Path $RepoRoot 'bap-edge\bapedge.exe'),
+            (Join-Path $RepoRoot 'bapedge.exe')
+        )
+        $BapEdgeBin = Resolve-BinaryPath -Paths $edgeCandidates -Commands @('bapedge.exe')
+
+        # 6. Resolve Target Executable
+        $TargetBin = Resolve-BinaryPath -Paths $CandidateExecutables -Commands $CandidateExecutables
+        if ([string]::IsNullOrWhiteSpace($TargetBin)) {
+            throw "Target executable for $DisplayName not found. Looked for: $($CandidateExecutables -join ', ')"
+        }
+        Write-Host "[+] Target Executable: $TargetBin" -ForegroundColor Gray
+
+        # 7. Take Transactional Custody of Configuration Files (Primary Session)
+        if (-not $isSecondary) {
+            $filesSpec = & $ConfigureFiles $Workspace $SessionId
+            $trackedList = @()
+
+            foreach ($spec in $filesSpec) {
+                $targetFile = [string]$spec.Path
+                $bapContent = [string]$spec.Content
+                $fDir = Split-Path -Parent $targetFile
+                if (-not [string]::IsNullOrWhiteSpace($fDir) -and -not (Test-Path -LiteralPath $fDir)) {
+                    New-Item -ItemType Directory -Path $fDir -Force | Out-Null
+                }
+
+                $existed = Test-Path -LiteralPath $targetFile -PathType Leaf
+                $backupPath = "$targetFile.bap-backup-$SessionId"
+                $origSha = if ($existed) { Get-FileSha256 -Path $targetFile } else { $null }
+
+                if ($existed) {
+                    Move-Item -LiteralPath $targetFile -Destination $backupPath -Force
+                }
+
+                # Write BAP governed content
+                Write-AtomicText -Path $targetFile -Text $bapContent
+                $bapSha = Get-FileSha256 -Path $targetFile
+                $bapBytes = [System.IO.File]::ReadAllBytes($targetFile)
+
+                $trackedList += [ordered]@{
+                    path             = $targetFile
+                    existed          = [bool]$existed
+                    backup           = $backupPath
+                    original_sha256  = $origSha
+                    bap_sha256       = $bapSha
+                    bap_content_b64  = [Convert]::ToBase64String($bapBytes)
+                }
+            }
+
+            $RecoveryRecord = [ordered]@{
+                version              = 2
+                session_id           = $SessionId
+                agent_id             = $AgentId
+                agent_mode           = $AgentMode
+                state                = 'Prepared'
+                workspace            = $Workspace
+                launcher_pid         = [int]$PID
+                launcher_start_ticks = [int64]$ParentTicks
+                watchdog_pid         = 0
+                server_url           = $ServerUrl
+                bapedge_bin          = $BapEdgeBin
+                session_active       = $false
+                created_utc          = [DateTime]::UtcNow.ToString('o')
+                active_sessions      = @(
+                    [ordered]@{
+                        launcher_pid         = [int]$PID
+                        launcher_start_ticks = [int64]$ParentTicks
+                        session_id           = [string]$SessionId
+                        agent_id             = [string]$AgentId
+                        mode                 = [string]$AgentMode
+                    }
+                )
+                tracked_files        = $trackedList
+            }
+
+            Write-RecoveryRecord -Record $RecoveryRecord -ManifestPath $ManifestPath
+
+            # Start detached session guard
+            $watchdog = Start-DetachedWatchdog -ScriptPath $CallingScript -ManifestPath $ManifestPath -MutexName $MutexName -ParentPid $PID -ParentTicks $ParentTicks
+            $RecoveryRecord.watchdog_pid = [int]$watchdog.Id
+            $RecoveryRecord.state = 'Guarded'
+            Write-RecoveryRecord -Record $RecoveryRecord -ManifestPath $ManifestPath
+            Write-Host "[+] Detached session guard active (PID $($watchdog.Id))." -ForegroundColor Green
+        }
+
+        # 8. Enroll BAP Session with Local Edge / Control Plane
+        $env:BAP_SESSION_ID = $SessionId
+        $env:BAP_SERVER_URL = $ServerUrl
+        $env:LTD_SOURCE = $AgentId
+
+        if (-not [string]::IsNullOrWhiteSpace($BapEdgeBin)) {
+            Write-Host "[*] Enrolling session '$SessionId' with BAP Edge..." -ForegroundColor Cyan
+            & $BapEdgeBin session-start --server $ServerUrl --session-id $SessionId --app-id $AgentId
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "[+] Session enrolled successfully in BAP Live Radar!" -ForegroundColor Green
+            } else {
+                Write-Warning "bapedge session-start returned $LASTEXITCODE. Continuing under local zero-trust policy."
+            }
+        }
+
+        if ($null -ne $RecoveryRecord) {
+            $RecoveryRecord.session_active = $true
+            $RecoveryRecord.state = 'Running'
+            Write-RecoveryRecord -Record $RecoveryRecord -ManifestPath $ManifestPath
+        }
+
+        # 9. Launch Target Process
+        Write-Host ""
+        Write-Host "===============================================================================" -ForegroundColor Green
+        Write-Host "  $DisplayName IS NOW GOVERNED BY BAP ZERO-TRUST" -ForegroundColor Green
+        Write-Host "===============================================================================" -ForegroundColor Green
+        Write-Host ""
+
+        & $TargetBin @ForwardArgs
+        $pExit = $LASTEXITCODE
+        $ExitCode = if ($null -eq $pExit) { 0 } else { [int]$pExit }
+        Write-Host "[*] $DisplayName exited with code $ExitCode." -ForegroundColor Gray
+    }
+    catch {
+        if ($ExitCode -eq 0) { $ExitCode = 1 }
+        Write-Host "[-] Error: $($_.Exception.Message)" -ForegroundColor Red
+    }
+    finally {
+        # 10. Multi-Session Teardown Coordination
+        Write-Host "`n[*] Performing BAP session teardown for session '$SessionId'..." -ForegroundColor Yellow
+
+        if (-not [string]::IsNullOrWhiteSpace($BapEdgeBin) -and -not [string]::IsNullOrWhiteSpace($ServerUrl)) {
+            & $BapEdgeBin session-end --server $ServerUrl --session-id $SessionId 2>$null
+        }
+
+        $teardownMutex = Acquire-BapMutex -Name $MutexName -TimeoutMs 5000
+        try {
+            if (Test-Path -LiteralPath $ManifestPath) {
+                $curRecord = Read-RecoveryRecord -ManifestPath $ManifestPath
+                if ($null -ne $curRecord) {
+                    $surviving = @()
+                    if ($curRecord.PSObject.Properties.Name -contains 'active_sessions' -and $null -ne $curRecord.active_sessions) {
+                        foreach ($s in $curRecord.active_sessions) {
+                            $spid = [int]($s.launcher_pid)
+                            if ($spid -ne $PID -and $spid -gt 0) {
+                                $pr = Get-Process -Id $spid -ErrorAction SilentlyContinue
+                                if ($null -ne $pr -and -not $pr.HasExited) { $surviving += $s }
+                            }
+                        }
+                    }
+
+                    if ($surviving.Count -eq 0) {
+                        # Last session: Kill watchdog and restore original files
+                        if ($curRecord.PSObject.Properties.Name -contains 'watchdog_pid' -and $curRecord.watchdog_pid -gt 0) {
+                            $wdPid = [int]($curRecord.watchdog_pid)
+                            $wdPr = Get-Process -Id $wdPid -ErrorAction SilentlyContinue
+                            if ($null -ne $wdPr -and -not $wdPr.HasExited) {
+                                Stop-Process -Id $wdPid -Force -ErrorAction SilentlyContinue
+                            }
+                        }
+                        $curRecord.state = 'Cleaning'
+                        Write-RecoveryRecord -Record $curRecord -ManifestPath $ManifestPath
+                        [void](Restore-BapSessionState -ManifestPath $ManifestPath -Reason 'last session teardown')
+                    } else {
+                        $curRecord.active_sessions = @($surviving)
+                        Write-RecoveryRecord -Record $curRecord -ManifestPath $ManifestPath
+                        Write-Host "[*] Session '$SessionId' ended. $($surviving.Count) session(s) remain active in this workspace." -ForegroundColor Cyan
+                    }
+                }
+            }
+        }
+        finally {
+            Release-BapMutex -Mutex $teardownMutex
+        }
+
+        # Restore environment
+        Remove-Item Env:\BAP_SESSION_ID -ErrorAction SilentlyContinue
+        Remove-Item Env:\LTD_SOURCE -ErrorAction SilentlyContinue
+    }
+
+    exit $ExitCode
+}
