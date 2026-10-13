@@ -243,8 +243,9 @@ func RunSandboxedCommandWithExitCode(cmdStr string) (string, int, error) {
 		}
 	}
 
-	// Inject CORP_OBO_TOKEN environment variable
+	// Inject CORP_OBO_TOKEN and broker marker environment variables
 	cmd.Env = append(env, fmt.Sprintf("CORP_OBO_TOKEN=%s", InjectedOBOToken))
+	cmd.Env = append(cmd.Env, "BAP_IN_BROKER=1")
 
 	var b bytes.Buffer
 	cmd.Stdout = &b

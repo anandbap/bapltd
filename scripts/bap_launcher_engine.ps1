@@ -479,6 +479,59 @@ function Run-WatchdogLoop {
 }
 
 # -----------------------------------------------------------------------------
+# Layer 3: Tool Call & Terminal Interceptor Shims
+# -----------------------------------------------------------------------------
+function Initialize-BapShims {
+    param(
+        [Parameter(Mandatory = $true)][string]$Workspace,
+        [Parameter(Mandatory = $true)][string]$BapEdgeBin,
+        [Parameter(Mandatory = $true)][string]$AgentId,
+        [Parameter(Mandatory = $true)][string]$SessionId
+    )
+
+    $shimDir = Join-Path $Workspace ".bapstate\shims-$SessionId"
+    if (-not (Test-Path -LiteralPath $shimDir)) {
+        New-Item -ItemType Directory -Path $shimDir -Force | Out-Null
+    }
+
+    $toolsToShim = @('git', 'python', 'curl', 'wget', 'powershell', 'cat', 'rm')
+    foreach ($tool in $toolsToShim) {
+        $realBin = $null
+        try {
+            $cmdObj = Get-Command $tool -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($null -ne $cmdObj -and -not [string]::IsNullOrWhiteSpace($cmdObj.Source)) {
+                $realBin = $cmdObj.Source
+            }
+        } catch { }
+
+        if ([string]::IsNullOrWhiteSpace($realBin)) {
+            if ($tool -eq 'git') { $realBin = 'C:\Program Files\Git\cmd\git.exe' }
+            elseif ($tool -eq 'curl') { $realBin = 'C:\Windows\System32\curl.exe' }
+            elseif ($tool -eq 'powershell') { $realBin = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' }
+            elseif ($tool -eq 'cat') { $realBin = 'C:\Program Files\Git\usr\bin\cat.exe' }
+            elseif ($tool -eq 'rm') { $realBin = 'C:\Program Files\Git\usr\bin\rm.exe' }
+            elseif ($tool -eq 'python') { $realBin = 'python.exe' }
+        }
+
+        $shimContent = @"
+@echo off
+if "%BAP_IN_BROKER%"=="1" goto REAL_RUN
+"$BapEdgeBin" exec --source %LTD_SOURCE% --session-id %BAP_SESSION_ID% --raw "%~n0 %*"
+exit /b %ERRORLEVEL%
+
+:REAL_RUN
+"$realBin" %*
+exit /b %ERRORLEVEL%
+"@
+
+        $shimFile = Join-Path $shimDir "$tool.cmd"
+        [System.IO.File]::WriteAllText($shimFile, $shimContent, [System.Text.UTF8Encoding]::new($false))
+    }
+
+    return $shimDir
+}
+
+# -----------------------------------------------------------------------------
 # Main Universal Transactional Execution Broker
 # -----------------------------------------------------------------------------
 function Invoke-BapGovernedSession {
@@ -772,6 +825,27 @@ function Invoke-BapGovernedSession {
             Write-RecoveryRecord -Record $RecoveryRecord -ManifestPath $ManifestPath
         }
 
+        # 8B. Layer 3: Setup Tool Call & Terminal Interceptor Shims
+        $ShimDir = $null
+        $origPath = $env:PATH
+        if (-not [string]::IsNullOrWhiteSpace($BapEdgeBin)) {
+            $ShimDir = Initialize-BapShims -Workspace $Workspace -BapEdgeBin $BapEdgeBin -AgentId $AgentId -SessionId $SessionId
+            $env:PATH = "$ShimDir;$origPath"
+            Write-Host "[+] Layer 3 shims active in $ShimDir (git, python, curl, powershell, cat)." -ForegroundColor Gray
+        }
+
+        # 8C. Layer 4: Setup Runtime Execution Broker & Environment
+        $env:BAP_MODE = "enforce"
+        $env:BAP_AGENT_SANDBOX = "1"
+        $env:BAP_IN_BROKER = "0"
+
+        # Start detached watcher to monitor agent process tree and sync heartbeats/revocations
+        if (-not [string]::IsNullOrWhiteSpace($BapEdgeBin) -and -not [string]::IsNullOrWhiteSpace($ServerUrl)) {
+            try {
+                Start-Process -FilePath $BapEdgeBin -ArgumentList @("watch", "--pid", "$PID", "--server", $ServerUrl, "--session-id", $SessionId, "--detach") -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
+            } catch { }
+        }
+
         # 9. Launch Target Process
         Write-Host ""
         Write-Host "===============================================================================" -ForegroundColor Green
@@ -795,6 +869,17 @@ function Invoke-BapGovernedSession {
         if (-not [string]::IsNullOrWhiteSpace($BapEdgeBin) -and -not [string]::IsNullOrWhiteSpace($ServerUrl)) {
             & $BapEdgeBin session-end --server $ServerUrl --session-id $SessionId 2>$null
         }
+
+        # Restore PATH and clean up Layer 3 shims
+        if (-not [string]::IsNullOrWhiteSpace($origPath)) {
+            $env:PATH = $origPath
+        }
+        if (-not [string]::IsNullOrWhiteSpace($ShimDir) -and (Test-Path -LiteralPath $ShimDir)) {
+            Remove-Item -LiteralPath $ShimDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item Env:\BAP_MODE -ErrorAction SilentlyContinue
+        Remove-Item Env:\BAP_AGENT_SANDBOX -ErrorAction SilentlyContinue
+        Remove-Item Env:\BAP_IN_BROKER -ErrorAction SilentlyContinue
 
         $teardownMutex = Acquire-BapMutex -Name $MutexName -TimeoutMs 5000
         try {
