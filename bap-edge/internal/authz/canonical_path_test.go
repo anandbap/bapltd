@@ -16,7 +16,7 @@ func TestResolveCanonicalPath_Traversal(t *testing.T) {
 
 	target := filepath.Join(sub, "..", ".env")
 	canonical := ResolveCanonicalPath(target, ws)
-	expected := filepath.Clean(filepath.Join(ws, "app", ".env"))
+	expected := filepath.Clean(filepath.Join(ResolveCanonicalPath(ws, ""), "app", ".env"))
 
 	if canonical != expected {
 		t.Errorf("got canonical %q, want %q", canonical, expected)

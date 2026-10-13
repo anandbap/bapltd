@@ -2,6 +2,7 @@ package authz
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -115,9 +116,10 @@ func IsForbiddenSecretPath(canonicalPath string) (bool, string) {
 		return false, ""
 	}
 
-	cleaned := filepath.Clean(canonicalPath)
-	lower := strings.ToLower(filepath.ToSlash(cleaned))
-	base := strings.ToLower(filepath.Base(cleaned))
+	slashPath := strings.ReplaceAll(canonicalPath, "\\", "/")
+	cleaned := path.Clean(slashPath)
+	lower := strings.ToLower(cleaned)
+	base := strings.ToLower(path.Base(cleaned))
 
 	// 1. .env files
 	if base == ".env" || strings.HasPrefix(base, ".env.") || strings.HasSuffix(base, ".env") || strings.Contains(lower, "/.env") {
