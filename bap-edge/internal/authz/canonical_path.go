@@ -145,3 +145,4 @@ func IsForbiddenSecretPath(canonicalPath string) (bool, string) {
 
 	return false, ""
 }
+

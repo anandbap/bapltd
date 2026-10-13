@@ -95,3 +95,4 @@ func TestIsPathOutsideWorkspaceCanonical(t *testing.T) {
 		}
 	}
 }
+
