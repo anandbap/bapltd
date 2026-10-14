@@ -42,6 +42,7 @@ type execContext struct {
 	userPrompt      string
 	skillName       string
 	contentHash     string
+	stepUpDecision  string
 	parentPID       int
 	processPID      int
 	processTree     []string
@@ -101,6 +102,243 @@ func recordSessionDenial(sessionID, fullCmd, reason string) (int, string) {
 	}
 
 	return rec.DenialCount, rec.ThreatLevel
+}
+
+type sessionApprovalRecord struct {
+	SessionID           string            `json:"session_id"`
+	ApprovedCommands    map[string]string `json:"approved_commands"`
+	ApprovedExecutables map[string]bool   `json:"approved_executables"`
+}
+
+func getSessionApprovalsPath(sessionID string) string {
+	_ = os.MkdirAll(".bap", 0700)
+	safeID := strings.ReplaceAll(sessionID, ":", "_")
+	safeID = strings.ReplaceAll(safeID, "/", "_")
+	safeID = strings.ReplaceAll(safeID, "\\", "_")
+	return filepath.Join(".bap", fmt.Sprintf("approvals_%s.json", safeID))
+}
+
+func isSessionTrustGranted(sessionID, fullCommand, executable string) bool {
+	if sessionID == "" {
+		return false
+	}
+	path := getSessionApprovalsPath(sessionID)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var rec sessionApprovalRecord
+	if err := json.Unmarshal(data, &rec); err != nil {
+		return false
+	}
+	normExec := strings.ToLower(strings.TrimSpace(executable))
+	if rec.ApprovedExecutables != nil && rec.ApprovedExecutables[normExec] {
+		return true
+	}
+	cmdHash := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.TrimSpace(fullCommand))))
+	if rec.ApprovedCommands != nil && rec.ApprovedCommands[cmdHash] == "session" {
+		return true
+	}
+	return false
+}
+
+func recordSessionTrust(sessionID, fullCommand, executable, approvalType string) {
+	if sessionID == "" {
+		sessionID = "default"
+	}
+	path := getSessionApprovalsPath(sessionID)
+	var rec sessionApprovalRecord
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &rec)
+	}
+	rec.SessionID = sessionID
+	if rec.ApprovedCommands == nil {
+		rec.ApprovedCommands = make(map[string]string)
+	}
+	if rec.ApprovedExecutables == nil {
+		rec.ApprovedExecutables = make(map[string]bool)
+	}
+	cmdHash := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.TrimSpace(fullCommand))))
+	rec.ApprovedCommands[cmdHash] = approvalType
+	if approvalType == "session" {
+		normExec := strings.ToLower(strings.TrimSpace(executable))
+		if normExec != "" {
+			rec.ApprovedExecutables[normExec] = true
+		}
+	}
+	if b, err := json.MarshalIndent(rec, "", "  "); err == nil {
+		_ = os.WriteFile(path, b, 0600)
+	}
+}
+
+func promptHumanStepUpApproval(ec *execContext, fullCommand, executable, reason string) string {
+	// 1. Check if session already trusts this command or executable
+	if isSessionTrustGranted(ec.sessionID, fullCommand, executable) {
+		return "session_trust"
+	}
+
+	// 2. Anti-tampering check: BAP protected assets are NEVER eligible for step-up escalation
+	if isTamper, _ := isTamperingAttempt(fullCommand); isTamper {
+		return "denied"
+	}
+
+	// Determine if this is a cross-folder mutation
+	decomp := authz.Decompose(executable, fullCommand, ec.cmdArguments)
+	targetEntity := decomp.TargetEntity
+	if targetEntity == "" || targetEntity == executable {
+		if parts := strings.Split(fullCommand, ">"); len(parts) > 1 {
+			targetEntity = strings.TrimSpace(strings.Trim(parts[len(parts)-1], "\"'`"))
+		}
+	}
+	workspaceRoot := authz.GetWorkspaceRoot()
+	var absTarget string
+	if targetEntity != "" {
+		if filepath.IsAbs(targetEntity) {
+			absTarget = filepath.Clean(targetEntity)
+		} else if workspaceRoot != "" {
+			absTarget = filepath.Clean(filepath.Join(workspaceRoot, targetEntity))
+		}
+	}
+
+	escapes := authz.CheckCommandWorkspaceEscape(workspaceRoot, fullCommand)
+	if absTarget != "" && workspaceRoot != "" && authz.IsPathOutsideWorkspaceCanonical(workspaceRoot, absTarget) {
+		escapes = true
+	}
+
+	isCrossFolder := escapes && (decomp.ActionType == "write" || decomp.ActionType == "delete" || strings.Contains(strings.ToLower(reason), "policy2") || strings.Contains(strings.ToLower(reason), "escapes_workspace") || strings.Contains(strings.ToLower(reason), "escapes workspace"))
+
+	// Check if target is already authorized via session/project/global
+	if isCrossFolder && absTarget != "" {
+		if auth, scope := authz.IsTargetAuthorized(workspaceRoot, ec.sessionID, absTarget, decomp.ActionType); auth {
+			switch scope {
+			case "project":
+				return "project_trust"
+			case "global":
+				return "global_trust"
+			default:
+				return "session_trust"
+			}
+		}
+	}
+
+	trustPath := absTarget
+	if trustPath == "" {
+		trustPath = fullCommand
+	}
+
+	// 3. Automated / Environment Override for CI/CD, headless pipelines, or test harnesses
+	envDecision := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_STEPUP_DECISION")))
+	if envDecision == "approve" || envDecision == "once" || envDecision == "allow" || envDecision == "o" {
+		return "approve_once"
+	}
+	if envDecision == "project" || envDecision == "p" {
+		if isCrossFolder && absTarget != "" {
+			_ = authz.GrantPermission(workspaceRoot, ec.sessionID, absTarget, "project", []string{decomp.ActionType})
+		}
+		return "project_trust"
+	}
+	if envDecision == "global" || envDecision == "g" {
+		if isCrossFolder && absTarget != "" {
+			_ = authz.GrantPermission(workspaceRoot, ec.sessionID, absTarget, "global", []string{decomp.ActionType})
+		}
+		return "global_trust"
+	}
+	if envDecision == "session" || envDecision == "trust" || envDecision == "s" {
+		if isCrossFolder && absTarget != "" {
+			_ = authz.GrantPermission(workspaceRoot, ec.sessionID, absTarget, "session", []string{decomp.ActionType})
+		}
+		recordSessionTrust(ec.sessionID, fullCommand, executable, "session")
+		return "session_trust"
+	}
+	if envDecision == "deny" || envDecision == "block" || envDecision == "d" {
+		return "denied"
+	}
+
+	// 4. Interactive Terminal Check:
+	// If non-interactive (piped stdin, CI, or explicit flag), fail-closed
+	if !isTerminal(os.Stdin) || os.Getenv("BAP_NON_INTERACTIVE") == "1" || ec.forceJSON {
+		return "non_interactive_deny"
+	}
+
+	// 5. Interactive Human-in-the-Loop Prompt on terminal
+	fmt.Fprintf(os.Stderr, "\n")
+	fmt.Fprintf(os.Stderr, "================================================================================\n")
+	if isCrossFolder {
+		fmt.Fprintf(os.Stderr, " [BAP AIR SECURITY KERNEL] CROSS-FOLDER MUTATION APPROVAL REQUIRED (HITL)\n")
+		fmt.Fprintf(os.Stderr, "================================================================================\n")
+		fmt.Fprintf(os.Stderr, " Session ID   : %s\n", ec.sessionID)
+		fmt.Fprintf(os.Stderr, " Agent Source : %s\n", ec.source)
+		fmt.Fprintf(os.Stderr, " Target Entity: %s\n", trustPath)
+		fmt.Fprintf(os.Stderr, " Action Type  : %s\n", decomp.ActionType)
+		fmt.Fprintf(os.Stderr, " Executable   : %s\n", executable)
+		fmt.Fprintf(os.Stderr, " Command      : %s\n", fullCommand)
+		fmt.Fprintf(os.Stderr, " Policy Reason: %s\n", reason)
+		fmt.Fprintf(os.Stderr, "--------------------------------------------------------------------------------\n")
+		fmt.Fprintf(os.Stderr, " This operation requests cross-folder mutation outside the active workspace.\n")
+		fmt.Fprintf(os.Stderr, " [O] Once     - Authorize this specific execution once\n")
+		fmt.Fprintf(os.Stderr, " [S] Session  - Trust target path for remainder of this session (%s)\n", ec.sessionID)
+		fmt.Fprintf(os.Stderr, " [P] Project  - Persistently trust target path across sessions for this workspace\n")
+		fmt.Fprintf(os.Stderr, " [G] Global   - Persistently trust target path machine-wide across all workspaces\n")
+		fmt.Fprintf(os.Stderr, " [D] Deny (Default) - Strictly block execution and maintain containment\n")
+		fmt.Fprintf(os.Stderr, "================================================================================\n")
+		fmt.Fprintf(os.Stderr, "[BAP HITL] Enter choice [o/s/p/g/D]: ")
+
+		var input string
+		_, _ = fmt.Fscanln(os.Stdin, &input)
+		choice := strings.ToLower(strings.TrimSpace(input))
+
+		switch choice {
+		case "o", "once", "approve", "yes", "y", "a":
+			return "approve_once"
+		case "s", "session":
+			if absTarget != "" {
+				_ = authz.GrantPermission(workspaceRoot, ec.sessionID, absTarget, "session", []string{decomp.ActionType})
+			}
+			recordSessionTrust(ec.sessionID, fullCommand, executable, "session")
+			return "session_trust"
+		case "p", "project":
+			if absTarget != "" {
+				_ = authz.GrantPermission(workspaceRoot, ec.sessionID, absTarget, "project", []string{decomp.ActionType})
+			}
+			return "project_trust"
+		case "g", "global":
+			if absTarget != "" {
+				_ = authz.GrantPermission(workspaceRoot, ec.sessionID, absTarget, "global", []string{decomp.ActionType})
+			}
+			return "global_trust"
+		default:
+			return "denied"
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, " [BAP AIR SECURITY KERNEL] HUMAN STEP-UP APPROVAL REQUIRED (HITL)\n")
+		fmt.Fprintf(os.Stderr, "================================================================================\n")
+		fmt.Fprintf(os.Stderr, " Session ID   : %s\n", ec.sessionID)
+		fmt.Fprintf(os.Stderr, " Agent Source : %s\n", ec.source)
+		fmt.Fprintf(os.Stderr, " Executable   : %s\n", executable)
+		fmt.Fprintf(os.Stderr, " Command      : %s\n", fullCommand)
+		fmt.Fprintf(os.Stderr, " Policy Reason: %s\n", reason)
+		fmt.Fprintf(os.Stderr, "--------------------------------------------------------------------------------\n")
+		fmt.Fprintf(os.Stderr, " This operation requires human operator authorization.\n")
+		fmt.Fprintf(os.Stderr, " [A] Approve Once       - Authorize this specific execution once\n")
+		fmt.Fprintf(os.Stderr, " [S] Trust for Session  - Authorize executable for remainder of this session\n")
+		fmt.Fprintf(os.Stderr, " [D] Deny (Default)     - Strictly block execution and record violation\n")
+		fmt.Fprintf(os.Stderr, "================================================================================\n")
+		fmt.Fprintf(os.Stderr, "[BAP HITL] Enter choice [a/s/D]: ")
+
+		var input string
+		_, _ = fmt.Fscanln(os.Stdin, &input)
+		choice := strings.ToLower(strings.TrimSpace(input))
+
+		switch choice {
+		case "a", "approve", "yes", "y", "o", "once":
+			return "approve_once"
+		case "s", "session", "trust":
+			recordSessionTrust(ec.sessionID, fullCommand, executable, "session")
+			return "session_trust"
+		default:
+			return "denied"
+		}
+	}
 }
 
 func isTamperingAttempt(cmdStr string) (bool, string) {
@@ -243,7 +481,9 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 	resp.ExitCode = code
 
 	result := "ALLOWED_EXECUTED"
-	if ec.decisionOnly {
+	if ec.stepUpDecision != "" && resp.Allowed {
+		result = "ALLOWED_STEPUP"
+	} else if ec.decisionOnly {
 		result = "DECISION_ONLY"
 	} else if ec.shadowDenied {
 		result = "AUDIT_PERMITTED"
@@ -263,6 +503,10 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 		result = "EXECUTION_FAILED"
 	}
 
+	if ec.stepUpDecision != "" {
+		resp.StepUpDecision = ec.stepUpDecision
+	}
+
 	if resp.Receipt == nil {
 		resp.Receipt = generateExecutionReceipt(ec, result, code)
 	}
@@ -273,7 +517,11 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 	durationMs := time.Since(ec.startTime).Milliseconds()
 	decision := "deny"
 	if resp.Allowed {
-		decision = "allow"
+		if ec.stepUpDecision != "" {
+			decision = "stepup_allow"
+		} else {
+			decision = "allow"
+		}
 	}
 	if ec.shadowDenied {
 		decision = "shadow_deny"
@@ -373,10 +621,15 @@ func RunExec(args []string) {
 	promptFlag := fs.String("prompt", os.Getenv("BAP_USER_PROMPT"), "User prompt driving the command (e.g. 'Investigate auth issue')")
 	skillFlag := fs.String("skill", os.Getenv("BAP_SKILL_NAME"), "Identifier of declaring skill for AIR content pinning (e.g. 'sql-analyzer')")
 	verifyPinsFlag := fs.Bool("verify-pins", true, "Verify cryptographic content hashes against pinning manifest (AIR Model)")
+	stepUpFlag := fs.String("stepup-decision", "", "Human Step-Up approval decision ('approve', 'session', or 'deny')")
 
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing arguments: %v\n", err)
 		os.Exit(1)
+	}
+
+	if *stepUpFlag != "" {
+		os.Setenv("BAP_STEPUP_DECISION", *stepUpFlag)
 	}
 
 	ec := &execContext{
@@ -486,6 +739,7 @@ func RunExec(args []string) {
 		}
 		ec.exit(resp, 1)
 	}
+	authorizer.SetSessionID(ec.sessionID)
 
 	// 2. Parse command for Cedar context
 	executable, cmdArguments := sandbox.ParseCommand(fullCommand)
@@ -503,10 +757,40 @@ func RunExec(args []string) {
 		ec.exit(resp, 1)
 	}
 
+	stepUpResult := ""
+	if !allowed {
+		stepUpResult = promptHumanStepUpApproval(ec, fullCommand, executable, reason)
+		if stepUpResult == "approve_once" || stepUpResult == "session_trust" || stepUpResult == "project_trust" || stepUpResult == "global_trust" {
+			allowed = true
+			ec.stepUpDecision = stepUpResult
+		}
+	}
+
 	if !allowed {
 		suggestion := ""
-		if strings.Contains(reason, "escapes_workspace") || authz.CheckCommandWorkspaceEscape(authz.GetWorkspaceRoot(), fullCommand) {
-			suggestion = "Directory traversal outside the workspace is prohibited. Commands and file paths must remain within the workspace boundary. Child project access (e.g. Maven child modules) inside the workspace is permitted."
+		decomp := authz.Decompose(executable, fullCommand, cmdArguments)
+		targetPath := decomp.TargetEntity
+		if targetPath == "" || targetPath == executable {
+			if parts := strings.Split(fullCommand, ">"); len(parts) > 1 {
+				targetPath = strings.TrimSpace(strings.Trim(parts[len(parts)-1], "\"'`"))
+			}
+		}
+		if targetPath != "" && !filepath.IsAbs(targetPath) {
+			targetPath = filepath.Clean(filepath.Join(authz.GetWorkspaceRoot(), targetPath))
+		}
+
+		isCrossFolder := authz.CheckCommandWorkspaceEscape(authz.GetWorkspaceRoot(), fullCommand) || (targetPath != "" && authz.IsPathOutsideWorkspaceCanonical(authz.GetWorkspaceRoot(), targetPath))
+
+		if stepUpResult == "non_interactive_deny" {
+			if isCrossFolder && targetPath != "" {
+				suggestion = fmt.Sprintf("Cross-folder %s to %q outside workspace boundary requires user authorization. Authorize via 'bapedge trust %q --project' (or --session / --global), or set BAP_STEPUP_DECISION=project.", decomp.ActionType, targetPath, targetPath)
+			} else {
+				suggestion = "Action requires Human Step-Up Approval (HITL). In non-interactive environments, authorize via BAP_STEPUP_DECISION=approve or request a BAP Gateway Grant."
+			}
+		} else if isCrossFolder && targetPath != "" {
+			suggestion = fmt.Sprintf("Cross-folder %s to %q outside workspace boundary was denied. To permit dependency operations outside the workspace, authorize via 'bapedge trust %q --project' (or --session / --global).", decomp.ActionType, targetPath, targetPath)
+		} else if strings.Contains(reason, "escapes_workspace") || authz.CheckCommandWorkspaceEscape(authz.GetWorkspaceRoot(), fullCommand) {
+			suggestion = "Directory traversal outside the workspace is prohibited. Commands and file paths must remain within the workspace boundary. Child project access (e.g. Maven child modules) inside the workspace is permitted, or grant Step-Up approval via BAP HITL."
 		}
 		if suggestion == "" {
 			suggestion = GenerateSuggestion(fullCommand, executable, reason)
@@ -518,10 +802,11 @@ func RunExec(args []string) {
 			fmt.Fprintf(os.Stderr, "[BAP AUDIT MODE] Policy violation detected: %s. Execution permitted in audit mode.\n", reason)
 		} else {
 			resp := types.ExecResponse{
-				Allowed:    false,
-				Reason:     reason,
-				Suggestion: suggestion,
-				Mode:       ec.enforcementMode,
+				Allowed:        false,
+				Reason:         reason,
+				Suggestion:     suggestion,
+				Mode:           ec.enforcementMode,
+				StepUpDecision: "denied",
 			}
 			ec.exit(resp, 1)
 		}
@@ -533,9 +818,22 @@ func RunExec(args []string) {
 	// This guarantees that the native agent executes the command exactly once.
 	if ec.decisionOnly {
 		resp := types.ExecResponse{
-			Allowed:      true,
-			DecisionOnly: true,
-			Mode:         ec.enforcementMode,
+			Allowed:        true,
+			DecisionOnly:   true,
+			Mode:           ec.enforcementMode,
+			StepUpDecision: ec.stepUpDecision,
+		}
+		if ec.stepUpDecision != "" {
+			switch ec.stepUpDecision {
+			case "approve_once":
+				resp.Warning = fmt.Sprintf("[STEP-UP AUTHORIZED] Human operator authorized one-time execution for %q.", fullCommand)
+			case "session_trust":
+				resp.Warning = fmt.Sprintf("[STEP-UP AUTHORIZED: SESSION TRUST] Human operator granted session trust for %q in session %s.", executable, ec.sessionID)
+			case "project_trust":
+				resp.Warning = fmt.Sprintf("[STEP-UP AUTHORIZED: PROJECT TRUST] Human operator granted persistent project trust for workspace %s.", authz.GetWorkspaceRoot())
+			case "global_trust":
+				resp.Warning = fmt.Sprintf("[STEP-UP AUTHORIZED: GLOBAL TRUST] Human operator granted persistent global trust.")
+			}
 		}
 		if ec.shadowDenied {
 			resp.Warning = fmt.Sprintf("[BAP AUDIT MODE] Policy violation detected: %s. Execution permitted in audit mode.", ec.shadowReason)
@@ -559,10 +857,23 @@ func RunExec(args []string) {
 	output, exitCode, execErr := execRes.Output, execRes.ExitCode, execRes.Error
 
 	resp := types.ExecResponse{
-		Allowed:  true,
-		Output:   output,
-		ExitCode: exitCode,
-		Mode:     ec.enforcementMode,
+		Allowed:        true,
+		Output:         output,
+		ExitCode:       exitCode,
+		Mode:           ec.enforcementMode,
+		StepUpDecision: ec.stepUpDecision,
+	}
+	if ec.stepUpDecision != "" {
+		switch ec.stepUpDecision {
+		case "approve_once":
+			resp.Warning = fmt.Sprintf("[STEP-UP AUTHORIZED] Human operator authorized one-time execution for %q.", fullCommand)
+		case "session_trust":
+			resp.Warning = fmt.Sprintf("[STEP-UP AUTHORIZED: SESSION TRUST] Human operator granted session trust for %q in session %s.", executable, ec.sessionID)
+		case "project_trust":
+			resp.Warning = fmt.Sprintf("[STEP-UP AUTHORIZED: PROJECT TRUST] Human operator granted persistent project trust for workspace %s.", authz.GetWorkspaceRoot())
+		case "global_trust":
+			resp.Warning = fmt.Sprintf("[STEP-UP AUTHORIZED: GLOBAL TRUST] Human operator granted persistent global trust.")
+		}
 	}
 	if ec.shadowDenied {
 		resp.Warning = fmt.Sprintf("[BAP AUDIT MODE] Policy violation detected: %s. Execution permitted in audit mode.", ec.shadowReason)

@@ -32,4 +32,12 @@ if (Test-Path "bapdashboard.exe") {
 }
 Copy-Item -Force "bap-controlplane\bapdashboard.exe" "bapdashboard.exe"
 
+if (Test-Path "dist\windows-amd64") {
+    Copy-Item -Force "bap-edge\bapedge.exe" "dist\windows-amd64\bapedge.exe"
+    if (Test-Path "cchook\interceptor.exe") {
+        Copy-Item -Force "cchook\interceptor.exe" "dist\windows-amd64\interceptor.exe"
+        Copy-Item -Force "cchook\interceptor.exe" "dist\windows-amd64\cchook-interceptor.exe"
+    }
+}
+
 Write-Host "Binaries successfully updated."

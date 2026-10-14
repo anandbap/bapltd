@@ -385,6 +385,255 @@ func resolveEnforcementMode() string {
 	return "enforce"
 }
 
+func isSessionTrustGranted(sessionID, fullCommand, executable string) bool {
+	if sessionID == "" {
+		return false
+	}
+	safeID := strings.ReplaceAll(sessionID, ":", "_")
+	safeID = strings.ReplaceAll(safeID, "/", "_")
+	safeID = strings.ReplaceAll(safeID, "\\", "_")
+	path := filepath.Join(".bap", fmt.Sprintf("approvals_%s.json", safeID))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var rec struct {
+		ApprovedCommands    map[string]string `json:"approved_commands"`
+		ApprovedExecutables map[string]bool   `json:"approved_executables"`
+	}
+	if err := json.Unmarshal(data, &rec); err != nil {
+		return false
+	}
+	normExec := strings.ToLower(strings.TrimSpace(executable))
+	if rec.ApprovedExecutables != nil && rec.ApprovedExecutables[normExec] {
+		return true
+	}
+	cmdHash := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.TrimSpace(fullCommand))))
+	if rec.ApprovedCommands != nil && rec.ApprovedCommands[cmdHash] == "session" {
+		return true
+	}
+	return false
+}
+
+type PathPermission struct {
+	Path      string    `json:"path"`
+	Actions   []string  `json:"actions"`
+	Scope     string    `json:"scope"`
+	GrantedAt time.Time `json:"granted_at,omitempty"`
+	GrantedBy string    `json:"granted_by,omitempty"`
+	SessionID string    `json:"session_id,omitempty"`
+}
+
+type PermissionsStore struct {
+	TrustedPaths []PathPermission `json:"trusted_paths"`
+}
+
+func isTargetAuthorized(workspaceRoot, sessionID, targetPath, action string) (bool, string) {
+	if targetPath == "" {
+		return false, ""
+	}
+	cleanTarget := filepath.Clean(targetPath)
+	if abs, err := filepath.Abs(cleanTarget); err == nil {
+		cleanTarget = abs
+	}
+	normAction := strings.ToLower(strings.TrimSpace(action))
+	if normAction == "" {
+		normAction = "write"
+	}
+
+	checkFile := func(filePath, scope string) bool {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return false
+		}
+		var store PermissionsStore
+		if json.Unmarshal(data, &store) == nil && len(store.TrustedPaths) > 0 {
+			for _, p := range store.TrustedPaths {
+				if isPathCovered(p.Path, cleanTarget) && actionMatches(p.Actions, normAction) {
+					return true
+				}
+			}
+		}
+		var legacy struct {
+			ApprovedPaths []PathPermission `json:"approved_paths"`
+		}
+		if json.Unmarshal(data, &legacy) == nil && len(legacy.ApprovedPaths) > 0 {
+			for _, p := range legacy.ApprovedPaths {
+				if isPathCovered(p.Path, cleanTarget) && actionMatches(p.Actions, normAction) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	// 1. Session scope
+	if sessionID != "" {
+		safeID := strings.ReplaceAll(sessionID, ":", "_")
+		safeID = strings.ReplaceAll(safeID, "/", "_")
+		safeID = strings.ReplaceAll(safeID, "\\", "_")
+		sessPath := filepath.Join(workspaceRoot, ".bap", fmt.Sprintf("approvals_%s.json", safeID))
+		if checkFile(sessPath, "session") {
+			return true, "session"
+		}
+	}
+
+	// 2. Project scope
+	projPath := filepath.Join(workspaceRoot, ".bap", "project_permissions.json")
+	if checkFile(projPath, "project") {
+		return true, "project"
+	}
+
+	// 3. Global scope
+	if home, err := os.UserHomeDir(); err == nil {
+		globPath := filepath.Join(home, ".bap", "global_permissions.json")
+		if checkFile(globPath, "global") {
+			return true, "global"
+		}
+	}
+
+	return false, ""
+}
+
+func grantTargetPermission(workspaceRoot, sessionID, targetPath, scope string, actions []string) error {
+	if targetPath == "" {
+		return nil
+	}
+	cleanPath, err := filepath.Abs(targetPath)
+	if err != nil {
+		cleanPath = filepath.Clean(targetPath)
+	}
+	if len(actions) == 0 {
+		actions = []string{"write", "delete"}
+	}
+	perm := PathPermission{
+		Path:      cleanPath,
+		Actions:   actions,
+		Scope:     scope,
+		GrantedAt: time.Now().UTC(),
+		GrantedBy: "user_override",
+		SessionID: sessionID,
+	}
+
+	var filePath string
+	switch strings.ToLower(scope) {
+	case "session":
+		safeID := strings.ReplaceAll(sessionID, ":", "_")
+		safeID = strings.ReplaceAll(safeID, "/", "_")
+		safeID = strings.ReplaceAll(safeID, "\\", "_")
+		filePath = filepath.Join(workspaceRoot, ".bap", fmt.Sprintf("approvals_%s.json", safeID))
+	case "project":
+		filePath = filepath.Join(workspaceRoot, ".bap", "project_permissions.json")
+	case "global":
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		filePath = filepath.Join(home, ".bap", "global_permissions.json")
+	default:
+		return fmt.Errorf("invalid scope: %s", scope)
+	}
+
+	_ = os.MkdirAll(filepath.Dir(filePath), 0700)
+	var existing []PathPermission
+	if data, err := os.ReadFile(filePath); err == nil {
+		var store PermissionsStore
+		if json.Unmarshal(data, &store) == nil {
+			existing = store.TrustedPaths
+		}
+	}
+	updated := false
+	for i, p := range existing {
+		if strings.EqualFold(filepath.Clean(p.Path), cleanPath) {
+			existing[i] = perm
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		existing = append(existing, perm)
+	}
+	b, err := json.MarshalIndent(PermissionsStore{TrustedPaths: existing}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filePath, b, 0600)
+}
+
+func isPathCovered(trustedPath, targetPath string) bool {
+	if trustedPath == "" || targetPath == "" {
+		return false
+	}
+	cleanTrusted := filepath.Clean(trustedPath)
+	cleanTarget := filepath.Clean(targetPath)
+	if abs, err := filepath.Abs(cleanTrusted); err == nil {
+		cleanTrusted = abs
+	}
+	if abs, err := filepath.Abs(cleanTarget); err == nil {
+		cleanTarget = abs
+	}
+
+	if strings.EqualFold(cleanTrusted, cleanTarget) {
+		return true
+	}
+	rel, err := filepath.Rel(cleanTrusted, cleanTarget)
+	if err != nil {
+		return false
+	}
+	if rel == "." || (!strings.HasPrefix(rel, "..") && !strings.HasPrefix(rel, "/") && !strings.HasPrefix(rel, "\\")) {
+		return true
+	}
+	return false
+}
+
+func actionMatches(actions []string, requested string) bool {
+	if len(actions) == 0 {
+		return true
+	}
+	for _, a := range actions {
+		lower := strings.ToLower(strings.TrimSpace(a))
+		if lower == "all" || lower == "*" || lower == requested {
+			return true
+		}
+		if (requested == "write" || requested == "delete") && lower == "modify" {
+			return true
+		}
+	}
+	return false
+}
+
+func isMutatingShellCommand(cmd string) bool {
+	lower := strings.ToLower(cmd)
+	if strings.Contains(lower, ">") {
+		return true
+	}
+	destructive := []string{
+		"rm ", "rm -", "del ", "erase ", "remove-item", "unlink", "rmdir", "rd /", "rd ",
+		"mkdir ", "md ", "touch ", "cp ", "copy ", "mv ", "move ", "ren ", "rename ",
+		"set-content", "out-file", "add-content",
+	}
+	for _, d := range destructive {
+		if strings.Contains(lower, d) {
+			return true
+		}
+	}
+	return false
+}
+
+func extractCommandTarget(cmd string) string {
+	if parts := strings.Split(cmd, ">"); len(parts) > 1 {
+		return strings.TrimSpace(strings.Trim(parts[len(parts)-1], "\"'`"))
+	}
+	tokens := tokenizeHookCommand(cmd)
+	for i := 1; i < len(tokens); i++ {
+		t := strings.Trim(tokens[i], "\"'`")
+		if !strings.HasPrefix(t, "-") && !strings.HasPrefix(t, "/") && len(t) > 1 {
+			return t
+		}
+	}
+	return ""
+}
+
 func isSafeFileTool(toolLower string) bool {
 	return toolLower == "read" || toolLower == "view" || toolLower == "edit" || toolLower == "write" ||
 		toolLower == "read_file" || toolLower == "view_file" || toolLower == "write_file" ||
@@ -905,9 +1154,33 @@ func main() {
 			return
 		}
 
-		// Mutating tools (Edit, Write) outside workspace are strictly forbidden
+		// Mutating tools (Edit, Write) outside workspace are strictly forbidden unless step-up approved
 		if (payload.ToolName == "Edit" || payload.ToolName == "Write") && isPathOutsideWorkspace(workspaceRoot, targetFile) {
-			outputDecision("deny", fmt.Sprintf("Modifying files outside workspace is forbidden for file %q", targetFile), "Writing or modifying files outside the project root is prohibited. Read-only inspection of sibling projects is permitted.")
+			stepUpDec := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_STEPUP_DECISION")))
+			if stepUpDec == "approve" || stepUpDec == "once" || stepUpDec == "allow" || isSessionTrustGranted(sessionID, targetFile, payload.ToolName) {
+				outputDecision("allow", "", fmt.Sprintf("[STEP-UP AUTHORIZED] Human operator authorized modifying file outside workspace: %s", targetFile))
+				return
+			}
+			if authorized, scope := isTargetAuthorized(workspaceRoot, sessionID, targetFile, "write"); authorized {
+				outputDecision("allow", "", fmt.Sprintf("[STEP-UP AUTHORIZED: %s TRUST] User granted cross-folder write permission for %s", strings.ToUpper(scope), targetFile))
+				return
+			}
+			if stepUpDec == "project" || stepUpDec == "p" {
+				_ = grantTargetPermission(workspaceRoot, sessionID, targetFile, "project", []string{"write"})
+				outputDecision("allow", "", fmt.Sprintf("[STEP-UP AUTHORIZED: PROJECT TRUST] User granted cross-folder write permission for %s", targetFile))
+				return
+			}
+			if stepUpDec == "global" || stepUpDec == "g" {
+				_ = grantTargetPermission(workspaceRoot, sessionID, targetFile, "global", []string{"write"})
+				outputDecision("allow", "", fmt.Sprintf("[STEP-UP AUTHORIZED: GLOBAL TRUST] User granted cross-folder write permission for %s", targetFile))
+				return
+			}
+			if stepUpDec == "session" || stepUpDec == "s" {
+				_ = grantTargetPermission(workspaceRoot, sessionID, targetFile, "session", []string{"write"})
+				outputDecision("allow", "", fmt.Sprintf("[STEP-UP AUTHORIZED: SESSION TRUST] User granted cross-folder write permission for %s", targetFile))
+				return
+			}
+			outputDecision("deny", fmt.Sprintf("Modifying files outside workspace is forbidden for file %q", targetFile), fmt.Sprintf("Writing or modifying files outside the project root is prohibited. Authorize via 'bapedge trust %q --project' (or --session / --global).", targetFile))
 			return
 		}
 
@@ -1022,8 +1295,25 @@ func main() {
 		return
 	}
 	if checkCommandWorkspaceEscape(workspaceRoot, command) {
-		outputDecision("deny", fmt.Sprintf("Directory traversal outside workspace is forbidden in command: %s", command), "Commands cannot navigate or reference paths outside the project workspace root. Child projects (e.g. Maven child modules) inside the workspace are permitted.")
-		return
+		isMutating := isMutatingShellCommand(command)
+		target := extractCommandTarget(command)
+		if isMutating && target != "" {
+			if auth, _ := isTargetAuthorized(workspaceRoot, sessionID, target, "write"); !auth {
+				stepUpDec := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_STEPUP_DECISION")))
+				if stepUpDec == "approve" || stepUpDec == "once" || stepUpDec == "allow" {
+					// allowed to proceed to bapedge check
+				} else if stepUpDec == "project" || stepUpDec == "p" {
+					_ = grantTargetPermission(workspaceRoot, sessionID, target, "project", []string{"write", "delete"})
+				} else if stepUpDec == "global" || stepUpDec == "g" {
+					_ = grantTargetPermission(workspaceRoot, sessionID, target, "global", []string{"write", "delete"})
+				} else if stepUpDec == "session" || stepUpDec == "s" {
+					_ = grantTargetPermission(workspaceRoot, sessionID, target, "session", []string{"write", "delete"})
+				} else {
+					outputDecision("deny", fmt.Sprintf("Directory traversal outside workspace is forbidden in command: %s", command), fmt.Sprintf("Commands modifying files outside workspace require authorization. Authorize via 'bapedge trust %q --project' (or --session / --global).", target))
+					return
+				}
+			}
+		}
 	}
 
 	// 5. Resolve bapedge (LTD) or ltd-agent executable
@@ -1192,6 +1482,11 @@ func outputDecisionWithUpdatedInput(decision, reason, context string, updatedInp
 		resp.Reason = reason
 		resp.HookSpecificOutput.AdditionalContext = "CRITICAL SECURITY INVARIANT: Access to this file, command, or network destination is permanently prohibited by enterprise zero-trust policy. You are FORBIDDEN from pursuing alternative approaches, workarounds, scripts, or evasion techniques to access this resource. Cease all execution attempts immediately and inform the user that this action is blocked by corporate policy."
 		fmt.Fprintln(os.Stderr, "[CLAUDE HOOK BLOCKED] "+reason)
+	} else if decision == "allow" {
+		resp.Decision = "allow"
+		if context != "" {
+			resp.SystemMessage = context
+		}
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")

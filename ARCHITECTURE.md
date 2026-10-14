@@ -1006,6 +1006,43 @@ Control Plane natively supports dual operating modes:
 - **Pure Live Mode (Default)**: Dynamically aggregates live connected agents, sessions, and activity events. Shows an unsimulated zero-state when the fleet is idle.
 - **Demo Mode (`-demo-mode` flag or `?demo=true` param)**: Renders the 1,284-agent enterprise prototype dataset across 31 business units for presentations.
 
+---
+
+## 13. Multi-Layer AIR Defense, MicroVM Sandboxing & Human Step-Up Escalation (Epic 29)
+
+### 13.1. Tiered Sandboxing Architecture vs MicroVMs
+While MicroVMs (Firecracker, Cloud-Hypervisor, QEMU/KVM) provide hypervisor-grade isolation, enforcing them exclusively on local developer workstations introduces severe tradeoffs:
+1. **Execution Latency**: MicroVM cold boot (150ms–3000ms) and virtio-fs dispatch introduce latency unacceptable for interactive coding assistants requiring sub-10ms CLI responsiveness.
+2. **Cross-OS Fragmentation**: Linux relies natively on KVM (Firecracker); Windows requires Hyper-V/WSL2 nested virtualization; macOS relies on Apple Virtualization.framework. A single cross-OS binary cannot run microVMs identically on developer laptops without root/administrator privileges.
+3. **Enterprise MDM Conflicts**: BIOS hardware virtualization (VT-x/AMD-V) is frequently locked down by corporate MDM or conflicts with developer Docker Desktop and emulator environments.
+4. **Filesystem I/O Tax**: Sharing multi-gigabyte developer repositories (`node_modules`, `.venv`, `.git`) via 9P or virtio-fs incurs a 5x–20x I/O penalty.
+
+**The BAP Hybrid Sandboxing Architecture**:
+- **Tier 1 (Host-Native Zero-Dependency Sandbox - Default for CLI/IDE Work)**:
+  - Windows: Windows Job Objects (kill-on-close, memory limits) + Restricted Security Tokens (dropping administrative SIDs and `SE_DEBUG_NAME`).
+  - Linux: Landlock LSM + unprivileged user/mount namespaces + seccomp-bpf.
+  - macOS: `sandbox-exec` Seatbelt confinement.
+  - Provides sub-millisecond execution, zero hypervisor requirements, and 100% cross-OS mobility.
+- **Tier 2 (On-Demand Ephemeral MicroVM Cloud Runner)**:
+  - High-risk, unvetted binaries, unapproved container builds, or untrusted network downloads are routed via BAP Gateway PEP to remote ephemeral Firecracker/E2B microVM workers.
+
+### 13.2. Human-in-the-Loop (HITL) Step-Up Escalation
+When an agent encounters a policy boundary (e.g. mutating sibling projects, unapproved installers, or unvetted scripts):
+1. **Interactive Step-Up TTY Prompt**:
+   - `[A] Approve Once`: Permits single command execution; logs cryptographic receipt `ALLOWED_STEPUP` and audit decision `stepup_allow`.
+   - `[S] Trust for Session`: Records persistent session trust in `.bap/approvals_<session_id>.json`; subsequent commands within that session execute seamlessly without prompting.
+   - `[D] Deny (Default)`: Strictly blocks execution and logs policy violation.
+2. **Headless / CI Mode**: Defaults to fail-closed (`step_up_decision: "denied"`) unless authorized via `BAP_STEPUP_DECISION=approve` or pre-authorized BAP Gateway Grants.
+3. **Anti-Tampering Invariant**: BAP protected assets (`policy.cedar`, `bapedge.exe`, lifecycle hooks) are strictly non-escalatable and can never be bypassed via Step-Up.
+
+### 13.3. Software Supply-Chain Corporate Mirror Injection
+Prevents dependency confusion and public registry exfiltration by automatically injecting enterprise repository manager configurations (Nexus, Artifactory, CodeArtifact):
+- **Maven**: Injects `$env:MAVEN_ARGS = "-s .bapstate/mirrors/settings.xml"` configuring `<mirror>` to route all artifact downloads through corporate Nexus (`nexus.corp.internal`).
+- **npm / yarn**: Injects `$env:NPM_CONFIG_USERCONFIG = ".bapstate/mirrors/.npmrc"` enforcing corporate registry with `strict-ssl=true`.
+- **pip**: Injects `$env:PIP_CONFIG_FILE = ".bapstate/mirrors/pip.ini"` and `$env:PIP_INDEX_URL`.
+- **Policy 6 Enforcement**: Cedar invariants strictly block direct public repository bypass flags (`--index-url http://pypi.org`, `--registry registry.npmjs.org`, `-DremoteRepositories=http://repo.maven.apache.org`).
+
+
 
 
 

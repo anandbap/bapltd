@@ -542,6 +542,79 @@ exit /b %ERRORLEVEL%
     return $shimDir
 }
 
+function Initialize-CorporateMirrors {
+    param(
+        [Parameter(Mandatory = $true)][string]$Workspace,
+        [Parameter(Mandatory = $true)][string]$SessionId
+    )
+
+    $mirrorDir = Join-Path $Workspace ".bapstate\mirrors"
+    if (-not (Test-Path -LiteralPath $mirrorDir)) {
+        New-Item -ItemType Directory -Path $mirrorDir -Force | Out-Null
+    }
+
+    $nexusBase = if ($env:BAP_NEXUS_URL) { $env:BAP_NEXUS_URL.TrimEnd('/') } else { "http://nexus.corp.internal" }
+    $mavenMirrorUrl = "$nexusBase/repository/maven-public/"
+    $npmMirrorUrl = "$nexusBase/repository/npm-group/"
+    $pypiMirrorUrl = "$nexusBase/repository/pypi-group/simple"
+    $nexusHost = "nexus.corp.internal"
+    try {
+        $uri = [System.Uri]$nexusBase
+        if ($null -ne $uri -and -not [string]::IsNullOrWhiteSpace($uri.Host)) {
+            $nexusHost = $uri.Host
+        }
+    } catch { }
+
+    # 1. Maven settings.xml
+    $settingsXmlPath = Join-Path $mirrorDir "settings.xml"
+    $settingsContent = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.2.0 http://maven.apache.org/xsd/settings-1.2.0.xsd">
+  <mirrors>
+    <mirror>
+      <id>bap-corporate-nexus</id>
+      <name>Corporate Nexus Repository Mirror</name>
+      <url>$mavenMirrorUrl</url>
+      <mirrorOf>central,*</mirrorOf>
+    </mirror>
+  </mirrors>
+</settings>
+"@
+    Write-AtomicText -Path $settingsXmlPath -Text $settingsContent
+
+    # 2. npm .npmrc
+    $npmrcPath = Join-Path $mirrorDir ".npmrc"
+    $npmrcContent = @"
+registry=$npmMirrorUrl
+strict-ssl=true
+audit=false
+"@
+    Write-AtomicText -Path $npmrcPath -Text $npmrcContent
+
+    # 3. pip pip.ini
+    $pipIniPath = Join-Path $mirrorDir "pip.ini"
+    $pipContent = @"
+[global]
+index-url = $pypiMirrorUrl
+trusted-host = $nexusHost
+timeout = 15
+"@
+    Write-AtomicText -Path $pipIniPath -Text $pipContent
+
+    # Inject into process environment
+    $env:MAVEN_ARGS = "-s `"$settingsXmlPath`""
+    $env:M2_SETTINGS_XML = $settingsXmlPath
+    $env:NPM_CONFIG_USERCONFIG = $npmrcPath
+    $env:NPM_CONFIG_REGISTRY = $npmMirrorUrl
+    $env:PIP_CONFIG_FILE = $pipIniPath
+    $env:PIP_INDEX_URL = $pypiMirrorUrl
+
+    Write-Host "[+] Supply-Chain Defense: Corporate mirror configurations injected (Nexus: Maven, npm, pip)." -ForegroundColor Green
+    return $mirrorDir
+}
+
 # -----------------------------------------------------------------------------
 # Main Universal Transactional Execution Broker
 # -----------------------------------------------------------------------------
@@ -849,7 +922,10 @@ function Invoke-BapGovernedSession {
             Write-Host "[+] Layer 3 shims active in $ShimDir (git, python, curl, powershell, cat)." -ForegroundColor Gray
         }
 
-        # 8C. Layer 4: Setup Runtime Execution Broker & Environment
+        # 8C. Supply-Chain Governance: Inject Corporate Mirrors (Nexus / Artifactory)
+        $MirrorDir = Initialize-CorporateMirrors -Workspace $Workspace -SessionId $SessionId
+
+        # 8D. Layer 4: Setup Runtime Execution Broker & Environment
         $env:BAP_MODE = "enforce"
         $env:BAP_AGENT_SANDBOX = "1"
         $env:BAP_IN_BROKER = "0"

@@ -27,11 +27,17 @@ type Authorizer struct {
 	policySet *cedar.PolicySet
 	schema    *schema.Schema
 	identity  PrincipalIdentity
+	sessionID string
 }
 
 // SetIdentity explicitly sets the authenticated engineer's corporate identity.
 func (a *Authorizer) SetIdentity(identity PrincipalIdentity) {
 	a.identity = identity
+}
+
+// SetSessionID sets the active session identifier for scoped permissions lookup.
+func (a *Authorizer) SetSessionID(sessionID string) {
+	a.sessionID = sessionID
 }
 
 // GetIdentity returns the current authenticated corporate identity.
@@ -235,7 +241,9 @@ func (a *Authorizer) EvaluateWithWorkspace(executable, fullCommand, args, worksp
 			}
 			canonical := ResolveCanonicalPath(r.Target, currentDir)
 			if workspaceRoot != "" && IsPathOutsideWorkspaceCanonical(workspaceRoot, canonical) {
-				return false, fmt.Sprintf("Denial on redirection target '%s': Path escapes workspace boundary", r.Target), nil
+				if authorized, _ := IsTargetAuthorized(workspaceRoot, a.sessionID, canonical, "write"); !authorized {
+					return false, fmt.Sprintf("Denial on redirection target '%s': Path escapes workspace boundary", r.Target), nil
+				}
 			}
 			if isForbidden, secretReason := IsForbiddenSecretPath(canonical); isForbidden {
 				return false, fmt.Sprintf("Denial on redirection target '%s': %s", r.Target, secretReason), nil
@@ -303,11 +311,25 @@ func (a *Authorizer) evaluateAtomicNode(executable, fullCommand, args, workspace
 		decomp.CanonicalResource = "file://" + filepath.ToSlash(canonicalTarget)
 	}
 
+	effectiveEscapesWorkspace := escapesWorkspace
+	checkTarget := canonicalTarget
+	if checkTarget == "" {
+		checkTarget = decomp.TargetEntity
+	}
+	if checkTarget != "" && !filepath.IsAbs(checkTarget) && workspaceRoot != "" {
+		checkTarget = filepath.Clean(filepath.Join(workspaceRoot, checkTarget))
+	}
+	if escapesWorkspace && checkTarget != "" && (decomp.ActionType == "write" || decomp.ActionType == "delete") {
+		if authorized, _ := IsTargetAuthorized(workspaceRoot, a.sessionID, checkTarget, decomp.ActionType); authorized {
+			effectiveEscapesWorkspace = false
+		}
+	}
+
 	contextMap := cedar.RecordMap{
 		cedar.String("executable"):         cedar.String(normalizedExec),
 		cedar.String("full_command"):       cedar.String(normalizedFull),
 		cedar.String("args"):               cedar.String(normalizedArgs),
-		cedar.String("escapes_workspace"):  cedar.Boolean(escapesWorkspace),
+		cedar.String("escapes_workspace"):  cedar.Boolean(effectiveEscapesWorkspace),
 		cedar.String("department"):         cedar.String(a.identity.Department),
 		cedar.String("user_email"):         cedar.String(a.identity.UserEmail),
 		cedar.String("action_canonical"):   cedar.String(decomp.CanonicalAction),
@@ -467,7 +489,8 @@ permit (
         "cd", "chdir", "pushd", "popd", "exit",
         "cmd", "powershell", "pwsh", "bash", "sh", "zsh",
         "grep", "findstr", "head", "tail", "wc", "sort", "uniq", "more",
-        "taskkill", "kill", "pkill", "killall"
+        "taskkill", "kill", "pkill", "killall",
+        "bapedge", "ltd-agent"
     ].contains(context.executable)
 };
 

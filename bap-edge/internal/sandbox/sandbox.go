@@ -6,8 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // InjectedOBOToken is the corporate on-behalf-of token injected into the sandboxed process.
@@ -257,6 +260,44 @@ func RunSandboxedCommandWithDetails(cmdStr string) ExecResult {
 	cmd.Env = append(env, fmt.Sprintf("CORP_OBO_TOKEN=%s", InjectedOBOToken))
 	cmd.Env = append(cmd.Env, "BAP_IN_BROKER=1")
 
+	// Inject Corporate Mirror Supply-Chain Environment (Nexus / Artifactory)
+	nexusMaven := os.Getenv("BAP_NEXUS_MAVEN_URL")
+	if nexusMaven == "" {
+		nexusMaven = "http://nexus.corp.internal/repository/maven-public/"
+	}
+	nexusNPM := os.Getenv("BAP_NEXUS_NPM_URL")
+	if nexusNPM == "" {
+		nexusNPM = "http://nexus.corp.internal/repository/npm-group/"
+	}
+	nexusPyPI := os.Getenv("BAP_NEXUS_PYPI_URL")
+	if nexusPyPI == "" {
+		nexusPyPI = "http://nexus.corp.internal/repository/pypi-group/simple"
+	}
+
+	cmd.Env = append(cmd.Env,
+		fmt.Sprintf("PIP_INDEX_URL=%s", nexusPyPI),
+		fmt.Sprintf("NPM_CONFIG_REGISTRY=%s", nexusNPM),
+		"NPM_CONFIG_STRICT_SSL=true",
+	)
+
+	// If mirrors settings.xml or pip.ini exist, point to them
+	for _, mDir := range []string{".bapstate/mirrors", "../.bapstate/mirrors"} {
+		if absM, err := filepath.Abs(mDir); err == nil {
+			mSettings := filepath.Join(absM, "settings.xml")
+			if _, err := os.Stat(mSettings); err == nil {
+				cmd.Env = append(cmd.Env, fmt.Sprintf("MAVEN_ARGS=-s \"%s\"", mSettings))
+			}
+			mPip := filepath.Join(absM, "pip.ini")
+			if _, err := os.Stat(mPip); err == nil {
+				cmd.Env = append(cmd.Env, fmt.Sprintf("PIP_CONFIG_FILE=%s", mPip))
+			}
+			mNpm := filepath.Join(absM, ".npmrc")
+			if _, err := os.Stat(mNpm); err == nil {
+				cmd.Env = append(cmd.Env, fmt.Sprintf("NPM_CONFIG_USERCONFIG=%s", mNpm))
+			}
+		}
+	}
+
 	var b bytes.Buffer
 	cmd.Stdout = &b
 	cmd.Stderr = &b
@@ -284,7 +325,27 @@ func RunSandboxedCommandWithDetails(cmdStr string) ExecResult {
 		defer postCleanup()
 	}
 
-	waitErr := cmd.Wait()
+	timeoutSec := 120
+	if toStr := os.Getenv("BAP_EXEC_TIMEOUT_SEC"); toStr != "" {
+		if val, err := strconv.Atoi(toStr); err == nil && val > 0 {
+			timeoutSec = val
+		}
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	var waitErr error
+	select {
+	case waitErr = <-done:
+	case <-time.After(time.Duration(timeoutSec) * time.Second):
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		waitErr = fmt.Errorf("Execution timed out after %d seconds (Process Terminated by Resource Quota)", timeoutSec)
+	}
 	// Redact sensitive keys/tokens from stdout and stderr output (BAP-535)
 	cleaned := CleanOutput(RedactSecrets(b.String()))
 	exitCode := 0

@@ -20,7 +20,8 @@ permit (
         "cd", "chdir", "pushd", "popd", "exit",
         "cmd", "powershell", "pwsh", "bash", "sh", "zsh",
         "grep", "findstr", "head", "tail", "wc", "sort", "uniq", "more",
-        "taskkill", "kill", "pkill", "killall"
+        "taskkill", "kill", "pkill", "killall",
+        "bapedge", "ltd-agent"
     ].contains(context.executable)
 };
 
@@ -185,6 +186,19 @@ forbid (
             context.full_command like "*--registry*registry.yarnpkg.com*"
         )
     )
+};
+
+// 7. Forbid Policy: Honeytoken / Canary Secret Tripwire (BAP-546 Prompt Injection Containment)
+// Prohibits reading, querying, or exfiltrating synthetic corporate canary tokens.
+// Any attempt to access canary tokens trips an immediate zero-trust containment violation.
+forbid (
+    principal == Agent::"Local",
+    action == Action::"Execute",
+    resource == Command::"CLI"
+) when {
+    context.full_command like "*corp_canary_token*" ||
+    context.full_command like "*canary-trap-*" ||
+    context.full_command like "*bap-canary-*"
 };
 
 

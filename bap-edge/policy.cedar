@@ -20,18 +20,21 @@ permit (
         "cd", "chdir", "pushd", "popd", "exit",
         "cmd", "powershell", "pwsh", "bash", "sh", "zsh",
         "grep", "findstr", "head", "tail", "wc", "sort", "uniq", "more",
-        "taskkill", "kill", "pkill", "killall"
+        "taskkill", "kill", "pkill", "killall",
+        "bapedge", "ltd-agent"
     ].contains(context.executable)
 };
 
-// 2. Forbid Policy: Directory Traversal Outside Workspace Boundary
-// Strictly blocks any execution that attempts to navigate or access files outside the workspace root.
+// 2. Forbid Policy: Mutating or Destructive Actions Outside Workspace Boundary
+// Allows read-only inspection and cross-project dependency traversal across sibling repositories.
+// Strictly blocks file modification, deletion, or output redirection escaping the workspace root.
 forbid (
     principal == Agent::"Local",
     action == Action::"Execute",
     resource == Command::"CLI"
 ) when {
-    context.escapes_workspace == true
+    context.escapes_workspace == true &&
+    (context.action_type == "write" || context.action_type == "delete" || context.action_type == "tamper")
 };
 
 // 3. Forbid Policy: Sensitive Operations & Exfiltration
@@ -135,5 +138,65 @@ permit (
     ["corp-org", "corp-internal"].contains(resource.tenant_id)
 };
 
+// 5. Forbid Policy: Unapproved Software Installation & Foreign Binary Execution
+// Prevents agents from running unapproved software installers, MSI packages, or setup executables.
+forbid (
+    principal == Agent::"Local",
+    action == Action::"Execute",
+    resource == Command::"CLI"
+) when {
+    context.executable == "msiexec" ||
+    context.full_command like "*.msi*" ||
+    context.full_command like "*setup.exe*" ||
+    context.full_command like "*install.exe*" ||
+    context.full_command like "*winget*install*" ||
+    context.full_command like "*choco*install*" ||
+    context.full_command like "*scoop*install*"
+};
 
+// 6. Forbid Policy: Public Repository Bypass (Enforce Corporate Nexus / Artifactory Mirror)
+// Blocks package managers attempting to download directly from unapproved public internet registries
+// instead of the corporate internal Nexus / Artifactory mirror.
+forbid (
+    principal == Agent::"Local",
+    action == Action::"Execute",
+    resource == Command::"CLI"
+) when {
+    (
+        (context.executable == "mvn" || context.executable == "gradle") &&
+        (
+            context.full_command like "*repo.maven.apache.org*" ||
+            context.full_command like "*repo1.maven.org*" ||
+            context.full_command like "*repo.spring.io*" ||
+            context.full_command like "*-dremoterepositories=http*"
+        )
+    ) ||
+    (
+        (context.executable == "pip" || context.executable == "pip3") &&
+        (
+            context.full_command like "*--index-url*http://pypi.org*" ||
+            context.full_command like "*--extra-index-url*http://*" ||
+            context.full_command like "*--extra-index-url*https://*"
+        )
+    ) ||
+    (
+        (context.executable == "npm" || context.executable == "yarn" || context.executable == "pnpm") &&
+        (
+            context.full_command like "*--registry*registry.npmjs.org*" ||
+            context.full_command like "*--registry*registry.yarnpkg.com*"
+        )
+    )
+};
 
+// 7. Forbid Policy: Honeytoken / Canary Secret Tripwire (BAP-546 Prompt Injection Containment)
+// Prohibits reading, querying, or exfiltrating synthetic corporate canary tokens.
+// Any attempt to access canary tokens trips an immediate zero-trust containment violation.
+forbid (
+    principal == Agent::"Local",
+    action == Action::"Execute",
+    resource == Command::"CLI"
+) when {
+    context.full_command like "*corp_canary_token*" ||
+    context.full_command like "*canary-trap-*" ||
+    context.full_command like "*bap-canary-*"
+};

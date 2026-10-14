@@ -29,8 +29,10 @@ Available Commands:
   mcp       Run as Model Context Protocol (MCP) stdio server for Claude, Copilot, and Cursor
   daemon    Start, stop, or query background supervisor daemon (bap-daemon)
   pin       Cryptographically pin, verify, and re-attest skills, prompt instructions, and MCP tools (BAP-531)
-  delegate  Mint attenuated child grants and execute subagents with delegation lineage (BAP-532)
   rollback  Forensically revert file mutations to pre-execution cryptographic checkpoints (BAP-538)
+  trust     Authorize cross-folder write/delete operations for a path (session/project/global)
+  untrust   Revoke cross-folder mutation authorization for a path
+  permissions List all active cross-folder authorizations across session, project, and global scopes
   attest      Client test command: connect to attestation server and request OBO JWT
   verify-log  Verify cryptographic integrity and anti-tamper hash-chain of local audit log
   help        Display help information
@@ -145,6 +147,21 @@ func main() {
 	case "rollback":
 		if err := cmd.RunRollback(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error in rollback: %v\n", err)
+			os.Exit(1)
+		}
+	case "trust":
+		if err := cmd.RunTrust(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error granting trust: %v\n", err)
+			os.Exit(1)
+		}
+	case "untrust":
+		if err := cmd.RunUntrust(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error revoking trust: %v\n", err)
+			os.Exit(1)
+		}
+	case "permissions":
+		if err := cmd.RunPermissions(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error listing permissions: %v\n", err)
 			os.Exit(1)
 		}
 	case "attest":

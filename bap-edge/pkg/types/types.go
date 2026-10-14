@@ -46,6 +46,7 @@ type ExecResponse struct {
 	Warning      string            `json:"warning,omitempty"`
 	Mode         string            `json:"mode,omitempty"`
 	DecisionOnly      bool              `json:"decision_only,omitempty"`
+	StepUpDecision    string            `json:"step_up_decision,omitempty"`
 	CanonicalAction   string            `json:"canonical_action,omitempty"`
 	CanonicalResource string            `json:"canonical_resource,omitempty"`
 	Receipt           *ExecutionReceipt `json:"receipt,omitempty"`

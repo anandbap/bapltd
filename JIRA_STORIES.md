@@ -25,6 +25,9 @@ This document represents the complete functional and non-functional requirements
 | `BAP-541` | Google Antigravity IDE & CLI Zero-Trust Governance | **DONE** | Electron GUI process supervision, active session guard, 120ms `transcript.jsonl` tailing, `GEMINI.md` policy & MCP injection. |
 | `BAP-542` | GitHub Copilot CLI Standalone v1.0.97+ & Token Accounting | **DONE** | Standalone `copilot.exe` priority, `events.jsonl` streaming, `AGENTS.md`, and session exit `accountingSnapshot` audit ingestion. |
 | `BAP-543` | Subagent & Inspection Tool Routing & Broker Unwrapping | **DONE** | `isSafeSubagentOrInspectionTool` eliminates false denials for read-only tools (`search_code_subagent`, `Glob`, `Grep`); `unwrapBrokerCommand` unwraps direct agent `bapedge.exe exec` calls. |
+| `BAP-544` | Human-in-the-Loop (HITL) Step-Up Escalation | **DONE** | Interactive terminal approval prompt (`[O] Once`, `[S] Session`, `[P] Project`, `[G] Global`, `[D] Deny`), fail-closed headless enforcement, and `ALLOWED_STEPUP` receipts. |
+| `BAP-545` | Supply-Chain Corporate Mirrors & Public Registry Bypass Prevention | **DONE** | Automated Maven, npm, pip corporate mirror injection and Cedar Rule 6 & 7 enforcement blocking public bypass and honeytoken exfiltration. |
+| `BAP-546` | Enterprise Multi-Scope Cross-Folder Mutation Governance | **DONE** | Fine-grained cross-folder mutation governance (`bapedge trust`, `untrust`, `permissions`), canonical path coverage, and multi-scope persistence across Session, Project, and Global stores. |
 | `BAP-534` | Process-Level Supervision & Child Ancestry Tracking | **DONE** | Process tree ancestry (`parent`, `broker`, `child`), Windows Job Object containment, execution receipts. Verified in `test_bap_534_535_538.py`, `test_e2e_full_lifecycle.py`, and `test_e2e_adversarial_hardening.py`. |
 | `BAP-535` | Credential Shielding & Secret Redaction | **DONE** | Ambient env scrubbing (`AWS_*`, `GITHUB_*`, `OPENAI_*`) and output regex redaction (`[BAP_REDACTED_*]`). Verified across unit and E2E suites. |
 | `BAP-538` | Incident Forensics & Automated Snapshot Rollback | **DONE** | Pre-execution snapshot checkpointing and instant 1-click recovery CLI `bapedge rollback`. Verified in unit and E2E test suites. |
@@ -2686,4 +2689,91 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   1. `search_code_subagent` calls with query parameters are permitted without "No command or target specified" errors.
   2. Direct agent calls to `bapedge.exe exec "<cmd>"` are unwrapped and evaluated against Cedar policy without double-wrapping.
   3. Tool calls attempting directory traversal outside workspace or targeting `.env` / credentials remain strictly denied.
+
+---
+
+#### BAP-544: Human-in-the-Loop (HITL) Step-Up Escalation & Session-Level Persistent Trust
+* **Epic**: `BAP-EPIC-30`
+* **Status**: `DONE`
+* **Priority**: `P0 - High`
+* **Implementation Evidence**:
+  - Implemented interactive terminal Step-Up prompt in [`bap-edge/cmd/exec.go`](file:///c:/Users/User/pyprj/bapltd/bap-edge/cmd/exec.go): `[A] Approve Once`, `[S] Trust for Session`, `[D] Deny (Default)`.
+  - Implemented session-level persistent trust in `.bap/approvals_<session_id>.json`, granting automatic approval for subsequent executions in that session.
+  - Fail-closed non-interactive / headless enforcement (`step_up_decision: "denied"`) with suggestion instructing operator on interactive step-up or gateway grant options.
+  - Injected `ALLOWED_STEPUP` cryptographic execution receipt and `stepup_allow` audit trail logging.
+  - Hardened anti-tampering invariant: BAP protected files (`policy.cedar`, `bapedge.exe`, hooks) are strictly non-escalatable.
+  - Implemented hard process tree timeout quota (`BAP_EXEC_TIMEOUT_SEC`) in [`bap-edge/internal/sandbox/sandbox.go`](file:///c:/Users/User/pyprj/bapltd/bap-edge/internal/sandbox/sandbox.go) to terminate runaway loops and fork bombs.
+  - Integrated into [`cchook/interceptor.go`](file:///c:/Users/User/pyprj/bapltd/cchook/interceptor.go) for outside-workspace file mutations.
+  - Test verification: [`tests/test_hitl_and_supply_chain.py`](file:///c:/Users/User/pyprj/bapltd/tests/test_hitl_and_supply_chain.py) passes 15/15 tests.
+* **Story**:
+  > As an enterprise developer, I want high-risk or cross-project actions flagged for interactive human approval rather than blanket blocking, so that I can grant one-time or session-level trust without disabling zero-trust policy.
+* **Acceptance Criteria**:
+  1. High-risk command (e.g. unapproved installer) triggers terminal HITL prompt: `[A] Approve Once | [S] Trust for Session | [D] Deny`.
+  2. One-time approval permits command execution with receipt result `ALLOWED_STEPUP`.
+  3. Session trust persists for subsequent invocations within the same session ID.
+  4. Non-interactive sessions fail closed immediately without hanging.
+  5. Anti-tampering operations (modifying `policy.cedar` or binaries) cannot be stepped-up.
+  6. Runaway agent executions exceeding timeout quota are forcibly terminated.
+
+---
+
+#### BAP-545: Software Supply-Chain Corporate Mirror Injection & Canary Tripwire Defense
+* **Epic**: `BAP-EPIC-30`
+* **Status**: `DONE`
+* **Priority**: `P0 - High`
+* **Implementation Evidence**:
+  - Implemented `Initialize-CorporateMirrors` in [`scripts/bap_launcher_engine.ps1`](file:///c:/Users/User/pyprj/bapltd/scripts/bap_launcher_engine.ps1):
+    - Maven: Generates `.bapstate/mirrors/settings.xml` routing `central,*` to corporate Nexus (`nexus.corp.internal`); injects `$env:MAVEN_ARGS`.
+    - npm: Generates `.bapstate/mirrors/.npmrc` with corporate registry and `strict-ssl=true`; injects `$env:NPM_CONFIG_USERCONFIG` and `$env:NPM_CONFIG_REGISTRY`.
+    - pip: Generates `.bapstate/mirrors/pip.ini` with trusted host; injects `$env:PIP_CONFIG_FILE` and `$env:PIP_INDEX_URL`.
+  - Hardened in [`bap-edge/internal/sandbox/sandbox.go`](file:///c:/Users/User/pyprj/bapltd/bap-edge/internal/sandbox/sandbox.go): child processes automatically inherit corporate mirror environment variables.
+  - Cedar Policy 6 in [`policy.cedar`](file:///c:/Users/User/pyprj/bapltd/policy.cedar): strictly blocks direct public repository bypass flags (`--index-url http://pypi.org`, `--registry registry.npmjs.org`, `-DremoteRepositories=http://repo.maven.apache.org`).
+  - Cedar Policy 7 in [`policy.cedar`](file:///c:/Users/User/pyprj/bapltd/policy.cedar): tripwire defense blocking any agent attempts to probe or exfiltrate corporate canary honeytokens (`$env:CORP_CANARY_TOKEN`, canary trap secrets).
+  - Test verification: [`tests/test_hitl_and_supply_chain.py`](file:///c:/Users/User/pyprj/bapltd/tests/test_hitl_and_supply_chain.py) passes 15/15 tests.
+* **Story**:
+  > As a Chief Information Security Officer, I want all agent package manager executions automatically directed to enterprise Nexus/Artifactory mirrors, and any attempts to download from public repositories blocked, eliminating software supply-chain poisoning.
+* **Acceptance Criteria**:
+  1. Agent sessions auto-generate and configure corporate mirrors for Maven, npm, and pip.
+  2. Public registry bypass flags on `mvn`, `pip`, and `npm` are strictly denied by Cedar policy.
+  3. All child sandboxed processes inherit corporate repository configurations.
+  4. Canary honeytoken exfiltration probes are immediately trapped and blocked.
+
+---
+
+#### BAP-546: Enterprise Multi-Scope Cross-Folder Mutation Governance (Once / Session / Project / Global)
+* **Epic**: `BAP-EPIC-30`
+* **Status**: `DONE`
+* **Priority**: `P0 - High`
+* **Implementation Evidence**:
+  - Implemented multi-tier persistent permission engine in [`bap-edge/internal/authz/permissions.go`](file:///c:/Users/User/pyprj/bapltd/bap-edge/internal/authz/permissions.go):
+    - Multi-scope stores: Session (`.bap/approvals_<session_id>.json`), Project (`<workspace>/.bap/project_permissions.json`), Global (`~/.bap/global_permissions.json`).
+    - Canonical path prefix coverage via `IsPathCovered` supporting directory hierarchy, symlink resolution, and case-insensitive Windows/POSIX path matching.
+    - Path permission verification via `IsTargetAuthorized(workspaceRoot, sessionID, targetPath, action)`.
+  - Refined Cedar Rule 2 in [`policy.cedar`](file:///c:/Users/User/pyprj/bapltd/policy.cedar):
+    - Read-only cross-folder directory traversal (`cat`, `ls`, `git status`) across sibling repositories natively permitted without friction.
+    - Mutating actions (`write`, `delete`, `tamper`, output redirection) outside workspace evaluated against `IsTargetAuthorized`.
+    - If authorized under any active scope, `escapes_workspace` context is overridden to `false`, permitting execution with `ALLOWED_STEPUP` receipt.
+  - Implemented interactive terminal HITL escalation in [`bap-edge/cmd/exec.go`](file:///c:/Users/User/pyprj/bapltd/bap-edge/cmd/exec.go):
+    - Full contextual display: Target Path, Action Type, Executable, Command, Session ID, Agent Source.
+    - User selection options: `[O] Once`, `[S] Session`, `[P] Project`, `[G] Global`, `[D] Deny`.
+    - Automated environment support for testing & CI/CD: `BAP_STEPUP_DECISION=project|global|session|once`.
+  - Implemented Developer CLI management commands in [`bap-edge/cmd/trust.go`](file:///c:/Users/User/pyprj/bapltd/bap-edge/cmd/trust.go) and [`bap-edge/main.go`](file:///c:/Users/User/pyprj/bapltd/bap-edge/main.go):
+    - `bapedge trust <path> [--project | --global | --session]`
+    - `bapedge untrust <path> [--project | --global | --session]`
+    - `bapedge permissions` (formatted inventory table of all active authorizations across scopes).
+  - Integrated into Claude Code & Antigravity PreToolUse hook [`cchook/interceptor.go`](file:///c:/Users/User/pyprj/bapltd/cchook/interceptor.go):
+    - Direct agent mutating file tools (`Edit`, `Write`) check `isTargetAuthorized`.
+    - Shell commands escaping workspace check `isTargetAuthorized` and permit execution through broker.
+  - Comprehensive test suite: Verified via 15/15 tests in [`tests/test_hitl_and_supply_chain.py`](file:///c:/Users/User/pyprj/bapltd/tests/test_hitl_and_supply_chain.py).
+* **Story**:
+  > As an enterprise software engineer working in a complex multi-repository codebase, I want BAP to distinguish between read-only cross-project inspection and mutating operations, and when mutating dependencies outside the project root, explicitly ask for my authorization and allow me to remember that grant for the session, project, or globally, so that security governance does not break enterprise development workflows.
+* **Acceptance Criteria**:
+  1. Read-only inspection commands (`cat`, `ls`, `git status`) across sibling directories are natively permitted by Cedar Rule 2.
+  2. Mutating commands (`echo >`, `rm`, `del`, `mkdir`) outside workspace trigger interactive HITL escalation offering `[O] Once | [S] Session | [P] Project | [G] Global | [D] Deny`.
+  3. Granted permissions persist according to selected scope (Session in `.bap/approvals_<session_id>.json`, Project in `.bap/project_permissions.json`, Global in `~/.bap/global_permissions.json`).
+  4. Subsequent cross-folder operations within a granted scope execute without further prompts.
+  5. Developer CLI commands `bapedge trust`, `bapedge untrust`, and `bapedge permissions` manage authorizations across all scopes.
+  6. Direct agent file modification tools (`Edit`, `Write`) in `cchook` respect active permissions.
+
+
 
