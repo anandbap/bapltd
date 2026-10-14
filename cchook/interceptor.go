@@ -306,7 +306,17 @@ func unwrapBrokerCommand(command, expectedSessionID string) (string, bool, error
 	default:
 		return command, false, nil
 	}
-	if len(fields) != 8 || fields[1] != "exec" || fields[2] != "--source" || fields[3] != "claude-code" || fields[4] != "--session-id" || fields[6] != "--cmd-b64" {
+	// Direct agent invocation via bapedge exec "<command>" as instructed by AGENTS.md / GEMINI.md
+	if len(fields) >= 2 && fields[1] == "exec" && !strings.Contains(command, "--cmd-b64") {
+		idx := strings.Index(command, "exec")
+		rawInner := strings.TrimSpace(command[idx+4:])
+		rawInner = strings.Trim(rawInner, `"'`)
+		if rawInner != "" {
+			return rawInner, false, nil
+		}
+	}
+	validSource := len(fields) > 3 && (fields[3] == "claude-code" || fields[3] == "copilot" || fields[3] == "antigravity")
+	if len(fields) != 8 || fields[1] != "exec" || fields[2] != "--source" || !validSource || fields[4] != "--session-id" || fields[6] != "--cmd-b64" {
 		return "", true, fmt.Errorf("untrusted BAPEdge invocation: expected the broker-owned exec wrapper")
 	}
 	if expectedSessionID == "" || fields[5] != expectedSessionID {
@@ -373,6 +383,29 @@ func resolveEnforcementMode() string {
 		}
 	}
 	return "enforce"
+}
+
+func isSafeFileTool(toolLower string) bool {
+	return toolLower == "read" || toolLower == "view" || toolLower == "edit" || toolLower == "write" ||
+		toolLower == "read_file" || toolLower == "view_file" || toolLower == "write_file" ||
+		toolLower == "edit_file" || toolLower == "replace_file_content"
+}
+
+func isSafeSubagentOrInspectionTool(toolLower string) bool {
+	if strings.Contains(toolLower, "search") || strings.Contains(toolLower, "subagent") ||
+		strings.Contains(toolLower, "agent") || strings.Contains(toolLower, "task") ||
+		strings.Contains(toolLower, "grep") || strings.Contains(toolLower, "glob") ||
+		strings.Contains(toolLower, "list") || strings.Contains(toolLower, "find") ||
+		toolLower == "ls" || toolLower == "dir" || strings.HasPrefix(toolLower, "bap_") {
+		return true
+	}
+	return false
+}
+
+func isShellTool(toolLower string) bool {
+	return toolLower == "bash" || toolLower == "sh" || toolLower == "terminal" ||
+		toolLower == "command" || toolLower == "execute" || toolLower == "run_command" ||
+		toolLower == "shell" || toolLower == ""
 }
 
 func isProtectedBAPAsset(pathStr string) bool {
@@ -866,28 +899,48 @@ func main() {
 			return
 		}
 
-		if isPathOutsideWorkspace(workspaceRoot, targetFile) {
-			outputDecision("deny", fmt.Sprintf("Directory traversal outside workspace is forbidden for file %q", targetFile), "Access to files outside the project root is prohibited. Child module and subproject files are permitted inside the workspace.")
-			return
-		}
-		if strings.Contains(normPath, ".env") || strings.Contains(normPath, ".aws") || strings.Contains(normPath, ".ssh") {
+		// Secret protection applies to all files inside or outside workspace
+		if strings.Contains(normPath, ".env") || strings.Contains(normPath, ".aws") || strings.Contains(normPath, ".ssh") || strings.Contains(normPath, "id_rsa") || strings.Contains(normPath, "id_ed25519") {
 			outputDecision("deny", fmt.Sprintf("Access to sensitive credential file %q is strictly forbidden by policy", targetFile), "Sensitive credential file access blocked")
 			return
 		}
-		// If it's a safe file tool operation (Read, View, Edit, Write), allow immediately
-		if payload.ToolName == "Read" || payload.ToolName == "View" || payload.ToolName == "Edit" || payload.ToolName == "Write" {
-			outputDecision("allow", "", "File operation within workspace permitted")
+
+		// Mutating tools (Edit, Write) outside workspace are strictly forbidden
+		if (payload.ToolName == "Edit" || payload.ToolName == "Write") && isPathOutsideWorkspace(workspaceRoot, targetFile) {
+			outputDecision("deny", fmt.Sprintf("Modifying files outside workspace is forbidden for file %q", targetFile), "Writing or modifying files outside the project root is prohibited. Read-only inspection of sibling projects is permitted.")
+			return
+		}
+
+		// Read-only inspection tools (Read, View) are permitted for cross-project dependencies and documentation
+		toolLower := strings.ToLower(payload.ToolName)
+		if isSafeFileTool(toolLower) {
+			outputDecision("allow", "", "File inspection permitted")
 			return
 		}
 	}
 
-	// 5. Process Command execution (Bash or generic command)
+	// 5. Process Command execution (Bash or generic command) vs Subagents & Inspection Tools
 	command := strings.TrimSpace(payload.ToolInput.Command)
 	if command == "" {
-		if payload.ToolName == "Read" || payload.ToolName == "View" || payload.ToolName == "Edit" || payload.ToolName == "Write" {
+		toolLower := strings.ToLower(payload.ToolName)
+		if isSafeFileTool(toolLower) {
 			outputDecision("allow", "", "File operation permitted")
 			return
 		}
+
+		// Allow subagents, code search, and directory exploration tools
+		// (e.g. search_code_subagent, Agent, Task, Glob, Grep, LS, ListDirectory, find_by_name)
+		if isSafeSubagentOrInspectionTool(toolLower) {
+			outputDecision("allow", "", fmt.Sprintf("Inspection or subagent tool %q permitted by zero-trust policy", payload.ToolName))
+			return
+		}
+
+		// Allow any non-shell tool (e.g. MCP tools, model query tools)
+		if payload.ToolName != "" && !isShellTool(toolLower) {
+			outputDecision("allow", "", fmt.Sprintf("Non-shell tool %q permitted", payload.ToolName))
+			return
+		}
+
 		outputDecision("deny", "No command or target specified in tool input", "Empty command")
 		return
 	}

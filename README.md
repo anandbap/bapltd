@@ -122,6 +122,20 @@ flowchart LR
 
 ## ⚡ Quickstart & Interactive Testing
 
+### 🚀 Governed Agent Launchers (Production 1-Click Runtimes)
+
+BAP provides dedicated zero-trust launchers for all major developer coding assistants, with automatic workspace policy mounting, liveness monitoring, token telemetry, and clean teardown:
+
+| Launcher Script | Agent Runtime | Capabilities & Zero-Trust Governance |
+| :--- | :--- | :--- |
+| [`run_claude_bap.bat`](file:///c:/Users/User/pyprj/bapltd/run_claude_bap.bat) | **Claude Code CLI** | Multi-instance concurrency, reference-counted custody locks, transactional `settings.json` backup/restore, `cchook/interceptor.exe` hook integration. |
+| [`run_antigravity_ide_bap.bat`](file:///c:/Users/User/pyprj/bapltd/run_antigravity_ide_bap.bat) | **Google Antigravity (IDE)** | Electron GUI process supervision (prevents premature exit), holds session active in Control Plane, live high-speed `transcript.jsonl` streaming, `GEMINI.md` policy and MCP injection. |
+| [`run_antigravity_cli_bap.bat`](file:///c:/Users/User/pyprj/bapltd/run_antigravity_cli_bap.bat) | **Google Antigravity (CLI)** | Transactional CLI execution (`agy.exe`) under full BAP workspace and command containment. |
+| [`run_copilot_cli_bap.bat`](file:///c:/Users/User/pyprj/bapltd/run_copilot_cli_bap.bat) | **GitHub Copilot CLI** | Prioritizes standalone `copilot.exe` (v1.0.97+) with `gh copilot` fallback, live `events.jsonl` telemetry tailing, `AGENTS.md` and MCP server injection, exit token & credit accounting snapshot. |
+| [`run_agent_demo.bat`](file:///c:/Users/User/pyprj/bapltd/run_agent_demo.bat) | **Multi-Agent Fleet Demo** | Interactive squad demo (Python SDK + Claude Code) with dynamic scaling and live Cockpit radar validation. |
+
+---
+
 ### Option 1: Automated Regression & End-to-End Suites
 ```powershell
 # Run complete test discovery across all 79 unit, integration & E2E tests
@@ -479,6 +493,28 @@ Standard string-splitting and regex decomposers are notoriously susceptible to c
 - **Recursive Subshell Parsing**: Automatically extracts and evaluates embedded command substitutions (`$(curl ...)` and `` `...` ``) before any command runs.
 - **Canonical Symlink Resolution**: Resolves all path arguments and I/O redirection targets (`>`, `>>`, `<`) via `filepath.Clean` and `filepath.EvalSymlinks` to their real filesystem destinations. Accessing sensitive files (`.env`, `~/.ssh`, `~/.aws`, `/etc/shadow`) through symlinks or relative traversal (`/app/subdir/../.env`) is evaluated against the target path and blocked.
 - **Fail-Closed Pipeline Gating**: In compound pipelines (e.g. `git status && curl untrusted.site`), each node is evaluated independently against Cedar policy. If **any** sub-command, subshell, or redirected path violates security policy, the entire pipeline is denied immediately—preventing execution of any part of the command.
+
+#### 5. Process-Level Supervision & Child Ancestry Tracking (BAP-534)
+Subprocesses spawned by permitted parent commands (e.g., `npm`, `make`, `python`) are cryptographically and structurally governed:
+- **Cryptographic Ancestry**: Every tool execution records complete process ancestry (`parent:<pid>`, `broker:<pid>`, `child:<pid>`) inside `ExecutionReceipt` and audit log entries.
+- **Windows Job Object Containment**: Child processes are assigned to a Windows Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, ensuring any unapproved child processes cannot outlive or escape the broker's process boundary.
+
+#### 6. Ambient Credential Shielding & Secret Redaction (BAP-535)
+Protects standing developer secrets from ambient exposure and exfiltration:
+- **Ambient Secret Stripping**: All child processes executed under `bapedge exec` or launcher sessions have standing credentials scrubbed from the environment (`AWS_*`, `GITHUB_*`, `OPENAI_*`, `ANTHROPIC_*`, `SLACK_*`, `AZURE_*`, and sensitive suffixes `*_TOKEN`, `*_KEY`, `*_SECRET`, `*_PASSWORD`).
+- **Output Stream Redaction**: Detects and redacts private keys (`BEGIN ... PRIVATE KEY`), AWS access keys (`AKIA...`), GitHub tokens (`ghp_...`), OpenAI keys (`sk-...`), and Bearer JWT tokens in stdout/stderr with `[BAP_REDACTED_*]` tags.
+
+#### 7. Incident Forensics & Automated Snapshot Rollback (BAP-538)
+Provides point-in-time recovery for files modified during agent execution:
+- **Pre-Execution Checkpointing**: Files targeted by mutating commands or file redirection (`>`, `>>`) are automatically captured into `.bapstate/snapshots/<sessionID>/<ckptID>/` with SHA-256 hashes before execution occurs.
+- **1-Click Rollback CLI**:
+  ```powershell
+  # List checkpoints for a session
+  .\bapedge.exe rollback --session-id <session_id> --list --json
+
+  # Rollback a specific file or the entire session to safe baseline
+  .\bapedge.exe rollback --session-id <session_id> --file <target_file> --json
+  ```
 
 ---
 

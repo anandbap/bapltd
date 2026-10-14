@@ -217,9 +217,19 @@ func CleanOutput(raw string) string {
 	return strings.TrimSpace(s)
 }
 
-// RunSandboxedCommandWithExitCode executes the shell command in an isolated sandbox,
-// injecting CORP_OBO_TOKEN and capturing combined stdout and stderr along with the integer exit code.
-func RunSandboxedCommandWithExitCode(cmdStr string) (string, int, error) {
+// ExecResult encapsulates full execution telemetry including exit code, output, and process ancestry.
+type ExecResult struct {
+	Output      string
+	ExitCode    int
+	Error       error
+	ParentPID   int
+	ProcessPID  int
+	ProcessTree []string
+}
+
+// RunSandboxedCommandWithDetails executes the shell command in an isolated sandbox,
+// capturing combined stdout/stderr, exit code, and complete process tree ancestry (BAP-534).
+func RunSandboxedCommandWithDetails(cmdStr string) ExecResult {
 	cmd := BuildExecCmd(cmdStr)
 
 	// Apply platform-specific sandbox attributes
@@ -228,8 +238,8 @@ func RunSandboxedCommandWithExitCode(cmdStr string) (string, int, error) {
 		defer cleanup()
 	}
 
-	// Prepare environment
-	env := os.Environ()
+	// Prepare environment and scrub ambient credentials (BAP-535)
+	env := ScrubEnvironment(os.Environ())
 	if runtime.GOOS == "windows" {
 		// Ensure standard utilities from Git (ls, grep, head, tail, etc.) are reachable in cmd.exe
 		gitUsrBin := `C:\Program Files\Git\usr\bin`
@@ -253,7 +263,20 @@ func RunSandboxedCommandWithExitCode(cmdStr string) (string, int, error) {
 
 	err := cmd.Start()
 	if err != nil {
-		return "", 1, err
+		return ExecResult{
+			Output:   "",
+			ExitCode: 1,
+			Error:    err,
+		}
+	}
+
+	childPID := cmd.Process.Pid
+	parentPID := os.Getppid()
+	brokerPID := os.Getpid()
+	tree := []string{
+		fmt.Sprintf("parent:%d", parentPID),
+		fmt.Sprintf("broker:%d", brokerPID),
+		fmt.Sprintf("child:%d", childPID),
 	}
 
 	postCleanup := PostStartProcess(cmd)
@@ -262,7 +285,8 @@ func RunSandboxedCommandWithExitCode(cmdStr string) (string, int, error) {
 	}
 
 	waitErr := cmd.Wait()
-	cleaned := CleanOutput(b.String())
+	// Redact sensitive keys/tokens from stdout and stderr output (BAP-535)
+	cleaned := CleanOutput(RedactSecrets(b.String()))
 	exitCode := 0
 	if waitErr != nil {
 		if exitErr, ok := waitErr.(*exec.ExitError); ok {
@@ -271,7 +295,22 @@ func RunSandboxedCommandWithExitCode(cmdStr string) (string, int, error) {
 			exitCode = 1
 		}
 	}
-	return cleaned, exitCode, waitErr
+
+	return ExecResult{
+		Output:      cleaned,
+		ExitCode:    exitCode,
+		Error:       waitErr,
+		ParentPID:   parentPID,
+		ProcessPID:  childPID,
+		ProcessTree: tree,
+	}
+}
+
+// RunSandboxedCommandWithExitCode executes the shell command in an isolated sandbox,
+// injecting CORP_OBO_TOKEN and capturing combined stdout and stderr along with the integer exit code.
+func RunSandboxedCommandWithExitCode(cmdStr string) (string, int, error) {
+	res := RunSandboxedCommandWithDetails(cmdStr)
+	return res.Output, res.ExitCode, res.Error
 }
 
 // RunSandboxedCommand executes the shell command in an isolated sandbox,

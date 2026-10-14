@@ -71,7 +71,18 @@ function Get-FileSha256 {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         return $null
     }
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        try {
+            $sha = [System.Security.Cryptography.SHA256]::Create()
+            $bytes = $sha.ComputeHash($stream)
+            return (-join ($bytes | ForEach-Object { $_.ToString('X2') }))
+        } finally {
+            $stream.Dispose()
+        }
+    } catch {
+        return $null
+    }
 }
 
 function Resolve-BinaryPath {
@@ -616,6 +627,10 @@ function Invoke-BapGovernedSession {
     $isSecondary = $false
     $RecoveryRecord = $null
     $ExitCode = 0
+    $transcriptJob = $null
+    $scrubbedVars = @{}
+    $origPath = $null
+    $ShimDir = $null
 
     try {
         try {
@@ -839,6 +854,23 @@ function Invoke-BapGovernedSession {
         $env:BAP_AGENT_SANDBOX = "1"
         $env:BAP_IN_BROKER = "0"
 
+        # Scrub ambient sensitive credentials from agent process scope (BAP-535)
+        $sensitiveVarPatterns = @(
+            'AWS_SECRET*', 'AWS_SESSION*', 'AWS_SECURITY*',
+            'GITHUB_TOKEN', 'GH_TOKEN', 'OPENAI_API*', 'ANTHROPIC_API*',
+            'SLACK_TOKEN', 'SLACK_BOT*', 'AZURE_CLIENT_SECRET',
+            'GOOGLE_APPLICATION_CREDENTIALS', 'NPM_TOKEN', 'PYPI_PASSWORD',
+            '*_SECRET', '*_SECRET_KEY', '*_PRIVATE_KEY', '*_AUTH_TOKEN'
+        )
+        foreach ($pattern in $sensitiveVarPatterns) {
+            Get-ChildItem "env:$pattern" -ErrorAction SilentlyContinue | ForEach-Object {
+                if ($_.Name -notmatch '^(BAP_|LTD_|CORP_)') {
+                    $scrubbedVars[$_.Name] = $_.Value
+                    Remove-Item "env:$($_.Name)" -ErrorAction SilentlyContinue
+                }
+            }
+        }
+
         # Start detached watcher to monitor agent process tree and sync heartbeats/revocations
         if (-not [string]::IsNullOrWhiteSpace($BapEdgeBin) -and -not [string]::IsNullOrWhiteSpace($ServerUrl)) {
             try {
@@ -862,8 +894,10 @@ function Invoke-BapGovernedSession {
                     try {
                         foreach ($root in $searchRoots) {
                             if (Test-Path -LiteralPath $root) {
-                                $recentFiles = Get-ChildItem -Path $root -Recurse -Filter "transcript.jsonl" -ErrorAction SilentlyContinue |
-                                    Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-5) } |
+                                $recentFiles = @(
+                                    (Get-ChildItem -Path "$root\*\.system_generated\logs\transcript.jsonl" -ErrorAction SilentlyContinue),
+                                    (Get-ChildItem -Path "$root\*\transcript.jsonl" -ErrorAction SilentlyContinue)
+                                ) | Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-10) } |
                                     Sort-Object LastWriteTime -Descending | Select-Object -First 3
                                 foreach ($f in $recentFiles) {
                                     $lines = Get-Content -LiteralPath $f.FullName -ErrorAction SilentlyContinue | Select-Object -Last 10
@@ -919,6 +953,113 @@ function Invoke-BapGovernedSession {
             } -ArgumentList $SessionId, $ServerUrl
         }
 
+        # For Copilot sessions, start background tail to capture prompts, outputs, and token usage
+        if ($AgentId -eq 'copilot' -and -not [string]::IsNullOrWhiteSpace($ServerUrl)) {
+            $transcriptJob = Start-Job -ScriptBlock {
+                param($SessionId, $ServerUrl)
+                $copilotDir = Join-Path $env:USERPROFILE ".copilot\session-state"
+                $seenHashes = @{}
+                $sha = [System.Security.Cryptography.SHA256]::Create()
+                $curl = 'curl.exe'
+
+                while ($true) {
+                    Start-Sleep -Milliseconds 800
+                    try {
+                        if (Test-Path -LiteralPath $copilotDir) {
+                            $recentFile = Get-ChildItem -Path "$copilotDir\*\events.jsonl" -ErrorAction SilentlyContinue |
+                                Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-10) } |
+                                Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
+                            if ($null -ne $recentFile) {
+                                $lines = Get-Content -LiteralPath $recentFile.FullName -ErrorAction SilentlyContinue | Select-Object -Last 25
+                                foreach ($l in $lines) {
+                                    if ([string]::IsNullOrWhiteSpace($l)) { continue }
+                                    $bytes = [System.Text.Encoding]::UTF8.GetBytes($l)
+                                    $lHash = -join ($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') })
+                                    if ($seenHashes.ContainsKey($lHash)) { continue }
+                                    $seenHashes[$lHash] = $true
+
+                                    try {
+                                        $ev = $l | ConvertFrom-Json -ErrorAction SilentlyContinue
+                                        if ($null -eq $ev -or [string]::IsNullOrWhiteSpace($ev.type)) { continue }
+
+                                        # 1. User Prompt Capture
+                                        if ($ev.type -eq "user.message" -and $null -ne $ev.data) {
+                                            $promptText = [string]$ev.data.content
+                                            if ([string]::IsNullOrWhiteSpace($promptText)) {
+                                                $promptText = [string]$ev.data.transformedContent
+                                            }
+                                            if (-not [string]::IsNullOrWhiteSpace($promptText)) {
+                                                $pBytes = [System.Text.Encoding]::UTF8.GetBytes($promptText)
+                                                $pHash = -join ($sha.ComputeHash($pBytes) | ForEach-Object { $_.ToString('x2') })
+                                                $promptPayload = @{
+                                                    session_id             = $SessionId
+                                                    user_prompt            = $promptText
+                                                    producer               = "copilot-cli"
+                                                    prompt_hash            = $pHash
+                                                    prompt_capture_enabled = $true
+                                                    intent                 = @{
+                                                        primary            = "INVESTIGATION"
+                                                        confidence         = 0.90
+                                                        classifier_version = "bap-edge-rules-v1"
+                                                        source             = "copilot-events-tail"
+                                                    }
+                                                } | ConvertTo-Json -Compress
+                                                $cArgs = @('-s', '--max-time', '2', '-X', 'POST', "$ServerUrl/api/v1/sessions/prompt", '-H', 'Content-Type: application/json', '-d', $promptPayload)
+                                                & $curl @cArgs *> $null
+                                            }
+                                        }
+
+                                        # 2. Assistant Response Output Capture
+                                        if ($ev.type -eq "assistant.message" -and $null -ne $ev.data -and -not [string]::IsNullOrWhiteSpace($ev.data.content)) {
+                                            $outContent = [string]$ev.data.content
+                                            $summary = if ($outContent.Length -gt 250) { $outContent.Substring(0, 247) + "..." } else { $outContent }
+                                            $auditPayload = @{
+                                                event_id     = "ev-copilot-out-$([Guid]::NewGuid().ToString('N').Substring(0,8))"
+                                                session_id   = $SessionId
+                                                source       = "copilot"
+                                                executable   = "assistant_response"
+                                                arguments    = "Turn: $($ev.data.turnId)"
+                                                full_command = $summary
+                                                decision     = "allow"
+                                                reason       = "Copilot Assistant Response Output"
+                                                timestamp    = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+                                            } | ConvertTo-Json -Compress
+                                            $cArgs = @('-s', '--max-time', '2', '-X', 'POST', "$ServerUrl/api/v1/audit/ingest", '-H', 'Content-Type: application/json', '-d', $auditPayload)
+                                            & $curl @cArgs *> $null
+                                        }
+
+                                        # 3. Intermediate Token Accounting
+                                        if ($ev.type -eq "session.usage_record" -and $null -ne $ev.data) {
+                                            $usageObj = $ev.data
+                                            $inT = if ($usageObj.inputTokens) { $usageObj.inputTokens } else { $usageObj.tokenDetails.input.tokenCount }
+                                            $outT = if ($usageObj.outputTokens) { $usageObj.outputTokens } else { $usageObj.tokenDetails.output.tokenCount }
+                                            $credits = if ($usageObj.totalNanoAiu) { [Math]::Round([double]$usageObj.totalNanoAiu / 1000000000, 4) } else { 0 }
+                                            $modelName = if ($ev.data.currentModel) { $ev.data.currentModel } else { "copilot" }
+
+                                            $tokenAudit = @{
+                                                event_id     = "ev-copilot-tokens-$([Guid]::NewGuid().ToString('N').Substring(0,8))"
+                                                session_id   = $SessionId
+                                                source       = "copilot"
+                                                executable   = "token_accounting"
+                                                arguments    = "In: $inT, Out: $outT, Credits: $credits"
+                                                full_command = "Copilot $modelName Turn Usage (In: $inT, Out: $outT, Credits: $credits)"
+                                                decision     = "allow"
+                                                reason       = "Copilot Turn Token Accounting"
+                                                timestamp    = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+                                            } | ConvertTo-Json -Compress
+                                            $cArgs = @('-s', '--max-time', '2', '-X', 'POST', "$ServerUrl/api/v1/audit/ingest", '-H', 'Content-Type: application/json', '-d', $tokenAudit)
+                                            & $curl @cArgs *> $null
+                                        }
+                                    } catch { }
+                                }
+                            }
+                        }
+                    } catch { }
+                }
+            } -ArgumentList $SessionId, $ServerUrl
+        }
+
         # 9. Launch Target Process
         Write-Host ""
         Write-Host "===============================================================================" -ForegroundColor Green
@@ -926,10 +1067,57 @@ function Invoke-BapGovernedSession {
         Write-Host "===============================================================================" -ForegroundColor Green
         Write-Host ""
 
-        & $TargetBin @ForwardArgs
-        $pExit = $LASTEXITCODE
-        $ExitCode = if ($null -eq $pExit) { 0 } else { [int]$pExit }
-        Write-Host "[*] $DisplayName exited with code $ExitCode." -ForegroundColor Gray
+        if ($AgentMode -eq 'ide') {
+            $ideArgs = @()
+            if ($ForwardArgs.Count -gt 0) {
+                $ideArgs += $ForwardArgs
+            } else {
+                $ideArgs += $Workspace
+            }
+
+            Write-Host "[*] Launching $DisplayName for workspace: $Workspace" -ForegroundColor Cyan
+            $targetProc = Start-Process -FilePath $TargetBin -ArgumentList $ideArgs -PassThru -ErrorAction SilentlyContinue
+
+            Write-Host "[+] BAP Governed Session '$SessionId' is ACTIVE." -ForegroundColor Green
+            Write-Host "[+] BAP Control Plane : $ServerUrl" -ForegroundColor Cyan
+            Write-Host "[+] Zero-Trust Guard  : Monitoring IDE processes & live transcripts..." -ForegroundColor Green
+            Write-Host "[*] Keep this console window open while working in the IDE." -ForegroundColor Yellow
+            Write-Host "[*] Press 'q' or Enter in this window to end the session (or close the IDE)." -ForegroundColor Yellow
+            Write-Host ""
+
+            $procName = [System.IO.Path]::GetFileNameWithoutExtension($TargetBin)
+            Start-Sleep -Seconds 2
+
+            while ($true) {
+                try {
+                    if (-not [Console]::IsInputRedirected -and [Console]::KeyAvailable) {
+                        $key = [Console]::ReadKey($true)
+                        if ($key.Key -eq [ConsoleKey]::Enter -or $key.Key -eq [ConsoleKey]::Q -or $key.Key -eq [ConsoleKey]::Escape) {
+                            Write-Host "`n[*] Ending BAP session as requested..." -ForegroundColor Yellow
+                            break
+                        }
+                    }
+                } catch { }
+
+                $aliveProcs = Get-Process -Name $procName -ErrorAction SilentlyContinue
+                if ($null -eq $aliveProcs -or $aliveProcs.Count -eq 0) {
+                    Write-Host "`n[*] All $DisplayName processes exited. Ending BAP session..." -ForegroundColor Gray
+                    break
+                }
+
+                Start-Sleep -Milliseconds 800
+            }
+            $ExitCode = 0
+        } else {
+            $cliExecArgs = @($ForwardArgs)
+            if ($AgentId -eq 'copilot' -and ($TargetBin -like '*gh.exe' -or $TargetBin -like '*\gh') -and ($cliExecArgs.Count -eq 0 -or $cliExecArgs[0] -ne 'copilot')) {
+                $cliExecArgs = @('copilot') + $cliExecArgs
+            }
+            & $TargetBin @cliExecArgs
+            $pExit = $LASTEXITCODE
+            $ExitCode = if ($null -eq $pExit) { 0 } else { [int]$pExit }
+            Write-Host "[*] $DisplayName exited with code $ExitCode." -ForegroundColor Gray
+        }
     }
     catch {
         if ($ExitCode -eq 0) { $ExitCode = 1 }
@@ -942,6 +1130,62 @@ function Invoke-BapGovernedSession {
         if ($null -ne $transcriptJob) {
             Stop-Job $transcriptJob -ErrorAction SilentlyContinue | Out-Null
             Remove-Job $transcriptJob -Force -ErrorAction SilentlyContinue | Out-Null
+        }
+
+        # For Copilot sessions, capture final accounting snapshot & token usage
+        if ($AgentId -eq 'copilot') {
+            try {
+                $copilotDir = Join-Path $env:USERPROFILE ".copilot\session-state"
+                if (Test-Path -LiteralPath $copilotDir) {
+                    $recentFile = Get-ChildItem -Path "$copilotDir\*\events.jsonl" -ErrorAction SilentlyContinue |
+                        Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-10) } |
+                        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
+                    if ($null -ne $recentFile) {
+                        $lines = Get-Content -LiteralPath $recentFile.FullName -ErrorAction SilentlyContinue
+                        $shutdown = $lines | Where-Object { $_ -match '"type":"session\.shutdown"' } | Select-Object -Last 1 | ConvertFrom-Json
+                        if ($null -ne $shutdown -and $null -ne $shutdown.data -and $null -ne $shutdown.data.accountingSnapshot) {
+                            $snap = $shutdown.data.accountingSnapshot
+                            $model = if ($shutdown.data.currentModel) { [string]$shutdown.data.currentModel } else { "copilot" }
+                            $inTokens = if ($snap.tokenDetails.input.tokenCount) { [int]$snap.tokenDetails.input.tokenCount } else { [int]$snap.usage.inputTokens }
+                            $cacheRead = if ($snap.tokenDetails.cache_read.tokenCount) { [int]$snap.tokenDetails.cache_read.tokenCount } else { [int]$snap.usage.cacheReadTokens }
+                            $cacheWrite = if ($snap.tokenDetails.cache_write.tokenCount) { [int]$snap.tokenDetails.cache_write.tokenCount } else { [int]$snap.usage.cacheWriteTokens }
+                            $outTokens = if ($snap.tokenDetails.output.tokenCount) { [int]$snap.tokenDetails.output.tokenCount } else { [int]$snap.usage.outputTokens }
+                            $credits = if ($snap.totalNanoAiu) { [Math]::Round([double]$snap.totalNanoAiu / 1000000000, 4) } else { 0 }
+                            $duration = if ($snap.totalApiDurationMs) { [int]$snap.totalApiDurationMs } else { 0 }
+
+                            Write-Host ""
+                            Write-Host "===============================================================================" -ForegroundColor Cyan
+                            Write-Host "  COPILOT ZERO-TRUST USAGE & TOKEN ACCOUNTING" -ForegroundColor Cyan
+                            Write-Host "===============================================================================" -ForegroundColor Cyan
+                            Write-Host "[*] Active Model       : $model"
+                            Write-Host "[*] Input Tokens       : $inTokens (Cached: $cacheRead, Written: $cacheWrite)"
+                            Write-Host "[*] Output Tokens      : $outTokens"
+                            Write-Host "[*] AI Credits Used    : $credits"
+                            Write-Host "[*] Total API Duration : $duration ms"
+                            Write-Host "===============================================================================" -ForegroundColor Cyan
+                            Write-Host ""
+
+                            if (-not [string]::IsNullOrWhiteSpace($ServerUrl)) {
+                                $finalAudit = @{
+                                    event_id     = "ev-copilot-tokens-$SessionId"
+                                    session_id   = $SessionId
+                                    source       = "copilot"
+                                    executable   = "token_accounting"
+                                    arguments    = "In: $inTokens, Out: $outTokens, Credits: $credits"
+                                    full_command = "Copilot Final Accounting ($model): $inTokens In, $outTokens Out, $credits Credits, ${duration}ms"
+                                    decision     = "allow"
+                                    reason       = "Copilot Final Token Accounting & AI Credit Audit"
+                                    timestamp    = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+                                } | ConvertTo-Json -Compress
+                                $curl = 'curl.exe'
+                                $cArgs = @('-s', '--max-time', '2', '-X', 'POST', "$ServerUrl/api/v1/audit/ingest", '-H', 'Content-Type: application/json', '-d', $finalAudit)
+                                & $curl @cArgs *> $null
+                            }
+                        }
+                    }
+                }
+            } catch { }
         }
 
         if (-not [string]::IsNullOrWhiteSpace($BapEdgeBin) -and -not [string]::IsNullOrWhiteSpace($ServerUrl)) {
@@ -983,6 +1227,13 @@ function Invoke-BapGovernedSession {
         Remove-Item Env:\BAP_MODE -ErrorAction SilentlyContinue
         Remove-Item Env:\BAP_AGENT_SANDBOX -ErrorAction SilentlyContinue
         Remove-Item Env:\BAP_IN_BROKER -ErrorAction SilentlyContinue
+
+        # Restore scrubbed ambient credentials to host environment (BAP-535)
+        if ($null -ne $scrubbedVars) {
+            foreach ($k in $scrubbedVars.Keys) {
+                [Environment]::SetEnvironmentVariable($k, $scrubbedVars[$k], 'Process')
+            }
+        }
 
         $teardownMutex = Acquire-BapMutex -Name $MutexName -TimeoutMs 5000
         try {

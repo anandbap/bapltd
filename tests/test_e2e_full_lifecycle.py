@@ -1,7 +1,7 @@
 """
 End-to-End (E2E) Full Mission Lifecycle Integration Test Suite.
 ==============================================================
-Validates the complete BAP Enterprise Governance Pipeline across all 10 stages:
+Validates the complete BAP Enterprise Governance Pipeline across all 12 stages:
 1. Stage 1: Workload Identity & Hardware Attestation (SPIFFE SVID + TPM 2.0 PCR quote)
 2. Stage 2: Session Bootstrap & Semantic Prompt Injection Defense (Risk context vs Invariant I1)
 3. Stage 3: Immutable Action Proposal Lifecycle (BAP-450, BAP-455)
@@ -12,6 +12,8 @@ Validates the complete BAP Enterprise Governance Pipeline across all 10 stages:
 8. Stage 8: Execution Reconciliation & Orphan Detection (BAP-456)
 9. Stage 9: Cryptographic Chain Linking, RFC 3161 Cloud KMS Notarization & WORM Storage (Epic 13)
 10. Stage 10: End-to-End Operations Investigation Timeline & Causality Graph (BAP-459)
+11. Stage 11: Real Agent Tool Defense, Ambient Credential Shielding & Token Redaction (BAP-535, BAP-540)
+12. Stage 12: Process Tree Supervision & Incident Forensics Rollback (BAP-534, BAP-538)
 """
 
 import hashlib
@@ -28,6 +30,9 @@ import urllib.request
 
 WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 CONTROL_PLANE_BIN = os.path.join(WORKSPACE_ROOT, "dist", "windows-amd64", "bapcontrolplane.exe")
+BAPEDGE_BIN = os.path.join(WORKSPACE_ROOT, "dist", "windows-amd64", "bapedge.exe")
+if not os.path.exists(BAPEDGE_BIN):
+    BAPEDGE_BIN = os.path.join(WORKSPACE_ROOT, "bapedge.exe")
 
 TEST_SECRET = "e2e-lifecycle-test-secret-key-32b!"
 TEST_ADMIN_TOKEN = "e2e-lifecycle-admin-token-123456"
@@ -584,6 +589,81 @@ when {
         node_stages = [n["stage"] for n in timeline.get("nodes", [])]
         self.assertIn("TASK", node_stages)
         self.assertIn("PROPOSAL", node_stages)
+
+    def test_11_agent_tool_credential_shielding_and_output_redaction(self):
+        """Stage 11: Real agent tool defense, ambient credential stripping, and output redaction (BAP-535, BAP-540)."""
+        session_id = f"sess-e2e-tool-shield-{os.getpid()}"
+        env = os.environ.copy()
+        env["AWS_SECRET_ACCESS_KEY"] = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        env["GITHUB_TOKEN"] = "ghp_123456789012345678901234567890123456"
+        env["BAP_SESSION_ID"] = session_id
+        env["BAP_TEST_MODE"] = "1"
+
+        # 1. Verify ambient secret stripping in subprocess
+        cmd_env = f'"{BAPEDGE_BIN}" exec --server {CP_URL} --source e2e-agent --session-id {session_id} --force-json --raw "cmd.exe /c set AWS_SECRET_ACCESS_KEY"'
+        proc_env = subprocess.run(cmd_env, shell=True, capture_output=True, text=True, env=env, cwd=WORKSPACE_ROOT)
+        try:
+            res_env = json.loads(proc_env.stdout)
+            self.assertEqual(res_env.get("exit_code"), 1)
+        except json.JSONDecodeError:
+            self.assertNotIn("wJalrXUtnFEMI", proc_env.stdout)
+
+        # 2. Verify token redaction in output
+        fake_token = "ghp_77776666555544443333222211110000aaaa"
+        cmd_redact = f'"{BAPEDGE_BIN}" exec --server {CP_URL} --source e2e-agent --session-id {session_id} --json "echo Secret: {fake_token}"'
+        proc_redact = subprocess.run(cmd_redact, shell=True, capture_output=True, text=True, cwd=WORKSPACE_ROOT)
+        self.assertEqual(proc_redact.returncode, 0)
+        res_redact = json.loads(proc_redact.stdout)
+        self.assertIn("[BAP_REDACTED_GITHUB_TOKEN]", res_redact.get("output", ""))
+        self.assertNotIn(fake_token, res_redact.get("output", ""))
+
+    def test_12_process_supervision_and_forensics_rollback(self):
+        """Stage 12: Process tree supervision and incident forensics checkpoint & rollback (BAP-534, BAP-538)."""
+        session_id = f"sess-e2e-rollback-{os.getpid()}"
+
+        # 1. Verify process tree ancestry in execution receipt
+        cmd_proc = f'"{BAPEDGE_BIN}" exec --server {CP_URL} --source e2e-agent --session-id {session_id} --json "git --version"'
+        proc_proc = subprocess.run(cmd_proc, shell=True, capture_output=True, text=True, cwd=WORKSPACE_ROOT)
+        self.assertEqual(proc_proc.returncode, 0)
+        res_proc = json.loads(proc_proc.stdout)
+        receipt = res_proc.get("receipt", {})
+        self.assertIsNotNone(receipt)
+        tree = receipt.get("process_tree", [])
+        self.assertGreaterEqual(len(tree), 3)
+        self.assertTrue(any(t.startswith("parent:") for t in tree))
+        self.assertTrue(any(t.startswith("broker:") for t in tree))
+        self.assertTrue(any(t.startswith("child:") for t in tree))
+
+        # 2. Mutate file and execute automated forensic rollback
+        scratch_dir = os.path.join(WORKSPACE_ROOT, "scratch", f"e2e_snap_{os.getpid()}")
+        os.makedirs(scratch_dir, exist_ok=True)
+        try:
+            target = os.path.join(scratch_dir, "e2e_config.txt")
+            baseline = "PRODUCTION_IMMUTABLE_CONFIG_V1"
+            with open(target, "w") as f:
+                f.write(baseline)
+
+            # Mutate via bapedge exec
+            cmd_mutate = f'"{BAPEDGE_BIN}" exec --server {CP_URL} --source e2e-agent --session-id {session_id} "echo ROGUE_MUTATION > {target}"'
+            proc_mutate = subprocess.run(cmd_mutate, shell=True, capture_output=True, text=True, cwd=WORKSPACE_ROOT)
+            self.assertEqual(proc_mutate.returncode, 0)
+
+            # Confirm corruption
+            with open(target, "r") as f:
+                self.assertIn("ROGUE_MUTATION", f.read())
+
+            # Perform rollback
+            cmd_rb = f'"{BAPEDGE_BIN}" rollback --session-id {session_id} --file {target} --json'
+            proc_rb = subprocess.run(cmd_rb, shell=True, capture_output=True, text=True, cwd=WORKSPACE_ROOT)
+            self.assertEqual(proc_rb.returncode, 0)
+            rb_res = json.loads(proc_rb.stdout)
+            self.assertIn(os.path.abspath(target), rb_res.get("restored_files", []))
+
+            # Confirm forensic recovery
+            with open(target, "r") as f:
+                self.assertEqual(f.read(), baseline)
+        finally:
+            shutil.rmtree(scratch_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

@@ -44,8 +44,12 @@ type AuditEntry struct {
 	GrantID       string    `json:"grant_id,omitempty"`
 	// Identity-Aware Egress Control (BAP-530)
 	DestinationTenantID string    `json:"destination_tenant_id,omitempty"`
-	PreviousHash      string    `json:"previous_hash,omitempty"`
-	EntryHash         string    `json:"entry_hash,omitempty"`
+	// Process-Level Supervision & Child Ancestry Tracking (BAP-534)
+	ProcessTree   []string  `json:"process_tree,omitempty"`
+	ParentPID     int       `json:"parent_pid,omitempty"`
+	ProcessPID    int       `json:"process_pid,omitempty"`
+	PreviousHash  string    `json:"previous_hash,omitempty"`
+	EntryHash     string    `json:"entry_hash,omitempty"`
 }
 
 var mu sync.Mutex
@@ -80,6 +84,9 @@ func ComputeEntryHash(entry AuditEntry, prevHash string) string {
 	}
 	if entry.GrantID != "" {
 		h.Write([]byte(entry.GrantID))
+	}
+	if entry.ProcessPID != 0 {
+		h.Write([]byte(strconv.Itoa(entry.ProcessPID)))
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

@@ -29,6 +29,11 @@ type ExecutionReceipt struct {
 
 	// Identity-Aware Egress Control (BAP-530)
 	DestinationTenantID string `json:"destination_tenant_id,omitempty"`
+
+	// Process-Level Supervision & Child Ancestry Tracking (BAP-534)
+	ProcessTree []string `json:"process_tree,omitempty"`
+	ParentPID   int      `json:"parent_pid,omitempty"`
+	ProcessPID  int      `json:"process_pid,omitempty"`
 }
 
 // ExecResponse is output by the exec command.

@@ -1,6 +1,31 @@
-# GitHub Copilot Zero-Trust Interceptor for ltd-agent
+# GitHub Copilot Zero-Trust Interceptor & Governance for BAP
 
-This directory provides execution wrappers and integration hooks to route [GitHub Copilot](https://github.com/features/copilot) (VS Code Agent Mode, Terminal Chat, and GitHub Copilot CLI) commands through the `ltd-agent` zero-trust broker.
+This directory provides execution wrappers, telemetry tailers, and integration hooks to route [GitHub Copilot](https://github.com/features/copilot) (Standalone Copilot CLI v1.0.97+, `gh copilot` extension, VS Code Agent Mode, and Terminal Chat) commands and telemetry through the **Bounded Authority Plane (BAP)**.
+
+---
+
+## 🚀 Quickstart: Governed Copilot CLI Launch
+
+The recommended way to run GitHub Copilot CLI under BAP zero-trust governance is via the 1-click production launcher:
+
+```powershell
+# Windows CMD / Batch:
+.\run_copilot_cli_bap.bat
+
+# PowerShell:
+.\run_copilot_cli_bap.ps1
+```
+
+### What the Launcher Does Automatically:
+1. **Prioritizes Standalone `copilot.exe` (v1.0.97+)**: Discovers standalone `copilot.exe` (WinGet / direct install); automatically falls back to `gh.exe copilot` if standalone is absent.
+2. **Registers BAP Session**: Initiates an active session (`sess-copilot-...`) on the central Control Plane with continuous liveness heartbeats.
+3. **Mounts Workspace Governance**: Injects `AGENTS.md` and `.copilot/mcp-config.json`, directing Copilot to use `bapedge exec` for tool calls and mounting `bapmcp.exe` zero-trust MCP tools.
+4. **Streams Live Telemetry**: Background tailer monitors `~/.copilot/session-state/*/events.jsonl`:
+   - Prompts (`user.message`) $\rightarrow$ sent to `/api/v1/sessions/prompt` with 11-category intent classification.
+   - Assistant outputs (`assistant.message`) $\rightarrow$ streamed to `/api/v1/audit/ingest`.
+   - Turn usage (`session.usage_record`) $\rightarrow$ tracked for token accounting.
+5. **Captures Accounting Snapshot on Exit**: Extracts final `accountingSnapshot` (`model`, `input_tokens`, `output_tokens`, `cached_tokens`, `ai_credits` in nanoAIU, `api_duration_ms`) and appends it to the tamper-evident Merkle audit chain.
+6. **Clean Workspace Teardown**: Restores prior configuration and leaves zero stray artifacts in the workspace.
 
 ---
 
@@ -9,9 +34,7 @@ This directory provides execution wrappers and integration hooks to route [GitHu
 ```text
 copilot/
 ├── copilot_interceptor.go   # Standalone Go broker for Copilot commands
-├── copilot-wrap.bat         # Windows batch wrapper for Copilot terminal tasks
-├── copilot-wrap.sh          # POSIX shell wrapper for Linux / macOS
-├── copilot-wrap.bat         # Windows CMD batch wrapper
+├── copilot-wrap.bat         # Windows CMD batch wrapper for terminal tasks
 ├── copilot-wrap.ps1         # Windows / Cross-platform PowerShell wrapper
 ├── copilot-wrap.sh          # POSIX shell wrapper for Linux / macOS / Git Bash
 └── README.md                # This integration guide
@@ -19,24 +42,25 @@ copilot/
 
 ---
 
-## How It Works
+## How Policy Enforcement Works
 
-1. **Source Tagging**:
-   Commands executed through `copilot_interceptor` or `copilot-wrap` automatically pass `--source copilot` to `ltd-agent exec`.
+1. **Source Attribution**:
+   Commands routed through `copilot_interceptor` or `copilot-wrap` automatically pass `--source copilot` to `bapedge exec`.
 2. **Cedar Policy Enforcement**:
-   Commands are evaluated against `policy.cedar`:
+   Commands are evaluated against in-process Cedar policies in `<1.5ms`:
    - Developer commands (`go`, `python`, `npm`, `cargo`, `java`, `git`, `pytest`) are **permitted**.
-   - Credential theft (`.env`, `~/.aws`, `~/.ssh`) and exfiltration (`curl`, `wget`, `nc`, `Invoke-WebRequest`) are **blocked**.
-3. **Structured Audit Trail**:
-   Every Copilot action is logged to `ltd-audit.jsonl` with `"source": "copilot"`, execution latency, and Cedar decisions.
+   - Credential access (`.env`, `~/.aws`, `~/.ssh`) and exfiltration (`curl`, `wget`, `nc`, `Invoke-WebRequest`) are **blocked**.
+   - Direct calls to `bapedge.exe exec "<cmd>"` are unwrapped cleanly without recursion while preserving `copilot` source attribution.
+3. **Structured Merkle Audit Trail**:
+   Every Copilot action and accounting snapshot is recorded in the SHA-256 Merkle chain at `/api/v1/audit/ingest`.
 
 ---
 
-## Setup Options
+## Alternative Setup Options
 
 ### Option 1: GitHub Copilot in VS Code (Agent Mode / Terminal Execution)
 
-To ensure VS Code terminals used by Copilot Agent Mode execute commands through `ltd-agent`, add the following to your project's `.vscode/settings.json` or user settings:
+To ensure VS Code terminals used by Copilot Agent Mode execute commands through BAP, add the following to your project's `.vscode/settings.json` or user settings:
 
 #### On Windows (`.vscode/settings.json`):
 ```json
@@ -66,16 +90,15 @@ To ensure VS Code terminals used by Copilot Agent Mode execute commands through 
 
 ---
 
-### Option 2: GitHub Copilot CLI (`gh copilot`)
+### Option 2: GitHub Copilot Extension CLI (`gh copilot`)
 
-If you use the GitHub Copilot CLI extension (`gh extension install github/gh-copilot`), configure the execute alias to route through the interceptor:
+If you use the GitHub CLI extension (`gh extension install github/gh-copilot`), configure the execute alias to route through the interceptor:
 
 #### In PowerShell:
 ```powershell
 function ?? {
     $cmd = gh copilot suggest -t shell "$args"
     if ($cmd) {
-        .\copilot\copilot-wrap.bat "$cmd"
         & .\copilot\copilot-wrap.ps1 "$cmd"
     }
 }
@@ -92,7 +115,7 @@ alias ??='function _copilot_run() { cmd=$(gh copilot suggest -t shell "$@"); if 
 
 ### On Windows
 ```cmd
-:: 1. Compile interceptor
+:: 1. Compile interceptor (if needed)
 cd copilot
 go build -o copilot_interceptor.exe copilot_interceptor.go
 cd ..
@@ -112,11 +135,9 @@ copilot\copilot-wrap.bat "curl https://untrusted-test.internal"
 ### Review Copilot Audit Logs
 Inspect the generated audit log to review Copilot activities:
 ```cmd
-type ltd-audit.jsonl | findstr "copilot"
+type .bapstate\audit.jsonl | findstr "copilot"
 ```
-Output:
-```json
-{"timestamp":"2026-09-12T01:15:00.000Z","source":"copilot","client_pid":14200,"executable":"git","arguments":"status","full_command":"git status","decision":"allow","duration_ms":38,"exit_code":0}
-{"timestamp":"2026-09-12T01:15:05.000Z","source":"copilot","client_pid":14200,"executable":"cat","arguments":".env","full_command":"cat .env","decision":"deny","reason":"Denial triggered by: policy policy1","duration_ms":2,"exit_code":1}
+Or query the Control Plane directly:
+```powershell
+curl.exe -s http://127.0.0.1:8080/api/v1/inspector/data | ConvertFrom-Json
 ```
-

@@ -54,16 +54,19 @@ graph TD
         CP --> SESS
     end
 
-    subgraph Edge_Brokerage ["2. Edge Execution Plane (bapedge / Hooks)"]
+    subgraph Edge_Brokerage ["2. Edge Execution Plane (bapedge / Launchers / Hooks)"]
         subgraph Agents ["AI Agent Runtimes"]
             CLAUDE["Claude Code CLI"]
-            COPILOT["GitHub Copilot CLI"]
+            COPILOT["GitHub Copilot CLI (Standalone v1.0.97+ / gh)"]
+            ANTIGRAV["Google Antigravity (IDE Electron & agy CLI)"]
             WORKER["Autonomous Worker Agent (Python SDK)"]
         end
 
-        subgraph Interceptors ["Managed Interception Layer"]
+        subgraph Interceptors ["Managed Interception & Lifecycle Layer"]
             CCHOOK["Claude Code Hook (cchook/interceptor.exe)"]
-            COPSHIM["Copilot Adapter (copilot_interceptor.exe)"]
+            COPSHIM["Copilot Streamer & Interceptor (run_copilot_cli_bap)"]
+            AGYHOOK["Antigravity Lifecycle & Transcript Streamer (run_antigravity_ide/cli)"]
+            SUBAGENT_ROUTER["Subagent & Inspection Tool Classifier (cchook)"]
         end
 
         subgraph Edge_Daemon ["bapedge - Local Execution Broker (LTD)"]
@@ -75,11 +78,14 @@ graph TD
         end
 
         CLAUDE -->|PreToolUse / UserPromptSubmit| CCHOOK
-        COPILOT -->|CLI Argument Intercept| COPSHIM
+        COPILOT -->|events.jsonl Tailing & CLI Intercept| COPSHIM
+        ANTIGRAV -->|transcript.jsonl Tailing & Process Guard| AGYHOOK
         WORKER -->|bap_sdk API| EDGE_PEP
 
-        CCHOOK --> EDGE_PEP
+        CCHOOK --> SUBAGENT_ROUTER
+        SUBAGENT_ROUTER --> EDGE_PEP
         COPSHIM --> EDGE_PEP
+        AGYHOOK --> EDGE_PEP
         EDGE_PEP --> CEDAR_LOCAL
         CEDAR_LOCAL --> STORE_LOCAL
         EDGE_PEP --> AUDIT_LOCAL
@@ -176,6 +182,21 @@ graph TD
    - Ambiguous or unclassified prompts fail safely to `UNKNOWN` ($0.0$ confidence), which explicitly forces human approval or restricted execution rather than silent privilege escalation.
 5. **Anti-Tampering Asset Guard (BAP-200A, BAP-425):**
    - Blocks any agent attempt to read credentials (`.env`, `.aws`, `.ssh`), tamper with BAP assets (`policy.cedar`, `bap-config.json`, `interceptor.exe`), or perform directory traversal outside the authorized workspace.
+6. **Subagent & Inspection Tool Classification (`cchook/interceptor.go`):**
+   - Distinguishes shell execution tools (`Bash`, `Terminal`, `Shell`) requiring command validation from read-only search/inspection tools and subagents (`search_code_subagent`, `Glob`, `Grep`, `Agent`, `Task`, `LS`, `bap_*`).
+   - Prevents false-positive denials on empty command fields for non-shell inspection payloads, while strictly maintaining filesystem jail and credential boundary checks across all tool types.
+7. **Direct Broker Command Unwrapping (`unwrapBrokerCommand`):**
+   - Governing rules (`AGENTS.md`, `GEMINI.md`) instruct advanced agents to directly call `bapedge.exe exec "<cmd>"`.
+   - The interceptor dynamically unwraps nested invocations, preserving source attribution (`copilot`, `antigravity`, `claude-code`) and evaluating the inner command against Cedar policy without recursion or double-wrapping.
+8. **Multi-Agent Launchers & Lifecycle Supervision (`scripts/bap_launcher_engine.ps1`):**
+   - **Google Antigravity IDE & CLI (`run_antigravity_ide_bap.bat`, `run_antigravity_cli_bap.bat`)**:
+     - *GUI Electron Lifecycle Guard*: Overcomes asynchronous process-return where Electron GUI launches immediately detach; holds the BAP session `active` in the Control Plane, monitors the entire process tree, and allows clean console termination.
+     - *Live Transcript Streaming*: Fast polling (120ms) of `transcript.jsonl` streams user mission prompts to `/api/v1/sessions/prompt` in real-time.
+     - *MCP Governance*: Automates mounting of `bapmcp.exe` in `.antigravity/mcp_config.json`.
+   - **GitHub Copilot CLI Standalone v1.0.97+ (`run_copilot_cli_bap.bat`)**:
+     - *Native Standalone Prioritization*: Prioritizes standalone `copilot.exe` over `gh copilot` extension.
+     - *Live Event Streaming*: Tails `~/.copilot/session-state/*/events.jsonl`, ingesting prompts (`user.message`), assistant answers (`assistant.message`), and token metrics (`session.usage_record`) to the Control Plane.
+     - *Audit Accounting Snapshot*: Extracts final `accountingSnapshot` upon session exit, recording tokens (input, cached, output), AI credits (nanoAIU), and API duration directly into the Merkle audit chain (`/api/v1/audit/ingest`).
 
 ---
 
@@ -277,6 +298,22 @@ The Observability Plane answers the fundamental question: **"Why did the agent i
 │    Tamper Verification Status: 100% Cryptographically Valid                 │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+#### 3.4.1. AI Token, Usage & Financial Accounting Pipeline
+
+In addition to runtime command authorization and security boundaries, enterprise governance requires precise accounting of AI compute costs and resource liability. BAP incorporates continuous usage accounting into the Observability Plane:
+
+1. **Turn-by-Turn Usage Records (`session.usage_record`):**
+   - Streamed in real-time from agent event state logs (e.g., `~/.copilot/session-state/*/events.jsonl` or Google Antigravity `transcript.jsonl`).
+   - Captures per-turn prompt tokens, completion tokens, cached context tokens, and model identifiers.
+2. **Session Shutdown Accounting (`accountingSnapshot`):**
+   - Captured upon agent exit and ingested into `/api/v1/audit/ingest`:
+     - `model`: Specific model version deployed for the task.
+     - `input_tokens`, `output_tokens`, `cached_tokens`: Granular breakdown of token volume.
+     - `ai_credits`: Exact consumption in nanoAIUs (nano AI Units).
+     - `api_duration_ms`: Total upstream LLM inference latency.
+3. **Cryptographic Merkle Immutability:**
+   - Financial accounting snapshots are chained into BAP's sequential SHA-256 Merkle ledger alongside the human initiator's identity and Cedar authorization decisions, establishing an irrefutable audit trail for enterprise billing and CFO/CIO chargebacks.
 
 ---
 
@@ -581,6 +618,132 @@ High-risk operations (e.g. database schema migrations, production secrets access
 To ensure zero-trust controls do not cause developer lockouts on flights or during network outages:
 * **Tier 1 (Safe Local Development):** Compiling source code, running unit tests (`cargo test`, `pytest`, `go test`), code formatting, and git status evaluate locally against the cached Cedar policy bundle indefinitely offline.
 * **Tier 2 (Protected Enterprise Egress):** Operations targeting corporate microservices, remote databases, or cloud APIs require online signed grants and fail closed when the 15-minute grant TTL expires.
+
+---
+
+### 8.6. The 4-Layer Tool Defense-in-Depth Architecture (BAP-540)
+
+While Section 8.1 (Layers A/B/C) defines the **Operating System & Network Boundary Controls**, BAP enforces an orthogonal, runtime-level **4-Layer Defense-in-Depth Mechanism** that governs tool discovery, invocation, and execution across all AI developer agents before commands ever reach the host operating system:
+
+```mermaid
+flowchart TD
+    subgraph L1 ["Layer 1: Native Lifecycle & Subagent Interception"]
+        L1A["PreToolUse Hook (interceptor.exe)"]
+        L1B["Subagent & Inspection Router (isSafeSubagentOrInspectionTool)"]
+        L1C["Direct Broker Unwrapper (unwrapBrokerCommand)"]
+        L1D["Live Event / Transcript Tailing (events.jsonl / transcript.jsonl)"]
+        L1A --- L1B --- L1C --- L1D
+    end
+
+    subgraph L2 ["Layer 2: Model Context Protocol (MCP) Authority Boundary"]
+        L2A["bapmcp.exe Managed Server"]
+        L2B["bap_execute (Cedar-gated tool execution)"]
+        L2C["bap_explain_policy & bap_status"]
+        L2A --- L2B --- L2C
+    end
+
+    subgraph L3 ["Layer 3: Tool Call & Terminal Interceptor Shims (PATH Hijacking Defense)"]
+        L3A[".bapstate/shims-$SessionId/ (Prepend to PATH)"]
+        L3B["Command Shims: git, python, curl, wget, powershell, cat, rm"]
+        L3C["Unmediated Subprocess Trap -> bapedge exec --raw"]
+        L3A --- L3B --- L3C
+    end
+
+    subgraph L4 ["Layer 4: In-Process Broker, Sandbox Containment & Merkle Audit"]
+        L4A["bapedge exec (Sole Executor Pattern)"]
+        L4B["In-Process Cedar Engine (<1.5ms)"]
+        L4C["Detached Watcher (bapedge watch) & Process Tree Guard"]
+        L4D["Merkle SHA-256 Ledger & Token Accounting Ingestion"]
+        L4A --- L4B --- L4C --- L4D
+    end
+
+    L1 -->|If Tool Bypasses Hooks| L2
+    L2 -->|If Agent Spawns Direct Subshell| L3
+    L3 -->|Always Routed To| L4
+```
+
+#### Detailed Layer Breakdown:
+
+1. **Layer 1: Native Lifecycle & Subagent Interception:**
+   - Intercepts agent tool requests at the prompt and pre-execution phase.
+   - Claude Code routes through `cchook/interceptor.exe` on `SessionStart`, `UserPromptSubmit`, and `PreToolUse`.
+   - Dedicated inspection router `isSafeSubagentOrInspectionTool` identifies non-shell tools (`search_code_subagent`, `Glob`, `Grep`, `Agent`, `Task`, `LS`, `bap_*`) that lack shell commands, allowing legitimate codebase inspection while maintaining directory traversal and `.env` protections.
+   - `unwrapBrokerCommand` unwraps nested `bapedge.exe exec "<cmd>"` calls emitted by agents following workspace rules (`AGENTS.md`, `GEMINI.md`) without recursion, preserving multi-agent source attribution.
+   - Live event tailers stream mission prompts and agent responses to the central Control Plane in real time.
+
+2. **Layer 2: Model Context Protocol (MCP) Authority Boundary:**
+   - Exposes `bapmcp.exe` as a managed MCP server configured in the agent's MCP catalog (`.claude/settings.json`, `.copilot/mcp-config.json`, `.antigravity/mcp_config.json`).
+   - Forces structured tool execution through `bap_execute`, evaluating tool arguments against Cedar policies prior to dispatch.
+   - Provides runtime introspection tools: `bap_explain_policy` and `bap_status`.
+
+3. **Layer 3: Tool Call & Terminal Interceptor Shims (`PATH` Hijacking Defense):**
+   - Intercepts raw terminal commands or unmediated child subshells that attempt to bypass Layer 1 and Layer 2.
+   - The launcher engine (`Initialize-BapShims`) generates per-session command shims in `.bapstate/shims-$SessionId/` for critical CLI executables (`git`, `python`, `curl`, `wget`, `powershell`, `cat`, `rm`) and prepends this directory to `$env:PATH`.
+   - Any raw invocation of `git` or `curl` by an agent subshell executes the `.cmd` shim, which immediately forwards execution through `bapedge.exe exec --raw` under the active session and Cedar rules. Re-entrant execution inside the broker is un-shimmed via `BAP_IN_BROKER=1`.
+
+4. **Layer 4: In-Process Broker, Sandbox Containment & Merkle Audit:**
+   - The final host-level enforcement authority: `bapedge exec` with an in-process AWS Cedar engine evaluates operations in $<1.5\text{ms}$.
+   - Enforces execution environment variables (`BAP_MODE=enforce`, `BAP_AGENT_SANDBOX=1`).
+   - Spawns a detached background watchdog (`bapedge watch`) pulsing liveness heartbeats to `/api/v1/sessions/heartbeat` and enforcing real-time administrative revocations and emergency freezes.
+   - Seals every execution result and token accounting record (`accountingSnapshot`) into the tamper-evident SHA-256 Merkle chain at `/api/v1/audit/ingest`.
+
+---
+
+### 8.7. Multi-Agent Defense Matrix: Implementation Across All Tools
+
+| Agent Toolchain | Layer 1 (Hooks / Invariants) | Layer 2 (MCP Integration) | Layer 3 (Terminal Shims) | Layer 4 (Broker & Telemetry) | Test Verification |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Claude Code CLI** | `cchook/interceptor.exe` (`SessionStart`, `UserPromptSubmit`, `PreToolUse`) | `bapmcp.exe` mounted in `.claude/settings.json` | Active in `.bapstate/shims-$SessionId` | `bapedge exec` + watchdog + refcounted custody | `tests/test_multi_layer_defense.py` |
+| **Google Antigravity (IDE)** | `GEMINI.md` zero-trust rules + 120ms `transcript.jsonl` tailer | `bapmcp.exe` mounted in `.antigravity/mcp_config.json` | Active in `.bapstate/shims-$SessionId` | Electron GUI lifecycle guard + `bapedge exec` | `tests/test_multi_layer_defense.py` |
+| **Google Antigravity (CLI)** | `GEMINI.md` rules + direct console capture | `bapmcp.exe` mounted in `.antigravity/mcp_config.json` | Active in `.bapstate/shims-$SessionId` | `agy.exe` supervised by `bapedge exec` | Automated launcher suite |
+| **GitHub Copilot CLI** | `AGENTS.md` rules + live `events.jsonl` streamer | `bapmcp.exe` mounted in `.copilot/mcp-config.json` | Active in `.bapstate/shims-$SessionId` | Standalone `copilot.exe` + `accountingSnapshot` capture | Automated launcher suite |
+| **Autonomous Python SDK** | `bap_sdk.BAPSession` native mission wrapper | MCP tool wrappers & programmatic decorators | Subprocesses routed through `bap.exec()` | Real-time 3s daemon heartbeat + Cedar broker | `tests/test_bounded_authority_matrix.py` |
+
+---
+
+### 8.8. Universal Extension Guide: How to Onboard a New AI Tool
+
+To onboard any new AI tool (e.g. Cursor, Windsurf, Devin, OpenAI Operator, or internal CLI) into BAP's 4-layer defense system, follow this 4-step integration recipe:
+
+#### Step 1: Layer 1 — Hook Configuration or Workspace Rule Injection
+1. If the tool supports native lifecycle hooks (JSON on stdin/stdout), register `dist/windows-amd64/interceptor.exe` (or `cchook/interceptor.exe`) in the tool's settings.
+2. If the tool is prompt- or rule-driven, inject an authoritative workspace invariant file (e.g. `.cursorrules`, `SYSTEM_PROMPT.md`, `INVARIANTS.md`) directing the agent:
+   - All shell executions MUST use `bapedge.exe exec "<cmd>"`.
+   - Never execute raw shell commands directly.
+3. In [`cchook/interceptor.go`](file:///c:/Users/User/pyprj/bapltd/cchook/interceptor.go), register the tool's source identifier in `unwrapBrokerCommand` (e.g., `source = "newtool"`).
+
+#### Step 2: Layer 2 — MCP Server Catalog Registration
+1. Generate the tool's native MCP configuration file (e.g. `.newtool/mcp.json` or `~/.config/newtool/mcp.json`).
+2. Mount `bapmcp.exe` as the `bap-zero-trust` MCP server:
+   ```json
+   {
+     "mcpServers": {
+       "bap-zero-trust": {
+         "command": "C:\\path\\to\\bapltd\\bapmcp.exe",
+         "args": []
+       }
+     }
+   }
+   ```
+
+#### Step 3: Layer 3 — Terminal Shims Activation
+1. When launching the tool, invoke `Initialize-BapShims` from [`scripts/bap_launcher_engine.ps1`](file:///c:/Users/User/pyprj/bapltd/scripts/bap_launcher_engine.ps1).
+2. This generates `.cmd` shims for `git`, `python`, `curl`, `wget`, `powershell`, `cat`, `rm` in `.bapstate/shims-$SessionId/`.
+3. Prepend the shim directory to `$env:PATH`:
+   ```powershell
+   $ShimDir = Initialize-BapShims -Workspace $Workspace -BapEdgeBin $BapEdgeBin -AgentId $AgentId -SessionId $SessionId
+   $env:PATH = "$ShimDir;$env:PATH"
+   ```
+4. If the new tool uses custom CLI binaries, append them to the `$toolsToShim` array.
+
+#### Step 4: Layer 4 — Launcher Engine Profile & Lifecycle Supervision
+1. Create `run_<newtool>_bap.bat` and `run_<newtool>_bap.ps1`.
+2. Invoke `Invoke-BapGovernedSession` with:
+   - `AgentId`: e.g. `'newtool'`
+   - `AgentMode`: `'cli'` for terminal CLIs, or `'ide'` for GUI/Electron apps (activates active process tree monitoring so the session doesn't prematurely terminate).
+   - `CandidateExecutables`: Discovery paths for the tool executable.
+   - `ConfigureFiles`: Callback scriptblock injecting the workspace rule file and MCP configuration file.
+3. If the tool emits background session logs (e.g. JSON lines of prompts or tokens), attach a lightweight background tailer job (similar to Antigravity's `transcript.jsonl` or Copilot's `events.jsonl`) to stream prompts to `/api/v1/sessions/prompt` and tokens to `/api/v1/audit/ingest`.
 
 ---
 

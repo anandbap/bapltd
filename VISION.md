@@ -8,7 +8,7 @@
 
 Enterprise engineering is experiencing an unprecedented paradigm shift: **from AI assistants that suggest text to autonomous AI agents that execute actions.** 
 
-Today, agents like Claude Code, GitHub Copilot CLI, OpenAI Operator, and custom LangChain/AutoGen/CrewAI workers run directly on developer workstations and cloud infrastructure. They compile code, invoke shell binaries, query production databases, call cloud APIs, and manipulate internal microservices.
+Today, agents like Claude Code, Google Antigravity (IDE & CLI), GitHub Copilot CLI (standalone v1.0.97+ & extension), OpenAI Operator, and custom LangChain/AutoGen/CrewAI workers run directly on developer workstations and cloud infrastructure. They compile code, invoke shell binaries, query production databases, call cloud APIs, and manipulate internal microservices.
 
 ### The Fatal Flaws of Traditional Security Models
 
@@ -38,10 +38,14 @@ Traditional enterprise security models (IAM, RBAC, OAuth2, and API gateways) wer
 │ 5. The Local Enforcement Blindspot:                                         │
 │    Relying solely on on-device agent hooks fails because the agent or code   │
 │    can bypass local shims and hit internal network endpoints directly.      │
+│                                                                             │
+│ 6. The Financial & Token Billing Blindspot:                                 │
+│    Autonomous tool loops and subagent cascades burn millions of tokens      │
+│    and proprietary AI credits without real-time attribution or limits.      │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The **Bounded Authority Plane (BAP)** is the industry's first open reference architecture purpose-built to solve this crisis. BAP establishes **Zero Standing Privilege (ZSP)**, **Cryptographic Bounded Authority**, and **Dual Policy Enforcement Points (PEP)** for AI agent workforces.
+The **Bounded Authority Plane (BAP)** is the industry's first open reference architecture purpose-built to solve this crisis. BAP establishes **Zero Standing Privilege (ZSP)**, **Cryptographic Bounded Authority**, **Dual Policy Enforcement Points (PEP)**, and **Multi-Agent Lifecycle & Token Governance** for enterprise AI workforces.
 
 ---
 
@@ -225,20 +229,25 @@ Edge daemons continuously inspect local agent environments for unmanaged MCP ser
 ### Pillar 7: Tamper-Evident Merkle Provenance & RFC 3161 Notarization (`I5`)
 All lifecycle events (prompt $\rightarrow$ proposal $\rightarrow$ grant $\rightarrow$ execution $\rightarrow$ evidence) form a tamper-evident SHA-256 Merkle chain. Periodic root hashes are anchored against RFC 3161 timestamp authorities and Cloud KMS keys, providing immutable forensic evidence for auditors.
 
-### Pillar 8: Live CIO Fleet Command Cockpit & Emergency Freeze
-Security operations maintain real-time visibility across thousands of active developer workstations and cloud agents. Operators can pinpoint runaway token spending or prompt anomalies and execute sub-100ms fleet-wide or session-scoped kill-switch freezes.
+### Pillar 8: Live CIO Fleet Command Cockpit, Token Accounting & Emergency Freeze
+Security operations maintain real-time visibility across thousands of active developer workstations and cloud agents running Claude Code, Google Antigravity, GitHub Copilot CLI, or custom Python agents:
+- **Unified Fleet Telemetry**: Live streams sanitized user mission prompts, deterministic intent classifications (11 CIO categories), and tool execution decisions.
+- **Granular Token & AI Credit Accounting**: Tails runtime event streams (`events.jsonl`, `transcript.jsonl`) to capture per-turn token usage and session exit `accountingSnapshot` metrics (input/output tokens, nanoAIU credits, API latencies) into the SHA-256 Merkle chain.
+- **Sub-100ms Kill Switches**: Operators can pinpoint runaway token spending or prompt anomalies and execute sub-100ms fleet-wide or session-scoped freezes.
 
 ### Pillar 9: 3-Tier Layered Endpoint Enforcement & Biometric Step-Up (Epic 23)
 Local agent processes are governed through defense-in-depth:
-- **Layer A:** Application-level lifecycle interceptors (`cchook`, Copilot CLI wrapper).
+- **Layer A:** Application-level lifecycle interceptors (`cchook`, Antigravity process monitor, Copilot CLI streamer).
 - **Layer B:** OS-level kernel sandboxing (Seatbelt, Landlock, AppContainer) restricting filesystem and command execution.
 - **Layer C:** Localhost egress proxy pinning enforcing that all outbound agent traffic routes through BAP verification.
 - **Biometric Step-Up:** High-risk actions require real-time human biometric elevation (Windows Hello / Touch ID / FIDO2).
 - **Scoped Offline Degradation:** If network connectivity to the Control Plane drops, safe local read/dev commands continue under local Cedar policy cache, while cloud and protected API egress fails closed.
 - **Enterprise MDM:** Packaged Intune & Jamf profiles enforce daemon registration and tamper resistance across corporate fleets.
 
-### Pillar 10: Operational Resilience, Crash Sweeps & Developer CLI Tooling (Epic 24)
-Designed for real-world enterprise operations:
+### Pillar 10: Multi-Agent Fleet Launchers, Operational Resilience & Crash Sweeps (Epic 24)
+Designed for real-world enterprise operations and diverse developer toolchains:
+- **Multi-Agent Zero-Trust Launchers**: Dedicated 1-click launchers (`run_antigravity_ide_bap`, `run_antigravity_cli_bap`, `run_copilot_cli_bap`, `run_claude_bap`) that configure workspace policies (`AGENTS.md`, `GEMINI.md`, `managed-settings.json`), mount BAP MCP servers, monitor GUI/Electron lifecycle trees, and guarantee clean teardown with zero stray root files.
+- **Subagent & Inspection Classification**: Differentiates shell tool execution from read-only search subagents (`search_code_subagent`, `Glob`, `Grep`, `Task`, `bap_*`), eliminating false denials while maintaining hard workspace and credential boundaries.
 - **Clean Sweep Crash Recovery:** Idempotent sweep reconciler (`bapedge sweep` and `/api/v1/control/sweep`) purges zombie tokens, orphaned sessions, and temp locks after ungraceful terminations, enabling seamless fleet rejoin.
 - **1-Click Developer Onboarding:** `bapedge setup --app=claude-code` provisions hooks, config files, and verification checks in a single idempotent command.
 - **In-Terminal Policy Explanations:** `bapedge why <action> <resource>` and `bapedge status` provide instant sub-second Cedar policy attribution and daemon health diagnostics directly in the developer's terminal.

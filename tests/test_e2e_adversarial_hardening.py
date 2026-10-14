@@ -12,6 +12,10 @@ Validates zero-trust boundaries, fail-closed enforcement, and anti-tamper mechan
 8. eBPF Process Tree Violation & Rogue Subshell Termination (BAP-1202)
 9. Grant Double-Spend & Replay Attack Defense (BAP-412, BAP-413)
 10. Tamper-Evident Audit Chain Integrity & WORM Storage Lock (BAP-458, BAP-1301, BAP-1302)
+11. Ambient Credential Shielding & Subprocess Secret Stripping (BAP-535)
+12. Output Secret Token Redaction & Masking (BAP-535)
+13. Process Tree Supervision & Cryptographic Ancestry in Receipts (BAP-534)
+14. Unauthorized Mutation Rollback & Cryptographic Checkpoint Recovery (BAP-538)
 """
 
 import hashlib
@@ -28,6 +32,9 @@ import urllib.request
 
 WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 CONTROL_PLANE_BIN = os.path.join(WORKSPACE_ROOT, "dist", "windows-amd64", "bapcontrolplane.exe")
+BAPEDGE_BIN = os.path.join(WORKSPACE_ROOT, "dist", "windows-amd64", "bapedge.exe")
+if not os.path.exists(BAPEDGE_BIN):
+    BAPEDGE_BIN = os.path.join(WORKSPACE_ROOT, "bapedge.exe")
 
 TEST_SECRET = "adversarial-hardening-secret-key-32b!"
 TEST_ADMIN_TOKEN = "adversarial-admin-token-secret-999"
@@ -414,6 +421,97 @@ class TestE2EAdversarialHardening(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(worm_res.get("retention_mode"), "COMPLIANCE")
         self.assertTrue(worm_res.get("legal_hold"))
+
+    def test_11_ambient_credential_shielding(self):
+        """BAP-535: Ambient developer credentials in environment are stripped from agent subprocess."""
+        env = os.environ.copy()
+        env["AWS_SECRET_ACCESS_KEY"] = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        env["GITHUB_TOKEN"] = "ghp_123456789012345678901234567890123456"
+        env["OPENAI_API_KEY"] = "sk-abcdefghijklmnopqrstuvwxyz123456"
+        session_id = f"sess-adv-shield-{os.getpid()}"
+        env["BAP_SESSION_ID"] = session_id
+        env["BAP_TEST_MODE"] = "1"
+
+        cmd = f'"{BAPEDGE_BIN}" exec --source adv-agent --session-id {session_id} --force-json --raw "cmd.exe /c set AWS_SECRET_ACCESS_KEY"'
+        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, env=env, cwd=WORKSPACE_ROOT)
+        try:
+            res = json.loads(proc.stdout)
+            self.assertEqual(res.get("exit_code"), 1, "AWS_SECRET_ACCESS_KEY must not exist in child process environment")
+        except json.JSONDecodeError:
+            self.assertNotIn("wJalrXUtnFEMI", proc.stdout)
+
+    def test_12_output_secret_token_redaction(self):
+        """BAP-535: Detected private keys and API tokens in command stdout/stderr are redacted."""
+        fake_gh_token = "ghp_888877776666555544443333222211110000"
+        fake_aws_key = "AKIAIOSFODNN7EXAMPLE"
+        session_id = f"sess-adv-redact-{os.getpid()}"
+
+        cmd = f'"{BAPEDGE_BIN}" exec --source adv-agent --session-id {session_id} --json "echo Leaked: {fake_gh_token} and {fake_aws_key}"'
+        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=WORKSPACE_ROOT)
+        self.assertEqual(proc.returncode, 0)
+        res = json.loads(proc.stdout)
+        output = res.get("output", "")
+        self.assertIn("[BAP_REDACTED_GITHUB_TOKEN]", output)
+        self.assertIn("[BAP_REDACTED_AWS_KEY]", output)
+        self.assertNotIn(fake_gh_token, output)
+        self.assertNotIn(fake_aws_key, output)
+
+    def test_13_process_tree_supervision_ancestry(self):
+        """BAP-534: Child process ancestry and OS token containment are recorded in receipts."""
+        session_id = f"sess-adv-ancestry-{os.getpid()}"
+        cmd = f'"{BAPEDGE_BIN}" exec --source adv-agent --session-id {session_id} --json "git --version"'
+        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=WORKSPACE_ROOT)
+        self.assertEqual(proc.returncode, 0)
+        res = json.loads(proc.stdout)
+        receipt = res.get("receipt", {})
+        self.assertIsNotNone(receipt)
+        process_tree = receipt.get("process_tree", [])
+        self.assertGreaterEqual(len(process_tree), 3)
+        self.assertTrue(any(p.startswith("parent:") for p in process_tree))
+        self.assertTrue(any(p.startswith("broker:") for p in process_tree))
+        self.assertTrue(any(p.startswith("child:") for p in process_tree))
+        self.assertGreater(receipt.get("process_pid", 0), 0)
+
+    def test_14_unauthorized_mutation_checkpoint_and_rollback(self):
+        """BAP-538: Mutating agent tool action triggers pre-execution checkpoint and allows instant rollback."""
+        scratch_dir = os.path.join(WORKSPACE_ROOT, "scratch", f"adv_snap_{os.getpid()}")
+        os.makedirs(scratch_dir, exist_ok=True)
+        try:
+            target_file = os.path.join(scratch_dir, "incident_target.txt")
+            original_content = "SECURITY_SAFE_BASELINE_V100"
+            with open(target_file, "w") as f:
+                f.write(original_content)
+
+            session_id = f"sess-adv-rollback-{os.getpid()}"
+
+            # Mutate via bapedge exec
+            cmd_mutate = f'"{BAPEDGE_BIN}" exec --source adv-agent --session-id {session_id} "echo MALICIOUS_TAMPERED_DATA > {target_file}"'
+            proc_mutate = subprocess.run(cmd_mutate, shell=True, capture_output=True, text=True, cwd=WORKSPACE_ROOT)
+            self.assertEqual(proc_mutate.returncode, 0)
+
+            # Confirm file mutated
+            with open(target_file, "r") as f:
+                self.assertIn("MALICIOUS_TAMPERED_DATA", f.read())
+
+            # Checkpoint listed
+            cmd_list = f'"{BAPEDGE_BIN}" rollback --session-id {session_id} --list --json'
+            proc_list = subprocess.run(cmd_list, shell=True, capture_output=True, text=True, cwd=WORKSPACE_ROOT)
+            self.assertEqual(proc_list.returncode, 0)
+            ckpts = json.loads(proc_list.stdout)
+            self.assertGreaterEqual(len(ckpts), 1)
+
+            # Rollback
+            cmd_rb = f'"{BAPEDGE_BIN}" rollback --session-id {session_id} --file {target_file} --json'
+            proc_rb = subprocess.run(cmd_rb, shell=True, capture_output=True, text=True, cwd=WORKSPACE_ROOT)
+            self.assertEqual(proc_rb.returncode, 0)
+            rb_res = json.loads(proc_rb.stdout)
+            self.assertIn(os.path.abspath(target_file), rb_res.get("restored_files", []))
+
+            # Verify restoration
+            with open(target_file, "r") as f:
+                self.assertEqual(f.read(), original_content)
+        finally:
+            shutil.rmtree(scratch_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

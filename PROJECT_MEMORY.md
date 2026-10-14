@@ -38,20 +38,52 @@ BAP (Bounded Authority Plane) is a Zero-Trust governance and least-privilege pol
   - Stores all runtime artifacts in `.bap/` (`.bap/sessions/pid-<PID>.json`, `.bap/policy-state.json`, `.bap/session.json`).
   - **Zero stray files** left in root workspace directory.
 
-### 4. Claude Code Hook Interceptor (`cchook/` & `interceptor.exe`)
+### 4. Hook Interceptor & Subagent Classifier (`cchook/` & `interceptor.exe`)
 - **Binary**: `cchook/interceptor.exe` (and `dist/windows-amd64/claude-client/`)
 - **Hook Points**: Intercepts `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `ConfigChange`.
-- **Per-PID Session Isolation**: Resolves calling process via `os.Getppid()`, mapping directly to `.bap/sessions/pid-<PPID>.json`. Prevents duplicate session creation and ensures each terminal session has dedicated attribution.
+- **Per-PID Session Isolation**: Resolves calling process via `os.Getppid()`, mapping directly to `.bap/sessions/pid-<PPID>.json`.
+- **Tool Classification & Whitelisting**: Distinguishes between shell execution tools (`Bash`, `Terminal`, `Shell`) and read-only subagents/search tools (`search_code_subagent`, `Glob`, `Grep`, `Agent`, `Task`, `LS`, `bap_*`). Non-shell tools with empty command fields are permitted without false-positive denials, while path escapes and `.env` credentials remain strictly blocked.
+- **Direct Broker Unwrapping**: Unwraps direct agent calls like `bapedge.exe exec "<cmd>"` as directed by `AGENTS.md` and `GEMINI.md`, evaluating the inner command against Cedar policy while supporting multi-agent source attributions (`copilot`, `antigravity`, `claude-code`).
 
-### 5. Multi-Instance Claude Launcher (`run_claude_bap.bat` & `run_claude_bap.ps1`)
+### 5. Google Antigravity Zero-Trust Launchers (`run_antigravity_ide_bap` & `run_antigravity_cli_bap`)
+- **IDE Mode (`run_antigravity_ide_bap.bat`)**:
+  - Targets `Antigravity.exe` (Electron GUI).
+  - **Active IDE Lifecycle Guard**: Prevents premature session teardown caused by non-blocking GUI spawns; holds session `active` in the BAP Control Plane and monitors the process tree until IDE closure or user termination ('q'/Enter).
+  - **Live Transcript Tailer**: Targeted high-speed scan (120ms) of `.gemini\antigravity\brain\*\.system_generated\logs\transcript.jsonl`, streaming user mission prompts to `/api/v1/sessions/prompt` in real-time.
+  - **Policy & MCP Injection**: Injects `GEMINI.md` and mounts `bapmcp.exe` in `.antigravity/mcp_config.json`.
+- **CLI Mode (`run_antigravity_cli_bap.bat`)**:
+  - Targets `agy.exe` with transactional workspace governance and direct console interactivity.
+
+### 6. GitHub Copilot CLI Zero-Trust Launcher (`run_copilot_cli_bap.bat`)
+- **Standalone Copilot CLI v1.0.97+ Integration**: Prioritizes native standalone `copilot.exe` over `gh.exe` with automatic fallback to `gh copilot`.
+- **Live Output & Token Telemetry Streaming**:
+  - Background tailer continuously monitors `~/.copilot/session-state/*/events.jsonl`.
+  - Ingests prompts (`user.message`) to `/api/v1/sessions/prompt` with intent classification.
+  - Ingests assistant outputs (`assistant.message`) to `/api/v1/audit/ingest`.
+  - Ingests turn-by-turn token counts (`session.usage_record`).
+- **Final Session Accounting & AI Credits**:
+  - Captures Copilot's `accountingSnapshot` upon exit: reports model, input tokens, cached tokens, output tokens, total AI credits (nanoAIU), and API duration.
+  - Permanently stores accounting records in BAP Control Plane's tamper-evident SHA-256 audit chain.
+- **Configuration & MCP Injection**: Injects `AGENTS.md` and `.copilot/mcp-config.json` for BAP MCP governance.
+
+### 7. Multi-Instance Claude Launcher (`run_claude_bap.bat` & `run_claude_bap.ps1`)
 - **Reference-Counted Custody**: Replaced exclusive session-long mutex lock with transient coordination locks (5s timeout).
 - **Multi-Terminal Support**: Multiple Claude Code sessions can run simultaneously in the same or separate projects without lockouts.
 - **Transactional Settings**: Backs up `.claude/settings.json`, mounts BAP hooks for session 1, increments refcount for sessions 2..N. Only restores original settings when the final session exits.
 - **Session Watchdog**: Monitors all active PIDs in `.claude/.bap-recovery.json`; triggers recovery only if all processes terminate abnormally.
 
-### 6. Python Agent SDK (`python-agent/bap_sdk/`)
+### 8. Python Agent SDK (`python-agent/bap_sdk/`)
 - **Module**: `bap_sdk.BAPSession`
 - **Features**: Autonomous background daemon thread pulsing `/api/v1/sessions/heartbeat` every 3s, tool execution policy evaluation (`bap.exec(...)`), and graceful shutdown (`bap.end(...)`).
+
+### 9. 4-Layer Tool Defense, Shielding, Supervision & Rollback (`BAP-534`, `BAP-535`, `BAP-538`, `BAP-540`)
+- **Layer 1 Native Lifecycle Hooks**: Intercepts `PreToolUse` and `UserPromptSubmit` in `cchook/interceptor.exe`, routing subagents and search tools without empty-command false denials while blocking `.env` and path traversal.
+- **Layer 2 MCP Server**: `bapmcp.exe` exposes `bap_execute`, `bap_explain_policy`, and `bap_status` under Cedar authorization.
+- **Layer 3 PATH Shims**: Transparently routes terminal invocations (`git`, `python`, `curl`, `powershell`) through `.bapstate/shims-$SessionId/` to `bapedge exec`.
+- **Layer 4 Broker Supervision, Shielding & Forensics**:
+  - **Credential Shielding (`BAP-535`)**: Strips ambient standing secrets (`AWS_*`, `GITHUB_*`, `OPENAI_*`, `ANTHROPIC_*`, `SLACK_*`, `AZURE_*`, `*_TOKEN`, `*_KEY`) before launching child processes; regex-masks sensitive tokens and private keys in output streams with `[BAP_REDACTED_*]` tags.
+  - **Process-Level Supervision (`BAP-534`)**: Captures complete process ancestry (`parent:<pid>`, `broker:<pid>`, `child:<pid>`) inside execution receipts and audit logs; applies OS process containment via Windows Job Objects (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`).
+  - **Forensics Snapshot & Rollback (`BAP-538`)**: Automatically creates pre-execution file snapshot checkpoints in `.bapstate/snapshots/<sessionID>/<ckptID>/`; provides `bapedge rollback` CLI for instant sub-second point-in-time recovery.
 
 ---
 

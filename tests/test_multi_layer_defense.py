@@ -227,6 +227,122 @@ exit /b %ERRORLEVEL%
         )
         self.assertEqual(res_end.returncode, 0)
 
+    def test_04_layer4_credential_shielding_and_output_redaction(self):
+        """Verify Layer 4 (Broker): Strips ambient secrets and redacts sensitive tokens in output."""
+        session_id = f"sess-mld-shield-{os.getpid()}"
+        env = os.environ.copy()
+        env["AWS_SECRET_ACCESS_KEY"] = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        env["BAP_SESSION_ID"] = session_id
+        env["BAP_TEST_MODE"] = "1"
+
+        # Verify env stripped
+        res_env = subprocess.run(
+            [
+                BAPEDGE_BIN, "exec",
+                "--server", self.server_url,
+                "--source", "antigravity",
+                "--session-id", session_id,
+                "--force-json",
+                "--raw", "cmd.exe /c set AWS_SECRET_ACCESS_KEY"
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=REPO_ROOT
+        )
+        try:
+            res_json = json.loads(res_env.stdout)
+            self.assertEqual(res_json.get("exit_code"), 1)
+        except json.JSONDecodeError:
+            self.assertNotIn("wJalrXUtnFEMI", res_env.stdout)
+
+        # Verify output token redacted
+        fake_token = "ghp_555544443333222211110000aaaa99998888"
+        res_redact = subprocess.run(
+            [
+                BAPEDGE_BIN, "exec",
+                "--server", self.server_url,
+                "--source", "antigravity",
+                "--session-id", session_id,
+                "--json", f"echo token={fake_token}"
+            ],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT
+        )
+        self.assertEqual(res_redact.returncode, 0)
+        data = json.loads(res_redact.stdout)
+        self.assertIn("[BAP_REDACTED_GITHUB_TOKEN]", data.get("output", ""))
+        self.assertNotIn(fake_token, data.get("output", ""))
+
+    def test_05_layer4_process_ancestry_and_forensic_rollback(self):
+        """Verify Layer 4 (Broker): Captures process tree ancestry and executes bapedge rollback."""
+        session_id = f"sess-mld-rollback-{os.getpid()}"
+
+        # 1. Process ancestry
+        res_proc = subprocess.run(
+            [
+                BAPEDGE_BIN, "exec",
+                "--server", self.server_url,
+                "--source", "antigravity",
+                "--session-id", session_id,
+                "--json", "git --version"
+            ],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT
+        )
+        self.assertEqual(res_proc.returncode, 0)
+        receipt = json.loads(res_proc.stdout).get("receipt", {})
+        tree = receipt.get("process_tree", [])
+        self.assertGreaterEqual(len(tree), 3)
+
+        # 2. Checkpoint and Rollback
+        scratch_dir = os.path.join(REPO_ROOT, "scratch", f"mld_snap_{os.getpid()}")
+        os.makedirs(scratch_dir, exist_ok=True)
+        try:
+            target = os.path.join(scratch_dir, "mld_target.txt")
+            original_val = "SAFE_BASELINE_MLD_V1"
+            with open(target, "w") as f:
+                f.write(original_val)
+
+            # Mutate
+            res_mut = subprocess.run(
+                [
+                    BAPEDGE_BIN, "exec",
+                    "--server", self.server_url,
+                    "--source", "antigravity",
+                    "--session-id", session_id,
+                    f"echo DAMAGED_DATA > {target}"
+                ],
+                capture_output=True,
+                text=True,
+                cwd=REPO_ROOT
+            )
+            self.assertEqual(res_mut.returncode, 0)
+
+            # Rollback
+            res_rb = subprocess.run(
+                [
+                    BAPEDGE_BIN, "rollback",
+                    "--session-id", session_id,
+                    "--file", target,
+                    "--json"
+                ],
+                capture_output=True,
+                text=True,
+                cwd=REPO_ROOT
+            )
+            self.assertEqual(res_rb.returncode, 0)
+            rb_json = json.loads(res_rb.stdout)
+            self.assertIn(os.path.abspath(target), rb_json.get("restored_files", []))
+
+            # Verify
+            with open(target, "r") as f:
+                self.assertEqual(f.read(), original_val)
+        finally:
+            shutil.rmtree(scratch_dir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

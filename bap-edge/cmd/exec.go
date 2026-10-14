@@ -19,6 +19,7 @@ import (
 	"bap-edge/internal/config"
 	"bap-edge/internal/pinning"
 	"bap-edge/internal/sandbox"
+	"bap-edge/internal/snapshot"
 	"bap-edge/pkg/types"
 )
 
@@ -41,6 +42,9 @@ type execContext struct {
 	userPrompt      string
 	skillName       string
 	contentHash     string
+	parentPID       int
+	processPID      int
+	processTree     []string
 }
 
 type sessionRiskState struct {
@@ -229,6 +233,9 @@ func generateExecutionReceipt(ec *execContext, result string, exitCode int) *typ
 		RootAgentID:    rootAgentID,
 		ParentGrantID:  parentGrantID,
 		GrantID:        grantID,
+		ProcessTree:    ec.processTree,
+		ParentPID:      ec.parentPID,
+		ProcessPID:     ec.processPID,
 	}
 }
 
@@ -308,6 +315,9 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 		RootAgentID:       resp.Receipt.RootAgentID,
 		ParentGrantID:     resp.Receipt.ParentGrantID,
 		GrantID:           resp.Receipt.GrantID,
+		ProcessTree:       resp.Receipt.ProcessTree,
+		ParentPID:         resp.Receipt.ParentPID,
+		ProcessPID:        resp.Receipt.ProcessPID,
 	}
 	if ec.shadowDenied && entry.Reason == "" {
 		entry.Reason = fmt.Sprintf("[AUDIT MODE VIOLATION] %s", ec.shadowReason)
@@ -536,8 +546,17 @@ func RunExec(args []string) {
 		return
 	}
 
-	// 5. Execute sandboxed command (allowed by Cedar or permitted in audit mode)
-	output, exitCode, execErr := sandbox.RunSandboxedCommandWithExitCode(fullCommand)
+	// 5. Pre-Execution Checkpoint for mutating commands (BAP-538)
+	if !ec.decisionOnly {
+		_, _ = snapshot.CreateCheckpoint(ec.sessionID, fullCommand, nil)
+	}
+
+	// 6. Execute sandboxed command with process supervision & ancestry tracking (BAP-534)
+	execRes := sandbox.RunSandboxedCommandWithDetails(fullCommand)
+	ec.parentPID = execRes.ParentPID
+	ec.processPID = execRes.ProcessPID
+	ec.processTree = execRes.ProcessTree
+	output, exitCode, execErr := execRes.Output, execRes.ExitCode, execRes.Error
 
 	resp := types.ExecResponse{
 		Allowed:  true,
