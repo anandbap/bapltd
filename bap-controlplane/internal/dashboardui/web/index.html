@@ -1954,6 +1954,7 @@ VIEWS.settings={
      <div style="margin-top:12px;display:flex;gap:8px"><button class="btn primary" id="cgo">Save & Authenticate</button><button class="btn" id="cdemo">Clear token</button></div><pre class="out" id="cout">${S.api.token ? 'Admin token loaded in memory.' : 'Unauthenticated (public mode). Prompts and PII masked.'}</pre></div>
    <div class="panel"><h2>Access hardening checklist</h2><p class="hint">Zero-trust controls protecting this control plane instance</p>
      ${[['Strict Admin Authentication','Admin token required for kill-switch and user unmasking'],['SPIFFE Cryptographic Trust Domain','Agents attested against spiffe://bap.internal'],['WAN Adaptive Timeouts','5000ms WAN audit timeouts with local offline SQLite spool'],['Apple Seatbelt & Windows JobObjects','Layer B kernel isolation active across OS matrix'],['Zero-Trust Public Telemetry Redaction','Prompts & user emails protected unless authenticated']].map(([a,b],i)=>`<label style="display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);cursor:default"><input type="checkbox" checked disabled><span><b style="font-weight:600">${a}</b><br><span style="color:var(--muted);font-size:13px">${b}</span></span></label>`).join('')}</div></div>`},
+  after(){
     $('#cdemo').onclick=()=>{
       S.api.token='';
       S.api.adminAuthorized=false;
