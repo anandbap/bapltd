@@ -206,4 +206,3 @@ func TestDecomposer(t *testing.T) {
 		})
 	}
 }
-

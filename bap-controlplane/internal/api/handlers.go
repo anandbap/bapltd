@@ -1926,6 +1926,8 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 		"bap-python-sdk":        true,
 		"demo-executive":        true,
 		"bap-agent":             true,
+		"antigravity-hook":      true,
+		"antigravity-cli":       true,
 	}
 	if !validProducers[req.Producer] {
 		writeError(w, http.StatusBadRequest, "prompt telemetry must come from an authorized agent producer")
@@ -1944,6 +1946,9 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 		"demo-executive":            true,
 		"bap-agent":                 true,
 		"bap-server-classifier":     true,
+		"antigravity-hook":          true,
+		"antigravity-cli":           true,
+		"antigravity-transcript-tail": true,
 	}
 	if !validIntentCategory(req.Intent.Primary) || req.Intent.ClassifierVersion == "" || !validSources[req.Intent.Source] {
 		writeError(w, http.StatusBadRequest, "a valid edge-classified intent is required")

@@ -846,6 +846,63 @@ function Invoke-BapGovernedSession {
             } catch { }
         }
 
+        # For Antigravity sessions, start background prompt tail to capture prompts typed interactively
+        $transcriptJob = $null
+        if ($AgentId -eq 'antigravity' -and -not [string]::IsNullOrWhiteSpace($ServerUrl)) {
+            $transcriptJob = Start-Job -ScriptBlock {
+                param($SessionId, $ServerUrl)
+                $searchRoots = @(
+                    (Join-Path $env:USERPROFILE ".gemini\antigravity-cli\brain"),
+                    (Join-Path $env:USERPROFILE ".gemini\antigravity\brain")
+                )
+                $seenHashes = @{}
+                $sha = [System.Security.Cryptography.SHA256]::Create()
+                while ($true) {
+                    Start-Sleep -Milliseconds 800
+                    try {
+                        foreach ($root in $searchRoots) {
+                            if (Test-Path -LiteralPath $root) {
+                                $recentFiles = Get-ChildItem -Path $root -Recurse -Filter "transcript.jsonl" -ErrorAction SilentlyContinue |
+                                    Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-5) } |
+                                    Sort-Object LastWriteTime -Descending | Select-Object -First 3
+                                foreach ($f in $recentFiles) {
+                                    $lines = Get-Content -LiteralPath $f.FullName -ErrorAction SilentlyContinue | Select-Object -Last 10
+                                    foreach ($l in $lines) {
+                                        if ($l -match '"type"\s*:\s*"USER_INPUT"' -and $l -match '<USER_REQUEST>([\s\S]*?)</USER_REQUEST>') {
+                                            $userReq = $matches[1].Trim()
+                                            if (-not [string]::IsNullOrWhiteSpace($userReq)) {
+                                                $bytes = [System.Text.Encoding]::UTF8.GetBytes($userReq)
+                                                $pHash = -join ($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') })
+                                                if (-not $seenHashes.ContainsKey($pHash)) {
+                                                    $seenHashes[$pHash] = $true
+                                                    $payload = @{
+                                                        session_id             = $SessionId
+                                                        user_prompt            = $userReq
+                                                        producer               = "antigravity-cli"
+                                                        prompt_hash            = $pHash
+                                                        prompt_capture_enabled = $true
+                                                        intent                 = @{
+                                                            primary            = "INVESTIGATION"
+                                                            confidence         = 0.90
+                                                            classifier_version = "bap-edge-rules-v1"
+                                                            source             = "antigravity-transcript-tail"
+                                                        }
+                                                    } | ConvertTo-Json -Compress
+                                                    $curl = 'curl.exe'
+                                                    $cArgs = @('-s', '--max-time', '2', '-X', 'POST', "$ServerUrl/api/v1/sessions/prompt", '-H', 'Content-Type: application/json', '-d', $payload)
+                                                    & $curl @cArgs *> $null
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } catch { }
+                }
+            } -ArgumentList $SessionId, $ServerUrl
+        }
+
         # 9. Launch Target Process
         Write-Host ""
         Write-Host "===============================================================================" -ForegroundColor Green
@@ -865,6 +922,11 @@ function Invoke-BapGovernedSession {
     finally {
         # 10. Multi-Session Teardown Coordination
         Write-Host "`n[*] Performing BAP session teardown for session '$SessionId'..." -ForegroundColor Yellow
+
+        if ($null -ne $transcriptJob) {
+            Stop-Job $transcriptJob -ErrorAction SilentlyContinue | Out-Null
+            Remove-Job $transcriptJob -Force -ErrorAction SilentlyContinue | Out-Null
+        }
 
         if (-not [string]::IsNullOrWhiteSpace($BapEdgeBin) -and -not [string]::IsNullOrWhiteSpace($ServerUrl)) {
             & $BapEdgeBin session-end --server $ServerUrl --session-id $SessionId 2>$null
