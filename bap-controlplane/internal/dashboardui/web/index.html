@@ -303,7 +303,7 @@ const tag=(v)=>{const cls=String(v||'').replace(/[^a-zA-Z0-9_-]/g,'');return `<s
 const S = {
   persona: 'cio',
   view:'pulse', paused:false, kill:false,
-  api:{base:window.location.origin, token:'', live:true, env:'production', demoMode:false},
+  api:{base:window.location.origin, token:'', live:true, env:'production', demoMode:false, adminAuthorized:false},
   decisions:[], buckets:Array.from({length:30},()=>({a:0,d:0,u:0})),
   agents:[], sessions:[], revokedSessions:[], revokedUsers:[],
   grants:[], policyVersion:'v1', policy:'', policyDigest:'', policySchema:'', chainStatus:'valid', sel:{agent:null},
@@ -448,6 +448,9 @@ function ingestServerData(data){
     S.kill = data.kill_switch;
     $('#killBanner').classList.toggle('on', S.kill);
     $('#killBtn').textContent = S.kill ? 'Kill switch is on' : 'Kill switch';
+  }
+  if(typeof data.admin_authorized === 'boolean') {
+    S.api.adminAuthorized = data.admin_authorized;
   }
   if(data.chain_status) S.chainStatus = data.chain_status;
   if(Array.isArray(data.revoked_sessions)) S.revokedSessions = data.revoked_sessions;
@@ -1461,32 +1464,44 @@ VIEWS.agents={
     if(q)confirmBox('Quarantine this agent?','All its grants are revoked and every action fails closed until you release it.','Quarantine',async()=>{
       const targetId = q.dataset.q;
       try {
-        await fetch(S.api.base + '/api/v1/control/agent/kill', {
+        const res = await fetch(S.api.base + '/api/v1/control/agent/kill', {
           method: 'POST',
           headers: {...getHeaders(), 'Content-Type': 'application/json'},
           body: JSON.stringify({target: targetId, action: 'revoke'})
         });
-      } catch(err){console.error(err)}
-      const a=S.agents.find(x=>x.id===targetId);
-      if(a) { a.state='QUARANTINED'; a.liveness='REVOKED'; }
-      audit('agent.quarantine',targetId);
-      toast((a?a.name:targetId)+' quarantined');
-      drawNav();render();
+        if(!res.ok) {
+          let msg = 'HTTP ' + res.status;
+          if(res.status === 401 || res.status === 403) msg = 'Administrative credential required or invalid';
+          toast('Quarantine failed: ' + msg);
+          return;
+        }
+        const a=S.agents.find(x=>x.id===targetId);
+        if(a) { a.state='QUARANTINED'; a.liveness='REVOKED'; }
+        audit('agent.quarantine',targetId);
+        toast((a?a.name:targetId)+' quarantined');
+        drawNav();render();
+      } catch(err){console.error(err); toast('Quarantine error: ' + err.message);}
     },true);
     if(r)confirmBox('Release this agent?','Only release after Layer B is enforcing again. Compliance is re-checked on the next heartbeat.','Release agent',async()=>{
       const targetId = r.dataset.rel;
       try {
-        await fetch(S.api.base + '/api/v1/control/agent/kill', {
+        const res = await fetch(S.api.base + '/api/v1/control/agent/kill', {
           method: 'POST',
           headers: {...getHeaders(), 'Content-Type': 'application/json'},
           body: JSON.stringify({target: targetId, action: 'restore'})
         });
-      } catch(err){console.error(err)}
-      const a=S.agents.find(x=>x.id===targetId);
-      if(a) { a.state='COMPLIANT'; a.layers=[1,1,1]; }
-      audit('agent.release',targetId);
-      toast((a?a.name:targetId)+' released');
-      drawNav();render();
+        if(!res.ok) {
+          let msg = 'HTTP ' + res.status;
+          if(res.status === 401 || res.status === 403) msg = 'Administrative credential required or invalid';
+          toast('Release failed: ' + msg);
+          return;
+        }
+        const a=S.agents.find(x=>x.id===targetId);
+        if(a) { a.state='COMPLIANT'; a.layers=[1,1,1]; }
+        audit('agent.release',targetId);
+        toast((a?a.name:targetId)+' released');
+        drawNav();render();
+      } catch(err){console.error(err); toast('Release error: ' + err.message);}
     });
   }}
 };
@@ -1940,31 +1955,67 @@ VIEWS.settings={
    <div class="panel"><h2>Access hardening checklist</h2><p class="hint">Zero-trust controls protecting this control plane instance</p>
      ${[['Strict Admin Authentication','Admin token required for kill-switch and user unmasking'],['SPIFFE Cryptographic Trust Domain','Agents attested against spiffe://bap.internal'],['WAN Adaptive Timeouts','5000ms WAN audit timeouts with local offline SQLite spool'],['Apple Seatbelt & Windows JobObjects','Layer B kernel isolation active across OS matrix'],['Zero-Trust Public Telemetry Redaction','Prompts & user emails protected unless authenticated']].map(([a,b],i)=>`<label style="display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);cursor:default"><input type="checkbox" checked disabled><span><b style="font-weight:600">${a}</b><br><span style="color:var(--muted);font-size:13px">${b}</span></span></label>`).join('')}</div></div>`},
   after(){
-    $('#cdemo').onclick=()=>{S.api.token='';try{sessionStorage.removeItem('bap_admin_token')}catch(e){}$('#ct').value='';$('#cout').textContent='Admin token cleared.';fetchTelemetry()};
+    $('#cdemo').onclick=()=>{
+      S.api.token='';
+      S.api.adminAuthorized=false;
+      try{sessionStorage.removeItem('bap_admin_token')}catch(e){}
+      $('#ct').value='';
+      $('#cout').textContent='Admin token cleared (unauthenticated mode).';
+      connUI();
+      fetchTelemetry();
+    };
     $('#cgo').onclick=async()=>{
       const base=$('#cb').value.replace(/\/+$/,'');
-      S.api.token=$('#ct').value.trim();
-      try{if(S.api.token) sessionStorage.setItem('bap_admin_token',S.api.token); else sessionStorage.removeItem('bap_admin_token')}catch(e){}
+      const candidateToken=$('#ct').value.trim();
+      if(!candidateToken){
+        S.api.token='';
+        S.api.adminAuthorized=false;
+        try{sessionStorage.removeItem('bap_admin_token')}catch(e){}
+        $('#cout').textContent='Admin token cleared (unauthenticated mode).';
+        connUI();
+        fetchTelemetry();
+        return;
+      }
       $('#cout').textContent='Testing admin authentication...';
       try{
-        const r=await fetch(base+'/api/v1/inspector/data',{headers:getHeaders()});
+        const headers={'Accept':'application/json','Authorization':'Bearer '+candidateToken,'X-BAP-Admin-Token':candidateToken};
+        const r=await fetch(base+'/api/v1/admin/inspector/data',{headers});
+        if(!r.ok){
+          let errMsg='HTTP '+r.status;
+          try{
+            const errData=await r.json();
+            if(errData.error) errMsg=errData.error;
+          }catch(_){}
+          if(r.status===401||r.status===403){
+            errMsg='Invalid administrative credential';
+          }
+          throw new Error(errMsg);
+        }
         const j=await r.json();
+        S.api.token=candidateToken;
+        S.api.adminAuthorized=true;
+        try{sessionStorage.setItem('bap_admin_token',candidateToken)}catch(e){}
         S.api.base=base;
         ingestServerData(j);
+        connUI();
         $('#cout').textContent='Connected and authenticated successfully!\nPolicy: '+j.policy_version+'\nAudit chain: '+j.chain_status;
         toast('Admin authentication active');
       }
       catch(err){
-        $('#cout').textContent='Failed: '+err.message;
+        S.api.adminAuthorized=false;
+        connUI();
+        $('#cout').textContent='Authentication failed: '+err.message;
+        toast('Authentication failed: '+err.message);
       }
     }
   }
 };
 function connUI(){
   const l=S.api.live;
+  const isAdm = l && S.api.token && S.api.adminAuthorized;
   $('#connDot').className='dot'+(l?' live':'');
-  $('#connTxt').textContent=l?(S.api.token?'Admin live':'Live (telemetry masked)'):'Connecting...';
-  $('#sideMode').textContent=l?(S.api.token?'Admin authenticated':'Control plane connected'):'Reconnecting...';
+  $('#connTxt').textContent=l?(isAdm?'Admin live':'Live (telemetry masked)'):'Connecting...';
+  $('#sideMode').textContent=l?(isAdm?'Admin authenticated':'Control plane connected'):'Reconnecting...';
 }
 $('#connPill').onclick=()=>go('settings');
 
@@ -1977,18 +2028,28 @@ function closeModal(){$('#modal').classList.remove('on');if(!$('#drawer').classL
 
 /* kill switch */
 async function setKill(v){
-  S.kill=v;
-  $('#killBanner').classList.toggle('on',v);
-  $('#killBtn').textContent=v?'Kill switch is on':'Kill switch';
   try {
-    await fetch(S.api.base + '/api/v1/control/kill-switch', {
+    const res = await fetch(S.api.base + '/api/v1/control/kill-switch', {
       method: 'POST',
       headers: {...getHeaders(), 'Content-Type': 'application/json'},
       body: JSON.stringify({enabled: v})
     });
-  } catch(e) { console.error('Failed to update kill-switch on server:', e) }
-  audit(v?'killswitch.on':'killswitch.off','console');
-  if(S.view==='overview')render();
+    if(!res.ok){
+      let msg = 'HTTP ' + res.status;
+      if(res.status === 401 || res.status === 403) msg = 'Administrative credential required or invalid';
+      toast('Failed to change kill switch: ' + msg);
+      return;
+    }
+    S.kill=v;
+    $('#killBanner').classList.toggle('on',v);
+    $('#killBtn').textContent=v?'Kill switch is on':'Kill switch';
+    audit(v?'killswitch.on':'killswitch.off','console');
+    toast(v ? 'Kill switch enabled: all agent execution halted' : 'Kill switch disabled: fleet operations resumed');
+    if(S.view==='overview')render();
+  } catch(e) {
+    console.error('Failed to update kill-switch on server:', e);
+    toast('Kill switch error: ' + e.message);
+  }
 }
 $('#killBtn').onclick=()=>S.kill?0:confirmBox('Turn on the kill switch?','Every agent fails closed immediately and no new grants are minted. Use this if you suspect compromise.','Turn on kill switch',()=>setKill(true),true);
 $('#killOff').onclick=()=>confirmBox('Resume normal operation?','Agents re-sync policy and can request grants again.','Resume',()=>setKill(false));
@@ -2109,7 +2170,8 @@ function renderTopoFilteredFeed() {
         </div>
         <span class="mono" style="color:var(--muted)">${timeAgo(act.timestamp)}</span>
       </div>
-      <div class="act-summary">${esc(act.prompt_summary || act.action || 'Workload action')}</div>
+      <div class="act-summary" style="font-weight:600;color:var(--ink);font-size:13.5px;line-height:1.4">${esc(act.prompt_summary || act.action || 'Workload action')}</div>
+      ${act.intent ? `<div style="font-size:12px;color:var(--muted);margin:4px 0 2px">Mission Intent: <span class="tag t-LIVE" style="font-size:11px;padding:1px 6px">${esc(act.intent)}</span></div>` : ''}
       <div class="act-footer">
         <div><span class="tag t-LIVE"><span class="dot-live"></span>${esc(act.action_status || 'working')}</span></div>
         <span class="mono" style="font-size:12px;color:var(--muted)">Trace: ${esc(act.trace_id || 'tr-live')}</span>

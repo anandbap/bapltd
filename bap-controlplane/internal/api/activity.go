@@ -503,10 +503,38 @@ func (s *Server) handleActivityLive(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.activityMu.RLock()
 	var res []*types.AgentActivityEvent
-	for i := len(s.activities) - 1; i >= 0; i-- {
+	seenSessions := make(map[string]bool)
+
+	// In non-demo mode, always synthesize and prioritize real active sessions from sessionStore at top
+	if s.sessionStore != nil && !s.isDemoMode(r) {
+		for _, sess := range s.sessionStore.List(limit) {
+			if sess.Status == "active" || sess.UserPrompt != "" {
+				ev := s.sessionToActivityEvent(sess)
+				if qStatus != "" && !strings.EqualFold(ev.ActionStatus, qStatus) {
+					continue
+				}
+				if qAgentType != "" && !strings.EqualFold(ev.AgentType, qAgentType) {
+					continue
+				}
+				if qBU != "" && !strings.EqualFold(ev.BusinessUnit, qBU) {
+					continue
+				}
+				res = append(res, ev)
+				seenSessions[sess.SessionID] = true
+				if len(res) >= limit {
+					break
+				}
+			}
+		}
+	}
+
+	s.activityMu.RLock()
+	for i := len(s.activities) - 1; i >= 0 && len(res) < limit; i-- {
 		ev := s.activities[i]
+		if seenSessions[ev.SessionID] {
+			continue
+		}
 		if qStatus != "" && !strings.EqualFold(ev.ActionStatus, qStatus) {
 			continue
 		}
@@ -517,31 +545,8 @@ func (s *Server) handleActivityLive(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		res = append(res, ev)
-		if len(res) >= limit {
-			break
-		}
 	}
 	s.activityMu.RUnlock()
-
-	// If unsimulated mode and no ingested events yet, synthesize from real active sessions
-	if len(res) == 0 && s.sessionStore != nil && !s.isDemoMode(r) {
-		for _, sess := range s.sessionStore.List(limit) {
-			ev := s.sessionToActivityEvent(sess)
-			if qStatus != "" && !strings.EqualFold(ev.ActionStatus, qStatus) {
-				continue
-			}
-			if qAgentType != "" && !strings.EqualFold(ev.AgentType, qAgentType) {
-				continue
-			}
-			if qBU != "" && !strings.EqualFold(ev.BusinessUnit, qBU) {
-				continue
-			}
-			res = append(res, ev)
-			if len(res) >= limit {
-				break
-			}
-		}
-	}
 
 	s.writeTelemetry(w, r, map[string]any{
 		"activities": res,
@@ -1336,7 +1341,7 @@ func (s *Server) buildLiveTopologyTree() *types.BusinessUnitTopologyNode {
 	}
 
 	for _, sess := range allSessions {
-		if sess.Status != "active" || now.Sub(sess.LastActiveAt) > 45*time.Second {
+		if sess.Status != "active" || now.Sub(sess.LastActiveAt) > 10*time.Minute {
 			continue
 		}
 		totalActive++

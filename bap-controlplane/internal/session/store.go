@@ -217,6 +217,8 @@ func NewStoreWithDB(dbPath string) (*Store, error) {
 	// Forward-compatible migration for databases created before mission intent
 	// became part of the session contract.
 	_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN intent_json TEXT`)
+	_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN user_prompt TEXT`)
+	_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN agent_name TEXT`)
 
 	store := &Store{
 		sessions:     make(map[string]*Session),
@@ -894,6 +896,9 @@ func (s *Store) SetPromptAndIntent(sessionID, prompt string, intent IntentContex
 	// Cryptographic idempotency check: If prompt_hash matches the active prompt for this session,
 	// do not duplicate intent history, category counts, or prompt count.
 	if normalized.PromptHash != "" && sess.Intent.PromptHash == normalized.PromptHash {
+		if sess.UserPrompt == "" && prompt != "" {
+			sess.UserPrompt = prompt
+		}
 		sess.LastActiveAt = now
 		if sess.Status == "closed" && sess.CloseReason == "idle_timeout" {
 			sess.Status = "active"
@@ -1097,7 +1102,7 @@ func (s *Store) loadFromDB() error {
 	if s.db == nil {
 		return nil
 	}
-	rows, err := s.db.Query(`SELECT session_id, app_id, instance_id, user_id, user_email, spiffe_id, status, started_at, ended_at, last_active_at, client_pid, hostname, total_events, allowed_count, denied_count, close_reason, intent_json FROM sessions ORDER BY started_at ASC`)
+	rows, err := s.db.Query(`SELECT session_id, app_id, instance_id, user_id, user_email, spiffe_id, status, started_at, ended_at, last_active_at, client_pid, hostname, total_events, allowed_count, denied_count, close_reason, intent_json, user_prompt, agent_name FROM sessions ORDER BY started_at ASC`)
 	if err != nil {
 		return err
 	}
@@ -1105,10 +1110,10 @@ func (s *Store) loadFromDB() error {
 
 	for rows.Next() {
 		var (
-			sessID, appID, instID, uID, uEmail, spiffeID, status, startedAtStr, endedAtStr, lastActiveStr, hostname, closeReason, intentJSON sql.NullString
-			clientPID, totalEv, allowCnt, denyCnt                                                                                            sql.NullInt64
+			sessID, appID, instID, uID, uEmail, spiffeID, status, startedAtStr, endedAtStr, lastActiveStr, hostname, closeReason, intentJSON, userPrompt, agentName sql.NullString
+			clientPID, totalEv, allowCnt, denyCnt                                                                                                                    sql.NullInt64
 		)
-		if err := rows.Scan(&sessID, &appID, &instID, &uID, &uEmail, &spiffeID, &status, &startedAtStr, &endedAtStr, &lastActiveStr, &clientPID, &hostname, &totalEv, &allowCnt, &denyCnt, &closeReason, &intentJSON); err != nil {
+		if err := rows.Scan(&sessID, &appID, &instID, &uID, &uEmail, &spiffeID, &status, &startedAtStr, &endedAtStr, &lastActiveStr, &clientPID, &hostname, &totalEv, &allowCnt, &denyCnt, &closeReason, &intentJSON, &userPrompt, &agentName); err != nil {
 			continue
 		}
 		startedAt, _ := time.Parse(time.RFC3339, startedAtStr.String)
@@ -1142,6 +1147,8 @@ func (s *Store) loadFromDB() error {
 			DeniedCount:  int(denyCnt.Int64),
 			CloseReason:  closeReason.String,
 			Intent:       normalizeIntent(intent),
+			UserPrompt:   userPrompt.String,
+			AgentName:    agentName.String,
 			Events:       make([]audit.Event, 0),
 		}
 		s.sessions[sess.SessionID] = sess
@@ -1214,8 +1221,8 @@ func (s *Store) saveSessionToDB(sess *Session) {
 	}
 	intentJSON, _ := json.Marshal(normalizeIntent(sess.Intent))
 	query := `
-	INSERT INTO sessions (session_id, app_id, instance_id, user_id, user_email, spiffe_id, status, started_at, ended_at, last_active_at, client_pid, hostname, total_events, allowed_count, denied_count, close_reason, intent_json)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO sessions (session_id, app_id, instance_id, user_id, user_email, spiffe_id, status, started_at, ended_at, last_active_at, client_pid, hostname, total_events, allowed_count, denied_count, close_reason, intent_json, user_prompt, agent_name)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(session_id) DO UPDATE SET
 		status = excluded.status,
 		ended_at = excluded.ended_at,
@@ -1224,7 +1231,9 @@ func (s *Store) saveSessionToDB(sess *Session) {
 		allowed_count = excluded.allowed_count,
 		denied_count = excluded.denied_count,
 		close_reason = excluded.close_reason,
-		intent_json = excluded.intent_json;`
+		intent_json = excluded.intent_json,
+		user_prompt = excluded.user_prompt,
+		agent_name = excluded.agent_name;`
 	_, _ = s.db.Exec(query,
 		sess.SessionID,
 		sess.AppID,
@@ -1243,6 +1252,8 @@ func (s *Store) saveSessionToDB(sess *Session) {
 		sess.DeniedCount,
 		sess.CloseReason,
 		string(intentJSON),
+		sess.UserPrompt,
+		sess.AgentName,
 	)
 }
 
