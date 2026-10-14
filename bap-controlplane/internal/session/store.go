@@ -247,16 +247,46 @@ func GenerateSessionID(prefix string) string {
 	return fmt.Sprintf("%s-%s-%s", prefix, time.Now().Format("150405"), hex.EncodeToString(b))
 }
 
+// CleanUserPrompt unmasks and sanitizes prompt text from CLI transcripts and hook payloads,
+// stripping XML metadata wrappers (<USER_REQUEST>, <ADDITIONAL_METADATA>, etc.).
+func CleanUserPrompt(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	if start := strings.Index(s, "<USER_REQUEST>"); start != -1 {
+		inner := s[start+len("<USER_REQUEST>"):]
+		if end := strings.Index(inner, "</USER_REQUEST>"); end != -1 {
+			s = inner[:end]
+		} else {
+			s = inner
+		}
+	} else {
+		for _, tag := range []string{"<ADDITIONAL_METADATA>", "<USER_SETTINGS_CHANGE>", "<SYSTEM_INFO>"} {
+			if idx := strings.Index(s, tag); idx != -1 {
+				s = s[:idx]
+			}
+		}
+	}
+	s = strings.ReplaceAll(s, "<USER_REQUEST>", "")
+	s = strings.ReplaceAll(s, "</USER_REQUEST>", "")
+	return strings.TrimSpace(s)
+}
+
 func normalizeIntent(intent IntentContext, prompt ...string) IntentContext {
+	cleanP := ""
+	if len(prompt) > 0 {
+		cleanP = CleanUserPrompt(prompt[0])
+	}
 	intent.Primary = strings.ToUpper(strings.TrimSpace(intent.Primary))
-	if (intent.Primary == "" || intent.Primary == "UNKNOWN") && len(prompt) > 0 && strings.TrimSpace(prompt[0]) != "" {
-		classified := ClassifyIntent(prompt[0])
+	if (intent.Primary == "" || intent.Primary == "UNKNOWN") && cleanP != "" {
+		classified := ClassifyIntent(cleanP)
 		if classified.Primary != "UNKNOWN" || intent.Primary == "" {
 			intent = classified
 		}
 	}
-	if len(prompt) > 0 && strings.TrimSpace(prompt[0]) != "" {
-		analysis := AnalyzePromptSemantics(prompt[0])
+	if cleanP != "" {
+		analysis := AnalyzePromptSemantics(cleanP)
 		intent.PromptRiskScore = analysis.RiskScore
 		intent.PromptRiskLevel = analysis.RiskLevel
 		intent.InjectionSignals = analysis.Signals
@@ -265,7 +295,7 @@ func normalizeIntent(intent IntentContext, prompt ...string) IntentContext {
 			intent.Evidence = append(intent.Evidence, analysis.Evidence...)
 		}
 		if intent.PromptHash == "" {
-			h := sha256.Sum256([]byte(strings.TrimSpace(prompt[0])))
+			h := sha256.Sum256([]byte(cleanP))
 			intent.PromptHash = hex.EncodeToString(h[:])
 		}
 	}
@@ -280,6 +310,7 @@ func normalizeIntent(intent IntentContext, prompt ...string) IntentContext {
 
 // Start creates and registers a new session or re-activates an existing one.
 func (s *Store) Start(req SessionStartRequest) (*Session, error) {
+	req.UserPrompt = CleanUserPrompt(req.UserPrompt)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -887,6 +918,7 @@ func (s *Store) SetPromptAndIntent(sessionID, prompt string, intent IntentContex
 		return nil, fmt.Errorf("session %q not found", sessionID)
 	}
 
+	prompt = CleanUserPrompt(prompt)
 	now := time.Now().UTC()
 	normalized := normalizeIntent(intent, prompt)
 	if normalized.PromptHash == "" && intent.PromptHash != "" {
@@ -1147,10 +1179,26 @@ func (s *Store) loadFromDB() error {
 			DeniedCount:  int(denyCnt.Int64),
 			CloseReason:  closeReason.String,
 			Intent:       normalizeIntent(intent),
-			UserPrompt:   userPrompt.String,
+			UserPrompt:   CleanUserPrompt(userPrompt.String),
 			AgentName:    agentName.String,
 			Events:       make([]audit.Event, 0),
 		}
+
+		// Architectural fix: reap stale active sessions from crashed/prior runs upon startup
+		now := time.Now().UTC()
+		if sess.Status == "active" && (sess.LastActiveAt.IsZero() || now.Sub(sess.LastActiveAt) > 90*time.Second) {
+			sess.Status = "closed"
+			sess.CloseReason = "stale_prior_shutdown"
+			if sess.EndedAt == nil {
+				endedAtVal := sess.LastActiveAt
+				if endedAtVal.IsZero() {
+					endedAtVal = now
+				}
+				sess.EndedAt = &endedAtVal
+			}
+			s.saveSessionToDB(sess)
+		}
+
 		s.sessions[sess.SessionID] = sess
 		s.order = append(s.order, sess.SessionID)
 	}

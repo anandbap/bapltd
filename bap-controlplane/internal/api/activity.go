@@ -1117,6 +1117,7 @@ func (s *Server) handleActivityBusinessUnits(w http.ResponseWriter, r *http.Requ
 				buMap[dept] = info
 			}
 			if sess.Status == "active" && now.Sub(sess.LastActiveAt) <= 45*time.Second {
+				info.active++
 				p := sess.AgentName
 				if p == "" {
 					p = "claude-code"
@@ -1341,7 +1342,7 @@ func (s *Server) buildLiveTopologyTree() *types.BusinessUnitTopologyNode {
 	}
 
 	for _, sess := range allSessions {
-		if sess.Status != "active" || now.Sub(sess.LastActiveAt) > 10*time.Minute {
+		if sess.Status != "active" || now.Sub(sess.LastActiveAt) > 45*time.Second {
 			continue
 		}
 		totalActive++
@@ -1519,7 +1520,12 @@ func (s *Server) handleActivityStream(w http.ResponseWriter, r *http.Request) {
 	recent := s.activities[start:]
 	s.activityMu.RUnlock()
 
-	snapData, _ := json.Marshal(recent)
+	var payload any = recent
+	if !s.isAdminViewer(r) && (s.adminToken != "" || !isLoopbackAddress(r.RemoteAddr)) {
+		payload = redactedTelemetry(recent)
+	}
+
+	snapData, _ := json.Marshal(payload)
 	_, _ = fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", snapData)
 	flusher.Flush()
 
@@ -1532,7 +1538,11 @@ func (s *Server) handleActivityStream(w http.ResponseWriter, r *http.Request) {
 			return
 		case ev := <-subChan:
 			if ev != nil {
-				data, _ := json.Marshal(ev)
+				var outEv any = ev
+				if !s.isAdminViewer(r) && (s.adminToken != "" || !isLoopbackAddress(r.RemoteAddr)) {
+					outEv = redactedTelemetry(ev)
+				}
+				data, _ := json.Marshal(outEv)
 				_, _ = fmt.Fprintf(w, "event: activity\ndata: %s\n\n", data)
 				flusher.Flush()
 			}

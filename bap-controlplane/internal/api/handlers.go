@@ -146,6 +146,21 @@ func NewServer(reg *registry.Store, otcStore *otc.Store, minter *authz.TokenMint
 	}
 	s.initActivityEngine()
 	s.registerRoutes()
+
+	// Architectural fix: background auto-reaper periodically purges stale sessions and agents
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			if s.sessionStore != nil {
+				s.sessionStore.PurgeStale(90 * time.Second)
+			}
+			if s.registry != nil {
+				s.registry.PurgeStale(90 * time.Second)
+			}
+		}
+	}()
+
 	return s
 }
 
@@ -2914,8 +2929,33 @@ func adminCredential(r *http.Request) string {
 	return r.Header.Get("X-BAP-Admin-Token")
 }
 
+// telemetryViewerCredential extracts admin credentials for read-only telemetry and SSE streams,
+// allowing explicit headers, URL query parameters (for EventSource), and local dashboard cookies.
+func telemetryViewerCredential(r *http.Request) string {
+	if cred := adminCredential(r); cred != "" {
+		return cred
+	}
+	if q := r.URL.Query().Get("token"); q != "" {
+		return q
+	}
+	if q := r.URL.Query().Get("admin_token"); q != "" {
+		return q
+	}
+	if c, err := r.Cookie("bap_admin_token"); err == nil && c.Value != "" {
+		return c.Value
+	}
+	return ""
+}
+
 func (s *Server) isAdminCaller(r *http.Request) bool {
 	token := adminCredential(r)
+	return s.adminToken != "" && token != "" &&
+		(s.allowRemoteAdmin || isLoopbackAddress(r.RemoteAddr)) &&
+		subtle.ConstantTimeCompare([]byte(token), []byte(s.adminToken)) == 1
+}
+
+func (s *Server) isAdminViewer(r *http.Request) bool {
+	token := telemetryViewerCredential(r)
 	return s.adminToken != "" && token != "" &&
 		(s.allowRemoteAdmin || isLoopbackAddress(r.RemoteAddr)) &&
 		subtle.ConstantTimeCompare([]byte(token), []byte(s.adminToken)) == 1
@@ -3000,7 +3040,7 @@ func redactedTelemetry(value any) any {
 		case map[string]any:
 			for key, item := range v {
 				switch key {
-				case "user_prompt", "prompt_hash", "user_id", "user_email", "owner_email", "session_id", "instance_id", "spiffe_id", "hostname":
+				case "user_prompt", "prompt_hash", "user_id", "user_email", "owner_email", "session_id", "instance_id", "spiffe_id", "hostname", "prompt_summary":
 					if item != "" && item != nil {
 						v[key] = "[Protected: Admin Authentication Required]"
 					}
@@ -3024,7 +3064,7 @@ func redactedTelemetry(value any) any {
 	return copy
 }
 func (s *Server) writeTelemetry(w http.ResponseWriter, r *http.Request, value any) {
-	if !s.isAdminCaller(r) && (s.adminToken != "" || !isLoopbackAddress(r.RemoteAddr)) {
+	if !s.isAdminViewer(r) && (s.adminToken != "" || !isLoopbackAddress(r.RemoteAddr)) {
 		value = redactedTelemetry(value)
 	}
 	writeJSON(w, http.StatusOK, value)

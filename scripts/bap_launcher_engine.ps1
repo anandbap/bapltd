@@ -868,30 +868,46 @@ function Invoke-BapGovernedSession {
                                 foreach ($f in $recentFiles) {
                                     $lines = Get-Content -LiteralPath $f.FullName -ErrorAction SilentlyContinue | Select-Object -Last 10
                                     foreach ($l in $lines) {
-                                        if ($l -match '"type"\s*:\s*"USER_INPUT"' -and $l -match '<USER_REQUEST>([\s\S]*?)</USER_REQUEST>') {
+                                        $userReq = $null
+                                        if ($l -match '<USER_REQUEST>([\s\S]*?)</USER_REQUEST>') {
                                             $userReq = $matches[1].Trim()
-                                            if (-not [string]::IsNullOrWhiteSpace($userReq)) {
-                                                $bytes = [System.Text.Encoding]::UTF8.GetBytes($userReq)
-                                                $pHash = -join ($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') })
-                                                if (-not $seenHashes.ContainsKey($pHash)) {
-                                                    $seenHashes[$pHash] = $true
-                                                    $payload = @{
-                                                        session_id             = $SessionId
-                                                        user_prompt            = $userReq
-                                                        producer               = "antigravity-cli"
-                                                        prompt_hash            = $pHash
-                                                        prompt_capture_enabled = $true
-                                                        intent                 = @{
-                                                            primary            = "INVESTIGATION"
-                                                            confidence         = 0.90
-                                                            classifier_version = "bap-edge-rules-v1"
-                                                            source             = "antigravity-transcript-tail"
-                                                        }
-                                                    } | ConvertTo-Json -Compress
-                                                    $curl = 'curl.exe'
-                                                    $cArgs = @('-s', '--max-time', '2', '-X', 'POST', "$ServerUrl/api/v1/sessions/prompt", '-H', 'Content-Type: application/json', '-d', $payload)
-                                                    & $curl @cArgs *> $null
+                                        } elseif ($l -match '"type"\s*:\s*"USER_INPUT"') {
+                                            try {
+                                                $jsonObj = $l | ConvertFrom-Json -ErrorAction SilentlyContinue
+                                                if ($null -ne $jsonObj -and -not [string]::IsNullOrWhiteSpace($jsonObj.content)) {
+                                                    $rawContent = $jsonObj.content
+                                                    if ($rawContent -match '<USER_REQUEST>([\s\S]*?)</USER_REQUEST>') {
+                                                        $userReq = $matches[1].Trim()
+                                                    } else {
+                                                        $stripped = $rawContent -replace '(?s)<ADDITIONAL_METADATA>.*?</ADDITIONAL_METADATA>', ''
+                                                        $stripped = $stripped -replace '(?s)<USER_SETTINGS_CHANGE>.*?</USER_SETTINGS_CHANGE>', ''
+                                                        $userReq = $stripped.Trim()
+                                                    }
                                                 }
+                                            } catch { }
+                                        }
+
+                                        if (-not [string]::IsNullOrWhiteSpace($userReq)) {
+                                            $bytes = [System.Text.Encoding]::UTF8.GetBytes($userReq)
+                                            $pHash = -join ($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') })
+                                            if (-not $seenHashes.ContainsKey($pHash)) {
+                                                $seenHashes[$pHash] = $true
+                                                $payload = @{
+                                                    session_id             = $SessionId
+                                                    user_prompt            = $userReq
+                                                    producer               = "antigravity-cli"
+                                                    prompt_hash            = $pHash
+                                                    prompt_capture_enabled = $true
+                                                    intent                 = @{
+                                                        primary            = "INVESTIGATION"
+                                                        confidence         = 0.90
+                                                        classifier_version = "bap-edge-rules-v1"
+                                                        source             = "antigravity-transcript-tail"
+                                                    }
+                                                } | ConvertTo-Json -Compress
+                                                $curl = 'curl.exe'
+                                                $cArgs = @('-s', '--max-time', '2', '-X', 'POST', "$ServerUrl/api/v1/sessions/prompt", '-H', 'Content-Type: application/json', '-d', $payload)
+                                                & $curl @cArgs *> $null
                                             }
                                         }
                                     }
@@ -930,6 +946,25 @@ function Invoke-BapGovernedSession {
 
         if (-not [string]::IsNullOrWhiteSpace($BapEdgeBin) -and -not [string]::IsNullOrWhiteSpace($ServerUrl)) {
             & $BapEdgeBin session-end --server $ServerUrl --session-id $SessionId 2>$null
+        }
+
+        # Direct HTTP fallback to ensure controlplane marks session closed even if CLI broker was interrupted
+        if (-not [string]::IsNullOrWhiteSpace($ServerUrl) -and -not [string]::IsNullOrWhiteSpace($SessionId)) {
+            try {
+                $endBody = @{ session_id = $SessionId; reason = "user_exit" } | ConvertTo-Json -Compress
+                [System.Net.HttpWebRequest]$req = [System.Net.WebRequest]::Create("$ServerUrl/api/v1/sessions/end")
+                $req.Method = "POST"
+                $req.ContentType = "application/json"
+                $req.Timeout = 2000
+                $bytes = [System.Text.Encoding]::UTF8.GetBytes($endBody)
+                $req.ContentLength = $bytes.Length
+                using ($stream = $req.GetRequestStream()) {
+                    $stream.Write($bytes, 0, $bytes.Length)
+                }
+                using ($resp = $req.GetResponse()) {}
+            } catch {
+                # Best-effort teardown notification
+            }
         }
 
         # Restore PATH and clean up Layer 3 shims

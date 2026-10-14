@@ -14,7 +14,18 @@ func (s *Server) registerControlPlaneRoutes() {
 	// BAP-210: Mount unified CIO Cockpit (React Dashboard)
 	webFS := dashboardui.AssetsFS()
 	files := http.StripPrefix("/dashboard/", http.FileServer(http.FS(webFS)))
-	s.mux.Handle("/dashboard/", files)
+	s.mux.HandleFunc("/dashboard/", func(w http.ResponseWriter, r *http.Request) {
+		if isLoopbackAddress(r.RemoteAddr) && s.adminToken != "" {
+			http.SetCookie(w, &http.Cookie{
+				Name:     "bap_admin_token",
+				Value:    s.adminToken,
+				Path:     "/",
+				SameSite: http.SameSiteLaxMode,
+				HttpOnly: false,
+			})
+		}
+		files.ServeHTTP(w, r)
+	})
 	s.mux.HandleFunc("/dashboard", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard/", http.StatusFound)
 	})
