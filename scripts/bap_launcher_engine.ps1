@@ -958,10 +958,16 @@ function Invoke-BapGovernedSession {
                 $req.Timeout = 2000
                 $bytes = [System.Text.Encoding]::UTF8.GetBytes($endBody)
                 $req.ContentLength = $bytes.Length
-                using ($stream = $req.GetRequestStream()) {
+                $stream = $req.GetRequestStream()
+                try {
                     $stream.Write($bytes, 0, $bytes.Length)
+                } finally {
+                    $stream.Dispose()
                 }
-                using ($resp = $req.GetResponse()) {}
+                $resp = $req.GetResponse()
+                if ($null -ne $resp) {
+                    $resp.Dispose()
+                }
             } catch {
                 # Best-effort teardown notification
             }
