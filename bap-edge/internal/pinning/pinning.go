@@ -28,6 +28,7 @@ type PinnedAsset struct {
 	ExpectedHash string            `json:"expected_hash"`// Canonical sha256:hex
 	AttestedAt   time.Time         `json:"attested_at"`
 	AttestedBy   string            `json:"attested_by"`  // "developer", "policy_sync", "admin"
+	AgentScope   string            `json:"agent_scope,omitempty"` // "all", "claude-code", "antigravity", "copilot", or specific app/identity
 	Metadata     map[string]string `json:"metadata,omitempty"`
 }
 
@@ -181,8 +182,27 @@ func (m *PinManifest) VerifyAll() []VerificationResult {
 	return results
 }
 
-// PinFile adds or updates a file's cryptographic pin.
+// RemoveAsset deletes an asset from the manifest by ID.
+func (m *PinManifest) RemoveAsset(id string) bool {
+	if _, exists := m.Assets[id]; exists {
+		delete(m.Assets, id)
+		return true
+	}
+	return false
+}
+
+// ClearAssets removes all assets from the manifest.
+func (m *PinManifest) ClearAssets() {
+	m.Assets = make(map[string]PinnedAsset)
+}
+
+// PinFile adds or updates a file's cryptographic pin with default "all" agent scope.
 func (m *PinManifest) PinFile(id, assetType, path, attestedBy string, metadata map[string]string) (*PinnedAsset, error) {
+	return m.PinFileWithScope(id, assetType, path, attestedBy, "all", metadata)
+}
+
+// PinFileWithScope adds or updates a file's cryptographic pin with an explicit agent scope.
+func (m *PinManifest) PinFileWithScope(id, assetType, path, attestedBy, agentScope string, metadata map[string]string) (*PinnedAsset, error) {
 	cleanPath, err := filepath.Abs(path)
 	if err != nil {
 		cleanPath = filepath.Clean(path)
@@ -198,6 +218,10 @@ func (m *PinManifest) PinFile(id, assetType, path, attestedBy string, metadata m
 		id = fmt.Sprintf("%s:%s", assetType, base)
 	}
 
+	if agentScope == "" {
+		agentScope = "all"
+	}
+
 	asset := PinnedAsset{
 		ID:           id,
 		AssetType:    assetType,
@@ -205,6 +229,7 @@ func (m *PinManifest) PinFile(id, assetType, path, attestedBy string, metadata m
 		ExpectedHash: hash,
 		AttestedAt:   time.Now().UTC(),
 		AttestedBy:   attestedBy,
+		AgentScope:   agentScope,
 		Metadata:     metadata,
 	}
 
@@ -212,7 +237,41 @@ func (m *PinManifest) PinFile(id, assetType, path, attestedBy string, metadata m
 	return &asset, nil
 }
 
-// DiscoverAssets searches common locations for skills, prompt files, and MCP manifests.
+// NormalizeAgentName maps common agent aliases to canonical strings.
+func NormalizeAgentName(name string) string {
+	s := strings.ToLower(strings.TrimSpace(name))
+	switch s {
+	case "ag", "antigravity", "gemini", "google-antigravity":
+		return "antigravity"
+	case "cc", "claude", "claude-code", "claudecode":
+		return "claude-code"
+	case "copilot", "github-copilot", "gh-copilot":
+		return "copilot"
+	case "cursor", "cursor-agent":
+		return "cursor"
+	case "cli", "shell", "ltd":
+		return "cli"
+	default:
+		return s
+	}
+}
+
+// IsAssetInAgentScope determines if a pinned asset applies to a specific calling agent.
+func IsAssetInAgentScope(assetScope, agentSource string) bool {
+	if assetScope == "" || strings.EqualFold(assetScope, "all") {
+		return true
+	}
+	normAsset := NormalizeAgentName(assetScope)
+	normAgent := NormalizeAgentName(agentSource)
+	if normAgent == "" || normAgent == "cli" {
+		// In raw CLI verification, all pins are included
+		return true
+	}
+	return normAsset == normAgent
+}
+
+// DiscoverAssets searches common locations for skills, prompt files, and MCP manifests,
+// accurately tagging each asset with its corresponding AgentScope (AG, CC, Copilot, or Global).
 func DiscoverAssets(workspaceRoot string) ([]PinnedAsset, error) {
 	if workspaceRoot == "" {
 		workspaceRoot = "."
@@ -225,15 +284,18 @@ func DiscoverAssets(workspaceRoot string) ([]PinnedAsset, error) {
 	var discovered []PinnedAsset
 
 	// 1. Discover Skill files (*.md or SKILL.md) in .claude/skills, .antigravity/skills, .bap/skills
-	skillGlobs := []string{
-		filepath.Join(absRoot, ".claude", "skills", "*", "SKILL.md"),
-		filepath.Join(absRoot, ".antigravity", "skills", "*", "SKILL.md"),
-		filepath.Join(absRoot, ".bap", "skills", "*", "SKILL.md"),
-		filepath.Join(absRoot, "skills", "*", "SKILL.md"),
+	skillGlobs := []struct {
+		Pattern string
+		Scope   string
+	}{
+		{Pattern: filepath.Join(absRoot, ".claude", "skills", "*", "SKILL.md"), Scope: "claude-code"},
+		{Pattern: filepath.Join(absRoot, ".antigravity", "skills", "*", "SKILL.md"), Scope: "antigravity"},
+		{Pattern: filepath.Join(absRoot, ".bap", "skills", "*", "SKILL.md"), Scope: "all"},
+		{Pattern: filepath.Join(absRoot, "skills", "*", "SKILL.md"), Scope: "all"},
 	}
 
-	for _, g := range skillGlobs {
-		matches, _ := filepath.Glob(g)
+	for _, sg := range skillGlobs {
+		matches, _ := filepath.Glob(sg.Pattern)
 		for _, match := range matches {
 			hash, err := ComputeFileHash(match)
 			if err != nil {
@@ -247,56 +309,67 @@ func DiscoverAssets(workspaceRoot string) ([]PinnedAsset, error) {
 				ExpectedHash: hash,
 				AttestedAt:   time.Now().UTC(),
 				AttestedBy:   "auto_discovery",
+				AgentScope:   sg.Scope,
 			})
 		}
 	}
 
 	// 2. Discover MCP manifests
-	mcpCandidates := []string{
-		filepath.Join(absRoot, ".claude", "mcp.json"),
-		filepath.Join(absRoot, ".cursor", "mcp.json"),
-		filepath.Join(absRoot, ".vscode", "mcp.json"),
-		filepath.Join(absRoot, "bap-config.json"),
+	mcpCandidates := []struct {
+		Path  string
+		Scope string
+	}{
+		{Path: filepath.Join(absRoot, ".claude", "mcp.json"), Scope: "claude-code"},
+		{Path: filepath.Join(absRoot, ".cursor", "mcp.json"), Scope: "cursor"},
+		{Path: filepath.Join(absRoot, ".vscode", "mcp.json"), Scope: "copilot"},
+		{Path: filepath.Join(absRoot, "bap-config.json"), Scope: "all"},
 	}
 
 	for _, cand := range mcpCandidates {
-		if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
-			hash, err := ComputeFileHash(cand)
+		if fi, err := os.Stat(cand.Path); err == nil && !fi.IsDir() {
+			hash, err := ComputeFileHash(cand.Path)
 			if err != nil {
 				continue
 			}
 			discovered = append(discovered, PinnedAsset{
-				ID:           fmt.Sprintf("mcp_manifest:%s", filepath.Base(cand)),
+				ID:           fmt.Sprintf("mcp_manifest:%s", filepath.Base(cand.Path)),
 				AssetType:    "mcp_manifest",
-				Path:         cand,
+				Path:         cand.Path,
 				ExpectedHash: hash,
 				AttestedAt:   time.Now().UTC(),
 				AttestedBy:   "auto_discovery",
+				AgentScope:   cand.Scope,
 			})
 		}
 	}
 
 	// 3. Discover Instruction and System Prompt files
-	promptCandidates := []string{
-		filepath.Join(absRoot, "CLAUDE.md"),
-		filepath.Join(absRoot, ".cursorrules"),
-		filepath.Join(absRoot, ".bap-prompt.txt"),
-		filepath.Join(absRoot, "policy.cedar"),
+	promptCandidates := []struct {
+		Path  string
+		Scope string
+	}{
+		{Path: filepath.Join(absRoot, "CLAUDE.md"), Scope: "claude-code"},
+		{Path: filepath.Join(absRoot, "GEMINI.md"), Scope: "antigravity"},
+		{Path: filepath.Join(absRoot, "AGENTS.md"), Scope: "copilot"},
+		{Path: filepath.Join(absRoot, ".cursorrules"), Scope: "cursor"},
+		{Path: filepath.Join(absRoot, ".bap-prompt.txt"), Scope: "all"},
+		{Path: filepath.Join(absRoot, "policy.cedar"), Scope: "all"},
 	}
 
 	for _, cand := range promptCandidates {
-		if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
-			hash, err := ComputeFileHash(cand)
+		if fi, err := os.Stat(cand.Path); err == nil && !fi.IsDir() {
+			hash, err := ComputeFileHash(cand.Path)
 			if err != nil {
 				continue
 			}
 			discovered = append(discovered, PinnedAsset{
-				ID:           fmt.Sprintf("prompt:%s", filepath.Base(cand)),
+				ID:           fmt.Sprintf("prompt:%s", filepath.Base(cand.Path)),
 				AssetType:    "prompt",
-				Path:         cand,
+				Path:         cand.Path,
 				ExpectedHash: hash,
 				AttestedAt:   time.Now().UTC(),
 				AttestedBy:   "auto_discovery",
+				AgentScope:   cand.Scope,
 			})
 		}
 	}

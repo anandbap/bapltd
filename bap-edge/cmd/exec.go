@@ -1086,14 +1086,14 @@ func checkContentPinning(ec *execContext, skillName string) (string, error) {
 		return "", nil
 	}
 
-	// 1. If explicit skill was declared, verify it
+	// 1. If explicit skill was declared, verify it if within agent scope
 	if skillName != "" {
 		skillKey := skillName
 		if !strings.HasPrefix(skillKey, "skill:") {
 			skillKey = "skill:" + skillName
 		}
 		res := manifest.VerifyAsset(skillKey)
-		if res.Asset.ID != "" {
+		if res.Asset.ID != "" && pinning.IsAssetInAgentScope(res.Asset.AgentScope, ec.source) {
 			if !res.Matches {
 				return res.CurrentHash, fmt.Errorf("declaring skill %q failed content attestation: %s", skillName, res.Error)
 			}
@@ -1101,10 +1101,13 @@ func checkContentPinning(ec *execContext, skillName string) (string, error) {
 		}
 	}
 
-	// 2. Check if the executed command directly references any pinned file
+	// 2. Check if the executed command directly references any pinned file scoped to this agent
 	cleanCmd := strings.ToLower(ec.fullCommand)
 	var matchedHash string
 	for _, a := range manifest.Assets {
+		if !pinning.IsAssetInAgentScope(a.AgentScope, ec.source) {
+			continue
+		}
 		baseName := strings.ToLower(filepath.Base(a.Path))
 		cleanAssetPath := strings.ToLower(filepath.ToSlash(a.Path))
 		if strings.Contains(cleanCmd, baseName) || strings.Contains(cleanCmd, cleanAssetPath) {
@@ -1116,12 +1119,37 @@ func checkContentPinning(ec *execContext, skillName string) (string, error) {
 		}
 	}
 
-	// 3. Fast verify workspace-level skill files registered in manifest
+	// 3. Fast verify workspace-level skill files registered in manifest for this agent scope
 	for _, a := range manifest.Assets {
 		if a.AssetType == "skill" {
+			if !pinning.IsAssetInAgentScope(a.AgentScope, ec.source) {
+				continue
+			}
 			res := manifest.VerifyAsset(a.ID)
 			if !res.Matches {
 				return res.CurrentHash, fmt.Errorf("active skill %s on disk has drifted: %s", a.ID, res.Error)
+			}
+		}
+	}
+
+	// 4. Verify system prompt / instruction file for the active agent
+	for _, a := range manifest.Assets {
+		if a.AssetType == "prompt" {
+			// Enforce if scoped specifically to this agent or global policy.cedar
+			if pinning.IsAssetInAgentScope(a.AgentScope, ec.source) {
+				// Only verify if base name is referenced or if it's the primary instruction file for this agent
+				canon := pinning.NormalizeAgentName(ec.source)
+				base := strings.ToLower(filepath.Base(a.Path))
+				isPrimaryPrompt := (canon == "antigravity" && base == "gemini.md") ||
+					(canon == "claude-code" && base == "claude.md") ||
+					(canon == "copilot" && base == "agents.md") ||
+					base == "policy.cedar"
+				if isPrimaryPrompt {
+					res := manifest.VerifyAsset(a.ID)
+					if !res.Matches {
+						return res.CurrentHash, fmt.Errorf("instruction/policy file %s on disk has drifted from pinned hash: %s", a.ID, res.Error)
+					}
+				}
 			}
 		}
 	}

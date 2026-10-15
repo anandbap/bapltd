@@ -639,7 +639,19 @@ powershell -ExecutionPolicy Bypass -File update_binaries.ps1
 .\bapedge.exe permissions            # List active cross-folder authorizations
 .\bapedge.exe why "<command>"        # Explain Cedar policy decision
 .\bapedge.exe rollback --checkpoint-id <id> # Forensically restore mutated files
-.\bapedge.exe pin scan | verify | update   # Cryptographic skill/prompt pinning
+
+# Cryptographic Content Pinning (AIR Attestation & Agent Scoping)
+.\bapedge.exe pin list                      # List pinned assets with AgentScope
+.\bapedge.exe pin verify [--scope <agent>]  # Verify skills/prompts for specific agent
+.\bapedge.exe pin add <path> [--scope <ag>] # Pin asset with explicit agent scope
+.\bapedge.exe pin update <id> [--all]       # Re-attest approved modification
+.\bapedge.exe pin unpin <id> [--all]        # Unpin specific asset or all assets
+.\bapedge.exe pin clear                     # Clear manifest to start fresh
+.\bapedge.exe pin reset                     # Reset & auto-discover workspace assets
+
+# Fleet Resilience, Sweep & Disconnected Sync
+.\bapedge.exe sweep [--force]        # Clean dead sessions, purge dead PIDs & shims
+.\bapedge.exe sync [--server <url>]  # Sync policy cache & flush offline audit spool
 
 # Governed Execution
 .\bapedge.exe exec "<command>"       # Execute under kernel isolation

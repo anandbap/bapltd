@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -695,11 +696,13 @@ type SweepResult struct {
 	FlushedAuditCount    int   `json:"flushed_audit_count"`
 	ServerSweptSessions  int   `json:"server_swept_sessions"`
 	ReconciledGrants     int   `json:"reconciled_grants"`
+	SweptDeadPIDFiles    int   `json:"swept_dead_pid_files"`
+	SweptTempFiles       int   `json:"swept_temp_files"`
 	ControlPlaneError    error `json:"-"`
 }
 
 // PerformSweep reconciles orphaned local sessions, purges stale session markers,
-// and flushes offline audit records to the central control plane.
+// clears dead PID files and orphaned shims, and flushes offline audit records.
 func PerformSweep(serverURL string, force bool) (SweepResult, error) {
 	var res SweepResult
 	sessionSweepDirs := []string{state.SessionsDir(), filepath.Join(".bap", "sessions")}
@@ -738,6 +741,45 @@ func PerformSweep(serverURL string, force bool) (SweepResult, error) {
 					}
 					res.LocalSweptSessions++
 				}
+			}
+		}
+	}
+
+	// 2. Sweep dead PID files, orphaned locks, dead shims, and stale temp files
+	stateDirs := []string{state.Dir(), ".bap"}
+	for _, sDir := range stateDirs {
+		entries, _ := os.ReadDir(sDir)
+		for _, entry := range entries {
+			name := entry.Name()
+			fullPath := filepath.Join(sDir, name)
+
+			// Clean *.pid files where process is dead
+			if !entry.IsDir() && (strings.HasSuffix(name, ".pid") || strings.HasPrefix(name, "pid-")) {
+				data, err := os.ReadFile(fullPath)
+				if err == nil {
+					pidStr := strings.TrimSpace(string(data))
+					if pid, err := strconv.Atoi(pidStr); err == nil && pid > 0 {
+						if force || !isProcessAlive(pid) {
+							_ = os.Remove(fullPath)
+							res.SweptDeadPIDFiles++
+						}
+					} else if force {
+						_ = os.Remove(fullPath)
+						res.SweptDeadPIDFiles++
+					}
+				}
+			}
+
+			// Clean stale temp files (*.tmp.* or .tmp.*)
+			if !entry.IsDir() && (strings.Contains(name, ".tmp.") || strings.HasSuffix(name, ".tmp")) {
+				_ = os.Remove(fullPath)
+				res.SweptTempFiles++
+			}
+
+			// Clean dead or orphaned shims directories (shims-*)
+			if entry.IsDir() && strings.HasPrefix(name, "shims-") {
+				_ = os.RemoveAll(fullPath)
+				res.SweptTempFiles++
 			}
 		}
 	}
@@ -824,6 +866,12 @@ func RunSweep(args []string) error {
 	}
 
 	fmt.Printf("  [✓] Swept %d orphaned/crashed local session markers\n", res.LocalSweptSessions)
+	if res.SweptDeadPIDFiles > 0 {
+		fmt.Printf("  [✓] Purged %d dead process lock/PID files\n", res.SweptDeadPIDFiles)
+	}
+	if res.SweptTempFiles > 0 {
+		fmt.Printf("  [✓] Cleaned %d stale temporary files and dead shims\n", res.SweptTempFiles)
+	}
 	fmt.Printf("  [✓] Flushed %d offline audit records to central tamper-evident ledger\n", res.FlushedAuditCount)
 	if res.ControlPlaneError == nil {
 		fmt.Printf("  [✓] Central Control Plane reconciled: %d idle sessions closed, %d stale grants expired\n", res.ServerSweptSessions, res.ReconciledGrants)

@@ -29,6 +29,7 @@ This document represents the complete functional and non-functional requirements
 | `BAP-545` | Supply-Chain Corporate Mirrors & Public Registry Bypass Prevention | **DONE** | Automated Maven, npm, pip corporate mirror injection and Cedar Rule 6 & 7 enforcement blocking public bypass and honeytoken exfiltration. |
 | `BAP-546` | Enterprise Multi-Scope Cross-Folder Mutation Governance | **DONE** | Fine-grained cross-folder mutation governance (`bapedge trust`, `untrust`, `permissions`), canonical path coverage, and multi-scope persistence across Session, Project, and Global stores. |
 | `BAP-547` | Unified CLI UX & Lifecycle Command Consistency Across All BAP Binaries | **DONE** | Standardized banner, help, and lifecycle commands (`start`, `stop`, `status`, `restart`, `enable`, `serve`) across `bapedge`, `bapcontrolplane`, `bapgateway`, and `bapmcp` with 100% backward compatibility. |
+| `BAP-548` | Agent-Scoped Content Pinning, Manifest Lifecycle (`unpin`, `clear`, `reset`), & Offline Edge Sweep/Sync | **DONE** | Cryptographic agent scoping (AG vs CC vs Copilot vs Global), pin lifecycle management (`unpin`, `clear`, `reset`), dead lock/PID & orphaned shim purge, and offline telemetry spool sweep/sync. |
 | `BAP-534` | Process-Level Supervision & Child Ancestry Tracking | **DONE** | Process tree ancestry (`parent`, `broker`, `child`), Windows Job Object containment, execution receipts. Verified in `test_bap_534_535_538.py`, `test_e2e_full_lifecycle.py`, and `test_e2e_adversarial_hardening.py`. |
 | `BAP-535` | Credential Shielding & Secret Redaction | **DONE** | Ambient env scrubbing (`AWS_*`, `GITHUB_*`, `OPENAI_*`) and output regex redaction (`[BAP_REDACTED_*]`). Verified across unit and E2E suites. |
 | `BAP-538` | Incident Forensics & Automated Snapshot Rollback | **DONE** | Pre-execution snapshot checkpointing and instant 1-click recovery CLI `bapedge rollback`. Verified in unit and E2E test suites. |
@@ -2805,3 +2806,43 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   3. `bapedge` top-level commands support `start`, `stop`, `restart`, `enable`, `trust`, `untrust`, `permissions`, `rollback`, `pin`, and `why`.
   4. Passing flags directly (e.g. `bapcontrolplane -port 8080`) defaults to `start` with those flags, ensuring 100% backward compatibility for all test suites and orchestration scripts.
   5. Interactive terminal invocation of `bapmcp` displays onboarding instructions for Claude Code, Antigravity, and Cursor, while piped invocation transparently starts the stdio MCP server.
+
+---
+
+#### BAP-548: Agent-Scoped Content Pinning, Manifest Lifecycle Management, & Offline Spool Sweep/Sync
+* **Epic**: `BAP-EPIC-30`
+* **Status**: `DONE`
+* **Priority**: `P0 - High`
+* **Implementation Evidence**:
+  - Agent-Scoped Content Pinning & AIR Protection ([`bap-edge/internal/pinning/pinning.go`](file:///c:/Users/User/pyprj/bapltd/bap-edge/internal/pinning/pinning.go)):
+    - Added `AgentScope` field to `PinnedAsset` struct (`"antigravity"`, `"claude-code"`, `"copilot"`, `"cursor"`, `"all"`, or specific app identity).
+    - Implemented `NormalizeAgentName(name string)` mapping aliases (`ag`, `antigravity`, `gemini`, `cc`, `claude`, `claudecode`, `copilot`) to canonical agent names.
+    - Implemented `IsAssetInAgentScope(assetScope, agentSource string) bool` guaranteeing that prompt and skill modifications for one agent (e.g. `CLAUDE.md`) do not block or cause false-positive drift for another agent (e.g. `antigravity`).
+    - Updated `DiscoverAssets` with deterministic agent scoping: `.claude/skills/*` and `CLAUDE.md` tagged `claude-code`; `.antigravity/skills/*` and `GEMINI.md` tagged `antigravity`; `AGENTS.md` tagged `copilot`; `policy.cedar` and `bap-config.json` tagged `all`.
+    - Updated `checkContentPinning` in [`bap-edge/cmd/exec.go`](file:///c:/Users/User/pyprj/bapltd/bap-edge/cmd/exec.go) to strictly evaluate assets matching the caller's agent scope.
+  - Manifest Lifecycle Management ([`bap-edge/cmd/pin.go`](file:///c:/Users/User/pyprj/bapltd/bap-edge/cmd/pin.go)):
+    - Added `bapedge pin unpin <id>` and `bapedge pin unpin --all` for removing specific or all asset pins.
+    - Added `bapedge pin clear` for clearing the pinning manifest to start fresh.
+    - Added `bapedge pin reset` to clear manifest and re-execute scoped auto-discovery across the workspace.
+    - Added `--scope <agent>` flag to `bapedge pin add` and `bapedge pin verify` with flexible argument/flag ordering.
+    - Enhanced `bapedge pin list` to display `Scope: <scope>` for every registered asset.
+  - Offline Edge Resilience & Telemetry Synchronization ([`bap-edge/cmd/sync.go`](file:///c:/Users/User/pyprj/bapltd/bap-edge/cmd/sync.go)):
+    - Updated `RunSync` to flush locally buffered offline telemetry events via `audit.FlushOfflineAudit` alongside Cedar policy synchronization.
+    - Displays detailed offline telemetry status: spooled event count in `.bapstate/audit.jsonl`, policy version, rules digest, and clear offline resilience feedback when central control plane is unreachable.
+  - Enhanced Clean Sweep & Zombie Artifact Purging ([`bap-edge/cmd/cli_tools.go`](file:///c:/Users/User/pyprj/bapltd/bap-edge/cmd/cli_tools.go)):
+    - Enhanced `PerformSweep` and `RunSweep` to purge dead PID files (`*.pid`, `pid-*`) where process is not alive in the OS process table.
+    - Purges stale temporary files (`*.tmp.*`) and abandoned shims directories (`shims-*`).
+    - Flushes offline telemetry spool to control plane and triggers central crash-recovery sweep.
+  - Verification & Testing:
+    - Verified via dedicated test suite in [`tests/test_scoped_pinning_and_sweep.py`](file:///c:/Users/User/pyprj/bapltd/tests/test_scoped_pinning_and_sweep.py) (5/5 pass).
+    - Verified full regression test suite in [`tests/test_hitl_and_supply_chain.py`](file:///c:/Users/User/pyprj/bapltd/tests/test_hitl_and_supply_chain.py) (15/15 pass), [`tests/test_bap200_sole_executor.py`](file:///c:/Users/User/pyprj/bapltd/tests/test_bap200_sole_executor.py) (15/15 pass), and [`tests/test_bap_534_535_538.py`](file:///c:/Users/User/pyprj/bapltd/tests/test_bap_534_535_538.py) (4/4 pass).
+* **Story**:
+  > As a platform security administrator and developer using multiple AI agents in the same repository, I want BAP to isolate cryptographic content pinning by agent identity (AG vs CC vs Copilot) so that changes to one agent's instructions do not falsely block another, provide full pin management lifecycle (`unpin`, `clear`, `reset`), and allow explicit invocation of `sweep` and `sync` to clean dead process locks, zombie shims, and flush locally spooled offline telemetry when disconnected from the central control plane.
+* **Acceptance Criteria**:
+  1. `bapedge pin list` displays the active `Scope` (`antigravity`, `claude-code`, `copilot`, or `all`) for every pinned asset.
+  2. `bapedge pin verify --scope <agent>` filters verification to only assets within the specified agent's scope or global assets.
+  3. Commands `bapedge pin unpin <id>`, `bapedge pin unpin --all`, `bapedge pin clear`, and `bapedge pin reset` cleanly manage the pinning manifest.
+  4. Pre-flight execution gate `checkContentPinning` enforces only pins matching the active `ec.source` agent identity.
+  5. `bapedge sweep` removes dead PID files, zombie session markers, orphaned shims, and stale temp files, and flushes the offline audit spool.
+  6. `bapedge sync` synchronizes policy cache AND flushes offline telemetry spool, reporting buffered offline event metrics when disconnected.
+

@@ -190,4 +190,36 @@ All BAP components (`bap-edge`, `bap-controlplane`, `bap-gateway`, `python-agent
   - Rule 6: Strictly denies public repository bypass flags (`--index-url http://pypi.org`, `--registry registry.npmjs.org`, `-DremoteRepositories=http://repo.maven.apache.org`).
   - Rule 7: Canary honeytoken tripwire defense blocking any agent attempts to probe or exfiltrate corporate canary tokens (`$env:CORP_CANARY_TOKEN`, canary trap secrets).
 
+---
+
+## 13. Agent-Scoped Content Pinning, Manifest Lifecycle Management, & Offline Spool Sweep/Sync (`BAP-548`)
+- **Agent Scoping Architecture (Multi-Agent Repositories)**:
+  - Solves cross-agent pin collision: When Google Antigravity (`AG`), Claude Code (`CC`), GitHub Copilot, and Cursor run in the same workspace, each maintains its own instruction files (`GEMINI.md`, `CLAUDE.md`, `AGENTS.md`, `.cursorrules`) and skill folders.
+  - Pinned assets in `.bapstate/pins.json` declare `agent_scope`:
+    - `"antigravity"` (or `"ag"`): Applies strictly to Antigravity instruction prompts and skills.
+    - `"claude-code"` (or `"cc"`): Applies strictly to Claude Code tools and skills.
+    - `"copilot"`: Applies strictly to GitHub Copilot configs.
+    - `"all"` or `""`: Enterprise global invariants (`policy.cedar`, `bap-config.json`, common scripts).
+  - Pre-flight gate `checkContentPinning` checks caller identity `ec.source` (`LTD_SOURCE`). If `GEMINI.md` is modified, Claude Code executions are never blocked by false-positive drift, and vice-versa.
+  - Production Identity Attestation: In production mode, agent identity is cryptographically attested via SPIFFE IDs and signed Grants (`spiffe://bap.internal/app/{app_id}/...`) rather than unauthenticated agent names.
+- **Pin Manifest Lifecycle Management**:
+  - `bapedge pin list`: Displays all pinned assets with `ID`, `Type`, `Scope`, `Path`, `Digest`, and attestation metadata.
+  - `bapedge pin verify [--scope <agent>]`: Cryptographically verifies assets against disk; filters by specified agent scope or evaluates all assets.
+  - `bapedge pin add <path> [--id <name>] [--scope <agent>]`: Pins an asset with custom scope; auto-detects scope from path when omitted.
+  - `bapedge pin unpin <id>` / `bapedge pin unpin --all`: Selectively or comprehensively removes pinned assets from the manifest.
+  - `bapedge pin clear`: Clears the manifest so developers can reset state.
+  - `bapedge pin reset`: Clears manifest and re-runs auto-discovery across the workspace with agent scoping.
+- **Offline Edge Resilience & Telemetry Synchronization**:
+  - `bapedge sync`:
+    - Synchronizes Cedar policy bundle from central control plane.
+    - Flushes offline telemetry spool (`audit.FlushOfflineAudit`) to central ledger.
+    - Displays clear offline resilience indicators when central control plane is unreachable: spooled record count in `.bapstate/audit.jsonl`, policy cache version, rules digest.
+- **Clean Sweep & Zombie Artifact Purging**:
+  - `bapedge sweep [--force]`:
+    - Reconciles orphaned local sessions for dead PIDs.
+    - Purges dead process locks (`*.pid`, `pid-*`) where process is no longer alive in OS process table.
+    - Purges abandoned shims (`shims-*`) and temporary files (`*.tmp.*`).
+    - Flushes pending offline audit entries and triggers control plane crash recovery.
+
+
 
