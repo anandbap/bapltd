@@ -451,7 +451,7 @@ func runStart(args []string) {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Printf("[bapcontrolplane] ERROR: Could not start server on %s: %v", addr, err)
 		log.Printf("[bapcontrolplane] Note: Port %d is already in use by another running instance or process.", *port)
-		log.Printf("[bapcontrolplane] Run 'bapcontrolplane stop' or check occupying process.", *port)
+		log.Printf("[bapcontrolplane] Run 'bapcontrolplane stop' or check occupying process for port %d.", *port)
 		time.Sleep(1 * time.Second)
 		os.Exit(1)
 	}
