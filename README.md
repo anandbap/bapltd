@@ -7,11 +7,37 @@
 BAP is an open reference architecture and implementation for governing AI agents (Claude Code, GitHub Copilot CLI, autonomous worker scripts, and MCP toolchains) that execute commands, touch source files, call APIs, and access enterprise resources.
 
 📖 **Core Documentation Links:**
+- [🚀 5-Minute Developer Onboarding Guide (`docs/ONBOARDING.md`)](docs/ONBOARDING.md) — Single-click user-mode setup for Claude Code, Antigravity, Copilot & Python.
+- [🏢 Enterprise Fleet Deployment (`docs/ENTERPRISE_DEPLOYMENT.md`)](docs/ENTERPRISE_DEPLOYMENT.md) — IT Admin guide for Intune, Jamf, GPO, and Ansible rollouts.
+- [🐍 Python Agent SDK Guide (`docs/PYTHON_SDK_GUIDE.md`)](docs/PYTHON_SDK_GUIDE.md) — Zero-dependency governance client for custom Python autonomous agents.
 - [🌟 Strategic Vision Document (`VISION.md`)](VISION.md) — The executive problem statement, the AI agent crisis, and strategic North Star.
 - [🏛️ Architecture & Technical Design (`ARCHITECTURE.md`)](ARCHITECTURE.md) — Complete 4-Plane technical architecture, state machines, and threat mitigations.
 - [📁 `.bapstate` Architecture & Troubleshooting (`docs/BAPSTATE_AND_TROUBLESHOOTING.md`)](docs/BAPSTATE_AND_TROUBLESHOOTING.md) — Unified state directory, command operations, and troubleshooting playbooks.
 - [📋 Jira Backlog & Stories (`JIRA_STORIES.md`)](JIRA_STORIES.md) — Complete epics, user stories, and delivery boards (BAP-100 through BAP-438).
 - [🧪 10-Point Adversarial Test Matrix (`tests/test_bounded_authority_matrix.py`)](tests/test_bounded_authority_matrix.py) — 100% automated regression matrix.
+
+---
+
+## ⚡ Quickstart (Zero-Privilege User-Mode Install)
+
+Install BAP via pip or directly using pure Python:
+
+```bash
+# 1. Install via PyPI
+pip install bap-ltd
+
+# 2. Run single-click user-mode installer (No admin / UAC required)
+bap install
+
+# 3. Launch developer cockpit & verify governed agents
+bap launch
+```
+
+Or execute without package installation:
+```bash
+python scripts/bap_install.py
+python scripts/bap_launch.py
+```
 
 ---
 

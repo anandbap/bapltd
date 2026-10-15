@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bap-ltd"
+version = "1.0.0"
+description = "Bounded Authority Plane (BAP) - Zero-Trust Local Trusted Daemon & Governance for AI Developer Agents"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "BAP Security Architecture Team", email = "security@bapltd.com"}
+]
+keywords = [
+    "bap", "zero-trust", "ai-agents", "security", "governance",
+    "claude-code", "antigravity", "copilot", "spiffe", "cedar-policy"
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: System Administrators",
+    "Topic :: Security",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = []
+
+[project.urls]
+"Homepage" = "https://bap-controlplane.onrender.com"
+"Documentation" = "https://github.com/anandnomura/bapltd/blob/main/docs/ONBOARDING.md"
+"Repository" = "https://github.com/anandnomura/bapltd"
+
+[project.scripts]
+bap = "bap.cli:main"
+bap-install = "bap.install:main"
+bap-launch = "bap.launch:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bap", "bap.*", "bap_sdk", "bap_sdk.*"]

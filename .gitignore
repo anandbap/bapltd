@@ -119,6 +119,8 @@ __pycache__/
 .pytest_cache/
 venv/
 .venv/
+build/
+*.egg-info/
 python-agent/dist/
 python-agent/build/
 python-agent/*.egg-info/

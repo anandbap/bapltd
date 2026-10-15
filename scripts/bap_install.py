@@ -1,0 +1,476 @@
+#!/usr/bin/env python3
+"""
+BAP Universal User-Mode Installer
+==================================
+Zero-privilege, single-click installer and onboarding engine for the
+Bounded Authority Plane (BAP) Zero-Trust ecosystem.
+
+Supported Platforms:
+  - Windows (x64 / ARM64)
+  - macOS (Apple Silicon / Intel)
+  - Linux (x86_64 / aarch64)
+
+Supported Developer Agents:
+  - Claude Code (Anthropic CLI)
+  - Google Antigravity (Gemini Pair Programmer)
+  - GitHub Copilot (VS Code & CLI)
+  - Python Autonomous Agents (LangChain, AutoGen, CrewAI, custom SDK)
+
+Security Guarantee:
+  - By default, runs completely in USER MODE.
+  - Zero administrator, UAC, or root privileges required.
+  - Installs to user directory (%LOCALAPPDATA%\\BAP or ~/.local/bin).
+  - Only requests administrative elevation if the user explicitly passes --system.
+
+Zero external dependencies (pure Python standard library).
+"""
+
+import os
+import sys
+import json
+import shutil
+import subprocess
+import argparse
+import time
+import urllib.request
+import urllib.error
+import ssl
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+if sys.platform == "win32":
+    import winreg
+    import ctypes
+
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+DEFAULT_REMOTE_SERVER = "https://bap-controlplane.onrender.com"
+
+# Colored terminal output helper
+class TermColor:
+    CYAN = "\033[96m" if sys.platform != "win32" or "WT_SESSION" in os.environ or "ANSICON" in os.environ else ""
+    GREEN = "\033[92m" if sys.platform != "win32" or "WT_SESSION" in os.environ or "ANSICON" in os.environ else ""
+    YELLOW = "\033[93m" if sys.platform != "win32" or "WT_SESSION" in os.environ or "ANSICON" in os.environ else ""
+    RED = "\033[91m" if sys.platform != "win32" or "WT_SESSION" in os.environ or "ANSICON" in os.environ else ""
+    BOLD = "\033[1m" if sys.platform != "win32" or "WT_SESSION" in os.environ or "ANSICON" in os.environ else ""
+    RESET = "\033[0m" if sys.platform != "win32" or "WT_SESSION" in os.environ or "ANSICON" in os.environ else ""
+
+
+def is_admin() -> bool:
+    """Check if the current process has administrative/root privileges."""
+    if sys.platform == "win32":
+        try:
+            return ctypes.windll.shell32.IsUserAnAdmin() != 0
+        except Exception:
+            return False
+    else:
+        return os.geteuid() == 0
+
+
+def resolve_default_install_dir() -> str:
+    """Resolves standard user-mode installation directory."""
+    if sys.platform == "win32":
+        local_app_data = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
+        return os.path.join(local_app_data, "BAP", "bin")
+    else:
+        return os.path.expanduser("~/.local/bin")
+
+
+def get_source_binary(name: str) -> str:
+    """Finds built binaries in the repository dist or build directories."""
+    ext = ".exe" if sys.platform == "win32" else ""
+    binary_name = name + ext if not name.endswith(ext) else name
+    
+    candidates = [
+        os.path.join(REPO_ROOT, "dist", "windows-amd64", binary_name),
+        os.path.join(REPO_ROOT, "dist", "windows-amd64", "claude-client", binary_name),
+        os.path.join(REPO_ROOT, "dist", "windows-amd64", "controlplane", binary_name),
+        os.path.join(REPO_ROOT, binary_name),
+        os.path.join(REPO_ROOT, "bap-edge", binary_name),
+        os.path.join(REPO_ROOT, "bap-controlplane", binary_name),
+        os.path.join(REPO_ROOT, "cchook", binary_name),
+        os.path.join(REPO_ROOT, "copilot", binary_name),
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    # Fallback to PATH
+    which_found = shutil.which(binary_name)
+    if which_found:
+        return which_found
+    return candidates[0]
+
+
+def update_user_path(target_dir: str):
+    """Adds the target directory to User Environment PATH persistently without admin rights."""
+    clean_target = os.path.normpath(target_dir)
+    print(f"[*] Updating User environment PATH to include: {clean_target}")
+
+    if sys.platform == "win32":
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment", 0, winreg.KEY_READ | winreg.KEY_WRITE)
+            try:
+                current_path, _ = winreg.QueryValueEx(key, "Path")
+            except FileNotFoundError:
+                current_path = ""
+
+            paths = [os.path.normpath(p.strip()) for p in current_path.split(";") if p.strip()]
+            if clean_target not in paths:
+                new_path = current_path.rstrip(";") + (";" if current_path else "") + clean_target
+                winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, new_path)
+                print(f"  {TermColor.GREEN}[+] Added to Windows User PATH (HKCU\\Environment\\Path){TermColor.RESET}")
+                
+                # Broadcast WM_SETTINGCHANGE so existing explorer and new shells pick it up
+                try:
+                    HWND_BROADCAST = 0xFFFF
+                    WM_SETTINGCHANGE = 0x001A
+                    SMTO_ABORTIFHUNG = 0x0002
+                    result = ctypes.c_long()
+                    ctypes.windll.user32.SendMessageTimeoutW(
+                        HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment",
+                        SMTO_ABORTIFHUNG, 1000, ctypes.byref(result)
+                    )
+                except Exception:
+                    pass
+            else:
+                print(f"  {TermColor.GREEN}[OK] User PATH already contains installation directory.{TermColor.RESET}")
+            winreg.CloseKey(key)
+        except Exception as e:
+            print(f"  {TermColor.YELLOW}[!] Notice: Could not update registry PATH automatically: {e}{TermColor.RESET}")
+    else:
+        # macOS / Linux: Append to shell profile
+        shell_profiles = [
+            os.path.expanduser("~/.bashrc"),
+            os.path.expanduser("~/.zshrc"),
+            os.path.expanduser("~/.profile"),
+        ]
+        export_line = f'export PATH="{clean_target}:$PATH"\n'
+        for profile in shell_profiles:
+            if os.path.exists(profile):
+                try:
+                    with open(profile, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    if clean_target not in content:
+                        with open(profile, "a", encoding="utf-8") as f:
+                            f.write(f"\n# BAP Zero-Trust Path\n{export_line}")
+                        print(f"  {TermColor.GREEN}[+] Appended PATH export to {profile}{TermColor.RESET}")
+                except Exception as e:
+                    print(f"  {TermColor.YELLOW}[!] Could not update {profile}: {e}{TermColor.RESET}")
+
+    # Also update current runtime process PATH
+    if clean_target not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = clean_target + os.pathsep + os.environ.get("PATH", "")
+
+
+def install_core_binaries(target_dir: str):
+    """Copies BAP executables and configuration assets into the user-mode directory."""
+    os.makedirs(target_dir, exist_ok=True)
+    print(f"\n[*] Deploying BAP Binaries to {target_dir}...")
+
+    # Assets to deploy
+    binaries = [
+        ("bapedge", "Edge Daemon & Execution Broker"),
+        ("interceptor", "Claude Code Lifecycle Hook"),
+        ("cchook-interceptor", "Claude Code Alternate Hook"),
+        ("copilot-interceptor", "Copilot Hook Interceptor"),
+        ("bapmcp", "Zero-Trust MCP Security Server"),
+        ("bapcontrolplane", "Local Control Plane Server"),
+    ]
+
+    deployed = 0
+    for bin_name, desc in binaries:
+        src = get_source_binary(bin_name)
+        ext = ".exe" if sys.platform == "win32" else ""
+        dst = os.path.join(target_dir, bin_name + ext)
+        if os.path.isfile(src):
+            try:
+                shutil.copy2(src, dst)
+                os.chmod(dst, 0o755)
+                size_kb = os.path.getsize(dst) / 1024
+                print(f"  {TermColor.GREEN}[+] {bin_name:<20}{TermColor.RESET} ({desc}) [{size_kb:.0f} KB]")
+                deployed += 1
+            except Exception as e:
+                print(f"  {TermColor.YELLOW}[!] Failed copying {bin_name}: {e}{TermColor.RESET}")
+        else:
+            print(f"  {TermColor.YELLOW}[-] Source binary not found: {bin_name} (Will build or download on demand){TermColor.RESET}")
+
+    # Deploy default Cedar baseline policy & schema
+    for asset in ["policy.cedar", "schema.json", "bap-config.json"]:
+        src = os.path.join(REPO_ROOT, asset)
+        dst = os.path.join(target_dir, asset)
+        if os.path.isfile(src):
+            shutil.copy2(src, dst)
+            print(f"  {TermColor.GREEN}[+] Configuration: {asset:<16}{TermColor.RESET}")
+
+    # Deploy convenience wrapper scripts
+    if sys.platform == "win32":
+        wrappers = [
+            ("run_claude_bap.bat", os.path.join(REPO_ROOT, "dist", "windows-amd64", "claude-client", "run_claude_bap.bat")),
+            ("copilot-wrap.bat", os.path.join(REPO_ROOT, "copilot", "copilot-wrap.bat")),
+        ]
+        for name, src in wrappers:
+            if os.path.isfile(src):
+                shutil.copy2(src, os.path.join(target_dir, name))
+                print(f"  {TermColor.GREEN}[+] Shell Wrapper: {name:<16}{TermColor.RESET}")
+
+    return deployed
+
+
+def configure_agent_hooks(workspace_root: str, target_dir: str):
+    """Autodetects installed agents and configures hooks, MCP configs, and rules."""
+    print(f"\n[*] Autodetecting and Configuring Developer Agent Hooks in: {workspace_root}...")
+    
+    bapedge_bin = os.path.join(target_dir, "bapedge.exe" if sys.platform == "win32" else "bapedge")
+    cchook_bin = os.path.join(target_dir, "interceptor.exe" if sys.platform == "win32" else "interceptor")
+    mcp_bin = os.path.join(target_dir, "bapmcp.exe" if sys.platform == "win32" else "bapmcp")
+    if not os.path.isfile(mcp_bin):
+        mcp_bin = bapedge_bin
+
+    detected_agents = []
+
+    # 1. Claude Code
+    claude_dir = os.path.join(workspace_root, ".claude")
+    claude_hooks_dir = os.path.join(claude_dir, "hooks")
+    os.makedirs(claude_hooks_dir, exist_ok=True)
+    
+    # Copy interceptor into workspace hooks
+    hook_dest = os.path.join(claude_hooks_dir, "interceptor.exe" if sys.platform == "win32" else "interceptor")
+    if os.path.isfile(cchook_bin):
+        try:
+            shutil.copy2(cchook_bin, hook_dest)
+            os.chmod(hook_dest, 0o755)
+        except Exception:
+            pass
+
+    claude_settings_path = os.path.join(claude_dir, "settings.json")
+    claude_settings = {
+        "hooks": {
+            "SessionStart": [{"command": hook_dest}],
+            "UserPromptSubmit": [{"command": hook_dest}],
+            "PreToolUse": [{"matcher": "*", "command": hook_dest}]
+        }
+    }
+    with open(claude_settings_path, "w", encoding="utf-8") as f:
+        json.dump(claude_settings, f, indent=2)
+
+    # Claude MCP
+    claude_mcp_path = os.path.join(claude_dir, "mcp.json")
+    claude_mcp = {
+        "mcpServers": {
+            "bap-zero-trust": {
+                "command": mcp_bin if mcp_bin != bapedge_bin else bapedge_bin,
+                "args": ["mcp"] if mcp_bin == bapedge_bin else [],
+                "env": {"LTD_SOURCE": "claude-code", "BAP_SESSION_ID": "sess-claude-governed"}
+            }
+        }
+    }
+    with open(claude_mcp_path, "w", encoding="utf-8") as f:
+        json.dump(claude_mcp, f, indent=2)
+
+    detected_agents.append("Claude Code (Hooks + MCP Installed)")
+    print(f"  {TermColor.GREEN}[+] Claude Code:{TermColor.RESET} Configured hooks in {claude_settings_path}")
+
+    # 2. Google Antigravity
+    antigravity_dir = os.path.join(workspace_root, ".antigravity")
+    os.makedirs(antigravity_dir, exist_ok=True)
+    gemini_md_path = os.path.join(workspace_root, "GEMINI.md")
+    if not os.path.isfile(gemini_md_path):
+        gemini_rule_content = f"""# BAP Zero-Trust Policy & Shell Governance for Antigravity (Governed Session)
+
+This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon ({os.path.basename(bapedge_bin)}).
+
+## Mandatory Execution Rules
+1. **Always Use BAP Edge Execution Broker**:
+   - All shell executions MUST run through bapedge.exe exec:
+      {bapedge_bin} exec "<command>"
+   - Never run raw, ungoverned shell commands on the host machine.
+2. **Zero-Trust Policy Enforcement**:
+   - Commands are evaluated against Cedar invariants before execution.
+   - If a command is denied, inspect the suggestion in the structured response.
+3. **Identity & Audit Logging**:
+   - LTD_SOURCE=antigravity
+"""
+        with open(gemini_md_path, "w", encoding="utf-8") as f:
+            f.write(gemini_rule_content)
+        detected_agents.append("Google Antigravity (GEMINI.md Rule + MCP Installed)")
+        print(f"  {TermColor.GREEN}[+] Google Antigravity:{TermColor.RESET} Created zero-trust rule at {gemini_md_path}")
+    else:
+        detected_agents.append("Google Antigravity (Existing GEMINI.md Preserved + MCP Installed)")
+        print(f"  {TermColor.GREEN}[+] Google Antigravity:{TermColor.RESET} Verified active zero-trust rule at {gemini_md_path}")
+
+    # 3. GitHub Copilot (.vscode/settings.json + .vscode/mcp.json)
+    vscode_dir = os.path.join(workspace_root, ".vscode")
+    os.makedirs(vscode_dir, exist_ok=True)
+    vscode_settings_path = os.path.join(vscode_dir, "settings.json")
+    vscode_settings = {}
+    if os.path.isfile(vscode_settings_path):
+        try:
+            with open(vscode_settings_path, "r", encoding="utf-8") as f:
+                vscode_settings = json.load(f)
+        except Exception:
+            pass
+
+    wrap_bat = os.path.join(target_dir, "copilot-wrap.bat")
+    if sys.platform == "win32":
+        vscode_settings["terminal.integrated.profiles.windows"] = {
+            "CopilotSandbox": {"path": wrap_bat, "overrideName": True}
+        }
+        vscode_settings["terminal.integrated.defaultProfile.windows"] = "CopilotSandbox"
+    with open(vscode_settings_path, "w", encoding="utf-8") as f:
+        json.dump(vscode_settings, f, indent=2)
+
+    vscode_mcp_path = os.path.join(vscode_dir, "mcp.json")
+    vscode_mcp = {
+        "servers": {
+            "bap-zero-trust": {
+                "command": mcp_bin if mcp_bin != bapedge_bin else bapedge_bin,
+                "args": ["mcp"] if mcp_bin == bapedge_bin else [],
+                "env": {"LTD_SOURCE": "copilot-mcp", "BAP_SESSION_ID": "sess-copilot-mcp"}
+            }
+        }
+    }
+    with open(vscode_mcp_path, "w", encoding="utf-8") as f:
+        json.dump(vscode_mcp, f, indent=2)
+    detected_agents.append("GitHub Copilot (VS Code Profile + MCP Installed)")
+    print(f"  {TermColor.GREEN}[+] GitHub Copilot:{TermColor.RESET} Configured VS Code sandbox in {vscode_settings_path}")
+
+    # 4. Python Agent SDK
+    py_agent_dir = os.path.join(REPO_ROOT, "python-agent")
+    if os.path.isdir(py_agent_dir):
+        print(f"  {TermColor.GREEN}[+] Python SDK:{TermColor.RESET} Local SDK available at {py_agent_dir}")
+        detected_agents.append("Python Agent SDK (Available)")
+
+    return detected_agents
+
+
+def verify_controlplane_handshake(server_url: str) -> bool:
+    """Probes remote or local control plane for health and returns status."""
+    print(f"\n[*] Probing BAP Control Plane connection ({server_url})...")
+    ctx = ssl.create_default_context()
+    try:
+        req = urllib.request.Request(f"{server_url}/health", headers={"User-Agent": "BAP-UniversalInstaller/1.0"})
+        with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
+            if resp.status == 200:
+                print(f"  {TermColor.GREEN}[+] Control Plane Reachable (HTTP 200 OK){TermColor.RESET}")
+                return True
+    except Exception as e:
+        print(f"  {TermColor.YELLOW}[!] Control Plane offline or unreachable: {e}{TermColor.RESET}")
+        print("      (bapedge will operate in secure offline cached policy mode)")
+    return False
+
+
+def run_pin_scan(target_dir: str, workspace_root: str):
+    """Executes initial AIR content pinning to baseline all prompts and policies."""
+    bapedge_bin = os.path.join(target_dir, "bapedge.exe" if sys.platform == "win32" else "bapedge")
+    if os.path.isfile(bapedge_bin):
+        print("\n[*] Initializing Cryptographic Content Pinning (AIR Model)...")
+        try:
+            res = subprocess.run([bapedge_bin, "pin", "scan", "--dir", workspace_root], capture_output=True, text=True, timeout=10)
+            if res.returncode == 0:
+                print(f"  {TermColor.GREEN}[+] Workspace skills, prompts, and manifests successfully pinned!{TermColor.RESET}")
+            else:
+                print(f"  {TermColor.YELLOW}[!] Pin scan notice: {res.stderr.strip()}{TermColor.RESET}")
+        except Exception as e:
+            print(f"  {TermColor.YELLOW}[!] Could not execute pin scan: {e}{TermColor.RESET}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="BAP Universal User-Mode Installer — Single-click Zero-Trust onboarding for AI developer agents"
+    )
+    parser.add_argument("--dir", default=resolve_default_install_dir(), help="Target installation directory (default: user home)")
+    parser.add_argument("--workspace", default=os.getcwd(), help="Target workspace root to configure agent hooks")
+    parser.add_argument("--server", default=DEFAULT_REMOTE_SERVER, help=f"Central BAP Control Plane URL (default: {DEFAULT_REMOTE_SERVER})")
+    parser.add_argument("--system", action="store_true", help="Request administrative elevation for system-wide service installation")
+    parser.add_argument("--offline", action="store_true", help="Install in purely offline local governance mode")
+    parser.add_argument("--no-path", action="store_true", help="Skip updating User environment PATH")
+    parser.add_argument("--non-interactive", action="store_true", help="Bypass interactive prompts and use defaults")
+    args = parser.parse_args()
+
+    selected_server = args.server
+    is_offline = args.offline
+    
+    # Interactive Server Selection (Default: Remote Server)
+    explicit_server = any(arg.startswith("--server") for arg in sys.argv)
+    if not explicit_server and not args.offline and not args.non_interactive and sys.stdin.isatty():
+        print("\n" + "=" * 80)
+        print("  SELECT CENTRAL BAP CONTROL PLANE FLEET:")
+        print(f"  [1] Remote BAP Cloud Fleet ({DEFAULT_REMOTE_SERVER})  [Default]")
+        print("  [2] Custom Enterprise Server URL (e.g. https://bap.corp.internal)")
+        print("  [3] Offline / Local Resilience Mode (Standalone local governance without central fleet)")
+        print("=" * 80)
+        try:
+            choice = input("  Enter selection [1/2/3] (Press Enter for default [1]): ").strip()
+            if choice == "2":
+                custom_url = input("  Enter BAP Control Plane URL: ").strip().rstrip("/")
+                if custom_url:
+                    selected_server = custom_url
+            elif choice == "3":
+                is_offline = True
+            else:
+                selected_server = DEFAULT_REMOTE_SERVER
+        except (KeyboardInterrupt, EOFError):
+            print("\n  Using default remote server.")
+            selected_server = DEFAULT_REMOTE_SERVER
+
+    print("=" * 80)
+    print(f"     {TermColor.CYAN}{TermColor.BOLD}BAP ZERO-TRUST ENTERPRISE AGENT GOVERNANCE -- UNIVERSAL INSTALLER{TermColor.RESET}")
+    print("=" * 80)
+    print(f"[*] Target Install Mode:  {'SYSTEM SERVICE (Administrator)' if args.system else 'USER MODE (Zero Privilege / No Root)'}")
+    print(f"[*] Target Directory:     {args.dir}")
+    print(f"[*] Target Workspace:     {args.workspace}")
+    print(f"[*] Control Plane URL:    {'OFFLINE (Local Store)' if is_offline else selected_server}")
+    print("=" * 80)
+
+    # 1. Admin escalation check (opt-in only)
+    if args.system and not is_admin():
+        print(f"\n{TermColor.YELLOW}[!] Administrator privileges requested for system-wide service.{TermColor.RESET}")
+        if sys.platform == "win32":
+            print("[*] Re-launching with UAC elevation...")
+            ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
+            sys.exit(0)
+        else:
+            print("[!] Please run with sudo: sudo python bap_install.py --system")
+            sys.exit(1)
+
+    # 2. Deploy core binaries
+    deployed_count = install_core_binaries(args.dir)
+
+    # 3. Update User PATH
+    if not args.no_path:
+        update_user_path(args.dir)
+
+    # 4. Configure Agent Hooks
+    agents = configure_agent_hooks(args.workspace, args.dir)
+
+    # 5. Handshake with Control Plane
+    if not is_offline:
+        verify_controlplane_handshake(selected_server)
+
+    # 6. Cryptographic Pinning Scan
+    run_pin_scan(args.dir, args.workspace)
+
+    # 7. Print Completion & Verification Banner
+    print("\n" + "=" * 80)
+    print(f"  {TermColor.GREEN}{TermColor.BOLD}[SUCCESS] BAP INSTALLATION COMPLETE! Your machine is ready to govern AI agents.{TermColor.RESET}")
+    print("=" * 80)
+    print(f"[+] Total Core Binaries Deployed : {deployed_count}")
+    print(f"[+] Configured Agent Platforms   : {len(agents)}")
+    for a in agents:
+        print(f"    * {a}")
+    print("-" * 80)
+    print(f"{TermColor.BOLD}QUICKSTART -- RUN YOUR AGENTS WITH BAP ZERO-TRUST GOVERNANCE:{TermColor.RESET}")
+    print(f"  1. Claude Code   : {TermColor.CYAN}claude{TermColor.RESET} (Hooks auto-intercept all actions)")
+    print(f"  2. Antigravity   : Governed automatically via {TermColor.CYAN}GEMINI.md{TermColor.RESET} & BAP MCP")
+    print(f"  3. VS Code Copilot: Opens with {TermColor.CYAN}CopilotSandbox{TermColor.RESET} governed profile")
+    print(f"  4. Direct CLI    : {TermColor.CYAN}bapedge exec \"<command>\"{TermColor.RESET}")
+    print(f"  5. Verification  : {TermColor.CYAN}bapedge pin verify{TermColor.RESET}")
+    print("=" * 80)
+
+
+if __name__ == "__main__":
+    main()

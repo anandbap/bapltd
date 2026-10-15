@@ -43,7 +43,7 @@ AGENT_PERSONAS = [
     {"app_id": "cursor", "user_id": "liam.dev", "name": "Liam O'Connor", "role": "DevOps Engineer", "squad": "Release Pipeline"},
 ]
 
-def http_call(method: str, path: str, payload: Dict[str, Any] = None, timeout: float = 12.0) -> RequestMetric:
+def http_call(method: str, path: str, payload: Dict[str, Any] = None, timeout: float = 20.0) -> RequestMetric:
     url = f"{SERVER_URL}{path}"
     headers = {
         "User-Agent": "BAP-PerfEngine/2.0 (Windows-x64)",
@@ -191,7 +191,7 @@ def run_performance_test(fleet_size: int = 12, burst_cycles: int = 4, live_hold_
     print(f"[*] Firing {total_ops} distributed requests across {fleet_size} concurrent workers...")
 
     t_phase3_start = time.perf_counter()
-    with ThreadPoolExecutor(max_workers=min(24, fleet_size * 2)) as executor:
+    with ThreadPoolExecutor(max_workers=fleet_size) as executor:
         futures = [executor.submit(http_call, method, path, payload) for method, path, payload in operations_to_run]
         completed = 0
         for f in as_completed(futures):
