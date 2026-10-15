@@ -136,7 +136,10 @@ class TestExecutiveDemo(unittest.TestCase):
                 res_json = json.loads(body) if body.strip().startswith(("{", "[")) else {}
                 return resp.status, res_json, dict(resp.headers)
         except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8") if e.fp else ""
+            try:
+                body = e.read().decode("utf-8") if e.fp else ""
+            finally:
+                e.close()
             res_json = json.loads(body) if body.strip().startswith(("{", "[")) else {}
             return e.code, res_json, dict(e.headers)
 
@@ -149,22 +152,22 @@ class TestExecutiveDemo(unittest.TestCase):
 
         # 1. Test /inspector.html redirect
         req1 = urllib.request.Request(f"{self.server_url}/inspector.html")
-        resp1 = opener.open(req1)
-        # Server sends 302 or 200 with HTML redirect meta
-        if resp1.status == 302:
-            self.assertIn("/dashboard/", resp1.headers.get("Location", ""))
-        else:
-            body1 = resp1.read().decode("utf-8")
-            self.assertIn("/dashboard/", body1)
+        with opener.open(req1) as resp1:
+            # Server sends 302 or 200 with HTML redirect meta
+            if resp1.status == 302:
+                self.assertIn("/dashboard/", resp1.headers.get("Location", ""))
+            else:
+                body1 = resp1.read().decode("utf-8")
+                self.assertIn("/dashboard/", body1)
 
         # 2. Test /inspector_v2.html redirect
         req2 = urllib.request.Request(f"{self.server_url}/inspector_v2.html")
-        resp2 = opener.open(req2)
-        if resp2.status == 302:
-            self.assertIn("/dashboard/", resp2.headers.get("Location", ""))
-        else:
-            body2 = resp2.read().decode("utf-8")
-            self.assertIn("/dashboard/", body2)
+        with opener.open(req2) as resp2:
+            if resp2.status == 302:
+                self.assertIn("/dashboard/", resp2.headers.get("Location", ""))
+            else:
+                body2 = resp2.read().decode("utf-8")
+                self.assertIn("/dashboard/", body2)
 
         # 3. Test /dashboard/ returns HTTP 200 with Cockpit dashboard HTML
         req_dash = urllib.request.Request(f"{self.server_url}/dashboard/")

@@ -34,8 +34,10 @@ CP_PORT = 19180
 CP_URL = f"http://127.0.0.1:{CP_PORT}"
 
 
-def http_req(url, method="GET", data=None, headers=None):
-    hdrs = headers or {}
+def http_req(url, method="GET", data=None, headers=None, retries=3):
+    hdrs = dict(headers or {})
+    if "Connection" not in hdrs:
+        hdrs["Connection"] = "close"
     body_bytes = None
     if data is not None:
         if isinstance(data, (dict, list)):
@@ -47,24 +49,32 @@ def http_req(url, method="GET", data=None, headers=None):
         else:
             body_bytes = data
 
-    req = urllib.request.Request(url, data=body_bytes, headers=hdrs, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            raw = resp.read()
+    for attempt in range(retries):
+        req = urllib.request.Request(url, data=body_bytes, headers=hdrs, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                raw = resp.read()
+                parsed = {}
+                try:
+                    parsed = json.loads(raw.decode("utf-8"))
+                except Exception:
+                    pass
+                return resp.status, parsed, raw
+        except urllib.error.HTTPError as e:
+            try:
+                raw = e.read()
+            finally:
+                e.close()
             parsed = {}
             try:
                 parsed = json.loads(raw.decode("utf-8"))
             except Exception:
                 pass
-            return resp.status, parsed, raw
-    except urllib.error.HTTPError as e:
-        raw = e.read()
-        parsed = {}
-        try:
-            parsed = json.loads(raw.decode("utf-8"))
+            return e.code, parsed, raw
         except Exception:
-            pass
-        return e.code, parsed, raw
+            if attempt == retries - 1:
+                raise
+            time.sleep(0.2)
 
 
 class TestGovernanceExtension(unittest.TestCase):
@@ -79,6 +89,7 @@ class TestGovernanceExtension(unittest.TestCase):
         env = os.environ.copy()
         env["BAP_SECRET_KEY"] = TEST_SECRET
         env["BAP_ADMIN_TOKEN"] = TEST_ADMIN_TOKEN
+        env["BAP_ALLOW_REMOTE_ADMIN"] = "1"
 
         cls.cp_proc = subprocess.Popen(
             [
@@ -86,6 +97,7 @@ class TestGovernanceExtension(unittest.TestCase):
                 "-port", str(CP_PORT),
                 "-secret", TEST_SECRET,
                 "-admin-token", TEST_ADMIN_TOKEN,
+                "-allow-remote-admin",
                 "-db", db_path,
             ],
             stdout=subprocess.DEVNULL,
@@ -95,7 +107,7 @@ class TestGovernanceExtension(unittest.TestCase):
         )
 
         healthy = False
-        for _ in range(30):
+        for _ in range(40):
             try:
                 status, _, _ = http_req(f"{CP_URL}/health")
                 if status == 200:
@@ -103,8 +115,10 @@ class TestGovernanceExtension(unittest.TestCase):
                     break
             except Exception:
                 pass
-            time.sleep(0.1)
+            time.sleep(0.15)
         if not healthy:
+            if cls.cp_proc:
+                cls.cp_proc.kill()
             raise RuntimeError(f"Control Plane failed to start on port {CP_PORT}")
 
     @classmethod

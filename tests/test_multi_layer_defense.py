@@ -45,10 +45,10 @@ class TestMultiLayerDefense(unittest.TestCase):
         healthy = False
         for _ in range(25):
             try:
-                res = urllib.request.urlopen(f"{cls.server_url}/api/v1/health", timeout=0.5)
-                if res.status == 200:
-                    healthy = True
-                    break
+                with urllib.request.urlopen(f"{cls.server_url}/api/v1/health", timeout=0.5) as res:
+                    if res.status == 200:
+                        healthy = True
+                        break
             except Exception:
                 time.sleep(0.15)
         if not healthy:
@@ -127,6 +127,16 @@ class TestMultiLayerDefense(unittest.TestCase):
             self.assertTrue(res_denied["result"]["isError"], "MCP must block 'cat .env' with isError=True")
             self.assertIn("[DENIED]", res_denied["result"]["content"][0]["text"])
         finally:
+            if proc.stdin:
+                try:
+                    proc.stdin.close()
+                except Exception:
+                    pass
+            if proc.stdout:
+                try:
+                    proc.stdout.close()
+                except Exception:
+                    pass
             proc.terminate()
             proc.wait()
 

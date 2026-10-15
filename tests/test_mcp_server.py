@@ -76,7 +76,21 @@ class MCPClient:
 
     def close(self):
         try:
-            self.proc.stdin.close()
+            if self.proc.stdin:
+                try:
+                    self.proc.stdin.close()
+                except Exception:
+                    pass
+            if self.proc.stdout:
+                try:
+                    self.proc.stdout.close()
+                except Exception:
+                    pass
+            if self.proc.stderr:
+                try:
+                    self.proc.stderr.close()
+                except Exception:
+                    pass
             self.proc.terminate()
             self.proc.wait(timeout=2)
         except Exception:

@@ -665,6 +665,16 @@ def main():
                         pass
 
     finally:
+        if server_proc.stdout:
+            try:
+                server_proc.stdout.close()
+            except Exception:
+                pass
+        if server_proc.stderr:
+            try:
+                server_proc.stderr.close()
+            except Exception:
+                pass
         server_proc.terminate()
         try:
             server_proc.wait(timeout=3)
