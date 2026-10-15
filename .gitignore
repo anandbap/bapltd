@@ -95,6 +95,7 @@ bap-gateway/bapgateway.exe
 *.sqlite3
 *.sqlite*
 bap-controlplane.db*
+*.pid
 policy-state.json
 manual-acceptance-results.json
 .bapstate/

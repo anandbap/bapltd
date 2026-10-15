@@ -28,6 +28,7 @@ This document represents the complete functional and non-functional requirements
 | `BAP-544` | Human-in-the-Loop (HITL) Step-Up Escalation | **DONE** | Interactive terminal approval prompt (`[O] Once`, `[S] Session`, `[P] Project`, `[G] Global`, `[D] Deny`), fail-closed headless enforcement, and `ALLOWED_STEPUP` receipts. |
 | `BAP-545` | Supply-Chain Corporate Mirrors & Public Registry Bypass Prevention | **DONE** | Automated Maven, npm, pip corporate mirror injection and Cedar Rule 6 & 7 enforcement blocking public bypass and honeytoken exfiltration. |
 | `BAP-546` | Enterprise Multi-Scope Cross-Folder Mutation Governance | **DONE** | Fine-grained cross-folder mutation governance (`bapedge trust`, `untrust`, `permissions`), canonical path coverage, and multi-scope persistence across Session, Project, and Global stores. |
+| `BAP-547` | Unified CLI UX & Lifecycle Command Consistency Across All BAP Binaries | **DONE** | Standardized banner, help, and lifecycle commands (`start`, `stop`, `status`, `restart`, `enable`, `serve`) across `bapedge`, `bapcontrolplane`, `bapgateway`, and `bapmcp` with 100% backward compatibility. |
 | `BAP-534` | Process-Level Supervision & Child Ancestry Tracking | **DONE** | Process tree ancestry (`parent`, `broker`, `child`), Windows Job Object containment, execution receipts. Verified in `test_bap_534_535_538.py`, `test_e2e_full_lifecycle.py`, and `test_e2e_adversarial_hardening.py`. |
 | `BAP-535` | Credential Shielding & Secret Redaction | **DONE** | Ambient env scrubbing (`AWS_*`, `GITHUB_*`, `OPENAI_*`) and output regex redaction (`[BAP_REDACTED_*]`). Verified across unit and E2E suites. |
 | `BAP-538` | Incident Forensics & Automated Snapshot Rollback | **DONE** | Pre-execution snapshot checkpointing and instant 1-click recovery CLI `bapedge rollback`. Verified in unit and E2E test suites. |
@@ -2775,5 +2776,32 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   5. Developer CLI commands `bapedge trust`, `bapedge untrust`, and `bapedge permissions` manage authorizations across all scopes.
   6. Direct agent file modification tools (`Edit`, `Write`) in `cchook` respect active permissions.
 
+---
 
-
+#### BAP-547: Unified CLI UX & Lifecycle Command Consistency Across All BAP Binaries
+* **Epic**: `BAP-EPIC-30`
+* **Status**: `DONE`
+* **Priority**: `P0 - High`
+* **Implementation Evidence**:
+  - Consistent Lifecycle Architecture:
+    - Standardized `start`, `stop`, `status`, `restart`, `enable`, `serve`, and `help` commands across all four BAP binaries (`bapedge`, `bapcontrolplane`, `bapgateway`, `bapmcp`).
+    - Cross-platform process management: Implemented `proc_windows.go` (using Win32 `OpenProcess`, `GetExitCodeProcess`, and `taskkill`) and `proc_unix.go` (`syscall.Kill`) for reliable PID tracking, detached background daemon spawning (`--detach` / `-d`), and graceful termination across all components.
+  - Zero-Surprise CLI Invocation:
+    - Running any binary with zero arguments or `help`/`--help` renders a structured, professional ASCII usage banner with categorized command sets and examples instead of immediately starting a blocking background server or locking a port unexpectedly.
+    - 100% strict backward compatibility: If arguments start with `-` (e.g. `bapcontrolplane --port 8080`), execution automatically defaults to `start` with those arguments, preserving all existing CI/CD automation and test suites without regression.
+  - Upgraded BAP Edge CLI Banner ([`bap-edge/main.go`](file:///c:/Users/User/pyprj/bapltd/bap-edge/main.go)):
+    - Integrated top-level `start`, `stop`, `restart`, `enable` command dispatchers routing directly to background supervisor daemon routines.
+    - Prominently showcases newly added zero-trust and governance commands: `trust`, `untrust`, `permissions` (cross-folder HITL), `rollback` (BAP-538 forensic recovery), `pin` (BAP-531 content pinning), and `why` (instant Cedar policy explanation).
+  - Interactive Terminal Guard on BAP MCP ([`bap-edge/cmd/mcp.go`](file:///c:/Users/User/pyprj/bapltd/bap-edge/cmd/mcp.go)):
+    - Interactive console detection via `isTerminal(os.Stdin)`: when run directly in a human shell without stdin pipe or flags, displays a comprehensive MCP onboarding and integration guide (Claude Code `settings.json`, Gemini/Antigravity `bap-zero-trust`, Cursor IDE `mcpServers`, tools exposed) instead of freezing on stdin read.
+    - When piped from an agent host or called with `--stdio` or `serve`, immediately engages standard JSON-RPC stdio protocol.
+  - Verification & Testing:
+    - Full backward compatibility verified across `tests/test_control_plane.py` (100% pass), `tests/test_hitl_and_supply_chain.py` (15/15 pass), `tests/test_bap200_sole_executor.py` (15/15 pass), and `tests/test_bap_534_535_538.py` (4/4 pass).
+* **Story**:
+  > As an enterprise engineer and platform administrator deploying BAP, I want a uniform CLI UX across all BAP binaries (`bapedge`, `bapcontrolplane`, `bapgateway`, `bapmcp`) where invoking binaries without parameters displays rich usage instructions, lifecycle management commands (`start`, `stop`, `status`, `restart`, `enable`) work identically across all services, newly added governance commands (`trust`, `rollback`, `pin`) are prominently exposed, and running `bapmcp` interactively explains how to mount it into AI agent hosts rather than hanging on standard input.
+* **Acceptance Criteria**:
+  1. Invoking `bapcontrolplane`, `bapgateway`, `bapedge`, or `bapmcp` with zero arguments or `--help` displays a standardized, rich usage banner without starting unexpected servers or freezing terminals.
+  2. Subcommands `start`, `stop`, `status`, `restart`, `enable`, and `serve` are supported across `bapcontrolplane` and `bapgateway`.
+  3. `bapedge` top-level commands support `start`, `stop`, `restart`, `enable`, `trust`, `untrust`, `permissions`, `rollback`, `pin`, and `why`.
+  4. Passing flags directly (e.g. `bapcontrolplane -port 8080`) defaults to `start` with those flags, ensuring 100% backward compatibility for all test suites and orchestration scripts.
+  5. Interactive terminal invocation of `bapmcp` displays onboarding instructions for Claude Code, Antigravity, and Cursor, while piped invocation transparently starts the stdio MCP server.

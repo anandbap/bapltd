@@ -206,4 +206,22 @@ Implement the top 3 high-impact enterprise MVP capabilities:
   - **BAP-213 (Closed-Loop Stop and Revoke)**: Live CISO controls with instant visual state transitions (`Active → Stopping → Stopped`), real process termination (`taskkill` / `SIGKILL`), permanent revocation, and instant restoration. Displays Merkle hash-chain status (`VALID`).
   - **BAP-214 (Deterministic Executive Demo Scenario)**: Created `demo_executive.py` with 3 governed agents (Carol Zhang / Healthy, Bob Miller / Single Policy Denial, Eve Mallory / Sequential Evasions escalating to Critical). Executes in <15 seconds with zero stale state. Created 1-click Windows launcher `run_executive_demo.bat`.
   - **BAP-215 (Executive Polish & Hardening)**: Modern dark command-center aesthetic, real-time pulse dots, crisp badges, automated test suite `tests/test_executive_demo.py` (5/5 tests passing 100%). Master regression suite in `run_all_tests.bat` verified 32/32 tests passing.
+- [x] **Task 10: Epic 30 — Unified CLI Parity, Cross-Folder HITL & Supply-Chain Governance (BAP-545, BAP-546, BAP-547) — COMPLETE**
+  - **BAP-547 (Universal CLI UX & Lifecycle Command Consistency)**:
+    - Standardized `start`, `stop`, `status`, `restart`, `enable`, `serve`, and `help` commands across all four BAP binaries (`bapedge`, `bapcontrolplane`, `bapgateway`, `bapmcp`).
+    - Zero-surprise invocation: running with no arguments or `--help` prints formatted command guide instead of starting unexpected servers or freezing on stdin.
+    - 100% backward compatibility: passing flags directly (e.g. `bapcontrolplane -port 8080`, `bapgateway -port 9090`) defaults to `start`, ensuring zero regression across automated test suites, scripts, and CI/CD pipelines.
+    - Cross-platform process management: `proc_windows.go` (Win32 `OpenProcess`, `GetExitCodeProcess`, `CREATE_NO_WINDOW`, `taskkill`) and `proc_unix.go` (`syscall.Kill`, `Setpgid`) for reliable background process detachment and process-tree termination.
+    - Interactive terminal detection in `bapmcp`: `isTerminal(os.Stdin)` shows mounting instructions for Claude Code, Antigravity, Cursor; piped execution runs stdio JSON-RPC.
+  - **BAP-546 (Enterprise Multi-Scope Cross-Folder Mutation Governance)**:
+    - Read-only inspection commands (`cat`, `ls`, `dir`, `git status`) traversing sibling repositories outside the project root are natively permitted under Cedar Rule 2 without friction.
+    - Mutating or destructive operations (`write`, `delete`, `tamper`, output redirection) outside workspace boundaries trigger interactive Human-in-the-Loop (HITL) step-up escalation (`[O] Once | [S] Session | [P] Project | [G] Global | [D] Deny`).
+    - Multi-scope persistence across Session (`.bap/approvals_<session_id>.json`), Project (`<workspace>/.bap/project_permissions.json`), and Global (`~/.bap/global_permissions.json`) stores.
+    - CLI tools: `bapedge trust`, `bapedge untrust`, and `bapedge permissions`.
+  - **BAP-545 (Supply-Chain Corporate Mirror Injection & Canary Defense)**:
+    - Automatically injects corporate mirror configurations for Maven (`.bapstate/mirrors/settings.xml`), npm (`.bapstate/mirrors/.npmrc`), and pip (`.bapstate/mirrors/pip.ini`).
+    - Cedar Rule 6: strictly blocks public repository bypass flags (`--index-url`, `--registry`, `-DremoteRepositories`).
+    - Cedar Rule 7: corporate canary honeytoken tripwire defense.
+  - **Test Suite Verification**: Verified with 100% pass across `tests/test_hitl_and_supply_chain.py` (15/15), `tests/test_control_plane.py` (100%), `tests/test_bap200_sole_executor.py` (15/15), and `tests/test_bap_534_535_538.py` (4/4).
+
 

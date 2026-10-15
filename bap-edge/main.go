@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"bap-edge/cmd"
 )
@@ -14,45 +15,52 @@ const usage = `bapedge - BAP Local Trusted Daemon (LTD) & Zero-Trust Execution B
 Usage:
   bapedge <command> [arguments]
 
-Available Commands:
-  config    View or update central control plane and gateway host URLs
-  login     Authenticate developer identity via enterprise OIDC/OAuth2 device flow (Okta/Entra)
-  register  Enroll edge LTD with central BAP Control Plane using one-time code (OTC)
-  setup     1-click workstation onboarding for Claude Code & AI agents (BAP-471)
-  status    Inspect local active sessions, Cedar policy cache, layers, and spool backlog (BAP-472)
-  why       Explain Cedar policy decision for a command directly in the terminal (BAP-472)
-  sweep     Clean sweep orphaned sessions, purge dead process locks, and flush offline audit (BAP-470)
-  sync      Synchronize or inspect local policy cache from control plane (with offline fallback)
-  serve     Start the zero-trust attestation server on Unix domain socket
-  exec      Evaluate command against Cedar policy and run in sandboxed kernel namespace
-  check     Evaluate command against Cedar policy in decision-only mode (zero execution side effects)
-  mcp       Run as Model Context Protocol (MCP) stdio server for Claude, Copilot, and Cursor
-  daemon    Start, stop, or query background supervisor daemon (bap-daemon)
-  pin       Cryptographically pin, verify, and re-attest skills, prompt instructions, and MCP tools (BAP-531)
-  rollback  Forensically revert file mutations to pre-execution cryptographic checkpoints (BAP-538)
-  trust     Authorize cross-folder write/delete operations for a path (session/project/global)
-  untrust   Revoke cross-folder mutation authorization for a path
-  permissions List all active cross-folder authorizations across session, project, and global scopes
-  attest      Client test command: connect to attestation server and request OBO JWT
-  verify-log  Verify cryptographic integrity and anti-tamper hash-chain of local audit log
-  help        Display help information
+Service & Daemon Lifecycle:
+  start        Start background supervisor daemon (or 'bapedge start -foreground')
+  stop         Gracefully terminate background daemon
+  status       Inspect local active sessions, daemon state, policy cache, and spool backlog
+  restart      Restart background supervisor daemon
+  enable       Enable zero-trust governance and configure developer workstation (1-click setup)
+  daemon       Manage supervisor daemon subsystem (start, stop, status)
+
+Zero-Trust Governance & HITL Authorization:
+  trust        Authorize cross-folder write/delete operations for a path (session/project/global)
+  untrust      Revoke cross-folder mutation authorization for a path
+  permissions  List all active cross-folder authorizations across session, project, and global scopes
+  why          Explain Cedar policy decision for a command directly in the terminal
+  rollback     Forensically revert file mutations to pre-execution cryptographic checkpoints (BAP-538)
+  pin          Cryptographically pin, verify, and re-attest skills, prompts, and MCP tools (BAP-531)
+
+Execution & Protocol Integration:
+  exec         Evaluate command against Cedar policy and run in sandboxed kernel namespace
+  check        Evaluate command against Cedar policy in decision-only mode (zero execution side effects)
+  mcp          Run as Model Context Protocol (MCP) server for Claude Code, Copilot, Cursor, Antigravity
+  serve        Start the zero-trust attestation server on domain socket / named pipe
+  sweep        Clean sweep orphaned sessions, purge dead process locks, and flush offline audit
+
+Identity & Central Control Plane:
+  setup        1-click workstation onboarding for Claude Code & AI agents (BAP-471)
+  login        Authenticate developer identity via enterprise OIDC/OAuth2 device flow (Okta/Entra)
+  register     Enroll edge LTD with central BAP Control Plane using one-time code (OTC)
+  sync         Synchronize or inspect local policy cache from control plane (with offline fallback)
+  config       View or update central control plane and gateway host URLs
+  attest       Client test command: connect to attestation server and request OBO JWT
+  verify-log   Verify cryptographic integrity and anti-tamper hash-chain of local audit log
+  help         Display help information
 
 Examples:
-  bapedge setup --app claude-code
+  bapedge start
   bapedge status
-  bapedge daemon start
-  bapedge daemon status
-  bapedge daemon stop
-  bapedge why "rm -rf /"
-  bapedge why "git status"
-  bapedge sweep
-  bapedge register --server http://localhost:8080 --code LTD-OTC-XXXX-XXXX
-  bapedge sync --server http://localhost:8080
+  bapedge stop
   bapedge exec "echo hello world"
-  bapedge exec "rm -rf /"
-
-  bapedge serve --socket /tmp/ltd.sock
-  bapedge attest --socket /tmp/ltd.sock
+  bapedge why "rm -rf /"
+  bapedge trust --path C:\Users\User\pyprj\other --scope session --ops write,delete
+  bapedge permissions
+  bapedge untrust --path C:\Users\User\pyprj\other
+  bapedge rollback --checkpoint-id chk-xxx
+  bapedge pin verify
+  bapedge mcp --stdio
+  bapedge setup --app claude-code
 `
 
 func main() {
@@ -73,13 +81,35 @@ func main() {
 			return
 		}
 		fmt.Print(usage)
-		os.Exit(1)
+		os.Exit(0)
 	}
 
 	command := os.Args[1]
 	args := os.Args[2:]
 
 	switch command {
+	case "start":
+		if err := cmd.RunDaemon(append([]string{"start"}, args...)); err != nil {
+			fmt.Fprintf(os.Stderr, "Error starting daemon: %v\n", err)
+			os.Exit(1)
+		}
+	case "stop":
+		if err := cmd.RunDaemon(append([]string{"stop"}, args...)); err != nil {
+			fmt.Fprintf(os.Stderr, "Error stopping daemon: %v\n", err)
+			os.Exit(1)
+		}
+	case "restart":
+		_ = cmd.RunDaemon([]string{"stop"})
+		time.Sleep(300 * time.Millisecond)
+		if err := cmd.RunDaemon(append([]string{"start"}, args...)); err != nil {
+			fmt.Fprintf(os.Stderr, "Error starting daemon: %v\n", err)
+			os.Exit(1)
+		}
+	case "enable":
+		if err := cmd.RunSetup(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error enabling workstation governance: %v\n", err)
+			os.Exit(1)
+		}
 	case "setup":
 		if err := cmd.RunSetup(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error in setup: %v\n", err)

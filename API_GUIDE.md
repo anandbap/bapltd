@@ -54,23 +54,41 @@ cd bap-controlplane
 go build -o bapcontrolplane.exe ./cmd/server
 ```
 
-### Standard HTTP (Development / Internal Mesh)
+### Lifecycle Commands & Server Startup
+
+`bapcontrolplane` provides full service lifecycle management out of the box:
+
 ```cmd
-# Development mode (self-service OTC permitted):
-.\bapcontrolplane.exe -port 8080 -mode dev -trust-domain bap.internal
+# 1. Initialize environment & admin tokens (.bap-admin-token)
+.\bapcontrolplane.exe enable
+
+# 2. Start server in foreground (Development mode):
+.\bapcontrolplane.exe start --port 8080 --mode dev --trust-domain bap.internal
+
+# 3. Start server as detached background daemon:
+.\bapcontrolplane.exe start --detach --port 8080 --mode dev
+
+# 4. Query live status, active port, uptime, and database metrics:
+.\bapcontrolplane.exe status
+
+# 5. Gracefully terminate running control plane:
+.\bapcontrolplane.exe stop
+
+# 6. Restart control plane:
+.\bapcontrolplane.exe restart --port 8080
 ```
 
 ### Secure HTTPS / TLS (Production Mode with OIDC Federation)
 ```cmd
 # Production mode with Microsoft Entra ID or Okta IdP federation:
-.\bapcontrolplane.exe -port 8443 -mode prod \
-  -tls -tls-cert /path/to/cert.pem -tls-key /path/to/key.pem \
-  -oidc-provider entra \
-  -oidc-issuer https://login.microsoftonline.com/your-tenant-id/v2.0 \
-  -oidc-client-id your-entra-client-id \
-  -oidc-tenant-id your-tenant-id \
-  -oidc-allowed-domains "company.com,subsidiary.com" \
-  -trust-domain bap.internal
+.\bapcontrolplane.exe start --port 8443 --mode prod \
+  --tls --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem \
+  --oidc-provider entra \
+  --oidc-issuer https://login.microsoftonline.com/your-tenant-id/v2.0 \
+  --oidc-client-id your-entra-client-id \
+  --oidc-tenant-id your-tenant-id \
+  --oidc-allowed-domains "company.com,subsidiary.com" \
+  --trust-domain bap.internal
 
 # In production mode:
 # - Self-service OTC endpoint (/api/v1/auth/otc/dev-request) returns HTTP 403 Forbidden.

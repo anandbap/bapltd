@@ -21,7 +21,7 @@ permit (
         "cmd", "powershell", "pwsh", "bash", "sh", "zsh",
         "grep", "findstr", "head", "tail", "wc", "sort", "uniq", "more",
         "taskkill", "kill", "pkill", "killall",
-        "bapedge", "ltd-agent"
+        "bapedge", "ltd-agent", "bapcontrolplane", "bapgateway", "bapmcp", "bap", "bapdashboard"
     ].contains(context.executable)
 };
 

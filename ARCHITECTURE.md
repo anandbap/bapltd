@@ -1041,6 +1041,79 @@ Prevents dependency confusion and public registry exfiltration by automatically 
 - **npm / yarn**: Injects `$env:NPM_CONFIG_USERCONFIG = ".bapstate/mirrors/.npmrc"` enforcing corporate registry with `strict-ssl=true`.
 - **pip**: Injects `$env:PIP_CONFIG_FILE = ".bapstate/mirrors/pip.ini"` and `$env:PIP_INDEX_URL`.
 - **Policy 6 Enforcement**: Cedar invariants strictly block direct public repository bypass flags (`--index-url http://pypi.org`, `--registry registry.npmjs.org`, `-DremoteRepositories=http://repo.maven.apache.org`).
+- **Policy 7 Tripwire**: Immediate alert and termination if an agent probes canary honeytokens (`CORP_CANARY_TOKEN`).
+
+### 13.4. Enterprise Multi-Scope Cross-Folder Governance (`BAP-546`)
+Enterprise codebases frequently require cross-repository builds, mono-repo traversals, and shared library modifications:
+1. **Separation of Read-Only Traversal vs Mutating Escalation**:
+   - Reading sibling repositories (`cat ../sibling/README.md`, `git -C ../dep status`) is natively permitted by Cedar Rule 2.
+   - Mutating commands (`write`, `delete`, `tamper`, output redirection `>`) escaping workspace root trigger Human-in-the-Loop (HITL) step-up.
+2. **Multi-Scope Persistence Architecture**:
+   - `Once`: Single execution grant yielding `ALLOWED_STEPUP` cryptographic receipt.
+   - `Session`: Stored in `.bap/approvals_<session_id>.json`.
+   - `Project`: Stored in `<workspace>/.bap/project_permissions.json`.
+   - `Global`: Stored in `~/.bap/global_permissions.json`.
+3. **Canonical Prefix Resolution**:
+   - Normalized paths handle symlinks, directory boundaries (`C:\app\sub` vs `C:\app\sub-other`), and case-insensitive Windows filesystem semantics.
+
+---
+
+## 14. Unified CLI Architecture & Binary Lifecycle Parity (Epic 30 — `BAP-547`)
+
+### 14.1. Universal CLI Design & Zero-Surprise Invariant
+All four BAP binaries (`bapedge`, `bapcontrolplane`, `bapgateway`, `bapmcp`) adhere to a uniform lifecycle contract:
+
+```mermaid
+flowchart TD
+    INVOKE["Binary Invocation (bapedge / bapcontrolplane / bapgateway / bapmcp)"]
+    
+    INVOKE --> CHECK_ARGS{"Arguments Passed?"}
+    CHECK_ARGS -->|No Args / 'help' / '--help'| USAGE["Display Structured ASCII Usage Banner (Exit 0)"]
+    CHECK_ARGS -->|Flag passed directly e.g. -port| COMPAT["Backward Compatibility Dispatcher -> start [flags]"]
+    CHECK_ARGS -->|Subcommand| DISPATCH{"Subcommand Router"}
+    
+    DISPATCH -->|start| START["runStart: Foreground or Background Daemon (--detach)"]
+    DISPATCH -->|stop| STOP["runStop: Read PID file, Graceful Terminate, Purge PID"]
+    DISPATCH -->|status| STATUS["runStatus: Inspect Health, Active Port, Uptime, Store"]
+    DISPATCH -->|restart| RESTART["runRestart: Sequential Stop -> Sleep -> Start"]
+    DISPATCH -->|enable| ENABLE["runEnable: Idempotent Credentials, Dirs & Tokens"]
+    DISPATCH -->|serve / run| SERVE["runStart: Foreground Server Alias"]
+    DISPATCH -->|Governance / Exec| GOV["bapedge: trust, untrust, permissions, rollback, pin, why, exec, check"]
+```
+
+### 14.2. Binary Command Matrix & Parity
+
+| Subcommand | `bapedge` | `bapcontrolplane` | `bapgateway` | `bapmcp` | Description |
+|---|:---:|:---:|:---:|:---:|---|
+| `start` | ✅ | ✅ | ✅ | — | Start component server / supervisor (supports `--detach` / `-d`, `--port`) |
+| `stop` | ✅ | ✅ | ✅ | — | Gracefully terminate running instance via tracked PID |
+| `status` | ✅ | ✅ | ✅ | ✅ | Query health, active port, uptime, and database persistence |
+| `restart` | ✅ | ✅ | ✅ | — | Atomic restart (`stop` $\to$ wait $\to$ `start`) |
+| `enable` | ✅ | ✅ | ✅ | — | Idempotent workstation/service initialization (setup tokens & state) |
+| `serve` | ✅ | ✅ | ✅ | ✅ | Explicit foreground server execution alias |
+| `trust` | ✅ | — | — | — | Authorize cross-folder mutations (`--session`, `--project`, `--global`) |
+| `untrust` | ✅ | — | — | — | Revoke cross-folder mutation authorization |
+| `permissions` | ✅ | — | — | — | List all active authorizations across all scopes |
+| `rollback` | ✅ | — | — | — | Forensically revert file mutations to pre-execution checkpoints |
+| `pin` | ✅ | — | — | — | Cryptographically pin, verify, and re-attest skills, prompts & tools |
+| `why` | ✅ | — | — | — | Instant terminal explanation of Cedar policy decisions |
+| `exec` / `check` | ✅ | — | — | — | Governed execution / dry-run evaluation under kernel isolation |
+| `mcp` | ✅ | — | — | ✅ | Model Context Protocol JSON-RPC stdio server |
+
+### 14.3. Cross-Platform Process Supervision Architecture
+Process lifecycle management avoids external shell dependencies and platform-specific lockups:
+- **Windows (`proc_windows.go`)**:
+  - `isProcessAlive(pid)`: Uses Win32 `OpenProcess` with `PROCESS_QUERY_LIMITED_INFORMATION` and `GetExitCodeProcess`.
+  - Background Detachment: Spawns processes with `CREATE_NO_WINDOW (0x08000000)` and `CREATE_NEW_PROCESS_GROUP (0x00000200)`, disconnecting standard I/O handles.
+  - Termination: `os.FindProcess(pid).Kill()` followed by `taskkill /F /PID <pid>` for complete child process-tree eradication.
+- **POSIX (`proc_unix.go`)**:
+  - `isProcessAlive(pid)`: `syscall.Kill(pid, 0)`.
+  - Background Detachment: Sets `SysProcAttr.Setpgid = true`.
+  - Termination: `syscall.Kill(pid, syscall.SIGTERM)` with fallback to `SIGKILL`.
+
+### 14.4. Interactive Terminal Guard on BAP MCP
+Running `bapmcp` or `bapedge mcp` in an interactive console without stdin redirection detects terminal mode via `isTerminal(os.Stdin)` and outputs an onboarding guide with instructions for Claude Code (`~/.claude/settings.json`), Google Antigravity (`~/.gemini/antigravity/mcp/bap-zero-trust/`), and Cursor IDE (`~/.cursor/mcp.json`). When spawned by an agent host with piped stdio or passed `--stdio`, it immediately engages the JSON-RPC 2.0 message loop.
+
 
 
 

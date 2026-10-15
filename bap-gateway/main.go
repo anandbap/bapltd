@@ -4,6 +4,7 @@ import (
 	"bap-gateway/internal/egress"
 	"bap-gateway/internal/httptransport"
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -15,10 +16,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -70,18 +74,147 @@ type TokenClaims struct {
 	Depth         int      `json:"depth,omitempty"`
 }
 
+const usage = `bapgateway - BAP Zero-Trust Gateway & Policy Enforcement Point (PEP)
+(Emulating Envoy Proxy / Istio Ingress with ext_authz Semantics)
+
+Usage:
+  bapgateway <command> [flags]
+
+Available Commands:
+  start     Start the Zero-Trust Gateway PEP HTTP server
+  stop      Gracefully terminate the running BAP Gateway instance
+  status    Query status, health, port, and connected control plane
+  restart   Restart the running BAP Gateway instance
+  enable    Validate configuration and connectivity to central control plane
+  serve     Run server in foreground (alias for 'start')
+  help      Display help and usage information
+
+Common Flags for 'start' / 'serve':
+  --port <p>           Port for Gateway PEP server (default: 9090 or $BAP_GATEWAY_PORT)
+  --detach, -d         Run as detached background process
+  --controlplane <url> BAP Control Plane base URL (default: http://localhost:8080)
+  --secret <key>       HMAC secret key for offline JWT verification
+  --consume            Atomically consume single-use grants via control plane (default: true)
+
+Examples:
+  bapgateway start --port 9090
+  bapgateway start --detach
+  bapgateway status
+  bapgateway stop
+  bapgateway restart
+  bapgateway enable
+`
+
+func pidPath() string {
+	if fi, err := os.Stat(".bapstate"); err == nil && fi.IsDir() {
+		return filepath.Join(".bapstate", "bap-gateway.pid")
+	}
+	home, err := os.UserHomeDir()
+	if err == nil {
+		homeBapstate := filepath.Join(home, ".bapstate")
+		if fi, err := os.Stat(homeBapstate); err == nil && fi.IsDir() {
+			return filepath.Join(homeBapstate, "bap-gateway.pid")
+		}
+	}
+	return "bap-gateway.pid"
+}
+
+func readPID(p string) (int, error) {
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(strings.TrimSpace(string(data)))
+}
+
 func main() {
+	if len(os.Args) < 2 {
+		fmt.Print(usage)
+		os.Exit(0)
+	}
+
+	command := os.Args[1]
+	args := os.Args[2:]
+
+	switch command {
+	case "help", "-h", "--help":
+		fmt.Print(usage)
+		os.Exit(0)
+	case "start":
+		runStart(args)
+	case "stop":
+		runStop(args)
+	case "status":
+		runStatus(args)
+	case "restart":
+		runRestart(args)
+	case "enable":
+		runEnable(args)
+	case "serve", "run":
+		runStart(args)
+	default:
+		// Backward compatibility: flags passed directly
+		if strings.HasPrefix(command, "-") {
+			runStart(os.Args[1:])
+			return
+		}
+		fmt.Fprintf(os.Stderr, "Unknown command %q for bapgateway\n\n%s", command, usage)
+		os.Exit(1)
+	}
+}
+
+func runStart(args []string) {
 	defaultCP, defaultPort := resolveConfig()
-	port := flag.Int("port", defaultPort, "Port for BAP Gateway PEP HTTP server")
-	cpURL := flag.String("controlplane", defaultCP, "BAP Control Plane base URL")
+	fs := flag.NewFlagSet("bapgateway start", flag.ExitOnError)
+	port := fs.Int("port", defaultPort, "Port for BAP Gateway PEP HTTP server")
+	detach := fs.Bool("detach", false, "Run as detached background process")
+	fs.BoolVar(detach, "d", false, "Run as detached background process (shorthand)")
+	fg := fs.Bool("foreground", false, "Run in foreground")
+	fs.BoolVar(fg, "fg", false, "Run in foreground (shorthand)")
+	cpURL := fs.String("controlplane", defaultCP, "BAP Control Plane base URL")
 	defaultSecret := ""
 	if envSec := os.Getenv("BAP_SECRET_KEY"); envSec != "" {
 		defaultSecret = envSec
 	}
-	secret := flag.String("secret", defaultSecret, "HMAC secret key for offline JWT verification")
-	consume := flag.Bool("consume", true, "Atomically consume single-use grants via control plane")
-	flag.Parse()
- if !*consume && (*secret == "" || *secret == "ltd-service-bounded-authority-secret-key-32b!") { log.Fatal("Offline verification requires an explicitly configured private signing secret") }
+	secret := fs.String("secret", defaultSecret, "HMAC secret key for offline JWT verification")
+	consume := fs.Bool("consume", true, "Atomically consume single-use grants via control plane")
+
+	_ = fs.Parse(args)
+
+	if *detach && !*fg {
+		exe, err := os.Executable()
+		if err != nil {
+			log.Fatalf("Failed to resolve executable path: %v", err)
+		}
+		var childArgs []string
+		childArgs = append(childArgs, "start", "--fg")
+		for _, a := range args {
+			if a == "--detach" || a == "-detach" || a == "-d" || a == "--d" {
+				continue
+			}
+			childArgs = append(childArgs, a)
+		}
+		cmd := exec.Command(exe, childArgs...)
+		cmd.Dir = "."
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+		cmd.Stdin = nil
+		cmd.SysProcAttr = getSysProcAttrDetached()
+		if err := cmd.Start(); err != nil {
+			log.Fatalf("Failed to start background bapgateway: %v", err)
+		}
+		pPath := pidPath()
+		_ = os.WriteFile(pPath, []byte(strconv.Itoa(cmd.Process.Pid)), 0644)
+		_ = os.WriteFile("bap-gateway.pid", []byte(strconv.Itoa(cmd.Process.Pid)), 0644)
+		time.Sleep(300 * time.Millisecond)
+		fmt.Printf("✅ BAP Gateway PEP launched in background (PID: %d on port %d)\n", cmd.Process.Pid, *port)
+		fmt.Println("   Run 'bapgateway status' to inspect health and endpoints.")
+		return
+	}
+
+	if !*consume && (*secret == "" || *secret == "ltd-service-bounded-authority-secret-key-32b!") {
+		log.Fatal("Offline verification requires an explicitly configured private signing secret")
+	}
 
 	cfg := GatewayConfig{
 		Port:         *port,
@@ -122,12 +255,142 @@ func main() {
 		WriteTimeout: 10 * time.Second,
 	}
 
+	pPath := pidPath()
+	_ = os.WriteFile(pPath, []byte(strconv.Itoa(os.Getpid())), 0644)
+	_ = os.WriteFile("bap-gateway.pid", []byte(strconv.Itoa(os.Getpid())), 0644)
+	defer func() {
+		_ = os.Remove(pPath)
+		_ = os.Remove("bap-gateway.pid")
+	}()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		log.Println("[bap-gateway] Received shutdown signal. Gracefully stopping...")
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
+		_ = os.Remove(pPath)
+		_ = os.Remove("bap-gateway.pid")
+		os.Exit(0)
+	}()
+
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Printf("[bap-gateway] ERROR: Could not start gateway on %s: %v", addr, err)
 		log.Printf("[bap-gateway] Note: Port %d is already in use by another running instance or process.", cfg.Port)
 		time.Sleep(1 * time.Second)
 		os.Exit(1)
 	}
+}
+
+func runStop(args []string) {
+	pid, err := readPID(pidPath())
+	if err != nil || pid <= 0 || !isProcessAlive(pid) {
+		pid, err = readPID("bap-gateway.pid")
+	}
+	if err != nil || pid <= 0 || !isProcessAlive(pid) {
+		fmt.Println("⚠️  BAP Gateway PEP is not currently running.")
+		_ = os.Remove(pidPath())
+		_ = os.Remove("bap-gateway.pid")
+		return
+	}
+
+	if err := killProcess(pid); err != nil {
+		fmt.Printf("❌ Failed to terminate BAP Gateway PEP (PID %d): %v\n", pid, err)
+		return
+	}
+	_ = os.Remove(pidPath())
+	_ = os.Remove("bap-gateway.pid")
+	fmt.Printf("✅ BAP Gateway PEP (PID %d) stopped successfully.\n", pid)
+}
+
+func runStatus(args []string) {
+	fs := flag.NewFlagSet("bapgateway status", flag.ContinueOnError)
+	_, defaultPort := resolveConfig()
+	port := fs.Int("port", defaultPort, "Port for BAP Gateway PEP HTTP server")
+	jsonFlag := fs.Bool("json", false, "Output status as JSON")
+	_ = fs.Parse(args)
+
+	pid, _ := readPID(pidPath())
+	if pid <= 0 {
+		pid, _ = readPID("bap-gateway.pid")
+	}
+
+	url := fmt.Sprintf("http://localhost:%d", *port)
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(url + "/health")
+	if err != nil {
+		resp, err = client.Get(url + "/api/v1/health")
+	}
+
+	if err != nil {
+		if *jsonFlag {
+			_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
+				"running": false,
+				"error":   err.Error(),
+			})
+			return
+		}
+		fmt.Println("⚠️  BAP Gateway PEP is not currently running.")
+		fmt.Printf("   No responsive gateway found on %s\n", url)
+		fmt.Println("   Run 'bapgateway start' to launch the policy enforcement proxy.")
+		return
+	}
+	defer resp.Body.Close()
+
+	var data map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&data)
+
+	if *jsonFlag {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(data)
+		return
+	}
+
+	fmt.Println("================================================================================")
+	fmt.Println("  [BAP GATEWAY PEP] 🛡️  Policy Enforcement Point Status")
+	fmt.Println("================================================================================")
+	fmt.Printf("  Status:           ONLINE / HEALTHY (HTTP %d)\n", resp.StatusCode)
+	if pid > 0 && isProcessAlive(pid) {
+		fmt.Printf("  PID:              %d\n", pid)
+	}
+	fmt.Printf("  Endpoint:         %s\n", url)
+	if svc, ok := data["service"]; ok {
+		fmt.Printf("  Service:          %v\n", svc)
+	}
+	if mode, ok := data["mode"]; ok {
+		fmt.Printf("  Proxy Mode:       %v\n", mode)
+	}
+	fmt.Println("================================================================================")
+}
+
+func runRestart(args []string) {
+	fmt.Println("[*] Restarting BAP Gateway PEP...")
+	runStop(nil)
+	time.Sleep(500 * time.Millisecond)
+	runStart(args)
+}
+
+func runEnable(args []string) {
+	fmt.Println("================================================================================")
+	fmt.Println("  [BAP GATEWAY PEP] 🚀 Initializing Gateway PEP Configuration")
+	fmt.Println("================================================================================")
+	cpURL, port := resolveConfig()
+	fmt.Printf("  • Gateway Port:     %d\n", port)
+	fmt.Printf("  • Target CP:        %s\n", cpURL)
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	if resp, err := client.Get(cpURL + "/health"); err == nil && resp.StatusCode == 200 {
+		fmt.Println("  • Control Plane:    Connected & Reachable")
+		_ = resp.Body.Close()
+	} else {
+		fmt.Println("  • Control Plane:    Not reachable yet (will connect when started)")
+	}
+	fmt.Println("================================================================================")
+	fmt.Println("✅ BAP Gateway PEP is enabled and ready to start.")
+	fmt.Println("   Run 'bapgateway start' to launch the gateway.")
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {

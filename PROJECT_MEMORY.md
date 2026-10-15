@@ -137,3 +137,57 @@ All BAP components (`bap-edge`, `bap-controlplane`, `bap-gateway`, `python-agent
 - **Stable Workstation Identity**: Multiple Claude Code launches on the same host reuse the single workstation agent identity, registering individual runs as concurrent execution sessions rather than sprawling duplicate agent cards.
 - **Reconciliation & Sweep**: `bapedge sweep` purges dead session markers for terminated PIDs, flushes pending offline audit spools, and reconciles state with the central control plane.
 
+---
+
+## 10. Unified CLI UX & Consistent Lifecycle Management (`BAP-547`)
+- **Binary Parity Across All 4 Services**: `bapedge`, `bapcontrolplane`, `bapgateway`, and `bapmcp` share an identical, cohesive command-line design:
+  - `start [--port <p>] [--detach | -d] [--db <path>] [--mode dev|prod]`: Runs in foreground or detached background daemon.
+  - `stop`: Gracefully terminates the running process and cleans up PID files.
+  - `status`: Queries live server health, active port, uptime, and database metrics.
+  - `restart`: Sequentially stops and starts the service.
+  - `enable`: Idempotently initializes configuration files, state directories, admin tokens, and certificates.
+  - `serve` / `run`: Explicit foreground server execution alias.
+  - `help` / `--help` / `-h` or zero arguments: Displays a structured, professional ASCII command banner.
+- **Zero-Surprise Invocation**: Running any binary without parameters prints usage and guidance instead of silently starting background HTTP listeners or locking default ports.
+- **100% Backward Compatibility**: Passing flags directly (e.g. `bapcontrolplane -port 8080`, `bapgateway -port 9090`) automatically routes to `start` with those flags, ensuring zero regression across automated test suites, scripts, and CI/CD pipelines.
+- **Cross-Platform Process Management**:
+  - `proc_windows.go`: Leverages Win32 API (`OpenProcess`, `GetExitCodeProcess`, `CREATE_NO_WINDOW`, `CREATE_NEW_PROCESS_GROUP`, `taskkill`) for reliable background process detachment and process-tree termination.
+  - `proc_unix.go`: Uses standard POSIX signals (`syscall.Kill`) with process group isolation (`Setpgid`).
+- **Interactive Terminal Guard on BAP MCP (`bapmcp`)**:
+  - `isTerminal(os.Stdin)` detection: When launched interactively by a human in PowerShell, CMD, or bash without stdin redirection, displays an onboarding integration guide showing how to mount `bapmcp` into Claude Code (`claude mcp add bap-zero-trust -- bapedge mcp`), Google Antigravity (`~/.gemini/antigravity/mcp/bap-zero-trust/`), and Cursor IDE (`~/.cursor/mcp.json`).
+  - When piped from an AI agent host or invoked with `--stdio`, immediately enters standard JSON-RPC 2.0 stdio transport.
+
+---
+
+## 11. Enterprise Multi-Scope Cross-Folder Mutation Governance (`BAP-546`)
+- **Read-Only vs Mutating Traversal**:
+  - Read-only inspection commands (`cat`, `ls`, `dir`, `git status`) traversing sibling repositories outside the project root are natively permitted under Cedar Rule 2 without friction.
+  - Mutating or destructive operations (`write`, `delete`, `tamper`, output redirection) outside workspace boundaries trigger interactive Human-in-the-Loop (HITL) step-up escalation.
+- **Multi-Scope Permissions Engine (`bap-edge/internal/authz/permissions.go`)**:
+  - Supports 4 granular scopes:
+    - `Once`: Authorized for single command execution with `ALLOWED_STEPUP` receipt.
+    - `Session`: Persisted in `.bap/approvals_<session_id>.json`.
+    - `Project`: Persisted in `<workspace>/.bap/project_permissions.json`.
+    - `Global`: Persisted in `~/.bap/global_permissions.json`.
+  - Canonical prefix coverage (`IsPathCovered`): Matches directory subtrees, handles symlink canonicalization, and respects case-insensitive Windows paths.
+- **Developer CLI Management**:
+  - `bapedge trust <path> [--project | --global | --session] [--ops write,delete]`
+  - `bapedge untrust <path> [--project | --global | --session]`
+  - `bapedge permissions`: Displays formatted table of all active cross-folder authorizations across all scopes.
+- **Agent Hook Integration (`cchook/interceptor.go`)**:
+  - PreToolUse hook checks `isTargetAuthorized` for direct file modification tools (`Edit`, `Write`) and shell commands.
+
+---
+
+## 12. Software Supply-Chain Protection & Corporate Mirror Injection (`BAP-545`)
+- **Corporate Mirror Enforcement (`scripts/bap_launcher_engine.ps1`)**:
+  - Automatically provisions local mirror configuration files on agent startup:
+    - Maven: `.bapstate/mirrors/settings.xml` routing `central,*` to corporate Nexus (`nexus.corp.internal`); injects `$env:MAVEN_ARGS`.
+    - npm: `.bapstate/mirrors/.npmrc` with corporate registry and `strict-ssl=true`; injects `$env:NPM_CONFIG_USERCONFIG` and `$env:NPM_CONFIG_REGISTRY`.
+    - pip: `.bapstate/mirrors/pip.ini` with corporate index URL; injects `$env:PIP_CONFIG_FILE` and `$env:PIP_INDEX_URL`.
+  - Sandboxed child processes inherit corporate repository configurations.
+- **Cedar Policy Invariants (Rules 6 & 7 in `policy.cedar`)**:
+  - Rule 6: Strictly denies public repository bypass flags (`--index-url http://pypi.org`, `--registry registry.npmjs.org`, `-DremoteRepositories=http://repo.maven.apache.org`).
+  - Rule 7: Canary honeytoken tripwire defense blocking any agent attempts to probe or exfiltrate corporate canary tokens (`$env:CORP_CANARY_TOKEN`, canary trap secrets).
+
+

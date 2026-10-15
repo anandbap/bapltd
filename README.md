@@ -518,6 +518,153 @@ Provides point-in-time recovery for files modified during agent execution:
 
 ---
 
+### 12. Unified CLI UX, Binary Consistency & Service Lifecycle (Epic 30 — `BAP-547`)
+
+BAP provides an identical, cohesive command-line interface across all four production binaries (`bapedge`, `bapcontrolplane`, `bapgateway`, `bapmcp`):
+
+#### 1. Universal Command Matrix
+
+| Subcommand | `bapedge` | `bapcontrolplane` | `bapgateway` | `bapmcp` | Description |
+|---|:---:|:---:|:---:|:---:|---|
+| `start` | ✅ | ✅ | ✅ | — | Start component server / supervisor (supports `--detach` / `-d`, `--port`) |
+| `stop` | ✅ | ✅ | ✅ | — | Gracefully terminate running instance and cleanup PID files |
+| `status` | ✅ | ✅ | ✅ | ✅ | Query health, active port, uptime, and database persistence |
+| `restart` | ✅ | ✅ | ✅ | — | Atomic restart (`stop` $\to$ wait $\to$ `start`) |
+| `enable` | ✅ | ✅ | ✅ | — | Idempotent workstation/service initialization (setup tokens & state) |
+| `serve` | ✅ | ✅ | ✅ | ✅ | Explicit foreground server execution alias |
+| `trust` | ✅ | — | — | — | Authorize cross-folder mutations (`--session`, `--project`, `--global`) |
+| `untrust` | ✅ | — | — | — | Revoke cross-folder mutation authorization |
+| `permissions` | ✅ | — | — | — | List all active authorizations across all scopes |
+| `rollback` | ✅ | — | — | — | Forensically revert file mutations to pre-execution checkpoints |
+| `pin` | ✅ | — | — | — | Cryptographically pin, verify, and re-attest skills, prompts & tools |
+| `why` | ✅ | — | — | — | Instant terminal explanation of Cedar policy decisions |
+| `exec` / `check` | ✅ | — | — | — | Governed execution / dry-run evaluation under kernel isolation |
+| `mcp` | ✅ | — | — | ✅ | Model Context Protocol JSON-RPC stdio server |
+
+#### 2. Building All BAP Binaries
+Compile zero-dependency static binaries and deploy across the workspace:
+```powershell
+# 1. Build Central Control Plane
+cd bap-controlplane; go build -o bapcontrolplane.exe ./cmd/server; cd ..
+
+# 2. Build Zero-Trust Gateway PEP
+cd bap-gateway; go build -o bapgateway.exe .; cd ..
+
+# 3. Build Edge Local Trusted Daemon (LTD) & MCP Broker
+cd bap-edge; go build -o bapedge.exe .; cd ..
+
+# 4. Deploy binaries to workspace root and dist/
+powershell -ExecutionPolicy Bypass -File update_binaries.ps1
+```
+
+#### 3. Command Line Parameters Reference
+
+##### A. `bapcontrolplane` (Central Policy Authority)
+```powershell
+# Display help and usage banner (default when no parameters provided)
+.\bapcontrolplane.exe
+
+# Start server in foreground
+.\bapcontrolplane.exe start --port 8080 --mode dev --db bap-controlplane.db
+
+# Start server as detached background daemon
+.\bapcontrolplane.exe start --detach --port 8080
+
+# Query running control plane status, port, uptime, and state stores
+.\bapcontrolplane.exe status
+
+# Gracefully terminate running control plane
+.\bapcontrolplane.exe stop
+
+# Restart running control plane
+.\bapcontrolplane.exe restart --port 8080
+
+# Initialize admin tokens (.bap-admin-token) and state directories
+.\bapcontrolplane.exe enable
+```
+
+**Common Flags:**
+- `--port <p>`: Port for HTTP server (default: `8080` or `$PORT`, `$BAP_PORT`)
+- `--detach`, `-d`: Spawn as background process
+- `--mode <dev|prod>`: Environment mode (`dev` for open OTC, `prod` for enterprise OIDC)
+- `--db <path>`: SQLite database file (default: `bap-controlplane.db`, or `:memory:`)
+- `--secret <key>`: HMAC signing secret for JWT grants (or `$BAP_SECRET_KEY`)
+- `--admin-token <token>`: Administrative bearer token (persisted in `.bap-admin-token`)
+- `--tls`, `--https`: Enable HTTPS with auto-generated dev certificates
+- `--policy <path>`: Path to authoritative Cedar policy file
+
+##### B. `bapgateway` (Zero-Trust Policy Enforcement Point - PEP)
+```powershell
+# Display usage banner
+.\bapgateway.exe
+
+# Start Gateway PEP in foreground
+.\bapgateway.exe start --port 9090 --controlplane http://localhost:8080
+
+# Start Gateway PEP in background
+.\bapgateway.exe start --detach --port 9090
+
+# Query live status and upstream control plane connectivity
+.\bapgateway.exe status
+
+# Stop Gateway PEP
+.\bapgateway.exe stop
+
+# Restart Gateway PEP
+.\bapgateway.exe restart
+
+# Validate upstream connectivity and credentials
+.\bapgateway.exe enable
+```
+
+**Common Flags:**
+- `--port <p>`: Port for Gateway HTTP server (default: `9090` or `$BAP_GATEWAY_PORT`)
+- `--detach`, `-d`: Spawn as background process
+- `--controlplane <url>`: Central BAP Control Plane base URL (default: `http://localhost:8080`)
+- `--secret <key>`: HMAC secret key for offline JWT verification
+- `--consume`: Atomically consume single-use grants via control plane (default: `true`)
+
+##### C. `bapedge` (Edge Local Trusted Daemon & Execution Broker)
+```powershell
+# Service Lifecycle
+.\bapedge.exe start [--foreground]   # Start supervisor daemon
+.\bapedge.exe stop                   # Stop supervisor daemon
+.\bapedge.exe restart                # Restart supervisor daemon
+.\bapedge.exe status                 # Inspect active sessions, policy cache, spool
+.\bapedge.exe enable                 # 1-click developer setup
+
+# Zero-Trust Governance & HITL Authorization
+.\bapedge.exe trust --path <dir> [--scope session|project|global] [--ops write,delete]
+.\bapedge.exe untrust --path <dir>
+.\bapedge.exe permissions            # List active cross-folder authorizations
+.\bapedge.exe why "<command>"        # Explain Cedar policy decision
+.\bapedge.exe rollback --checkpoint-id <id> # Forensically restore mutated files
+.\bapedge.exe pin scan | verify | update   # Cryptographic skill/prompt pinning
+
+# Governed Execution
+.\bapedge.exe exec "<command>"       # Execute under kernel isolation
+.\bapedge.exe check "<command>"      # Policy evaluation only (zero side-effects)
+```
+
+##### D. `bapmcp` (Model Context Protocol Server)
+```powershell
+# Interactive mode in terminal: displays MCP onboarding and configuration guide
+.\bapmcp.exe
+
+# Start JSON-RPC 2.0 stdio transport (default when spawned by Claude Code / Cursor)
+.\bapmcp.exe --stdio
+
+# Query MCP tool configuration and policy status
+.\bapmcp.exe status
+```
+
+**Exposed MCP Tools:**
+- `bap_execute`: Governed shell execution within sandboxed kernel isolation.
+- `bap_explain_policy`: Zero-trust Cedar decision query and explanation.
+- `bap_status`: Real-time inspection of local sessions, daemon health, and policy cache.
+
+---
+
 ## 📂 Repository Structure
 
 | Path | Purpose & Capabilities |
