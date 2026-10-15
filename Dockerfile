@@ -38,4 +38,5 @@ ENV BAP_DB_PATH=/app/bap-controlplane.db
 
 EXPOSE 8080
 
-CMD ["/app/bapcontrolplane"]
+ENTRYPOINT ["/app/bapcontrolplane"]
+CMD ["start"]
