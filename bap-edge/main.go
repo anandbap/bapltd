@@ -46,6 +46,7 @@ Identity & Central Control Plane:
   config       View or update central control plane and gateway host URLs
   attest       Client test command: connect to attestation server and request OBO JWT
   verify-log   Verify cryptographic integrity and anti-tamper hash-chain of local audit log
+  version      Display semantic version, git commit, build date, and platform metadata (-v, --version, --json)
   help         Display help information
 
 Examples:
@@ -221,6 +222,11 @@ func main() {
 		}
 	case "verify-log":
 		if err := cmd.RunVerifyLog(args); err != nil {
+			os.Exit(1)
+		}
+	case "version", "-v", "--version":
+		if err := cmd.RunVersion(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error displaying version: %v\n", err)
 			os.Exit(1)
 		}
 	case "help", "-h", "--help":

@@ -6,12 +6,17 @@ param(
     [string]$DistDir = "dist",
     [switch]$Archive = $true,
     [switch]$ForceRegenCerts = $false,
-    [string]$Domain = "a.b.com"
+    [string]$Domain = "a.b.com",
+    [string]$Version = "v1.0.0"
 )
 
 $ErrorActionPreference = "Stop"
 $rootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $rootDir
+
+$gitCommit = try { (git rev-parse --short HEAD 2>$null) } catch { "dev" }
+if (-not $gitCommit) { $gitCommit = "dev" }
+$buildDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 
 function Safe-CopyItem {
     param($Source, $Destination)
@@ -84,7 +89,17 @@ foreach ($p in $platforms) {
 
         Push-Location $compDir
         try {
-            go build -trimpath -ldflags "-s -w" -o $outFile $c.Pkg
+            $versionPkg = switch ($c.Dir) {
+                "bap-controlplane" { "bap-controlplane/pkg/version" }
+                "bap-edge"         { "bap-edge/pkg/version" }
+                "bap-gateway"      { "bap-gateway/pkg/version" }
+                default            { "" }
+            }
+            $ldflags = "-s -w"
+            if ($versionPkg) {
+                $ldflags = "-s -w -X '$versionPkg.Version=$Version' -X '$versionPkg.GitCommit=$gitCommit' -X '$versionPkg.BuildDate=$buildDate'"
+            }
+            go build -trimpath -ldflags $ldflags -o $outFile $c.Pkg
             if ($LASTEXITCODE -ne 0) {
                 throw "Compilation failed for $($c.Name) on $($p.Name)"
             }

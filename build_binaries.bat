@@ -7,30 +7,36 @@ set "GOTOOLCHAIN=auto"
 
 if "%1"=="--all" goto :build_all
 if "%1"=="-all" goto :build_all
+
+for /f "tokens=*" %%i in ('git rev-parse --short HEAD 2^>nul') do set "GIT_COMMIT=%%i"
+if "%GIT_COMMIT%"=="" set "GIT_COMMIT=dev"
+if "%BAP_VERSION%"=="" set "BAP_VERSION=v1.0.0"
+for /f "tokens=*" %%i in ('powershell -NoProfile -Command "(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')"') do set "BUILD_DATE=%%i"
+
 echo [0/6] Ensuring BAP Root CA and TLS credentials...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT_DIR%scripts\ensure_certs.ps1"
 if %ERRORLEVEL% neq 0 (
     echo [WARNING] ensure_certs.ps1 failed, continuing build...
 )
 
-echo [1/6] Building bap-controlplane and standalone dashboard...
+echo [1/6] Building bap-controlplane and standalone dashboard (Version: %BAP_VERSION%, Commit: %GIT_COMMIT%)...
 cd /d "%ROOT_DIR%bap-controlplane"
-go build -trimpath -ldflags "-s -w" -o bapcontrolplane.exe ./cmd/server
+go build -trimpath -ldflags "-s -w -X 'bap-controlplane/pkg/version.Version=%BAP_VERSION%' -X 'bap-controlplane/pkg/version.GitCommit=%GIT_COMMIT%' -X 'bap-controlplane/pkg/version.BuildDate=%BUILD_DATE%'" -o bapcontrolplane.exe ./cmd/server
 if %ERRORLEVEL% neq 0 (
     echo Failed to build bapcontrolplane.exe
     exit /b 1
 )
 copy /y bapcontrolplane.exe "%ROOT_DIR%bapcontrolplane.exe" >nul
-go build -trimpath -ldflags "-s -w" -o bapdashboard.exe ./cmd/dashboard
+go build -trimpath -ldflags "-s -w -X 'bap-controlplane/pkg/version.Version=%BAP_VERSION%' -X 'bap-controlplane/pkg/version.GitCommit=%GIT_COMMIT%' -X 'bap-controlplane/pkg/version.BuildDate=%BUILD_DATE%'" -o bapdashboard.exe ./cmd/dashboard
 if %ERRORLEVEL% neq 0 (
     echo Failed to build bapdashboard.exe
     exit /b 1
 )
 copy /y bapdashboard.exe "%ROOT_DIR%bapdashboard.exe" >nul
 
-echo [2/6] Building bap-edge...
+echo [2/6] Building bap-edge (Version: %BAP_VERSION%, Commit: %GIT_COMMIT%)...
 cd /d "%ROOT_DIR%bap-edge"
-go build -trimpath -ldflags "-s -w" -o bapedge.exe .
+go build -trimpath -ldflags "-s -w -X 'bap-edge/pkg/version.Version=%BAP_VERSION%' -X 'bap-edge/pkg/version.GitCommit=%GIT_COMMIT%' -X 'bap-edge/pkg/version.BuildDate=%BUILD_DATE%'" -o bapedge.exe .
 if %ERRORLEVEL% neq 0 (
     echo Failed to build bapedge.exe
     exit /b 1
@@ -38,9 +44,9 @@ if %ERRORLEVEL% neq 0 (
 copy /y bapedge.exe "%ROOT_DIR%bapedge.exe" >nul 2>&1
 copy /y bapedge.exe "%ROOT_DIR%bapmcp.exe" >nul 2>&1
 
-echo [3/6] Building bap-gateway...
+echo [3/6] Building bap-gateway (Version: %BAP_VERSION%, Commit: %GIT_COMMIT%)...
 cd /d "%ROOT_DIR%bap-gateway"
-go build -trimpath -ldflags "-s -w" -o bapgateway.exe .
+go build -trimpath -ldflags "-s -w -X 'bap-gateway/pkg/version.Version=%BAP_VERSION%' -X 'bap-gateway/pkg/version.GitCommit=%GIT_COMMIT%' -X 'bap-gateway/pkg/version.BuildDate=%BUILD_DATE%'" -o bapgateway.exe .
 if %ERRORLEVEL% neq 0 (
     echo Failed to build bapgateway.exe
     exit /b 1

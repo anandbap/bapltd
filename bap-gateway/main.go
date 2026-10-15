@@ -24,6 +24,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"bap-gateway/pkg/version"
 )
 
 type GatewayConfig struct {
@@ -87,6 +89,7 @@ Available Commands:
   restart   Restart the running BAP Gateway instance
   enable    Validate configuration and connectivity to central control plane
   serve     Run server in foreground (alias for 'start')
+  version   Display semantic version, git commit, build date, and platform metadata (-v, --version, --json)
   help      Display help and usage information
 
 Common Flags for 'start' / 'serve':
@@ -152,6 +155,8 @@ func main() {
 		runEnable(args)
 	case "serve", "run":
 		runStart(args)
+	case "version", "-v", "--version":
+		runVersion(args)
 	default:
 		// Backward compatibility: flags passed directly
 		if strings.HasPrefix(command, "-") {
@@ -927,4 +932,18 @@ func resolveConfig() (string, int) {
 	}
 
 	return defaultCP, defaultPort
+}
+
+func runVersion(args []string) {
+	fs := flag.NewFlagSet("bapgateway version", flag.ContinueOnError)
+	jsonFlag := fs.Bool("json", false, "Output version information in JSON format")
+	fs.BoolVar(jsonFlag, "j", false, "Output version information in JSON format (shorthand)")
+	_ = fs.Parse(args)
+
+	info := version.Get("bapgateway")
+	if *jsonFlag {
+		fmt.Println(info.JSON())
+		return
+	}
+	fmt.Println(info.String())
 }

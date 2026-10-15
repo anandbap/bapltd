@@ -66,6 +66,8 @@ type RegisteredAgent struct {
 	Groups              []string    `json:"groups,omitempty"`
 	AuthMode            string      `json:"auth_mode,omitempty"`   // "otc" or "oidc"
 	IdPProvider         string      `json:"idp_provider,omitempty"` // "entra", "okta", "generic"
+	AgentVersion        string      `json:"agent_version,omitempty"`
+	ProtocolVersion     int         `json:"protocol_version,omitempty"`
 }
 
 type PreRegisterRequest struct {
@@ -87,23 +89,27 @@ type PreRegisterResponse struct {
 }
 
 type RegisterEdgeRequest struct {
-	Code       string `json:"one_time_code"`
-	BinaryHash string `json:"binary_hash"`
-	PublicKey  string `json:"public_key"`
-	Hostname   string `json:"hostname,omitempty"`
-	OS         string `json:"os,omitempty"`
-	Arch       string `json:"arch,omitempty"`
-	InstanceID string `json:"instance_id,omitempty"`
+	Code            string `json:"one_time_code"`
+	BinaryHash      string `json:"binary_hash"`
+	PublicKey       string `json:"public_key"`
+	Hostname        string `json:"hostname,omitempty"`
+	OS              string `json:"os,omitempty"`
+	Arch            string `json:"arch,omitempty"`
+	InstanceID      string `json:"instance_id,omitempty"`
+	AgentVersion    string `json:"agent_version,omitempty"`
+	ProtocolVersion int    `json:"protocol_version,omitempty"`
 }
 
 type RegisterEdgeResponse struct {
-	AgentID      string    `json:"agent_id"`
-	AppID        string    `json:"app_id"`
-	InstanceID   string    `json:"instance_id,omitempty"`
-	SPIFFEID     string    `json:"spiffe_id,omitempty"`
-	Status       string    `json:"status"`
-	ServerTime   time.Time `json:"server_time"`
-	SessionToken string    `json:"session_token"`
+	AgentID                  string    `json:"agent_id"`
+	AppID                    string    `json:"app_id"`
+	InstanceID               string    `json:"instance_id,omitempty"`
+	SPIFFEID                 string    `json:"spiffe_id,omitempty"`
+	Status                   string    `json:"status"`
+	ServerTime               time.Time `json:"server_time"`
+	SessionToken             string    `json:"session_token"`
+	ServerVersion            string    `json:"server_version,omitempty"`
+	MinSupportedAgentVersion string    `json:"min_supported_agent_version,omitempty"`
 }
 
 type GrantConstraints struct {

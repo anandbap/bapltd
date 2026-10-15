@@ -83,6 +83,10 @@ func (s *Store) Get(agentID string) (*types.RegisteredAgent, error) {
 }
 
 func (s *Store) Enroll(agentID string, binaryHash, pubKey, hostname, osName, arch, instanceID string) (*types.RegisteredAgent, error) {
+	return s.EnrollWithVersion(agentID, binaryHash, pubKey, hostname, osName, arch, instanceID, "", 0)
+}
+
+func (s *Store) EnrollWithVersion(agentID string, binaryHash, pubKey, hostname, osName, arch, instanceID, agentVersion string, protocolVersion int) (*types.RegisteredAgent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -120,6 +124,8 @@ func (s *Store) Enroll(agentID string, binaryHash, pubKey, hostname, osName, arc
 		parentAgent.Hostname = hostname
 		parentAgent.OS = osName
 		parentAgent.Arch = arch
+		parentAgent.AgentVersion = agentVersion
+		parentAgent.ProtocolVersion = protocolVersion
 		parentAgent.EnrolledAt = &now
 		parentAgent.LastHeartbeatAt = &now
 		return parentAgent, nil
@@ -143,6 +149,8 @@ func (s *Store) Enroll(agentID string, binaryHash, pubKey, hostname, osName, arc
 		Hostname:            hostname,
 		OS:                  osName,
 		Arch:                arch,
+		AgentVersion:        agentVersion,
+		ProtocolVersion:     protocolVersion,
 		CreatedAt:           parentAgent.CreatedAt,
 		EnrolledAt:          &now,
 		LastHeartbeatAt:     &now,

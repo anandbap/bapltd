@@ -28,6 +28,7 @@ import (
 	"bap-controlplane/internal/session"
 	"bap-controlplane/internal/tlsutil"
 	"bap-controlplane/pkg/types"
+	"bap-controlplane/pkg/version"
 )
 
 const usage = `bapcontrolplane - BAP Central Control Plane & Policy Authority
@@ -43,19 +44,21 @@ Available Commands:
   restart   Restart the running Central Control Plane instance
   enable    Initialize environment, admin tokens, and state stores
   serve     Run server in foreground (alias for 'start')
+  version   Display semantic version, git commit, build date, and platform metadata (-v, --version, --json)
   help      Display help and usage information
 
 Common Flags for 'start' / 'serve':
-  --port <p>             Port for HTTP server (default: 8080 or $PORT)
-  --detach, -d           Run as detached background process
-  --mode <dev|prod>      Environment mode: 'dev' (open OTC) or 'prod' (strict OTC / OIDC)
-  --db <path>            Path to SQLite database file (default: bap-controlplane.db)
-  --secret <key>         HMAC signing secret for tokens (or $BAP_SECRET_KEY)
-  --admin-token <token>  Administrative token for control APIs (or $BAP_ADMIN_TOKEN)
-  --allow-remote-admin   Allow non-localhost callers with valid admin token
-  --tls, --https         Enable HTTPS/TLS (auto-generates dev cert if none provided)
-  --policy <path>        Path to authoritative Cedar policy file
-  --schema <path>        Path to authoritative Cedar schema file
+  --port <p>                 Port for HTTP server (default: 8080 or $PORT)
+  --detach, -d               Run as detached background process
+  --mode <dev|prod>          Environment mode: 'dev' (open OTC) or 'prod' (strict OTC / OIDC)
+  --min-edge-version <ver>   Enforce minimum supported edge client version (e.g. 1.0.0)
+  --db <path>                Path to SQLite database file (default: bap-controlplane.db)
+  --secret <key>             HMAC signing secret for tokens (or $BAP_SECRET_KEY)
+  --admin-token <token>      Administrative token for control APIs (or $BAP_ADMIN_TOKEN)
+  --allow-remote-admin       Allow non-localhost callers with valid admin token
+  --tls, --https             Enable HTTPS/TLS (auto-generates dev cert if none provided)
+  --policy <path>            Path to authoritative Cedar policy file
+  --schema <path>            Path to authoritative Cedar schema file
 
 Examples:
   bapcontrolplane start --port 8080
@@ -113,6 +116,8 @@ func main() {
 		runEnable(args)
 	case "serve", "run":
 		runStart(args)
+	case "version", "-v", "--version":
+		runVersion(args)
 	default:
 		// Strict backward compatibility: if flag is passed directly (e.g. `bapcontrolplane -port 8080`), default to start
 		if strings.HasPrefix(command, "-") {
@@ -152,6 +157,7 @@ func runStart(args []string) {
 	oidcClientID := fs.String("oidc-client-id", "", "OIDC application client ID")
 	oidcTenantID := fs.String("oidc-tenant-id", "", "Microsoft Entra tenant ID or Okta org")
 	oidcAllowedDomains := fs.String("oidc-allowed-domains", "", "Comma-separated corporate email domains permitted (e.g. corp.com,internal.org)")
+	minEdgeVersion := fs.String("min-edge-version", os.Getenv("BAP_MIN_EDGE_VERSION"), "Minimum supported edge client version (e.g. 1.0.0)")
 
 	_ = fs.Parse(args)
 
@@ -342,6 +348,10 @@ func runStart(args []string) {
 	server.SetAdminSecurity(*adminToken, *allowRemoteAdmin)
 	server.SetDemoMode(*demoMode)
 	server.SetEnvironmentMode(*mode)
+	if *minEdgeVersion != "" {
+		server.SetMinEdgeVersion(*minEdgeVersion)
+		log.Printf("[bapcontrolplane] Enforcing minimum edge client version: %s", *minEdgeVersion)
+	}
 
 	oidcCfg := types.OIDCConfig{
 		Enabled:         true,
@@ -539,6 +549,13 @@ func runStatus(args []string) {
 		fmt.Printf("  PID:              %d\n", pid)
 	}
 	fmt.Printf("  Endpoint:         %s\n", url)
+	fmt.Printf("  Version:          %s\n", version.Version)
+	if verVal, ok := data["version"]; ok && verVal != "" {
+		fmt.Printf("  Server Version:   %v\n", verVal)
+	}
+	if minVer, ok := data["min_edge_version"]; ok && minVer != "" {
+		fmt.Printf("  Min Edge Version: %v\n", minVer)
+	}
 	if statusVal, ok := data["status"]; ok {
 		fmt.Printf("  Service Status:   %v\n", statusVal)
 	}
@@ -617,4 +634,18 @@ func runEnable(args []string) {
 	fmt.Println("================================================================================")
 	fmt.Println("✅ BAP Control Plane is enabled and ready to start.")
 	fmt.Println("   Run 'bapcontrolplane start' to launch the server.")
+}
+
+func runVersion(args []string) {
+	fs := flag.NewFlagSet("bapcontrolplane version", flag.ContinueOnError)
+	jsonFlag := fs.Bool("json", false, "Output version information in JSON format")
+	fs.BoolVar(jsonFlag, "j", false, "Output version information in JSON format (shorthand)")
+	_ = fs.Parse(args)
+
+	info := version.Get("bapcontrolplane")
+	if *jsonFlag {
+		fmt.Println(info.JSON())
+		return
+	}
+	fmt.Println(info.String())
 }

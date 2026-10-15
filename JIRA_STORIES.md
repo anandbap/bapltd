@@ -33,6 +33,11 @@ This document represents the complete functional and non-functional requirements
 | `BAP-534` | Process-Level Supervision & Child Ancestry Tracking | **DONE** | Process tree ancestry (`parent`, `broker`, `child`), Windows Job Object containment, execution receipts. Verified in `test_bap_534_535_538.py`, `test_e2e_full_lifecycle.py`, and `test_e2e_adversarial_hardening.py`. |
 | `BAP-535` | Credential Shielding & Secret Redaction | **DONE** | Ambient env scrubbing (`AWS_*`, `GITHUB_*`, `OPENAI_*`) and output regex redaction (`[BAP_REDACTED_*]`). Verified across unit and E2E suites. |
 | `BAP-538` | Incident Forensics & Automated Snapshot Rollback | **DONE** | Pre-execution snapshot checkpointing and instant 1-click recovery CLI `bapedge rollback`. Verified in unit and E2E test suites. |
+| `BAP-550` | Universal Semantic Versioning Package & Compile-Time Ldflags Metadata Injection | **DONE** | Standardized `pkg/version` package, build pipeline `-ldflags` injection (SemVer, Git commit, build timestamp), and unified `version` CLI command across all BAP binaries. |
+| `BAP-551` | Edge-to-Control-Plane Handshake Version Telemetry & Enrollment State Tracking | **DONE** | Exchange `agent_version`, `server_version`, and `protocol_version` in registration and policy sync; persist agent version in control plane registry database. |
+| `BAP-552` | Policy & Telemetry Dynamic Protocol Version Gate & Anti-Skew Enforcement | **DONE** | Server-side `min_edge_version` enforcement rejecting outdated or incompatible clients with structured `UPGRADE_REQUIRED` guidance. |
+| `BAP-553` | Fleet Version Compatibility Observability in CIO Dashboard & Inspector Cockpit | **DONE** | Real-time agent version distribution metrics, outdated version warnings, and compatibility status in CLI and web dashboards. |
+| `BAP-554` | Automated Version Matrix & Compatibility Verification Test Suite | **DONE** | CI/CD automated test harness verifying version commands, handshake metadata propagation, minimum version rejection, and backward compatibility. |
 
 ### MVP exit sequence
 
@@ -74,6 +79,8 @@ This document represents the complete functional and non-functional requirements
    - [Epic 27: Fleet Telemetry Consistency, Dynamic Liveness Coupling & Unified State Architecture (BAP-EPIC-27)](#epic-27-fleet-telemetry-consistency-dynamic-liveness-coupling--unified-state-architecture-bap-epic-27)
    - [Epic 28: Agent Watch Persona Architecture, Canonical Activity Event & Live Enterprise Topology (BAP-EPIC-28)](#epic-28-agent-watch-persona-architecture-canonical-activity-event--live-enterprise-topology-bap-epic-28)
    - [Epic 29: Beyond-Hook Enforcement & Enterprise Defense Hardening (BAP-EPIC-29)](#epic-29-beyond-hook-enforcement--enterprise-defense-hardening-bap-epic-29)
+   - [Epic 30: Multi-Agent Tool Governance & 4-Layer Defense-in-Depth (BAP-EPIC-30)](#epic-30-multi-agent-tool-governance--4-layer-defense-in-depth-bap-epic-30)
+   - [Epic 31: Enterprise Launch Readiness, Client–Server Versioning Scheme & Protocol Compatibility Governance (BAP-EPIC-31)](#epic-31-enterprise-launch-readiness-client-server-versioning-scheme--protocol-compatibility-governance-bap-epic-31)
    - [Core Architectural Invariants & Adversarial Test Matrix](#core-architectural-invariants--adversarial-test-matrix)
 
 ---
@@ -110,6 +117,8 @@ This document represents the complete functional and non-functional requirements
 | `BAP-EPIC-27` | Fleet Telemetry Consistency, Dynamic Liveness Coupling & Unified State Architecture (BAP-510–BAP-513) | MVP Core & Telemetry | **DONE** |
 | `BAP-EPIC-28` | Agent Watch Persona Architecture, Canonical Activity Event & Live Enterprise Topology (BAP-520–BAP-525) | MVP Post-Pilot / v2.1 | **DONE** |
 | `BAP-EPIC-29` | Beyond-Hook Enforcement & Enterprise Defense Hardening (BAP-530–BAP-539) | Enterprise Hardening v2.2 | **BACKLOG** |
+| `BAP-EPIC-30` | Multi-Agent Tool Governance & 4-Layer Defense-in-Depth (BAP-540–BAP-548) | Enterprise Pack v2.3 | **DONE** |
+| `BAP-EPIC-31` | Enterprise Launch Readiness, Client–Server Versioning Scheme & Protocol Compatibility Governance (BAP-550–BAP-554) | Enterprise Launch v1.0 | **DONE** |
 
 ---
 
@@ -2845,4 +2854,121 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   4. Pre-flight execution gate `checkContentPinning` enforces only pins matching the active `ec.source` agent identity.
   5. `bapedge sweep` removes dead PID files, zombie session markers, orphaned shims, and stale temp files, and flushes the offline audit spool.
   6. `bapedge sync` synchronizes policy cache AND flushes offline telemetry spool, reporting buffered offline event metrics when disconnected.
+
+---
+
+### Epic 31: Enterprise Launch Readiness, Client–Server Versioning Scheme & Protocol Compatibility Governance (BAP-EPIC-31)
+
+**Goal:** Establish an enterprise-grade, cryptographically traceable semantic versioning scheme (SemVer 2.0.0) across all BAP binaries (`bapedge`, `bapcontrolplane`, `bapgateway`, `bapdashboard`), embed build metadata (`Version`, `GitCommit`, `BuildDate`) at compile-time via Go linker flags, enforce protocol version handshakes and minimum-client version gates between Edge daemons and the Central Control Plane, and surface fleet version distribution and compliance in the CIO Cockpit.
+
+---
+
+#### BAP-550: Universal Semantic Versioning Package & Compile-Time Ldflags Metadata Injection
+* **Epic**: `BAP-EPIC-31`
+* **Status**: `DONE`
+* **Priority**: `P0 - High`
+* **Implementation Plan**:
+  - Create standardized `pkg/version` package in both `bap-edge` and `bap-controlplane`:
+    - Variables: `Version` (SemVer e.g. `v1.0.0`), `GitCommit` (SHA hash), `BuildDate` (ISO 8601 UTC timestamp), `Platform` (`runtime.GOOS/runtime.GOARCH`), `GoVersion` (`runtime.Version()`).
+    - Format functions: `Short()` (e.g. `bapedge v1.0.0 (commit a1b2c3d)`), `Full()` (detailed multi-line build manifest), `JSON()` (structured metadata output).
+  - Add standardized CLI `version` subcommand and `-v` / `--version` flags:
+    - Supported across all binaries: `bapedge version`, `bapcontrolplane version`, `bapgateway version`, `bapdashboard version`.
+    - Support `--json` flag to emit machine-readable version specs for installer scripts and packaging verification.
+  - Update all build systems to inject linker flags automatically:
+    - [`build_binaries.bat`](file:///c:/Users/User/pyprj/bapltd/build_binaries.bat): Extract Git commit (`git rev-parse --short HEAD`) and timestamp, pass `-ldflags "-s -w -X '...'"` to `go build`.
+    - [`build_all_platforms.ps1`](file:///c:/Users/User/pyprj/bapltd/build_all_platforms.ps1): Support `$Version` parameter (defaults to git tag or `v1.0.0`), inject commit and date into all 5 target platform matrix builds.
+    - [`Dockerfile`](file:///c:/Users/User/pyprj/bapltd/Dockerfile): Pass build-args `VERSION` and `GIT_COMMIT` to statically link version metadata into production container images.
+* **Story**:
+  > As an enterprise infrastructure engineer and security administrator, I want every BAP binary (`bapedge`, `bapcontrolplane`, `bapgateway`) to report its exact semantic version, Git commit hash, and build timestamp via standard CLI commands (`version`, `--version`, `--json`) and embed this metadata during build time, so that our deployment automation and audit compliance systems can deterministically identify every running component.
+* **Acceptance Criteria**:
+  1. Running `bapedge version`, `bapcontrolplane version`, `bapgateway version`, or passing `-v` / `--version` outputs the semantic version, git commit, build date, and platform.
+  2. Passing `--json` outputs valid JSON containing `version`, `git_commit`, `build_date`, `go_version`, `os`, and `arch`.
+  3. All build scripts (`build_binaries.bat`, `build_all_platforms.ps1`, `Dockerfile`) automatically inject linker flags at compile-time.
+  4. Binary builds without explicit flags fallback safely to `"dev"` version with `"unknown"` commit without crashing.
+
+---
+
+#### BAP-551: Edge-to-Control-Plane Handshake Version Telemetry & Enrollment State Tracking
+* **Epic**: `BAP-EPIC-31`
+* **Status**: `DONE`
+* **Priority**: `P0 - High`
+* **Implementation Plan**:
+  - Extend Edge Registration Contract:
+    - Update `RegisterEdgeRequest` ([`bap-controlplane/pkg/types/types.go`](file:///c:/Users/User/pyprj/bapltd/bap-controlplane/pkg/types/types.go)) and [`bap-edge/cmd/register.go`](file:///c:/Users/User/pyprj/bapltd/bap-edge/cmd/register.go) to include `agent_version: string` and `protocol_version: int`.
+    - Update `RegisterEdgeResponse` to return `server_version: string` and `min_supported_agent_version: string`.
+    - Persist `AgentVersion` in `types.RegisteredAgent` in the SQLite database and in-memory registry store.
+  - Extend Policy Sync & Telemetry Protocols:
+    - In [`bap-edge/internal/policystore/store.go`](file:///c:/Users/User/pyprj/bapltd/bap-edge/internal/policystore/store.go), inject `X-BAP-Agent-Version: <version>` HTTP header on `/api/v1/policy/sync` and `/api/v1/audit/telemetry`.
+    - In Control Plane API handlers, attach `X-BAP-Server-Version: <version>` header to all HTTP responses.
+    - Update audit event schema to record `agent_version` alongside `request_hash`, `policy_version`, and `identity`.
+* **Story**:
+  > As a Chief Information Security Officer (CISO), I want the central control plane to track the exact software version of every enrolled developer workstation daemon and log the agent version on every security audit receipt, so that we have forensic proof of client integrity and can verify regulatory compliance across our distributed developer fleet.
+* **Acceptance Criteria**:
+  1. `bapedge register` sends the edge binary's version and protocol version in the registration payload.
+  2. The control plane saves the agent's software version in the persistent agent registry.
+  3. Every HTTP exchange between Edge and Control Plane carries `X-BAP-Agent-Version` and `X-BAP-Server-Version` headers.
+  4. Central audit events and receipts contain the reporting agent's version.
+
+---
+
+#### BAP-552: Policy & Telemetry Dynamic Protocol Version Gate & Anti-Skew Enforcement
+* **Epic**: `BAP-EPIC-31`
+* **Status**: `DONE`
+* **Priority**: `P0 - High`
+* **Implementation Plan**:
+  - Control Plane Version Gatekeeper:
+    - Add `--min-edge-version` CLI flag and `BAP_MIN_EDGE_VERSION` environment variable to `bapcontrolplane` (e.g. default `"1.0.0"`).
+    - In `/api/v1/policy/sync` and `/api/v1/auth/register-edge`, compare client SemVer against minimum required version.
+    - If client version is deprecated or incompatible:
+      - Return HTTP 426 Upgrade Required (or structured directive `UPGRADE_REQUIRED` with `min_version`, `download_url`, `remediation_notes`).
+  - Edge Daemon Graceful Upgrade Notice:
+    - When `bapedge sync` or background daemon receives `UPGRADE_REQUIRED`, log a high-visibility terminal banner advising the developer to update `bapedge`.
+    - Fallback securely: preserve local offline execution under cached policy if configured, or fail-closed if security invariants mandate strict deprecation cutoffs.
+* **Story**:
+  > As a Platform Security Architect, I want the central control plane to reject connections or policy sync from edge daemons that fall below our minimum supported version, and return actionable upgrade instructions, so that vulnerable or obsolete edge agents cannot bypass zero-trust governance or corrupt telemetry.
+* **Acceptance Criteria**:
+  1. `bapcontrolplane` accepts `--min-edge-version` and evaluates incoming agent requests.
+  2. Edge clients running versions strictly lower than the minimum required version receive a structured `UPGRADE_REQUIRED` response.
+  3. `bapedge sync` and `bapedge status` display clear upgrade instructions when an upgrade is mandated.
+  4. Compatible edge clients continue seamless policy synchronization and audit spool flushing.
+
+---
+
+#### BAP-553: Fleet Version Compatibility Observability in CIO Dashboard & Inspector Cockpit
+* **Epic**: `BAP-EPIC-31`
+* **Status**: `DONE`
+* **Priority**: `P0 - High`
+* **Implementation Plan**:
+  - CLI Status Inspection:
+    - Update `bapedge status` to show `Daemon Version: <ver>`, `Central Control Plane Version: <ver>`, and `Compatibility Status: [MATCHED | UPGRADE_AVAILABLE | DEPRECATED]`.
+    - Update `bapcontrolplane status` to display server version, min client version, and total registered fleet version distribution.
+  - Web UI & Inspector Cockpit:
+    - In [`inspector.html`](file:///c:/Users/User/pyprj/bapltd/inspector.html) and [`bap-controlplane/internal/dashboardui/web/index.html`](file:///c:/Users/User/pyprj/bapltd/bap-controlplane/internal/dashboardui/web/index.html), add a Fleet Version Distribution gauge and Agent Inventory version column.
+    - Highlight outdated agents in Amber/Red with an "Update Required" badge.
+* **Story**:
+  > As an IT Operations Director and CIO, I want real-time visibility into the distribution of BAP agent versions across the enterprise developer fleet directly in the Inspector Cockpit and via CLI status commands, so that my team can monitor rollout progress and identify workstations requiring software updates.
+* **Acceptance Criteria**:
+  1. `bapedge status` prints local version, server version, and compatibility state.
+  2. `bapcontrolplane status` summarizes fleet counts by agent version.
+  3. Web Inspector and Dashboard display agent versions in the active agent fleet table and flag deprecated versions.
+
+---
+
+#### BAP-554: Automated Version Matrix & Compatibility Verification Test Suite
+* **Epic**: `BAP-EPIC-31`
+* **Status**: `DONE`
+* **Priority**: `P0 - High`
+* **Implementation Plan**:
+  - Create dedicated automated test suite [`tests/test_version_compatibility.py`](file:///c:/Users/User/pyprj/bapltd/tests/test_version_compatibility.py):
+    - Test 1: Verify `bapedge version` and `bapcontrolplane version` CLI outputs format and `--json` parsing.
+    - Test 2: Verify registration handshake transfers `agent_version` and receives `server_version`.
+    - Test 3: Verify control plane minimum version rejection (`min_edge_version > client_version` triggers `UPGRADE_REQUIRED`).
+    - Test 4: Verify header propagation (`X-BAP-Agent-Version` and `X-BAP-Server-Version`) on policy sync.
+    - Test 5: Verify offline resilience continues functioning when version mismatch occurs with cached policy.
+  - Add test execution to [`run_all_tests.bat`](file:///c:/Users/User/pyprj/bapltd/run_all_tests.bat).
+* **Story**:
+  > As a Quality Engineering Lead, I want an end-to-end automated test harness validating version propagation, minimum-version enforcement, and backward compatibility across mixed-version topologies, so that regressions cannot be introduced during rapid release cycles.
+* **Acceptance Criteria**:
+  1. Dedicated test suite `tests/test_version_compatibility.py` passes 100% on Windows and POSIX environments.
+  2. All version scenarios (compatible, deprecated, offline fallback) are verified without flakiness.
 

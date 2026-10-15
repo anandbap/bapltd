@@ -4,6 +4,7 @@ import (
 	"bap-edge/internal/authz"
 	"bap-edge/internal/httptransport"
 	"bap-edge/internal/state"
+	"bap-edge/pkg/version"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -41,8 +43,11 @@ type PolicyState struct {
 }
 
 type SyncResponse struct {
-	Directive string  `json:"directive"`
-	Bundle    *Bundle `json:"bundle,omitempty"`
+	Directive      string  `json:"directive"`
+	Bundle         *Bundle `json:"bundle,omitempty"`
+	ServerVersion  string  `json:"server_version,omitempty"`
+	MinEdgeVersion string  `json:"min_edge_version,omitempty"`
+	Message        string  `json:"message,omitempty"`
 }
 
 type Store struct {
@@ -210,11 +215,19 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 		"agent_id":          agentID,
 		"installed_version": state.Version,
 		"installed_digest":  state.Digest,
+		"agent_version":     version.Version,
 	}
 	body, _ := json.Marshal(reqPayload)
 
 	endpoint := fmt.Sprintf("%s/api/v1/policy/sync", serverURL)
-	resp, err := client.Post(endpoint, "application/json", bytes.NewReader(body))
+	httpReq, errReq := http.NewRequest("POST", endpoint, bytes.NewReader(body))
+	if errReq != nil {
+		return Bundle{}, false, errReq
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-BAP-Agent-Version", version.Version)
+
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		// Control plane is offline / unreachable -> Fail-secure fallback to cached policy
 		cedarPath, schemaPath, currentState, loadErr := s.Current()
@@ -241,6 +254,10 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 	var syncResp SyncResponse
 	if err := json.NewDecoder(resp.Body).Decode(&syncResp); err != nil {
 		return Bundle{}, false, fmt.Errorf("failed to parse sync response: %w", err)
+	}
+
+	if syncResp.Message != "" && strings.Contains(syncResp.Message, "UPGRADE_REQUIRED") {
+		fmt.Fprintf(os.Stderr, "\n==================================================\n  [UPGRADE REQUIRED] %s\n==================================================\n\n", syncResp.Message)
 	}
 
 	if syncResp.Directive == "KILL_SWITCH" || (syncResp.Bundle != nil && syncResp.Bundle.KillSwitch) {

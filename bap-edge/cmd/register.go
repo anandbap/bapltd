@@ -19,26 +19,31 @@ import (
 	"bap-edge/internal/httptransport"
 	"bap-edge/internal/policystore"
 	"bap-edge/internal/state"
+	"bap-edge/pkg/version"
 )
 
 type RegisterRequest struct {
-	Code       string `json:"one_time_code"`
-	BinaryHash string `json:"binary_hash"`
-	Hostname   string `json:"hostname"`
-	OS         string `json:"os"`
-	Arch       string `json:"arch"`
-	PublicKey  string `json:"public_key,omitempty"`
-	InstanceID string `json:"instance_id,omitempty"`
+	Code            string `json:"one_time_code"`
+	BinaryHash      string `json:"binary_hash"`
+	Hostname        string `json:"hostname"`
+	OS              string `json:"os"`
+	Arch            string `json:"arch"`
+	PublicKey       string `json:"public_key,omitempty"`
+	InstanceID      string `json:"instance_id,omitempty"`
+	AgentVersion    string `json:"agent_version,omitempty"`
+	ProtocolVersion int    `json:"protocol_version,omitempty"`
 }
 
 type RegisterResponse struct {
-	AgentID      string    `json:"agent_id"`
-	AppID        string    `json:"app_id"`
-	InstanceID   string    `json:"instance_id,omitempty"`
-	SPIFFEID     string    `json:"spiffe_id,omitempty"`
-	Status       string    `json:"status"`
-	ServerTime   time.Time `json:"server_time"`
-	SessionToken string    `json:"session_token"`
+	AgentID                  string    `json:"agent_id"`
+	AppID                    string    `json:"app_id"`
+	InstanceID               string    `json:"instance_id,omitempty"`
+	SPIFFEID                 string    `json:"spiffe_id,omitempty"`
+	Status                   string    `json:"status"`
+	ServerTime               time.Time `json:"server_time"`
+	SessionToken             string    `json:"session_token"`
+	ServerVersion            string    `json:"server_version,omitempty"`
+	MinSupportedAgentVersion string    `json:"min_supported_agent_version,omitempty"`
 }
 
 type StoredCredentials struct {
@@ -126,12 +131,14 @@ func RunRegister(args []string) error {
 	hostname, _ := os.Hostname()
 
 	reqBody := RegisterRequest{
-		Code:       *code,
-		BinaryHash: binHash,
-		Hostname:   hostname,
-		OS:         runtime.GOOS,
-		Arch:       runtime.GOARCH,
-		InstanceID: *customInstanceID,
+		Code:            *code,
+		BinaryHash:      binHash,
+		Hostname:        hostname,
+		OS:              runtime.GOOS,
+		Arch:            runtime.GOARCH,
+		InstanceID:      *customInstanceID,
+		AgentVersion:    version.Version,
+		ProtocolVersion: 1,
 	}
 
 	reqBytes, err := json.Marshal(reqBody)

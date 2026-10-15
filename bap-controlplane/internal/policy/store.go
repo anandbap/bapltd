@@ -28,11 +28,15 @@ type SyncRequest struct {
 	AgentID          string `json:"agent_id"`
 	InstalledVersion uint64 `json:"installed_version"`
 	InstalledDigest  string `json:"installed_digest"`
+	AgentVersion     string `json:"agent_version,omitempty"`
 }
 
 type SyncResponse struct {
-	Directive SyncDirective `json:"directive"`
-	Bundle    *Bundle       `json:"bundle,omitempty"`
+	Directive      SyncDirective `json:"directive"`
+	Bundle         *Bundle       `json:"bundle,omitempty"`
+	ServerVersion  string        `json:"server_version,omitempty"`
+	MinEdgeVersion string        `json:"min_edge_version,omitempty"`
+	Message        string        `json:"message,omitempty"`
 }
 
 type Store struct {

@@ -31,6 +31,7 @@ import (
 	"bap-controlplane/internal/sandbox"
 	"bap-controlplane/internal/session"
 	"bap-controlplane/pkg/types"
+	"bap-controlplane/pkg/version"
 )
 
 type DemoActionRecord struct {
@@ -78,6 +79,7 @@ type Server struct {
 	activitySubs     map[chan *types.AgentActivityEvent]struct{}
 	categoriesMu     sync.RWMutex
 	customCategories []types.WorkCategoryMeta
+	minEdgeVersion   string
 }
 
 type deviceAuthSession struct {
@@ -194,6 +196,14 @@ func (s *Server) GetEnvironmentMode() string {
 		return "dev"
 	}
 	return s.envMode
+}
+
+func (s *Server) SetMinEdgeVersion(v string) {
+	s.minEdgeVersion = strings.TrimSpace(v)
+}
+
+func (s *Server) GetMinEdgeVersion() string {
+	return s.minEdgeVersion
 }
 
 func (s *Server) SetAdminSecurity(token string, allowRemote bool) {
@@ -397,6 +407,7 @@ func (s *Server) registerRoutes() {
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-BAP-Server-Version", version.Version)
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(data)
 }
@@ -406,7 +417,15 @@ func writeError(w http.ResponseWriter, status int, message string) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "ltd-service-control-plane"})
+	resp := map[string]string{
+		"status":   "ok",
+		"service":  "ltd-service-control-plane",
+		"version":  version.Version,
+	}
+	if s.minEdgeVersion != "" {
+		resp["min_edge_version"] = s.minEdgeVersion
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handlePreRegister(w http.ResponseWriter, r *http.Request) {
@@ -472,6 +491,22 @@ func (s *Server) handleRegisterEdge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Version compatibility gate
+	if s.minEdgeVersion != "" && req.AgentVersion != "" {
+		if version.Compare(req.AgentVersion, s.minEdgeVersion) < 0 {
+			w.Header().Set("X-BAP-Min-Edge-Version", s.minEdgeVersion)
+			writeJSON(w, http.StatusUpgradeRequired, map[string]any{
+				"error":            "Upgrade required",
+				"directive":        "UPGRADE_REQUIRED",
+				"agent_version":    req.AgentVersion,
+				"min_edge_version": s.minEdgeVersion,
+				"server_version":   version.Version,
+				"message":          fmt.Sprintf("Your bapedge version (%s) is outdated and incompatible. Minimum required version is %s.", req.AgentVersion, s.minEdgeVersion),
+			})
+			return
+		}
+	}
+
 	// 1. Consume OTC (single-use validation)
 	agentID, err := s.otcStore.Consume(code)
 	if err != nil {
@@ -492,8 +527,8 @@ func (s *Server) handleRegisterEdge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Enroll agent in registry
-	enrolled, err := s.registry.Enroll(agentID, req.BinaryHash, req.PublicKey, req.Hostname, req.OS, req.Arch, req.InstanceID)
+	// 4. Enroll agent in registry with version tracking
+	enrolled, err := s.registry.EnrollWithVersion(agentID, req.BinaryHash, req.PublicKey, req.Hostname, req.OS, req.Arch, req.InstanceID, req.AgentVersion, req.ProtocolVersion)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Enrollment error: "+err.Error())
 		return
@@ -503,13 +538,15 @@ func (s *Server) handleRegisterEdge(w http.ResponseWriter, r *http.Request) {
 	sessionToken, _, _ := s.minter.Mint(enrolled, req.BinaryHash, nil)
 
 	resp := types.RegisterEdgeResponse{
-		AgentID:      enrolled.AgentID,
-		AppID:        enrolled.AppID,
-		InstanceID:   enrolled.InstanceID,
-		SPIFFEID:     enrolled.SPIFFEID,
-		Status:       string(enrolled.Status),
-		ServerTime:   time.Now(),
-		SessionToken: sessionToken,
+		AgentID:                  enrolled.AgentID,
+		AppID:                    enrolled.AppID,
+		InstanceID:               enrolled.InstanceID,
+		SPIFFEID:                 enrolled.SPIFFEID,
+		Status:                   string(enrolled.Status),
+		ServerTime:               time.Now(),
+		SessionToken:             sessionToken,
+		ServerVersion:            version.Version,
+		MinSupportedAgentVersion: s.minEdgeVersion,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1336,7 +1373,30 @@ func (s *Server) handlePolicySync(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Invalid JSON body: "+err.Error())
 		return
 	}
+
+	agentVer := req.AgentVersion
+	if agentVer == "" {
+		agentVer = r.Header.Get("X-BAP-Agent-Version")
+	}
+
+	// Min-version evaluation
+	if s.minEdgeVersion != "" && agentVer != "" {
+		if version.Compare(agentVer, s.minEdgeVersion) < 0 {
+			w.Header().Set("X-BAP-Min-Edge-Version", s.minEdgeVersion)
+			writeJSON(w, http.StatusOK, policy.SyncResponse{
+				Directive:      policy.DirectiveUpdateRequired,
+				Bundle:         nil,
+				ServerVersion:  version.Version,
+				MinEdgeVersion: s.minEdgeVersion,
+				Message:        fmt.Sprintf("UPGRADE_REQUIRED: Client version %s is deprecated. Minimum required version is %s.", agentVer, s.minEdgeVersion),
+			})
+			return
+		}
+	}
+
 	resp := s.policyStore.Sync(req)
+	resp.ServerVersion = version.Version
+	resp.MinEdgeVersion = s.minEdgeVersion
 	writeJSON(w, http.StatusOK, resp)
 }
 

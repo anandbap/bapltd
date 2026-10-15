@@ -21,6 +21,7 @@ import (
 	"bap-edge/internal/httptransport"
 	"bap-edge/internal/policystore"
 	"bap-edge/internal/state"
+	"bap-edge/pkg/version"
 )
 
 // RunSetup provides a 1-click idempotent configuration for developer workstations (BAP-471).
@@ -158,11 +159,25 @@ func RunStatus(args []string) error {
 	cpConnected := false
 	cpLatencyMs := int64(0)
 	cpStatusText := "DISCONNECTED / OFFLINE (Local Spool Active)"
+	cpServerVersion := ""
+	cpMinEdgeVersion := ""
 	if resp, err := client.Get(serverURL + "/health"); err == nil {
 		cpLatencyMs = time.Since(probeStart).Milliseconds()
 		if resp.StatusCode == http.StatusOK {
 			cpConnected = true
 			cpStatusText = fmt.Sprintf("CONNECTED / ONLINE (%dms)", cpLatencyMs)
+			var hData map[string]any
+			if jsonErr := json.NewDecoder(resp.Body).Decode(&hData); jsonErr == nil {
+				if v, ok := hData["version"].(string); ok {
+					cpServerVersion = v
+				}
+				if mv, ok := hData["min_edge_version"].(string); ok {
+					cpMinEdgeVersion = mv
+				}
+			}
+			if cpServerVersion == "" {
+				cpServerVersion = resp.Header.Get("X-BAP-Server-Version")
+			}
 		} else {
 			cpStatusText = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		}
@@ -333,12 +348,30 @@ func RunStatus(args []string) error {
 		}
 	}
 
+	// Compatibility determination
+	compatibilityStatus := "OFFLINE / UNKNOWN"
+	if cpConnected {
+		if cpServerVersion == version.Version {
+			compatibilityStatus = "MATCHED (Exact)"
+		} else if cpMinEdgeVersion != "" && version.Compare(version.Version, cpMinEdgeVersion) < 0 {
+			compatibilityStatus = "DEPRECATED (Upgrade Required)"
+		} else {
+			compatibilityStatus = "COMPATIBLE"
+		}
+	}
+
 	// JSON output mode
 	if *jsonFlag {
 		statusOutput := map[string]any{
 			"host":     hostname,
 			"platform": fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH),
 			"user":     username,
+			"version": map[string]any{
+				"agent_version":        version.Version,
+				"server_version":       cpServerVersion,
+				"min_edge_version":     cpMinEdgeVersion,
+				"compatibility_status": compatibilityStatus,
+			},
 			"operating_mode": map[string]any{
 				"mode":           operatingMode,
 				"degraded":       !daemonActive,
@@ -347,10 +380,13 @@ func RunStatus(args []string) error {
 				"admin_required": false,
 			},
 			"control_plane": map[string]any{
-				"url":        serverURL,
-				"connected":  cpConnected,
-				"latency_ms": cpLatencyMs,
-				"status":     cpStatusText,
+				"url":                  serverURL,
+				"connected":            cpConnected,
+				"latency_ms":           cpLatencyMs,
+				"status":               cpStatusText,
+				"server_version":       cpServerVersion,
+				"min_edge_version":     cpMinEdgeVersion,
+				"compatibility_status": compatibilityStatus,
 			},
 			"enrollment": map[string]any{
 				"enrolled":   enrolled,
@@ -400,7 +436,12 @@ func RunStatus(args []string) error {
 	fmt.Println("================================================================================")
 	fmt.Printf("  Host:             %s (%s/%s)\n", hostname, runtime.GOOS, runtime.GOARCH)
 	fmt.Printf("  User:             %s\n", username)
-	fmt.Printf("  Control Plane:    %s [%s]\n", serverURL, cpStatusText)
+	fmt.Printf("  Daemon Version:   %s\n", version.Version)
+	if cpConnected && cpServerVersion != "" {
+		fmt.Printf("  Control Plane:    %s [v%s | %s]\n", serverURL, cpServerVersion, compatibilityStatus)
+	} else {
+		fmt.Printf("  Control Plane:    %s [%s]\n", serverURL, cpStatusText)
+	}
 	fmt.Printf("  Operating Mode:   %s\n", operatingModeDesc)
 	fmt.Printf("  Admin Rights Req: NO (100%% unprivileged user-space broker)\n")
 	fmt.Printf("  State Directory:  %s\n", state.Dir())
