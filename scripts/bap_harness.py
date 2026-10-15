@@ -93,8 +93,17 @@ def http_post(url: str, payload: dict, timeout: float = 0.4) -> tuple:
             body = resp.read().decode("utf-8")
             return resp.status, body
     except urllib.error.HTTPError as e:
-        return e.code, e.read().decode("utf-8")
+        try:
+            body = e.read().decode("utf-8", errors="replace")
+        finally:
+            e.close()
+        return e.code, body
     except Exception as e:
+        if hasattr(e, "close"):
+            try:
+                e.close()
+            except Exception:
+                pass
         return None, str(e)
 
 
@@ -615,8 +624,17 @@ def cmd_cleanup_all(args):
                 if s.get("status") == "active" and s_id:
                     http_post(f"{server_url}/api/v1/sessions/end", {"session_id": s_id, "reason": "cleanup_all"})
                     print(f"  [-] Closed remote session: {s_id}")
-    except Exception:
-        pass
+    except urllib.error.HTTPError as e:
+        try:
+            e.close()
+        except Exception:
+            pass
+    except Exception as e:
+        if hasattr(e, "close"):
+            try:
+                e.close()
+            except Exception:
+                pass
 
     # Purge local session markers
     purged = 0

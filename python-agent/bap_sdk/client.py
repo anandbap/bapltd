@@ -519,6 +519,11 @@ class BAPSession:
             with _urlopen(req, timeout=3) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except Exception as e:
+            if hasattr(e, "close"):
+                try:
+                    e.close()
+                except Exception:
+                    pass
             return {"error": str(e)}
 
     def _find_bapedge(self) -> str:
@@ -561,6 +566,11 @@ class BAPSession:
                     self.is_revoked = True
                 return data
         except Exception as e:
+            if hasattr(e, "close"):
+                try:
+                    e.close()
+                except Exception:
+                    pass
             return {"error": str(e)}
 
     def start(self) -> "BAPSession":
@@ -596,7 +606,12 @@ class BAPSession:
             with _urlopen(req, timeout=3) as resp:
                 if resp.status in (200, 201):
                     self.server_registered = True
-        except Exception:
+        except Exception as e:
+            if hasattr(e, "close"):
+                try:
+                    e.close()
+                except Exception:
+                    pass
             # Session registration soft-fails when offline to preserve local broker autonomy
             self.server_registered = False
 
@@ -639,8 +654,12 @@ class BAPSession:
             )
             with _urlopen(req, timeout=3) as resp:
                 pass
-        except Exception:
-            pass
+        except Exception as e:
+            if hasattr(e, "close"):
+                try:
+                    e.close()
+                except Exception:
+                    pass
         self.is_active = False
         self.server_registered = False
 

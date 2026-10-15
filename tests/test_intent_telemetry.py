@@ -92,6 +92,11 @@ class TestIntentTelemetry(unittest.TestCase):
                             if resp.status == 200:
                                 healthy = True
                                 break
+                    except urllib.error.HTTPError as e:
+                        try:
+                            e.close()
+                        except Exception:
+                            pass
                     except Exception:
                         pass
             if not healthy:
@@ -124,7 +129,10 @@ class TestIntentTelemetry(unittest.TestCase):
                 res_json = json.loads(body) if body.strip().startswith(("{", "[")) else {}
                 return resp.status, res_json
         except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8") if e.fp else ""
+            try:
+                body = e.read().decode("utf-8") if e.fp else ""
+            finally:
+                e.close()
             res_json = json.loads(body) if body.strip().startswith(("{", "[")) else {}
             return e.code, res_json
 

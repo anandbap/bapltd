@@ -64,7 +64,7 @@ class TestHarnessMultiSessionIsolation(unittest.TestCase):
         claude_mcp = os.path.join(self.test_ws, ".claude", "mcp.json")
         self.assertTrue(os.path.isfile(claude_settings), "Claude settings.json must be created")
         self.assertTrue(os.path.isfile(claude_mcp), "Claude mcp.json must be created")
-        with open(claude_settings, "r") as f:
+        with open(claude_settings, "r", encoding="utf-8") as f:
             data = json.load(f)
             self.assertIn("hooks", data)
             self.assertIn("PreToolUse", data["hooks"])
@@ -74,7 +74,7 @@ class TestHarnessMultiSessionIsolation(unittest.TestCase):
         vscode_mcp = os.path.join(self.test_ws, ".vscode", "mcp.json")
         self.assertTrue(os.path.isfile(vscode_settings), "VS Code settings.json must be created")
         self.assertTrue(os.path.isfile(vscode_mcp), "VS Code mcp.json must be created")
-        with open(vscode_settings, "r") as f:
+        with open(vscode_settings, "r", encoding="utf-8") as f:
             data = json.load(f)
             self.assertTrue(
                 "terminal.integrated.defaultProfile.windows" in data or "terminal.integrated.defaultProfile.linux" in data
@@ -125,11 +125,11 @@ class TestHarnessMultiSessionIsolation(unittest.TestCase):
         self.assertTrue(os.path.isfile(pid_marker_alpha), "Alpha PID marker must exist")
         self.assertTrue(os.path.isfile(pid_marker_beta), "Beta PID marker must exist")
 
-        with open(pid_marker_alpha, "r") as f:
+        with open(pid_marker_alpha, "r", encoding="utf-8") as f:
             d_alpha = json.load(f)
             self.assertEqual(d_alpha["session_id"], "sess-claude-test-alpha")
 
-        with open(pid_marker_beta, "r") as f:
+        with open(pid_marker_beta, "r", encoding="utf-8") as f:
             d_beta = json.load(f)
             self.assertEqual(d_beta["session_id"], "sess-claude-test-beta")
 
@@ -172,7 +172,7 @@ class TestHarnessMultiSessionIsolation(unittest.TestCase):
         pid_marker_2 = os.path.join(SESSIONS_DIR, "pid-55002.json")
         self.assertTrue(os.path.isfile(pid_marker_2), "Session 2 marker must remain completely intact")
 
-        with open(pid_marker_2, "r") as f:
+        with open(pid_marker_2, "r", encoding="utf-8") as f:
             d2 = json.load(f)
             self.assertEqual(d2["session_id"], "sess-copilot-2")
             self.assertEqual(d2["app_id"], "copilot")
