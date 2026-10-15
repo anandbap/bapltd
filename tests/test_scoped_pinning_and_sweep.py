@@ -14,6 +14,14 @@ class TestScopedPinningAndSweep(unittest.TestCase):
     def setUpClass(cls):
         cls.bapedge = os.path.abspath("bapedge.exe")
         assert os.path.exists(cls.bapedge), f"bapedge.exe not found at {cls.bapedge}"
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # Pre-scan and pin workspace assets so scoped prompts and policies are registered in pins manifest
+        subprocess.run(
+            [cls.bapedge, "pin", "scan", "--dir", repo_root],
+            capture_output=True,
+            text=True,
+            cwd=repo_root,
+        )
 
     def run_bapedge(self, *args, env=None):
         cmd = [self.bapedge, "exec", f"{self.bapedge} " + " ".join(args)]

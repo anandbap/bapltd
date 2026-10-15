@@ -1,6 +1,7 @@
 package policystore
 
 import (
+	"bap-edge/internal/authz"
 	"bap-edge/internal/httptransport"
 	"bap-edge/internal/state"
 	"bytes"
@@ -131,28 +132,68 @@ func (s *Store) LoadState() (PolicyState, error) {
 	return state, nil
 }
 
-// Current returns the cached policy path and verifies kill-switch is not active
+// Current returns the cached policy path and verifies kill-switch is not active.
+// If the cache directory is uninitialized, it falls back to checking local search paths.
 func (s *Store) Current() (string, string, PolicyState, error) {
 	state, err := s.LoadState()
-	if err != nil {
-		return "", "", PolicyState{}, ErrNoPolicyFound
+	if err == nil {
+		if state.KillSwitch {
+			return "", "", state, ErrKillSwitchActive
+		}
+
+		cedarPath := filepath.Join(s.directory, "policy.cedar")
+		if _, err := os.Stat(cedarPath); err == nil {
+			schemaPath := filepath.Join(s.directory, "schema.json")
+			if _, err := os.Stat(schemaPath); err != nil {
+				schemaPath = ""
+			}
+			return cedarPath, schemaPath, state, nil
+		}
 	}
 
-	if state.KillSwitch {
-		return "", "", state, ErrKillSwitchActive
+	// Fallback: search local candidate paths (policy.cedar in cwd, workspace root, or bap-edge)
+	candidates := []string{
+		"policy.cedar",
+		filepath.Join("bap-edge", "policy.cedar"),
+		filepath.Join("..", "policy.cedar"),
+	}
+	if ws := authz.GetWorkspaceRoot(); ws != "" {
+		candidates = append(candidates,
+			filepath.Join(ws, "policy.cedar"),
+			filepath.Join(ws, "bap-edge", "policy.cedar"),
+		)
 	}
 
-	cedarPath := filepath.Join(s.directory, "policy.cedar")
-	if _, err := os.Stat(cedarPath); err != nil {
-		return "", "", state, ErrNoPolicyFound
+	for _, cand := range candidates {
+		data, err := os.ReadFile(cand)
+		if err == nil && len(data) > 0 {
+			schemaPath := filepath.Join(filepath.Dir(cand), "schema.json")
+			var schemaData []byte
+			if sData, sErr := os.ReadFile(schemaPath); sErr == nil {
+				schemaData = sData
+			} else {
+				schemaPath = ""
+			}
+			computed := ComputeDigest(string(data), string(schemaData))
+			bundle := Bundle{
+				Version:     1,
+				Digest:      computed,
+				PolicyCedar: string(data),
+				SchemaJSON:  string(schemaData),
+				KillSwitch:  false,
+			}
+			_ = s.Accept(bundle)
+
+			return cand, schemaPath, PolicyState{
+				Version:    1,
+				Digest:     computed,
+				KillSwitch: false,
+				LastSync:   time.Now().UTC(),
+			}, nil
+		}
 	}
 
-	schemaPath := filepath.Join(s.directory, "schema.json")
-	if _, err := os.Stat(schemaPath); err != nil {
-		schemaPath = ""
-	}
-
-	return cedarPath, schemaPath, state, nil
+	return "", "", PolicyState{}, ErrNoPolicyFound
 }
 
 // SyncWithServer calls bapcontrolplane /api/v1/policy/sync.
