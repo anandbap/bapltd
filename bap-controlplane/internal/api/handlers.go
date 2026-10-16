@@ -25,6 +25,8 @@ import (
 	"bap-controlplane/internal/discovery"
 	"bap-controlplane/internal/endpoint"
 	"bap-controlplane/internal/governance"
+	"bap-controlplane/internal/hitl"
+	"bap-controlplane/internal/intent"
 	"bap-controlplane/internal/notary"
 	"bap-controlplane/internal/otc"
 	"bap-controlplane/internal/policy"
@@ -82,6 +84,8 @@ type Server struct {
 	customCategories []types.WorkCategoryMeta
 	minEdgeVersion   string
 	saasTokenMgr     *authz.SaaSTokenManager
+	intentMgr        *intent.IntentManager
+	escalationMgr    *hitl.EscalationManager
 }
 
 type deviceAuthSession struct {
@@ -135,6 +139,8 @@ func NewServer(reg *registry.Store, otcStore *otc.Store, minter *authz.TokenMint
 		scanner:         scanner,
 		endpointMgr:     endpointMgr,
 		saasTokenMgr:    authz.NewSaaSTokenManager(),
+		intentMgr:       intent.NewIntentManager(""),
+		escalationMgr:   hitl.NewEscalationManager("", 30*time.Second, 5),
 		envMode:         "dev",
 		deviceSessions:  make(map[string]*deviceAuthSession),
 		deviceUserCodes: make(map[string]*deviceAuthSession),
@@ -314,6 +320,13 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/saas/tokens/bind", s.handleBindSaaSToken)
 	s.mux.HandleFunc("/api/v1/saas/tokens/verify", s.handleVerifySaaSToken)
 	s.mux.HandleFunc("/api/v1/saas/tokens", s.handleListSaaSTokens)
+	s.mux.HandleFunc("/api/v1/intent/attest", s.handleAttestIntent)
+	s.mux.HandleFunc("/api/v1/intent/verify", s.handleVerifyIntent)
+	s.mux.HandleFunc("/api/v1/intent/", s.handleGetIntent)
+	s.mux.HandleFunc("/api/v1/escalation/request", s.handleEscalationRequest)
+	s.mux.HandleFunc("/api/v1/escalation/resolve", s.handleEscalationResolve)
+	s.mux.HandleFunc("/api/v1/escalation/requests", s.handleListEscalations)
+	s.mux.HandleFunc("/api/v1/escalation/", s.handleGetEscalation)
 
 	// Web Inspector & React Admin Handshake / Login
 	s.mux.HandleFunc("/api/v1/auth/inspector-handshake", s.handleInspectorHandshake)
@@ -4222,5 +4235,271 @@ func (s *Server) handleListSaaSTokens(w http.ResponseWriter, r *http.Request) {
 		"count":  len(bindings),
 	})
 }
+
+// handleAttestIntent registers and signs an immutable task intent binding (BAP-561)
+func (s *Server) handleAttestIntent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req types.AttestIntentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+
+	if strings.TrimSpace(req.TaskID) == "" {
+		writeError(w, http.StatusBadRequest, "task_id is required")
+		return
+	}
+	if strings.TrimSpace(req.SessionID) == "" {
+		writeError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+
+	ttl := 30 * time.Minute
+	if req.TTLSeconds > 0 {
+		ttl = time.Duration(req.TTLSeconds) * time.Second
+	}
+
+	att, err := s.intentMgr.AttestIntent(req.TaskID, req.SessionID, req.RootOperatorEmail, req.GoalDescription, req.PermittedEnvs, req.PermittedActions, ttl)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if s.auditStore != nil {
+		s.auditStore.Ingest([]audit.Event{{
+			EventID:     fmt.Sprintf("evt-intent-%d", time.Now().UnixNano()),
+			SessionID:   req.SessionID,
+			UserEmail:   req.RootOperatorEmail,
+			Timestamp:   time.Now().UTC().Format(time.RFC3339),
+			Source:      "intent_governance",
+			Executable:  "intent_attest",
+			FullCommand: fmt.Sprintf("intent attest task=%s goal=%s envs=%v actions=%v", req.TaskID, req.GoalDescription, req.PermittedEnvs, req.PermittedActions),
+			Decision:    "ALLOW",
+			Reason:      "Task intent attested and cryptographically signed",
+		}})
+	}
+
+	writeJSON(w, http.StatusCreated, att)
+}
+
+// handleVerifyIntent validates an attempted tool action against the task intent (BAP-561)
+func (s *Server) handleVerifyIntent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req types.VerifyIntentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+
+	if strings.TrimSpace(req.TaskID) == "" {
+		writeError(w, http.StatusBadRequest, "task_id is required")
+		return
+	}
+
+	allowed, status, err := s.intentMgr.VerifyActionAgainstIntent(req.TaskID, req.AttemptedAction, req.TargetEnv)
+	if !allowed {
+		if s.auditStore != nil {
+			s.auditStore.Ingest([]audit.Event{{
+				EventID:     fmt.Sprintf("evt-drift-%d", time.Now().UnixNano()),
+				Timestamp:   time.Now().UTC().Format(time.RFC3339),
+				Source:      "intent_governance",
+				Executable:  "intent_verify",
+				FullCommand: fmt.Sprintf("intent verify task=%s action=%s env=%s", req.TaskID, req.AttemptedAction, req.TargetEnv),
+				Decision:    "DENY",
+				Reason:      err.Error(),
+			}})
+		}
+
+		statusCode := http.StatusForbidden
+		if errors.Is(err, intent.ErrTaskNotFound) {
+			statusCode = http.StatusNotFound
+		}
+		writeJSON(w, statusCode, types.VerifyIntentResponse{
+			Allowed: false,
+			Status:  status,
+			Reason:  err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, types.VerifyIntentResponse{
+		Allowed: true,
+		Status:  status,
+	})
+}
+
+// handleGetIntent returns the active intent attestation for a task
+func (s *Server) handleGetIntent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	taskID := strings.TrimPrefix(r.URL.Path, "/api/v1/intent/")
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		writeError(w, http.StatusBadRequest, "task_id path parameter is required")
+		return
+	}
+
+	att, err := s.intentMgr.GetAttestation(taskID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, att)
+}
+
+// BAP-565: handleEscalationRequest allows an agent to request step-up approval for out-of-scope actions
+func (s *Server) handleEscalationRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req types.StepUpEscalationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON payload: "+err.Error())
+		return
+	}
+
+	if req.TaskID == "" || req.Action == "" {
+		writeError(w, http.StatusBadRequest, "task_id and action are required")
+		return
+	}
+
+	esc, err := s.escalationMgr.RequestEscalation(req.TaskID, req.SessionID, req.AgentID, req.Resource, req.Action, req.Reason)
+	if err != nil {
+		if errors.Is(err, hitl.ErrDuplicateRequestThrottled) {
+			writeJSON(w, http.StatusTooManyRequests, map[string]any{
+				"error":   "ApprovalFatigueThrottled",
+				"status":  "THROTTLED",
+				"message": err.Error(),
+			})
+			return
+		}
+		if errors.Is(err, hitl.ErrMaxAttemptsExceeded) {
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"error":   "MaxEscalationAttemptsExceeded",
+				"status":  "DENIED",
+				"message": err.Error(),
+			})
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if s.auditStore != nil {
+		s.auditStore.Ingest([]audit.Event{{
+			EventID:     fmt.Sprintf("evt-esc-%d", time.Now().UnixNano()),
+			Timestamp:   time.Now().UTC().Format(time.RFC3339),
+			Source:      "hitl_governance",
+			Executable:  "escalation_request",
+			FullCommand: fmt.Sprintf("ESCALATION_REQUEST task=%s action=%s risk=%s", esc.TaskID, esc.Action, esc.RiskRating),
+			Decision:    "PENDING",
+			Reason:      esc.Reason,
+		}})
+	}
+
+	writeJSON(w, http.StatusCreated, esc)
+}
+
+// BAP-565: handleEscalationResolve resolves a pending step-up request (approving/denying)
+func (s *Server) handleEscalationResolve(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req types.StepUpResolveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON payload: "+err.Error())
+		return
+	}
+
+	if req.EscalationID == "" || req.Decision == "" {
+		writeError(w, http.StatusBadRequest, "escalation_id and decision are required")
+		return
+	}
+
+	ttl := time.Duration(req.TTLSeconds) * time.Second
+	res, err := s.escalationMgr.ResolveEscalation(req.EscalationID, req.Decision, req.ReviewerEmail, ttl)
+	if err != nil {
+		if errors.Is(err, hitl.ErrEscalationNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, hitl.ErrEscalationAlreadyResolved) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if s.auditStore != nil {
+		s.auditStore.Ingest([]audit.Event{{
+			EventID:     fmt.Sprintf("evt-esc-res-%d", time.Now().UnixNano()),
+			Timestamp:   time.Now().UTC().Format(time.RFC3339),
+			Source:      "hitl_governance",
+			Executable:  "escalation_resolve",
+			FullCommand: fmt.Sprintf("ESCALATION_RESOLVE id=%s decision=%s reviewer=%s", res.EscalationID, res.Status, req.ReviewerEmail),
+			Decision:    string(res.Status),
+			Reason:      fmt.Sprintf("Escalation resolved by %s", req.ReviewerEmail),
+		}})
+	}
+
+	writeJSON(w, http.StatusOK, res)
+}
+
+// BAP-565: handleListEscalations returns all active and resolved escalation requests
+func (s *Server) handleListEscalations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	escs := s.escalationMgr.ListEscalations()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"count":       len(escs),
+		"escalations": escs,
+	})
+}
+
+// BAP-565: handleGetEscalation returns a specific escalation by ID
+func (s *Server) handleGetEscalation(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	escID := strings.TrimPrefix(r.URL.Path, "/api/v1/escalation/")
+	escID = strings.TrimSpace(escID)
+	if escID == "" {
+		writeError(w, http.StatusBadRequest, "escalation_id is required")
+		return
+	}
+
+	esc, err := s.escalationMgr.GetEscalation(escID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, esc)
+}
+
 
 

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"bap-edge/internal/antibypass"
 	"bap-edge/internal/audit"
 	"bap-edge/internal/authz"
 	"bap-edge/internal/config"
@@ -694,6 +695,19 @@ func RunExec(args []string) {
 		resp := types.ExecResponse{
 			Allowed: false,
 			Reason:  tamperReason,
+			Mode:    ec.enforcementMode,
+		}
+		ec.exit(resp, 1)
+		return
+	}
+
+	// Pre-flight Anti-Bypass Enforcement Engine (BAP-560):
+	// Detects unmediated subshell invocations, raw sockets, or proxy/session tampering
+	antiBypass := antibypass.NewAntiBypassEngine()
+	if viol, err := antiBypass.CheckCommand(ec.sessionID, fullCommand, nil); err != nil {
+		resp := types.ExecResponse{
+			Allowed: false,
+			Reason:  fmt.Sprintf("[DENIED_BYPASS] %s: %s", viol.Vector, viol.Reason),
 			Mode:    ec.enforcementMode,
 		}
 		ec.exit(resp, 1)

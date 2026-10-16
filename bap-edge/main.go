@@ -32,6 +32,9 @@ Zero-Trust Governance & HITL Authorization:
   pin          Cryptographically pin, verify, and re-attest skills, prompts, and MCP tools (BAP-531)
   scan         Audit workspace skills, prompt templates, and configs for prompt injection & drift (BAP-536)
   adapter      Unified multi-harness adapter for Cursor, Gemini CLI, Browser, and SaaS agents (BAP-539)
+  antibypass   Multi-tier anti-bypass inspection and egress isolation engine (BAP-560)
+  shield       Ambient credential shielding, disk token virtualization, and canary traps (BAP-562)
+  stepup       Task-scoped HITL step-up escalation with approval fatigue throttling (BAP-565)
 
 Execution & Protocol Integration:
   exec         Evaluate command against Cedar policy and run in sandboxed kernel namespace
@@ -180,6 +183,21 @@ func main() {
 	case "adapter":
 		if err := cmd.RunAdapter(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error in adapter: %v\n", err)
+			os.Exit(1)
+		}
+	case "antibypass":
+		if err := cmd.RunAntiBypass(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error in antibypass: %v\n", err)
+			os.Exit(1)
+		}
+	case "shield":
+		if err := cmd.RunShield(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error in shield: %v\n", err)
+			os.Exit(1)
+		}
+	case "stepup":
+		if err := cmd.RunStepUp(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error in stepup: %v\n", err)
 			os.Exit(1)
 		}
 	case "delegate", "subagent":

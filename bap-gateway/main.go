@@ -3,6 +3,7 @@ package main
 import (
 	"bap-gateway/internal/egress"
 	"bap-gateway/internal/httptransport"
+	"bap-gateway/internal/tokenexchange"
 	"bytes"
 	"context"
 	"crypto/hmac"
@@ -242,6 +243,10 @@ func runStart(args []string) {
 	mux.HandleFunc("/api/v1/egress/proxy", pepEgressGuard(cfg, handleEgressProxy))
 	mux.HandleFunc("/api/v1/egress", pepEgressGuard(cfg, handleEgressProxy))
 	mux.HandleFunc("/egress/", pepEgressGuard(cfg, handleEgressProxy))
+
+	// Ephemeral JIT Token Brokering & Single-Use Grant Exchange Gateway (BAP-563)
+	exchangeGw := tokenexchange.NewTokenExchangeGateway(cfg.SecretKey)
+	mux.HandleFunc("/api/v1/egress/exchange", handleTokenExchange(cfg, exchangeGw))
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("===============================================================================")
@@ -843,6 +848,90 @@ func handleEgressProxy(w http.ResponseWriter, r *http.Request) {
 		"canonical_resource":    res,
 		"security_boundary":     "Egress PEP Multi-Tenant Inspection Verified",
 	})
+}
+
+// TokenExchangeRequest represents the body payload for JIT downstream credential brokering (BAP-563)
+type TokenExchangeRequest struct {
+	Service    string `json:"service"`
+	TargetEnv  string `json:"target_env"`
+	TaskID     string `json:"task_id"`
+	GrantToken string `json:"grant_token,omitempty"`
+}
+
+// handleTokenExchange validates/burns a single-use BAP grant and brokers an ephemeral downstream token
+func handleTokenExchange(cfg GatewayConfig, exchangeGw *tokenexchange.TokenExchangeGateway) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{
+				"error":   "MethodNotAllowed",
+				"message": "Only POST is supported for JIT token exchange",
+			})
+			return
+		}
+
+		var req TokenExchangeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error":   "InvalidPayload",
+				"message": "Malformed JSON payload: " + err.Error(),
+			})
+			return
+		}
+
+		grantToken := req.GrantToken
+		if grantToken == "" {
+			authHeader := r.Header.Get("Authorization")
+			if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+				grantToken = strings.TrimSpace(authHeader[7:])
+			}
+		}
+
+		sessID := r.Header.Get("X-BAP-Session-ID")
+
+		if grantToken == "" {
+			emitGatewayAuditWithTenant(cfg, sessID, "rogue-agent", "unknown", "/api/v1/egress/exchange", r.Method, "deny",
+				"BLOCKED: Missing BAP Grant for JIT token exchange", "", req.Service, time.Since(start).Milliseconds(), 401)
+			writeJSON(w, http.StatusUnauthorized, map[string]any{
+				"error":         "AccessDenied",
+				"pep_decision":  "DENY",
+				"message":       "Missing BAP Grant Bearer Token or grant_token for JIT credential exchange",
+				"required_auth": "Bearer <bap_grant_token>",
+			})
+			return
+		}
+
+		// Broker downstream credential (atomically burns single-use grant token)
+		cred, err := exchangeGw.BrokerDownstreamCredential(req.Service, req.TargetEnv, req.TaskID, sessID, grantToken)
+		durationMs := time.Since(start).Milliseconds()
+
+		if err != nil {
+			status := http.StatusForbidden
+			if strings.Contains(err.Error(), "GrantAlreadyBurned") {
+				status = http.StatusUnauthorized
+			}
+			emitGatewayAuditWithTenant(cfg, sessID, "agent", "token-broker", "/api/v1/egress/exchange", r.Method, "deny",
+				"BROKERING DENIED: "+err.Error(), "", req.Service, durationMs, status)
+			writeJSON(w, status, map[string]any{
+				"error":        "Forbidden",
+				"pep_decision": "DENY",
+				"message":      err.Error(),
+			})
+			return
+		}
+
+		emitGatewayAuditWithTenant(cfg, sessID, "agent", "token-broker", "/api/v1/egress/exchange", r.Method, "allow",
+			fmt.Sprintf("JIT credential brokered for service %s (env: %s)", cred.Service, cred.TargetEnv),
+			"", cred.Service, durationMs, 200)
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":            "success",
+			"gateway":           "bap-gateway-pep",
+			"pep_decision":      "ALLOW",
+			"credential":        cred,
+			"security_boundary": "Downstream JIT Credential Isolation Enforced",
+		})
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

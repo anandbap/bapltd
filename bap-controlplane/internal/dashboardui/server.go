@@ -52,7 +52,54 @@ func Handler(controlPlane *url.URL, transport http.RoundTripper, allowRemoteAdmi
 	mux.HandleFunc("/dashboard", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard/", http.StatusTemporaryRedirect)
 	})
-	mux.Handle("/dashboard/", files)
+
+	serveV2 := func(w http.ResponseWriter, r *http.Request) {
+		v2Data, err := fs.ReadFile(web, "v2.html")
+		if err != nil {
+			http.Error(w, "v2 asset unavailable", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(v2Data)
+	}
+
+	serveV1 := func(w http.ResponseWriter, r *http.Request) {
+		v1Data, err := fs.ReadFile(web, "index.html")
+		if err != nil {
+			http.Error(w, "legacy asset unavailable", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(v1Data)
+	}
+
+	mux.HandleFunc("/dashboard/v2", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/dashboard/v2/", http.StatusTemporaryRedirect)
+	})
+	mux.HandleFunc("/dashboard/v2/", func(w http.ResponseWriter, r *http.Request) {
+		serveV2(w, r)
+	})
+	mux.HandleFunc("/dashboard/legacy", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/dashboard/?v=legacy", http.StatusTemporaryRedirect)
+	})
+	mux.HandleFunc("/dashboard/legacy/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/dashboard/?v=legacy", http.StatusTemporaryRedirect)
+	})
+
+	mux.HandleFunc("/dashboard/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/dashboard/" {
+			if r.URL.Query().Get("v") == "legacy" || r.URL.Query().Get("v") == "v1" {
+				serveV1(w, r)
+			} else {
+				serveV2(w, r)
+			}
+			return
+		}
+		files.ServeHTTP(w, r)
+	})
+
 
 	// BAP-210: Consolidate the CIO Cockpit - redirect legacy inspector routes
 	redirectCockpit := func(w http.ResponseWriter, r *http.Request) {

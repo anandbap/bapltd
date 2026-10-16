@@ -241,5 +241,17 @@ All BAP components (`bap-edge`, `bap-controlplane`, `bap-gateway`, `python-agent
   - Transactional launchers: `run_cursor_bap.ps1` / `run_cursor_bap.bat`, `run_gemini_cli_bap.ps1` / `run_gemini_cli_bap.bat`.
   - SaaS Token Manager (`bap-controlplane/internal/authz/saas_tokens.go`): Binds third-party cloud OAuth tokens to active attested BAP sessions (`/api/v1/saas/tokens/bind`); strictly rejects cross-session token reuse (`/api/v1/saas/tokens/verify`) with 403 `SaaSTokenSessionBindingViolation`.
 
+### 12. Runtime Agent Auth & Anti-Bypass Architecture (`BAP-EPIC-32`)
+- **Keycard.ai Gap Analysis & Full Implementation**: Formulated in response to industry agent auth challenges ("Defining Auth for Agents", Keycard, Oct 2026), resolving 5 systemic blind spots:
+  1. *Anti-Bypass Sandboxing (`BAP-560` - DONE)*: Implemented in `bap-edge/internal/antibypass/antibypass.go` (`bapedge antibypass [check|status]`). Detects raw socket evasion (`nc`, direct TCP), missing session provenance, and blocks attempts to unset `HTTP_PROXY` or `BAP_SESSION_ID`.
+  2. *Attested Intent Binding (`BAP-561` - DONE)*: Implemented in `bap-controlplane/internal/intent/intent.go` (`/api/v1/intent/attest`, `/api/v1/intent/verify`). HMAC-SHA256 signs task intent; blocks prompt injection domain drift, environment escalation, and destructive ops (`drop_database`) with 403 `IntentDriftViolation`.
+  3. *Ambient Token Shielding & Honeytokens (`BAP-562` - DONE)*: Implemented in `bap-edge/internal/shield/vault.go` (`bapedge shield [scan|plant-canary|check-canary]`). Directly neutralizes the Railway token incident: `ScanWorkspaceCredentials` discovers standing disk tokens, `VirtualizeCredentials` redacts production keys, and `PlantCanary` / `InspectForCanaryTrigger` seeds honeytoken tripwires (`.bap_canary_token`).
+  4. *Ephemeral JIT Token Exchange (`BAP-563` - DONE)*: Implemented in `bap-gateway/internal/tokenexchange/exchange.go` (`/api/v1/egress/exchange`). Gateway PEP burns single-use BAP grants (`BurnGrantOnce`) rejecting token replay with 401 `GrantAlreadyBurned`, and brokers short-lived 5-minute downstream credentials (`jit-<service>-<env>-...`) for approved services (Railway, AWS, GitHub, Salesforce, Stripe).
+  5. *Monotonic Attenuation & Lineage (`BAP-564` - DONE)*: Implemented in `bap-controlplane/internal/authz/grants.go` (`/api/v1/grants/delegate`, `/api/v1/grants/revoke`). Enforces mathematical monotonic attenuation ($\text{Scope}_{\text{child}} \subseteq \text{Scope}_{\text{parent}}$), rejecting broader child scopes with 403 `PrivilegeEscalationBlocked`. Tracks caveat-chained macaroon lineage and propagates cascading revocations across the fleet.
+  6. *Contextual Task HITL Escalation & Fatigue Throttling (`BAP-565` - DONE)*: Implemented in `bap-controlplane/internal/hitl/escalation.go` (`/api/v1/escalation/request`, `/api/v1/escalation/resolve`, `bapedge stepup`). Captures rich task context and risk rating, suppresses duplicate escalation prompts within a 30s cooldown window with 429 `ApprovalFatigueThrottled`, caps attempts per task, and issues strictly single-task ephemeral grants (5m TTL).
+- **Verification Suite**: 100% verified via master automated test suite `tests/test_bap_epic32_agent_auth.py` (6/6 tests passing in 3.43s) and 22 Go unit tests across `bap-edge`, `bap-controlplane`, and `bap-gateway`.
+
+
+
 
 

@@ -113,3 +113,81 @@ func TestTokenMinter_Consume(t *testing.T) {
 		t.Fatalf("expected unauthorized scope to fail")
 	}
 }
+
+func TestVerifyAttenuation_MonotonicSubset(t *testing.T) {
+	// 1. Child with subset scopes -> ALLOW
+	err := VerifyAttenuation([]string{"fs:read", "fs:write"}, []string{"fs:read"}, "repo/src", "repo/src/main.go", "read", "read")
+	if err != nil {
+		t.Fatalf("expected valid subset attenuation to pass, got: %v", err)
+	}
+
+	// 2. Child attempting scope escalation -> BLOCKED
+	errEscalation := VerifyAttenuation([]string{"fs:read"}, []string{"fs:read", "admin:all"}, "", "", "", "")
+	if errEscalation == nil {
+		t.Fatal("expected scope escalation to be blocked")
+	}
+
+	// 3. Child attempting resource widening -> BLOCKED
+	errResourceWidening := VerifyAttenuation([]string{"fs:read"}, []string{"fs:read"}, "repo/src", "repo", "read", "read")
+	if errResourceWidening == nil {
+		t.Fatal("expected resource widening to be blocked")
+	}
+
+	// 4. Child attempting action broadening -> BLOCKED
+	errActionBroadening := VerifyAttenuation([]string{"fs:read"}, []string{"fs:read"}, "repo/src", "repo/src", "read", "write")
+	if errActionBroadening == nil {
+		t.Fatal("expected action broadening to be blocked")
+	}
+}
+
+func TestDelegateAttenuatedChild_LineageAndRevocation(t *testing.T) {
+	minter := NewTokenMinter("secret-test-delegation", 30*time.Minute)
+	parentAgent := &types.RegisteredAgent{
+		AgentID:         "orchestrator-root",
+		AppID:           "test-app",
+		PermittedScopes: []string{"git:read", "git:write"},
+	}
+
+	// Mint parent grant
+	parentToken, _, parentGrantID, err := minter.MintWithDetails(parentAgent, "parent-hash", []string{"git:read", "git:write"}, "sess-parent", "git:read", "repo/path", nil, "v1")
+	if err != nil {
+		t.Fatalf("failed to mint parent grant: %v", err)
+	}
+
+	// Delegate to child subagent with attenuated scope "git:read"
+	childAgent := &types.RegisteredAgent{
+		AgentID:    "worker-subagent-1",
+		AppID:      "test-app",
+		AgentName:  "WorkerSubagent",
+		EnvProfile: types.ProfileDev,
+	}
+	childToken, _, childGrantID, childClaims, err := minter.DelegateAttenuatedChild(parentToken, childAgent, []string{"git:read"}, "sess-child", "git:read", "repo/path", nil, 10)
+	if err != nil {
+		t.Fatalf("expected successful child delegation, got: %v", err)
+	}
+
+	if childClaims.ParentGrantID != parentGrantID {
+		t.Errorf("expected parent grant ID %s, got %s", parentGrantID, childClaims.ParentGrantID)
+	}
+	if childClaims.LineageTree != "orchestrator-root -> worker-subagent-1" {
+		t.Errorf("expected lineage tree 'orchestrator-root -> worker-subagent-1', got %s", childClaims.LineageTree)
+	}
+
+	// Verify child token is valid initially
+	if isRevoked, _ := minter.IsGrantRevoked(childGrantID); isRevoked {
+		t.Fatal("child grant should not be revoked yet")
+	}
+
+	// Cascading Revocation: Revoke parent grant
+	revoked := minter.RevokeGrant(parentGrantID, "Compromise detected in parent")
+	if len(revoked) < 2 {
+		t.Errorf("expected cascading revocation of parent and child, revoked: %v", revoked)
+	}
+
+	// Verify child grant is now revoked
+	if isRevoked, _ := minter.IsGrantRevoked(childGrantID); !isRevoked {
+		t.Fatal("child grant MUST be revoked when parent grant is revoked")
+	}
+	_ = childToken
+}
+

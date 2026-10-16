@@ -290,4 +290,44 @@ type VerifySaaSTokenResponse struct {
 	Reason  string `json:"reason,omitempty"`
 }
 
+// Immutable Intent Attestation Types (BAP-561)
+type AttestIntentRequest struct {
+	TaskID            string   `json:"task_id"`
+	SessionID         string   `json:"session_id"`
+	RootOperatorEmail string   `json:"root_operator_email,omitempty"`
+	GoalDescription   string   `json:"goal_description"`
+	PermittedEnvs     []string `json:"permitted_envs,omitempty"`
+	PermittedActions  []string `json:"permitted_actions,omitempty"`
+	TTLSeconds        int      `json:"ttl_seconds,omitempty"`
+}
+
+type VerifyIntentRequest struct {
+	TaskID          string `json:"task_id"`
+	AttemptedAction string `json:"attempted_action"`
+	TargetEnv       string `json:"target_env,omitempty"`
+}
+
+type VerifyIntentResponse struct {
+	Allowed bool   `json:"allowed"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// Task-Scoped HITL Step-Up Escalation Types (BAP-565)
+type StepUpEscalationRequest struct {
+	TaskID    string `json:"task_id"`
+	SessionID string `json:"session_id"`
+	AgentID   string `json:"agent_id"`
+	Resource  string `json:"resource"`
+	Action    string `json:"action"`
+	Reason    string `json:"reason"`
+}
+
+type StepUpResolveRequest struct {
+	EscalationID  string `json:"escalation_id"`
+	Decision      string `json:"decision"` // "approve" or "deny"
+	ReviewerEmail string `json:"reviewer_email,omitempty"`
+	TTLSeconds    int    `json:"ttl_seconds,omitempty"`
+}
+
 

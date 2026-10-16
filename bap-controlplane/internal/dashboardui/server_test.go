@@ -51,6 +51,20 @@ func TestDashboardServesAssetsAndProxiesAPI(t *testing.T) {
 	if inspectorV2.Code != 302 || !strings.Contains(inspectorV2.Header().Get("Location"), "/dashboard/") {
 		t.Fatalf("expected redirect to /dashboard/, got: %d %s", inspectorV2.Code, inspectorV2.Body.String())
 	}
+
+	// Agent Watch V2 workspace route test
+	v2Page := httptest.NewRecorder()
+	handler.ServeHTTP(v2Page, httptest.NewRequest("GET", "/dashboard/v2/", nil))
+	if v2Page.Code != 200 || !strings.Contains(v2Page.Body.String(), "Agent Watch V2") {
+		t.Fatalf("v2 dashboard asset response: %d", v2Page.Code)
+	}
+
+	// Legacy V1 preservation route test
+	legacyPage := httptest.NewRecorder()
+	handler.ServeHTTP(legacyPage, httptest.NewRequest("GET", "/dashboard/?v=legacy", nil))
+	if legacyPage.Code != 200 || !strings.Contains(legacyPage.Body.String(), "BAP Control Plane") {
+		t.Fatalf("legacy dashboard asset response: %d", legacyPage.Code)
+	}
 }
 
 func TestRemoteAdministrativeProxyIsDeniedByDefault(t *testing.T) {
