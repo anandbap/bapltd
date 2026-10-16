@@ -16,10 +16,7 @@ class TestAgentWatchV2(unittest.TestCase):
         cls.v2_html_path = os.path.join(cls.base_dir, "bap-controlplane", "internal", "dashboardui", "web", "v2.html")
         cls.v1_html_path = os.path.join(cls.base_dir, "bap-controlplane", "internal", "dashboardui", "web", "index.html")
         cls.server_go_path = os.path.join(cls.base_dir, "bap-controlplane", "internal", "dashboardui", "server.go")
-        cls.matrix_doc_path = os.path.join(
-            r"C:\Users\User\.gemini\antigravity\brain\1f6ca452-b244-4d51-90cb-1d44b9f8a1cd",
-            "agent_watch_v2_feature_matrix_and_ia.md"
-        )
+        cls.matrix_doc_path = os.path.join(cls.base_dir, "docs", "agent_watch_v2_feature_matrix_and_ia.md")
 
         with open(cls.v2_html_path, "r", encoding="utf-8") as f:
             cls.v2_content = f.read()

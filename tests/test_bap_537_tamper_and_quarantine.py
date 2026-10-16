@@ -130,7 +130,9 @@ class TestBAP537TamperAndQuarantine(unittest.TestCase):
 
     def run_bapedge(self, args, cwd=None):
         cmd = [BAPEDGE_BIN] + args
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd)
+        env = os.environ.copy()
+        env.setdefault("BAP_SESSION_ID", "sess-bap537-test")
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd, env=env)
         return proc
 
     # =========================================================================

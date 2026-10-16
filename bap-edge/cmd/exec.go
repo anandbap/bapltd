@@ -630,6 +630,16 @@ func RunExec(args []string) {
 		os.Exit(1)
 	}
 
+	if *sessionFlag == "" {
+		if *sourceFlag == "cli" || *sourceFlag == "" || *sourceFlag == "antigravity" {
+			prefix := *sourceFlag
+			if prefix == "" {
+				prefix = "cli"
+			}
+			*sessionFlag = fmt.Sprintf("sess-%s-%d", prefix, os.Getpid())
+		}
+	}
+
 	if *stepUpFlag != "" {
 		os.Setenv("BAP_STEPUP_DECISION", *stepUpFlag)
 	}

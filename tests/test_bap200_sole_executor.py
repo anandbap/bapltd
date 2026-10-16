@@ -51,6 +51,7 @@ def run_bapedge(args: list, env=None) -> tuple[int, dict, str]:
     """Invokes bapedge with given arguments and parses JSON output."""
     test_env = os.environ.copy()
     test_env["BAP_WORKSPACE_ROOT"] = WORKSPACE_ROOT
+    test_env.setdefault("BAP_SESSION_ID", "sess-bap200-test")
     if env:
         test_env.update(env)
 

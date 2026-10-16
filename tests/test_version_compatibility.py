@@ -29,12 +29,21 @@ class TestVersionCompatibility(unittest.TestCase):
         cls.repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         cls.cp_bin = os.path.join(cls.repo_root, "bapcontrolplane.exe")
         cls.gw_bin = os.path.join(cls.repo_root, "bapgateway.exe")
-        cls.edge_bin = os.path.join(cls.repo_root, "bapedge.new.exe")
+        cls.edge_bin = os.path.join(cls.repo_root, "dist", "windows-amd64", "bapedge.exe")
         if not os.path.exists(cls.edge_bin):
             cls.edge_bin = os.path.join(cls.repo_root, "bapedge.exe")
 
         assert os.path.exists(cls.cp_bin), f"bapcontrolplane.exe not found at {cls.cp_bin}"
         assert os.path.exists(cls.edge_bin), f"bapedge binary not found at {cls.edge_bin}"
+
+        cls.expected_version = "v1.1.1"
+        pyproject_path = os.path.join(cls.repo_root, "pyproject.toml")
+        if os.path.exists(pyproject_path):
+            import re
+            with open(pyproject_path, "r", encoding="utf-8") as f:
+                m = re.search(r'version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"', f.read())
+                if m:
+                    cls.expected_version = f"v{m.group(1)}"
 
     # =========================================================================
     # BAP-550: CLI Version Commands & Metadata Injection
@@ -46,7 +55,7 @@ class TestVersionCompatibility(unittest.TestCase):
         proc = subprocess.run([self.cp_bin, "version"], capture_output=True, text=True, cwd=self.repo_root)
         self.assertEqual(proc.returncode, 0, f"version failed: {proc.stderr}")
         self.assertIn("bapcontrolplane", proc.stdout)
-        self.assertIn("v1.0.0", proc.stdout)
+        self.assertIn(self.expected_version, proc.stdout)
         self.assertIn("commit:", proc.stdout)
 
         # JSON mode
@@ -54,7 +63,7 @@ class TestVersionCompatibility(unittest.TestCase):
         self.assertEqual(proc_json.returncode, 0, f"version --json failed: {proc_json.stderr}")
         data = json.loads(proc_json.stdout)
         self.assertEqual(data.get("component"), "bapcontrolplane")
-        self.assertEqual(data.get("version"), "v1.0.0")
+        self.assertEqual(data.get("version"), self.expected_version)
         self.assertTrue(len(data.get("git_commit", "")) > 0)
         self.assertTrue(len(data.get("build_date", "")) > 0)
 
@@ -66,26 +75,26 @@ class TestVersionCompatibility(unittest.TestCase):
         proc = subprocess.run([self.gw_bin, "version"], capture_output=True, text=True, cwd=self.repo_root)
         self.assertEqual(proc.returncode, 0, f"gateway version failed: {proc.stderr}")
         self.assertIn("bapgateway", proc.stdout)
-        self.assertIn("v1.0.0", proc.stdout)
+        self.assertIn(self.expected_version, proc.stdout)
 
         proc_json = subprocess.run([self.gw_bin, "version", "--json"], capture_output=True, text=True, cwd=self.repo_root)
         self.assertEqual(proc_json.returncode, 0, f"gateway version --json failed: {proc_json.stderr}")
         data = json.loads(proc_json.stdout)
         self.assertEqual(data.get("component"), "bapgateway")
-        self.assertEqual(data.get("version"), "v1.0.0")
+        self.assertEqual(data.get("version"), self.expected_version)
 
     def test_03_bapedge_cli_version(self):
         """Test bapedge version command and --json output."""
         proc = subprocess.run([self.edge_bin, "version"], capture_output=True, text=True, cwd=self.repo_root)
         self.assertEqual(proc.returncode, 0, f"edge version failed: {proc.stderr}")
         self.assertIn("bapedge", proc.stdout)
-        self.assertIn("v1.0.0", proc.stdout)
+        self.assertIn(self.expected_version, proc.stdout)
 
         proc_json = subprocess.run([self.edge_bin, "version", "--json"], capture_output=True, text=True, cwd=self.repo_root)
         self.assertEqual(proc_json.returncode, 0, f"edge version --json failed: {proc_json.stderr}")
         data = json.loads(proc_json.stdout)
         self.assertEqual(data.get("component"), "bapedge")
-        self.assertEqual(data.get("version"), "v1.0.0")
+        self.assertEqual(data.get("version"), self.expected_version)
 
     # =========================================================================
     # BAP-551: Handshake Telemetry & HTTP Headers
@@ -112,10 +121,10 @@ class TestVersionCompatibility(unittest.TestCase):
                     with urllib.request.urlopen(req, timeout=1) as resp:
                         if resp.status == 200:
                             server_ver_header = resp.getheader("X-BAP-Server-Version")
-                            self.assertEqual(server_ver_header, "v1.0.0")
+                            self.assertEqual(server_ver_header, self.expected_version)
 
                             body = json.loads(resp.read().decode())
-                            self.assertEqual(body.get("version"), "v1.0.0")
+                            self.assertEqual(body.get("version"), self.expected_version)
                             healthy = True
                             break
                 except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
@@ -141,9 +150,9 @@ class TestVersionCompatibility(unittest.TestCase):
             )
             with urllib.request.urlopen(sync_req, timeout=2) as sync_resp:
                 self.assertEqual(sync_resp.status, 200)
-                self.assertEqual(sync_resp.getheader("X-BAP-Server-Version"), "v1.0.0")
+                self.assertEqual(sync_resp.getheader("X-BAP-Server-Version"), self.expected_version)
                 sync_body = json.loads(sync_resp.read().decode())
-                self.assertEqual(sync_body.get("server_version"), "v1.0.0")
+                self.assertEqual(sync_body.get("server_version"), self.expected_version)
 
         finally:
             proc.terminate()
@@ -220,7 +229,7 @@ class TestVersionCompatibility(unittest.TestCase):
             with urllib.request.urlopen(req_compliant, timeout=2) as resp:
                 body = json.loads(resp.read().decode())
                 self.assertNotIn("UPGRADE_REQUIRED", body.get("message", ""))
-                self.assertEqual(body.get("server_version"), "v1.0.0")
+                self.assertEqual(body.get("server_version"), self.expected_version)
 
             # 3. Registration rejection on deprecated client
             register_outdated = json.dumps({

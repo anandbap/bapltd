@@ -79,6 +79,10 @@ Safe-Copy "bap-edge\bapedge.exe" "ltd-agent.exe"
 Safe-Copy "bap-controlplane\bapcontrolplane.exe" "bapcontrolplane.exe"
 Safe-Copy "bap-controlplane\bapdashboard.exe" "bapdashboard.exe"
 Safe-Copy "bap-gateway\bapgateway.exe" "bapgateway.exe"
+if (Test-Path "cchook\interceptor.exe") {
+    Safe-Copy "cchook\interceptor.exe" "interceptor.exe"
+    Safe-Copy "cchook\interceptor.exe" "cchook-interceptor.exe"
+}
 
 # 6. Update dist/windows-amd64 binaries
 if (Test-Path "dist\windows-amd64") {
