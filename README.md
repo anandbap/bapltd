@@ -216,31 +216,45 @@ echo '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_pa
 
 ## 🛡️ Epic 23: Layered Endpoint Enforcement & Workstation Hardening
 
-BAP enforces defense-in-depth across developer workstations using an explicit 3-layer security model:
+BAP enforces defense-in-depth across developer workstations using an authoritative 5-layer security model:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│  LAYER A: Cooperative Agent Hooks (User Space)                         │
-│  - Claude Code PreToolUse hooks, Cursor MCP proxy                      │
+│  LAYER 1: Cooperative Agent Hooks & Rules (User Space)                 │
+│  - Claude Code PreToolUse hooks, Antigravity/Copilot workspace rules   │
 │  - MDM locks: managed-settings.json (dangerouslySkipPermissions: false)│
 │  - UX benefit: Sub-millisecond evaluation (<1ms), native in-CLI hints  │
 └──────────────────────────────────┬─────────────────────────────────────┘
-                                   │ (Jailbreak / Rogue Subshell Containment)
+                                   │ (Structured Tool Call Boundary)
                                    ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│  LAYER B: OS Execution & Boundary Control (Kernel / Hypervisor)        │
+│  LAYER 2: Model Context Protocol (MCP) Authority Boundary              │
+│  - Managed bapmcp.exe server with Cedar policy evaluation              │
+│  - Governed bap_execute, bap_status, bap_explain_policy tools          │
+└──────────────────────────────────┬─────────────────────────────────────┘
+                                   │ (Unmediated Terminal & Tool Call Trap)
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│  LAYER 3: Tool Call & Terminal Interceptor Shims (PATH Defense)        │
+│  - Dynamic per-session shims (.bapstate/shims-$SessionId/)             │
+│  - Traps raw CLI calls (git, python, curl) and routes to bapedge exec  │
+└──────────────────────────────────┬─────────────────────────────────────┘
+                                   │ (Host Process & Sandbox Containment)
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│  LAYER 4: OS Execution & Boundary Control (Kernel / Hypervisor)        │
 │  - Windows Restricted Tokens (LUA) + Job Objects (Kill-on-Close)       │
 │  - Linux Landlock LSM (Filesystem Jail) + eBPF sys_enter_execve probe  │
 │  - macOS Endpoint Security (AUTH_EXEC, AUTH_OPEN) + Seatbelt profiles  │
 │  - Blocks hidden child subshells and theft of .env / id_rsa secrets    │
 └──────────────────────────────────┬─────────────────────────────────────┘
-                                   │ (Direct Bypass / Network Redirection)
+                                   │ (Perimeter Egress Pinning & ZSP Grant)
                                    ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│  LAYER C: Network Egress Pinning (Perimeter PEP)                       │
-│  - Windows WFP / Linux cgroup socket filter / macOS NetworkExtension   │
-│  - Direct egress to cloud microservices dropped                        │
-│  - All API calls must present verified Ephemeral BAP Bearer Grants     │
+│  LAYER 5: Authoritative Network Gateway PEP (Perimeter Backstop)       │
+│  - bapgateway Envoy ext_authz proxy with authoritative derivation      │
+│  - Single-use Zero-Trust Session Protocol (ZSP) grant burning          │
+│  - Direct egress dropped; all enterprise API traffic pinned to PEP     │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -254,9 +268,9 @@ Run the dedicated Epic 23 test suite to validate all 7 verification gates:
 python -m unittest tests/test_endpoint_layered_enforcement.py
 ```
 **Verification Evidence:**
-- `test_01_endpoint_layers_reference`: Verifies Layer A, B, and C primitive mappings across Windows, macOS, and Linux.
-- `test_02_endpoint_compliance_managed_clean`: Verifies managed laptop with all 3 layers achieves `COMPLIANT` status.
-- `test_03_endpoint_compliance_managed_quarantine`: Verifies missing Layer B (Kernel Control) immediately triggers `QUARANTINED`.
+- `test_01_endpoint_layers_reference`: Verifies the 5-layer defense primitive mappings across Windows, macOS, and Linux.
+- `test_02_endpoint_compliance_managed_clean`: Verifies managed laptop with active defense layers achieves `COMPLIANT` status.
+- `test_03_endpoint_compliance_managed_quarantine`: Verifies missing Layer 4 (Kernel Control) or Layer 5 (Gateway PEP) immediately triggers `QUARANTINED`.
 - `test_04_endpoint_compliance_byod_cooperative`: Verifies unmanaged BYOD operates in `COOPERATIVE_BYOD` with Gateway PEP backstop.
 - `test_05_mdm_profile_generation_intune_and_jamf`: Validates Intune CSP and Jamf mobileconfig payloads.
 - `test_06_biometric_step_up_challenge_and_verification`: Initiates challenge, verifies biometric attestation, mints signed `StepUpToken`, and verifies replay rejection.
@@ -273,7 +287,7 @@ Start the Control Plane in Terminal 1:
 
 In Terminal 2, run each step-by-step verification:
 
-**Step 2.1: Inspect 3-Layer Mappings per OS:**
+**Step 2.1: Inspect 5-Layer Mappings per OS:**
 ```powershell
 curl.exe -s http://127.0.0.1:8080/api/v1/endpoint/layers?os=windows | ConvertFrom-Json
 curl.exe -s http://127.0.0.1:8080/api/v1/endpoint/layers?os=darwin | ConvertFrom-Json
@@ -333,7 +347,7 @@ curl.exe -s -X POST http://127.0.0.1:8080/api/v1/endpoint/offline/classify `
    ```
 2. Navigate to **`http://127.0.0.1:8080/dashboard`** in your browser.
 3. Click the **"Endpoint Hardening"** tab:
-   - **3-Layer Architecture**: Switch OS between Windows, macOS, and Linux to see active primitives.
+   - **5-Layer Architecture**: Switch OS between Windows, macOS, and Linux to see active primitives.
    - **MDM Configuration Packaging**: Toggle between Microsoft Intune and Jamf Pro to inspect deployment payloads.
    - **Biometric Step-Up Sandbox**: Click **"Initiate Biometric Challenge"** and then **"Touch Biometric Authenticator"** to observe live HMAC token minting and replay rejection.
    - **Scoped Offline Degradation**: Enter any command (`cargo test`, `pytest`, `POST /api/v1/transfer`) to view the instant Tier 1 vs Tier 2 policy verdict.
@@ -359,7 +373,7 @@ Idempotently configures local agent settings, sets `dangerouslySkipPermissions: 
 ```
 
 #### 2. In-Terminal Workstation Inspection (`bapedge status`)
-Inspects active local sessions, cached Cedar policy version, 3-tier layer compliance, operating mode, and offline audit spool backlog (with automatic sweep & flush on pending messages):
+Inspects active local sessions, cached Cedar policy version, 5-layer defense compliance, operating mode, and offline audit spool backlog (with automatic sweep & flush on pending messages):
 ```powershell
 .\dist\windows-amd64\bapedge.exe status
 ```
@@ -372,10 +386,12 @@ Inspects active local sessions, cached Cedar policy version, 3-tier layer compli
     • Version:        v1
     • Rules Digest:   d70701d094...
     • Kill Switch:    false
-  3-TIER LAYER COMPLIANCE STATUS:
-    • Layer A (Process Interception Hooks):    COMPLIANT (bapedge exec PreToolUse hook wired)
-    • Layer B (OS Kernel Boundary Sandbox):    DEGRADED (Windows Job Objects & Restricted Tokens - Standalone User Token)
-    • Layer C (Network Egress Pinning):        COMPLIANT (Gateway PEP perimeter backstop active)
+  5-LAYER DEFENSE-IN-DEPTH COMPLIANCE STATUS:
+    • Layer 1 (Process Interception Hooks):       COMPLIANT (bapedge exec PreToolUse hook wired)
+    • Layer 2 (Model Context Protocol MCP):       COMPLIANT (bapmcp server mounted with Cedar policy gate)
+    • Layer 3 (Terminal Interceptor Shims):       COMPLIANT (PATH shims active for unmediated subshells)
+    • Layer 4 (OS Kernel Boundary Sandbox):       COMPLIANT (Windows Job Objects & Restricted Tokens + Gateway PEP perimeter backstop active)
+    • Layer 5 (Network Perimeter Gateway PEP):    COMPLIANT (Authoritative Gateway PEP perimeter backstop active)
   TELEMETRY & OFFLINE RESILIENCE:
     • Auto-Sync:      ⚡ Auto-triggered sweep: 0 pending audit record(s) synced to Control Plane
     • Spool Backlog:  0 pending entries (All audit logs ingested by Control Plane)
@@ -439,7 +455,7 @@ Epic 28 transforms the administrative console into a persona-driven governance e
 - **CIO / Business**: AI Workforce Pulse, work category distributions, business-unit adoption, and governance efficiency.
 - **CISO / Security**: Invariant violations, quarantine controls, blast-radius mitigation, and intent deviation detection.
 - **Prod Ops / SRE**: Fleet telemetry, interceptor health, local evaluation latencies, and grant issuance rates.
-- **IT Enablement**: Managed catalog deployment, endpoint compliance (Layers A/B/C), and MDM packaging.
+- **IT Enablement**: Managed catalog deployment, endpoint compliance (Layers 1–5), and MDM packaging.
 
 #### 2. CIO AI Workforce Pulse & Live Activity Stream
 - High-level executive pulse: Communicates active governed scale without fabricated ROI claims.

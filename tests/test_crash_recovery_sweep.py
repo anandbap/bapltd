@@ -1,4 +1,4 @@
-﻿"""
+"""
 Epic 24: Operational Resilience, Crash Sweeps & Developer CLI Tooling Test Suite
 ================================================================================
 Validates BAP-470, BAP-471, BAP-472, and BAP-473:
@@ -164,10 +164,12 @@ class TestCrashRecoverySweep(unittest.TestCase):
         out = res.stdout
         self.assertIn("Edge Workstation Status & Compliance Inspection", out)
         self.assertIn("POLICY BUNDLE & ZERO-TRUST CACHE", out)
-        self.assertIn("3-TIER LAYER COMPLIANCE STATUS", out)
-        self.assertIn("Layer A (Process Interception Hooks):    COMPLIANT", out)
-        self.assertIn("Layer B (OS Kernel Boundary Sandbox):    COMPLIANT", out)
-        self.assertIn("Layer C (Network Egress Pinning):        COMPLIANT", out)
+        self.assertIn("5-LAYER DEFENSE-IN-DEPTH COMPLIANCE STATUS", out)
+        self.assertIn("Layer 1 (Process Interception Hooks):       COMPLIANT", out)
+        self.assertIn("Layer 2 (Model Context Protocol MCP):       COMPLIANT", out)
+        self.assertIn("Layer 3 (Terminal Interceptor Shims):       COMPLIANT", out)
+        self.assertIn("Layer 4 (OS Kernel Boundary Sandbox):       COMPLIANT", out)
+        self.assertIn("Layer 5 (Network Perimeter Gateway PEP):    COMPLIANT", out)
 
     def test_bap_472_why_explanation(self):
         """BAP-472: Test in-terminal policy explanation for benign and destructive actions."""

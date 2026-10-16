@@ -5,6 +5,7 @@ Verifies:
   Layer 2: Model Context Protocol (bapmcp.exe bap_execute & Cedar authorization)
   Layer 3: Tool Call & Terminal Interceptor Shims (.bapstate/shims/ -> bapedge exec)
   Layer 4: Runtime Execution Broker (Sandboxed Process Containment & Telemetry)
+  Layer 5: Authoritative Network Gateway PEP & Perimeter Backstop (Envoy ext_authz, ZSP single-use grant burning)
 """
 
 import os
@@ -126,6 +127,25 @@ class TestMultiLayerDefense(unittest.TestCase):
             res_denied = json.loads(proc.stdout.readline())
             self.assertTrue(res_denied["result"]["isError"], "MCP must block 'cat .env' with isError=True")
             self.assertIn("[DENIED]", res_denied["result"]["content"][0]["text"])
+
+            # 4. MCP call bap_status to verify 5-layer defense architecture
+            req_status = {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "bap_status",
+                    "arguments": {}
+                }
+            }
+            proc.stdin.write(json.dumps(req_status) + "\n")
+            proc.stdin.flush()
+            res_status = json.loads(proc.stdout.readline())
+            self.assertIn("result", res_status)
+            status_text = res_status["result"]["content"][0]["text"]
+            self.assertIn("5-Layer Defense-in-Depth", status_text)
+            self.assertIn("Layer 5", status_text)
+            self.assertIn("Authoritative Network Gateway PEP", status_text)
         finally:
             if proc.stdin:
                 try:

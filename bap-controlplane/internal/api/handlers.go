@@ -3877,7 +3877,7 @@ func (s *Server) handlePEPSimulate(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleEndpointLayers returns the 3-tier endpoint enforcement architecture definitions.
+// handleEndpointLayers returns the 5-layer defense-in-depth architecture definitions.
 func (s *Server) handleEndpointLayers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -3892,6 +3892,11 @@ func (s *Server) handleEndpointLayers(w http.ResponseWriter, r *http.Request) {
 		"target_os": osName,
 		"layers":    layers,
 		"architecture": map[string]string{
+			"layer_1": "Process & Lifecycle Interception Hooks (PreToolUse, prompt classification, managed-settings.json)",
+			"layer_2": "Model Context Protocol (MCP) Authority Boundary (bapmcp Cedar-gated tool execution)",
+			"layer_3": "Terminal Interceptor Shims (Dynamic PATH shims trapping raw subshells)",
+			"layer_4": "OS Kernel Boundary Sandbox & Local Broker (Windows Job Objects / Landlock / Seatbelt)",
+			"layer_5": "Authoritative Network Gateway PEP & Perimeter Backstop (Envoy ext_authz proxy, ZSP single-use grant burning)",
 			"layer_a": "Cooperative Hooks (Agent-Native: PreToolUse, managed-settings.json)",
 			"layer_b": "Kernel Execution Control (OS boundaries: Restricted Tokens, Landlock, Endpoint Security)",
 			"layer_c": "Network Egress Pinning (Local proxy redirection + Gateway PEP backstop)",

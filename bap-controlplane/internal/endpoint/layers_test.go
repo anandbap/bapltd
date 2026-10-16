@@ -8,21 +8,24 @@ func TestLayersReferenceMapping(t *testing.T) {
 	mgr := NewManager("test-key")
 
 	winLayers := mgr.GetLayersReference("windows")
-	if len(winLayers) != 3 {
-		t.Fatalf("expected 3 layers for Windows, got %d", len(winLayers))
+	if len(winLayers) != 5 {
+		t.Fatalf("expected 5 layers for Windows, got %d", len(winLayers))
 	}
-	if winLayers[0].LayerID != LayerACooperativeHooks {
-		t.Errorf("expected Layer A as first layer")
+	if winLayers[0].LayerID != Layer1CooperativeHooks {
+		t.Errorf("expected Layer 1 as first layer")
+	}
+	if winLayers[4].LayerID != Layer5GatewayPEP {
+		t.Errorf("expected Layer 5 as fifth layer, got %s", winLayers[4].LayerID)
 	}
 
 	macLayers := mgr.GetLayersReference("darwin")
-	if len(macLayers) != 3 {
-		t.Fatalf("expected 3 layers for macOS, got %d", len(macLayers))
+	if len(macLayers) != 5 {
+		t.Fatalf("expected 5 layers for macOS, got %d", len(macLayers))
 	}
 
 	linuxLayers := mgr.GetLayersReference("linux")
-	if len(linuxLayers) != 3 {
-		t.Fatalf("expected 3 layers for Linux, got %d", len(linuxLayers))
+	if len(linuxLayers) != 5 {
+		t.Fatalf("expected 5 layers for Linux, got %d", len(linuxLayers))
 	}
 }
 

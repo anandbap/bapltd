@@ -544,43 +544,61 @@ In distributed architectures, authorization does not guarantee execution. If a n
 
 ---
 
-## 8. Layered Endpoint Enforcement & Workstation Hardening (Epic 23)
+## 8. Layered Endpoint Enforcement & Workstation Hardening (Epic 23 & Epic 30)
 
-### 8.1. Defense-in-Depth: The Three Enforcement Layers
+### 8.1. Unified Defense-in-Depth: The 5-Layer Architecture
 
-To eliminate reliance on user-space agent cooperativeness, BAP models workstation defense across three decoupled layers:
+To eliminate reliance on user-space agent cooperativeness, BAP models workstation defense across five decoupled layers:
 
 ```mermaid
 graph TD
-    subgraph LayerA ["Layer A: Cooperative Agent Hooks (User Space)"]
+    subgraph Layer1 ["Layer 1: Native Lifecycle & Subagent Interception (User Space)"]
         H1["PreToolUse Lifecycle Hooks"]
-        H2["Cursor / MCP Proxy Wrappers"]
+        H2["Workspace Rules (GEMINI.md, AGENTS.md)"]
         H3["User-Immutable managed-settings.json"]
         H1 --- H2 --- H3
     end
 
-    subgraph LayerB ["Layer B: OS Execution & Boundary Control (Kernel / Hypervisor)"]
-        K1["Windows: Restricted Tokens (LUA) & Job Objects"]
-        K2["Linux: Landlock LSM & eBPF sys_enter_execve Probes"]
-        K3["macOS: Endpoint Security Framework (AUTH_EXEC, AUTH_OPEN)"]
-        K1 --- K2 --- K3
+    subgraph Layer2 ["Layer 2: Model Context Protocol (MCP) Authority Boundary"]
+        M1["bapmcp.exe Managed Server"]
+        M2["Cedar-gated bap_execute Tool Dispatch"]
+        M3["Runtime Introspection (bap_status, bap_explain_policy)"]
+        M1 --- M2 --- M3
     end
 
-    subgraph LayerC ["Layer C: Network Egress Pinning (Perimeter Enforcement)"]
-        N1["Windows: Windows Filtering Platform (WFP)"]
-        N2["Linux: eBPF cgroup Socket Filters"]
-        N3["macOS: NetworkExtension Content Filters"]
-        N4["Gateway PEP: ext_authz Reverse Proxy (Mandatory Backstop)"]
-        N1 --- N2 --- N3 --- N4
+    subgraph Layer3 ["Layer 3: Tool Call & Terminal Interceptor Shims (PATH Defense)"]
+        S1[".bapstate/shims-$SessionId/ (Prepend to PATH)"]
+        S2["CLI Shims: git, python, curl, wget, powershell, cat, rm"]
+        S3["Unmediated Subprocess Trap -> bapedge exec"]
+        S1 --- S2 --- S3
     end
 
-    LayerA -->|If Bypassed via Jailbreak| LayerB
-    LayerB -->|If Rogue Traffic Spawns| LayerC
+    subgraph Layer4 ["Layer 4: In-Process Broker, OS Kernel Boundary Sandbox & Merkle Audit"]
+        K1["bapedge exec In-Process Cedar Engine (<1.5ms)"]
+        K2["Windows: Job Objects & Restricted Tokens (LUA)"]
+        K3["Linux: Landlock LSM & eBPF Probes / macOS: Seatbelt"]
+        K4["Merkle SHA-256 Ledger & Local Rollback"]
+        K1 --- K2 --- K3 --- K4
+    end
+
+    subgraph Layer5 ["Layer 5: Authoritative Network Gateway PEP & Perimeter Backstop"]
+        G1["bapgateway Envoy ext_authz Proxy"]
+        G2["ZSP Single-Use Cryptographic Grant Burning"]
+        G3["Tenant & Egress Pinning Backstop"]
+        G1 --- G2 --- G3
+    end
+
+    Layer1 -->|If Bypassed via Direct Tool Call| Layer2
+    Layer2 -->|If Agent Spawns Raw Subshell| Layer3
+    Layer3 -->|All Invocations Reached At| Layer4
+    Layer4 -->|All Network Egress Gated By| Layer5
 ```
 
-* **Layer A (Cooperative Hooks):** Fast user-space interception for optimal developer experience (<1ms evaluation). Enforces `dangerouslySkipPermissions: false`.
-* **Layer B (OS Execution Control):** Kernel-enforced hard containment. Denies unauthorized process spawns, traps hidden subshells (`npm` lifecycle scripts), and blocks access to standing secrets (`~/.aws/credentials`, `~/.ssh/id_rsa`, `.env`).
-* **Layer C (Network Egress Pinning):** Forces agent network connections through the local proxy broker; direct network calls to protected cloud microservices are dropped at the packet filter or Gateway PEP.
+* **Layer 1 (Process & Lifecycle Hooks):** Fast user-space interception for optimal developer experience (<1ms evaluation). Enforces `dangerouslySkipPermissions: false`, prompt classification, and workspace invariants.
+* **Layer 2 (MCP Authority Boundary):** Governed tool exposure via `bapmcp.exe`, requiring Cedar policy authorization on all structured tool calls before dispatch.
+* **Layer 3 (Terminal Interceptor Shims):** Dynamic per-session PATH interception trapping unmediated subshell commands (`git`, `python`, `curl`, `powershell`) and re-routing to `bapedge exec`.
+* **Layer 4 (OS Kernel Boundary Sandbox & Local Broker):** Hard OS containment denying unauthorized process spawns, hidden subshells (`npm` lifecycle scripts), access to standing secrets (`.env`, `id_rsa`), backed by Windows Job Objects / Restricted Tokens, Landlock, and Seatbelt.
+* **Layer 5 (Authoritative Network Gateway PEP & Perimeter Backstop):** Centralized perimeter enforcement through `bapgateway` (Envoy `ext_authz`), requiring single-use cryptographic Zero-Trust Session Protocol (ZSP) grant burning and tenant egress pinning before any packet leaves the perimeter.
 
 ---
 
@@ -621,9 +639,9 @@ To ensure zero-trust controls do not cause developer lockouts on flights or duri
 
 ---
 
-### 8.6. The 4-Layer Tool Defense-in-Depth Architecture (BAP-540)
+### 8.6. The 5-Layer Defense-in-Depth Architecture (BAP-540)
 
-While Section 8.1 (Layers A/B/C) defines the **Operating System & Network Boundary Controls**, BAP enforces an orthogonal, runtime-level **4-Layer Defense-in-Depth Mechanism** that governs tool discovery, invocation, and execution across all AI developer agents before commands ever reach the host operating system:
+BAP enforces a comprehensive, runtime-level **5-Layer Defense-in-Depth Mechanism** that governs tool discovery, invocation, local execution, and network egress across all AI developer agents before any action affects the host operating system or corporate infrastructure:
 
 ```mermaid
 flowchart TD
@@ -653,13 +671,21 @@ flowchart TD
         L4A["bapedge exec (Sole Executor Pattern)"]
         L4B["In-Process Cedar Engine (<1.5ms)"]
         L4C["Detached Watcher (bapedge watch) & Process Tree Guard"]
-        L4D["Merkle SHA-256 Ledger & Token Accounting Ingestion"]
+        L4D["Merkle SHA-256 Ledger & Local Rollback"]
         L4A --- L4B --- L4C --- L4D
+    end
+
+    subgraph L5 ["Layer 5: Authoritative Network Gateway PEP & Perimeter Backstop"]
+        L5A["bapgateway Envoy ext_authz Proxy"]
+        L5B["Single-Use ZSP Cryptographic Grant Burning"]
+        L5C["Zero-Bypass Tenant & Network Egress Pinning"]
+        L5A --- L5B --- L5C
     end
 
     L1 -->|If Tool Bypasses Hooks| L2
     L2 -->|If Agent Spawns Direct Subshell| L3
     L3 -->|Always Routed To| L4
+    L4 -->|All Network Egress Gated By| L5
 ```
 
 #### Detailed Layer Breakdown:
@@ -682,28 +708,33 @@ flowchart TD
    - Any raw invocation of `git` or `curl` by an agent subshell executes the `.cmd` shim, which immediately forwards execution through `bapedge.exe exec --raw` under the active session and Cedar rules. Re-entrant execution inside the broker is un-shimmed via `BAP_IN_BROKER=1`.
 
 4. **Layer 4: In-Process Broker, Sandbox Containment & Merkle Audit:**
-   - The final host-level enforcement authority: `bapedge exec` with an in-process AWS Cedar engine evaluates operations in $<1.5\text{ms}$.
+   - The final host-level execution authority: `bapedge exec` with an in-process AWS Cedar engine evaluates operations in $<1.5\text{ms}$.
    - Enforces execution environment variables (`BAP_MODE=enforce`, `BAP_AGENT_SANDBOX=1`).
    - Spawns a detached background watchdog (`bapedge watch`) pulsing liveness heartbeats to `/api/v1/sessions/heartbeat` and enforcing real-time administrative revocations and emergency freezes.
    - Seals every execution result and token accounting record (`accountingSnapshot`) into the tamper-evident SHA-256 Merkle chain at `/api/v1/audit/ingest`.
+
+5. **Layer 5: Authoritative Network Gateway PEP & Perimeter Backstop:**
+   - Centralized, authoritative perimeter enforcement via `bapgateway` (Envoy `ext_authz`).
+   - Validates that every network call matches a pre-authorized, un-expired Zero-Trust Session Protocol (ZSP) grant.
+   - Burns single-use grants upon execution to prevent replay attacks and verifies cryptographic tenant isolation before traffic reaches corporate backends or cloud egress.
 
 ---
 
 ### 8.7. Multi-Agent Defense Matrix: Implementation Across All Tools
 
-| Agent Toolchain | Layer 1 (Hooks / Invariants) | Layer 2 (MCP Integration) | Layer 3 (Terminal Shims) | Layer 4 (Broker & Telemetry) | Test Verification |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Claude Code CLI** | `cchook/interceptor.exe` (`SessionStart`, `UserPromptSubmit`, `PreToolUse`) | `bapmcp.exe` mounted in `.claude/settings.json` | Active in `.bapstate/shims-$SessionId` | `bapedge exec` + watchdog + refcounted custody | `tests/test_multi_layer_defense.py` |
-| **Google Antigravity (IDE)** | `GEMINI.md` zero-trust rules + 120ms `transcript.jsonl` tailer | `bapmcp.exe` mounted in `.antigravity/mcp_config.json` | Active in `.bapstate/shims-$SessionId` | Electron GUI lifecycle guard + `bapedge exec` | `tests/test_multi_layer_defense.py` |
-| **Google Antigravity (CLI)** | `GEMINI.md` rules + direct console capture | `bapmcp.exe` mounted in `.antigravity/mcp_config.json` | Active in `.bapstate/shims-$SessionId` | `agy.exe` supervised by `bapedge exec` | Automated launcher suite |
-| **GitHub Copilot CLI** | `AGENTS.md` rules + live `events.jsonl` streamer | `bapmcp.exe` mounted in `.copilot/mcp-config.json` | Active in `.bapstate/shims-$SessionId` | Standalone `copilot.exe` + `accountingSnapshot` capture | Automated launcher suite |
-| **Autonomous Python SDK** | `bap_sdk.BAPSession` native mission wrapper | MCP tool wrappers & programmatic decorators | Subprocesses routed through `bap.exec()` | Real-time 3s daemon heartbeat + Cedar broker | `tests/test_bounded_authority_matrix.py` |
+| Agent Toolchain | Layer 1 (Hooks / Invariants) | Layer 2 (MCP Integration) | Layer 3 (Terminal Shims) | Layer 4 (Broker & Sandbox) | Layer 5 (Gateway PEP Egress) | Test Verification |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Claude Code CLI** | `cchook/interceptor.exe` (`SessionStart`, `UserPromptSubmit`, `PreToolUse`) | `bapmcp.exe` mounted in `.claude/settings.json` | Active in `.bapstate/shims-$SessionId` | `bapedge exec` + watchdog + refcounted custody | Envoy `ext_authz` + ZSP grant burning | `tests/test_multi_layer_defense.py` |
+| **Google Antigravity (IDE)** | `GEMINI.md` zero-trust rules + 120ms `transcript.jsonl` tailer | `bapmcp.exe` mounted in `.antigravity/mcp_config.json` | Active in `.bapstate/shims-$SessionId` | Electron GUI lifecycle guard + `bapedge exec` | Envoy `ext_authz` + ZSP grant burning | `tests/test_multi_layer_defense.py` |
+| **Google Antigravity (CLI)** | `GEMINI.md` rules + direct console capture | `bapmcp.exe` mounted in `.antigravity/mcp_config.json` | Active in `.bapstate/shims-$SessionId` | `agy.exe` supervised by `bapedge exec` | Envoy `ext_authz` + ZSP grant burning | Automated launcher suite |
+| **GitHub Copilot CLI** | `AGENTS.md` rules + live `events.jsonl` streamer | `bapmcp.exe` mounted in `.copilot/mcp-config.json` | Active in `.bapstate/shims-$SessionId` | Standalone `copilot.exe` + `accountingSnapshot` capture | Envoy `ext_authz` + ZSP grant burning | Automated launcher suite |
+| **Autonomous Python SDK** | `bap_sdk.BAPSession` native mission wrapper | MCP tool wrappers & programmatic decorators | Subprocesses routed through `bap.exec()` | Real-time 3s daemon heartbeat + Cedar broker | Envoy `ext_authz` + ZSP grant burning | `tests/test_bounded_authority_matrix.py` |
 
 ---
 
 ### 8.8. Universal Extension Guide: How to Onboard a New AI Tool
 
-To onboard any new AI tool (e.g. Cursor, Windsurf, Devin, OpenAI Operator, or internal CLI) into BAP's 4-layer defense system, follow this 4-step integration recipe:
+To onboard any new AI tool (e.g. Cursor, Windsurf, Devin, OpenAI Operator, or internal CLI) into BAP's 5-layer defense system, follow this 5-step integration recipe:
 
 #### Step 1: Layer 1 — Hook Configuration or Workspace Rule Injection
 1. If the tool supports native lifecycle hooks (JSON on stdin/stdout), register `dist/windows-amd64/interceptor.exe` (or `cchook/interceptor.exe`) in the tool's settings.
@@ -744,6 +775,13 @@ To onboard any new AI tool (e.g. Cursor, Windsurf, Devin, OpenAI Operator, or in
    - `CandidateExecutables`: Discovery paths for the tool executable.
    - `ConfigureFiles`: Callback scriptblock injecting the workspace rule file and MCP configuration file.
 3. If the tool emits background session logs (e.g. JSON lines of prompts or tokens), attach a lightweight background tailer job (similar to Antigravity's `transcript.jsonl` or Copilot's `events.jsonl`) to stream prompts to `/api/v1/sessions/prompt` and tokens to `/api/v1/audit/ingest`.
+
+#### Step 5: Layer 5 — Gateway PEP Route Registration & Egress Pinning
+1. Register backend service endpoints in `bapgateway` Envoy configuration.
+2. Require Zero-Trust Session Protocol (ZSP) grant headers on outgoing requests:
+   - `X-BAP-Grant-ID`: Single-use capability token minted by BAP Control Plane.
+   - `X-BAP-Signature`: Ed25519 cryptographic authorization signature.
+3. Ensure unauthenticated direct egress from the host to production backends is blocked at the firewall, forcing all enterprise traffic through `bapgateway`.
 
 ---
 
@@ -790,7 +828,7 @@ To minimize friction and prevent developers from bypassing controls, BAP embeds 
 2. **`bapedge status` (BAP-472):**
    - Real-time terminal inspection of active vs stale sessions.
    - Cedar policy bundle version, rules SHA-256 digest, and kill-switch state.
-   - 3-Tier Layer Compliance (Layer A: Hooks, Layer B: Kernel Sandbox, Layer C: Network PEP).
+   - 5-Layer Defense-in-Depth Compliance (Layer 1: Hooks, Layer 2: MCP, Layer 3: Terminal Shims, Layer 4: Kernel Sandbox, Layer 5: Gateway PEP).
    - Offline spool backlog count.
 3. **`bapedge why "<command>"` (BAP-472):**
    - In-terminal Cedar policy evaluation with zero browser round-trips.

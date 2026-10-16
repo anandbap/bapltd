@@ -77,7 +77,7 @@ bapedge status
 - **Auth Mode**: Authentication mechanism (`One-Time Code (OTC)` or `OIDC Federated (Entra/Okta)`).
 - **Active Sessions**: Lists running agent processes, PIDs, uptime, and flags dead/orphaned processes.
 - **Policy Bundle**: Version number, rules SHA-256 digest, and emergency kill-switch status.
-- **3-Tier Layers**: Status of Process Interception (Layer A), Kernel Sandbox (Layer B), and Gateway Egress (Layer C).
+- **5-Layer Defense-in-Depth**: Status across Layer 1 (Process Interception Hooks), Layer 2 (Model Context Protocol MCP), Layer 3 (Terminal Interceptor Shims), Layer 4 (OS Kernel Boundary Sandbox & Local Broker), and Layer 5 (Authoritative Network Gateway PEP & Perimeter Backstop).
 - **Auto-Sync / Spool Backlog**: Automatically triggers a clean sweep & flush if pending offline entries exist, the control plane is reachable, and no other `bap-edge` process is actively executing (concurrency-guarded).
 
 ```bash
@@ -146,10 +146,11 @@ bapedge why "curl http://169.254.169.254/latest/meta-data/"
 
 ### 2.5 `bapedge exec -- <command>`
 Executes a command through the complete BAP Zero-Trust pipeline:
-1. Intercepts arguments and evaluates against local cached Cedar policies (Layer A).
-2. Spawns process inside an OS kernel-isolated sandbox (Layer B: Windows Restricted Token / Linux Landlock / macOS sandbox-exec).
-3. Injects corporate on-behalf-of identity credentials.
-4. Appends tamper-evident SHA-256 hash-chained entry to `.bapstate/audit.jsonl` and streams telemetry to control plane.
+1. Intercepts arguments and evaluates against local cached Cedar policies (Layer 1 / Layer 4).
+2. Spawns process inside an OS kernel-isolated sandbox (Layer 4: Windows Restricted Token / Linux Landlock / macOS sandbox-exec).
+3. Routes all network egress through Gateway PEP with single-use ZSP grant burning (Layer 5).
+4. Injects corporate on-behalf-of identity credentials.
+5. Appends tamper-evident SHA-256 hash-chained entry to `.bapstate/audit.jsonl` and streams telemetry to control plane.
 
 ```bash
 bapedge exec -- git commit -m "Update"

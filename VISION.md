@@ -159,10 +159,12 @@ flowchart LR
 
 #### Plane 2: Edge Execution Plane (`bapedge` / Interceptors)
 - **Sole Executor Pattern:** Agents are stripped of raw shell execution rights. `bapedge` serves as the sole trusted broker, evaluating Cedar policies locally in $<1.5\text{ms}$.
-- **3-Tier Layered Endpoint Enforcement (Epic 23):**
-  - **Layer A (Application / CLI Hooks):** Claude Code (`SessionStart`, `UserPromptSubmit`, `PreToolUse`), Copilot CLI interceptors intercepting intent and proposals at the prompt/tool level.
-  - **Layer B (OS Kernel & Filesystem Sandbox):** OS-level containment isolating filesystem and process boundaries (macOS Seatbelt/sandbox-exec, Linux Landlock/Bubblewrap, Windows AppContainer).
-  - **Layer C (Deterministic Network Egress Pinning):** Egress filtering and localhost proxy routing (`HTTP_PROXY`/`HTTPS_PROXY`) preventing direct socket bypass to intranet and cloud APIs.
+- **5-Layer Defense-in-Depth Architecture (Epic 23 & Epic 30):**
+  - **Layer 1 (Process & Application Lifecycle Hooks):** Claude Code (`SessionStart`, `UserPromptSubmit`, `PreToolUse`), Antigravity/Copilot rule injection (`GEMINI.md`, `AGENTS.md`), safe subagent/inspection router.
+  - **Layer 2 (Model Context Protocol MCP Authority Boundary):** Governed `bapmcp.exe` tool catalog gating `bap_execute`, `bap_status`, and `bap_explain_policy` with Cedar authorization.
+  - **Layer 3 (Terminal & Tool Interceptor Shims):** Dynamic per-session PATH interception trapping unmediated subshell commands and routing to `bapedge exec`.
+  - **Layer 4 (OS Kernel Boundary Sandbox & Local Broker):** OS-level containment (Windows Job Objects & Restricted Tokens, Linux Landlock, macOS Seatbelt, Merkle ledger).
+  - **Layer 5 (Authoritative Network Gateway PEP & Perimeter Backstop):** Gateway PEP (`bapgateway` Envoy `ext_authz`), authoritative operation derivation, single-use ZSP grant burning, and zero-bypass network egress pinning.
 - **Biometric Elevation & Step-Up Verification:** Integrated platform authentication (Windows Hello, macOS Touch ID, FIDO2/WebAuthn) for high-impact actions (`DEPLOY_PROD`, `DROP_DB`, `SECRET_EXPORT`).
 - **Deterministic Intent Classification:** Analyzes user prompts locally across canonical CIO categories (`BUG_FIX`, `DATABASE_CHANGE`, `FEATURE_ENHANCEMENT`, `INFRA_CHANGE`, `MIGRATION`, etc.). Ambiguous or unmatched inputs fail safely to `UNKNOWN` with confidence $0.0$, requiring human sign-off.
 - **Enterprise MDM Delivery:** Enterprise-grade Intune and Jamf configuration profiles (`bapedge mdm-profile`) enforcing managed daemon launch daemons, locked policy directories, and non-bypassable proxy environment variables.
@@ -202,7 +204,7 @@ BAP operationalizes its vision through 10 concrete, testable architectural pilla
 │  6. Shadow IT & Unmanaged Tool Discovery (Local MCP & Secret Scanners)      │
 │  7. Tamper-Evident Merkle Provenance & Cloud KMS Notarization (RFC 3161)    │
 │  8. Live CIO Fleet Command Cockpit & Forensic Blast Graph                   │
-│  9. 3-Tier Layered Endpoint Enforcement & Biometric Step-Up (Epic 23)       │
+│  9. 5-Layer Defense-in-Depth & Biometric Step-Up (Epic 23 & Epic 30)         │
 │ 10. Operational Resilience, Crash Sweeps & Developer CLI Tooling (Epic 24)  │
 │ 11. Enterprise Identity Provider Federation & OIDC Device Flow (Epic 25)    │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -235,11 +237,13 @@ Security operations maintain real-time visibility across thousands of active dev
 - **Granular Token & AI Credit Accounting**: Tails runtime event streams (`events.jsonl`, `transcript.jsonl`) to capture per-turn token usage and session exit `accountingSnapshot` metrics (input/output tokens, nanoAIU credits, API latencies) into the SHA-256 Merkle chain.
 - **Sub-100ms Kill Switches**: Operators can pinpoint runaway token spending or prompt anomalies and execute sub-100ms fleet-wide or session-scoped freezes.
 
-### Pillar 9: 3-Tier Layered Endpoint Enforcement & Biometric Step-Up (Epic 23)
-Local agent processes are governed through defense-in-depth:
-- **Layer A:** Application-level lifecycle interceptors (`cchook`, Antigravity process monitor, Copilot CLI streamer).
-- **Layer B:** OS-level kernel sandboxing (Seatbelt, Landlock, AppContainer) restricting filesystem and command execution.
-- **Layer C:** Localhost egress proxy pinning enforcing that all outbound agent traffic routes through BAP verification.
+### Pillar 9: 5-Layer Defense-in-Depth & Biometric Step-Up (Epic 23 & Epic 30)
+Local agent processes are governed through unified 5-layer defense-in-depth:
+- **Layer 1 (Process Interception Hooks):** Application-level lifecycle interceptors (`cchook`, Antigravity process monitor, Copilot CLI streamer, workspace invariants).
+- **Layer 2 (Model Context Protocol MCP):** Managed `bapmcp.exe` server gating tool invocation with Cedar authorization.
+- **Layer 3 (Terminal Interceptor Shims):** Dynamic PATH shims trapping raw subshells and routing to `bapedge exec`.
+- **Layer 4 (OS Kernel Boundary Sandbox & Broker):** OS-level kernel sandboxing (Windows Job Objects, Seatbelt, Landlock) and local execution broker.
+- **Layer 5 (Authoritative Network Gateway PEP & Perimeter Backstop):** Gateway PEP (`bapgateway` Envoy `ext_authz`), authoritative operation derivation, single-use ZSP grant burning, and zero-bypass network egress pinning.
 - **Biometric Step-Up:** High-risk actions require real-time human biometric elevation (Windows Hello / Touch ID / FIDO2).
 - **Scoped Offline Degradation:** If network connectivity to the Control Plane drops, safe local read/dev commands continue under local Cedar policy cache, while cloud and protected API egress fails closed.
 - **Enterprise MDM:** Packaged Intune & Jamf profiles enforce daemon registration and tamper resistance across corporate fleets.
@@ -370,8 +374,8 @@ The BAP platform has advanced through aggressive implementation phases, progress
 - [x] **Cryptographic Observability (Epics 9–13):** Merkle-chained audit ledger, RFC 3161 Cloud KMS notarization, and forensic causal graph.
 - [x] **Enterprise Identity & Secretless Delegation (Epics 14–18):** SPIFFE SVID workload identity, Okta/Entra IdP federation, and dynamic credential brokering.
 - [x] **CIO Fleet Command Cockpit (Epics 19–22):** Real-time web cockpit, fleet kill-switch propagation ($<100\text{ms}$), shadow IT & unmanaged MCP discovery.
-- [x] **3-Tier Layered Endpoint Enforcement & Biometric Step-Up (Epic 23):** 
-  - Layer A (interceptor hooks), Layer B (OS kernel/filesystem sandbox), Layer C (deterministic network egress proxy pinning).
+- [x] **5-Layer Defense-in-Depth & Biometric Step-Up (Epic 23 & Epic 30):** 
+  - Layer 1 (interceptor hooks), Layer 2 (MCP boundary), Layer 3 (terminal shims), Layer 4 (OS kernel sandbox & local broker), Layer 5 (authoritative gateway PEP & egress pinning).
   - Intune & Jamf enterprise MDM configuration profiles.
   - Windows Hello, Touch ID, and FIDO2 biometric elevation challenges.
   - Scoped offline degradation policy (Tier 1 safe local dev vs Tier 2 cloud egress).

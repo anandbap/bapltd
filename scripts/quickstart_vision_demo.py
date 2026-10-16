@@ -13,7 +13,7 @@ and strategic vision across 8 fundamental pillars:
   [6] Shadow IT Discovery: Unmanaged Local MCP Servers & Leaked Environment Credentials
   [7] Tamper-Evident Hash Chaining & RFC 3161 Cloud KMS Audit Notarization (Epic 13)
   [8] Live CIO Fleet Cockpit & Forensic Investigation Graph (BAP-459)
-  [9] 3-Tier Layered Endpoint Enforcement & Biometric Step-Up (Epic 23)
+  [9] 5-Layer Defense-in-Depth & Biometric Step-Up (Epic 23 & Epic 30)
   [10] Operational Resilience, Crash Sweeps & Developer CLI Tooling (Epic 24)
 
 Usage:
@@ -493,14 +493,14 @@ def main():
 
         print(f"\n{C.GREEN}{C.BOLD}{'='*75}{C.RESET}")
         # =====================================================================
-        # PILLAR 9: 3-Tier Layered Endpoint Enforcement & Biometric Step-Up (Epic 23)
+        # PILLAR 9: 5-Layer Defense-in-Depth & Biometric Step-Up (Epic 23 & Epic 30)
         # =====================================================================
-        print_banner(9, "3-Tier Layered Endpoint Enforcement & Biometric Step-Up (Epic 23)")
-        print("Enforces defense-in-depth across Layer A (Hooks), Layer B (OS Sandbox), and Layer C (Network PEP).\n")
+        print_banner(9, "5-Layer Defense-in-Depth & Biometric Step-Up (Epic 23 & Epic 30)")
+        print("Enforces defense-in-depth across Layer 1 (Hooks), Layer 2 (MCP), Layer 3 (Terminal Shims), Layer 4 (OS Sandbox), and Layer 5 (Gateway PEP).\n")
 
-        # 1. 3-Layer Endpoint Enforcement Status
+        # 1. 5-Layer Defense-in-Depth Inspection
         st, layers_res, _ = http_req(f"{CP_URL}/api/v1/endpoint/layers?os=windows")
-        print("  1. 3-Tier Layer Enforcement Inspection:")
+        print("  1. 5-Layer Defense-in-Depth Inspection:")
         for lyr in layers_res.get("layers", []):
             prims = ", ".join(lyr.get("primitives", []))
             print(f"     - [{lyr.get('layer_id')}] {lyr.get('name')}: {C.GREEN}ACTIVE{C.RESET} ({prims})")

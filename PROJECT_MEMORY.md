@@ -76,7 +76,7 @@ BAP (Bounded Authority Plane) is a Zero-Trust governance and least-privilege pol
 - **Module**: `bap_sdk.BAPSession`
 - **Features**: Autonomous background daemon thread pulsing `/api/v1/sessions/heartbeat` every 3s, tool execution policy evaluation (`bap.exec(...)`), and graceful shutdown (`bap.end(...)`).
 
-### 9. 4-Layer Tool Defense, Shielding, Supervision & Rollback (`BAP-534`, `BAP-535`, `BAP-538`, `BAP-540`)
+### 9. 5-Layer Defense-in-Depth, Shielding, Supervision & Rollback (`BAP-534`, `BAP-535`, `BAP-538`, `BAP-540`)
 - **Layer 1 Native Lifecycle Hooks**: Intercepts `PreToolUse` and `UserPromptSubmit` in `cchook/interceptor.exe`, routing subagents and search tools without empty-command false denials while blocking `.env` and path traversal.
 - **Layer 2 MCP Server**: `bapmcp.exe` exposes `bap_execute`, `bap_explain_policy`, and `bap_status` under Cedar authorization.
 - **Layer 3 PATH Shims**: Transparently routes terminal invocations (`git`, `python`, `curl`, `powershell`) through `.bapstate/shims-$SessionId/` to `bapedge exec`.
@@ -84,6 +84,7 @@ BAP (Bounded Authority Plane) is a Zero-Trust governance and least-privilege pol
   - **Credential Shielding (`BAP-535`)**: Strips ambient standing secrets (`AWS_*`, `GITHUB_*`, `OPENAI_*`, `ANTHROPIC_*`, `SLACK_*`, `AZURE_*`, `*_TOKEN`, `*_KEY`) before launching child processes; regex-masks sensitive tokens and private keys in output streams with `[BAP_REDACTED_*]` tags.
   - **Process-Level Supervision (`BAP-534`)**: Captures complete process ancestry (`parent:<pid>`, `broker:<pid>`, `child:<pid>`) inside execution receipts and audit logs; applies OS process containment via Windows Job Objects (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`).
   - **Forensics Snapshot & Rollback (`BAP-538`)**: Automatically creates pre-execution file snapshot checkpoints in `.bapstate/snapshots/<sessionID>/<ckptID>/`; provides `bapedge rollback` CLI for instant sub-second point-in-time recovery.
+- **Layer 5 Authoritative Gateway PEP & Perimeter Backstop**: Centralized perimeter proxy (`bapgateway` Envoy `ext_authz`), requiring single-use cryptographic Zero-Trust Session Protocol (ZSP) grant burning and tenant egress pinning before packets exit the boundary.
 
 ---
 

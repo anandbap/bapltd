@@ -10,10 +10,17 @@ import (
 	"time"
 )
 
-// LayerID defines the three tiers of endpoint enforcement.
+// LayerID defines the tiers of endpoint enforcement in the 5-layer defense-in-depth architecture.
 type LayerID string
 
 const (
+	Layer1CooperativeHooks    LayerID = "LAYER_1_COOPERATIVE_HOOKS"
+	Layer2MCPAuthority        LayerID = "LAYER_2_MCP_AUTHORITY"
+	Layer3TerminalShims       LayerID = "LAYER_3_TERMINAL_SHIMS"
+	Layer4KernelExecutionCtrl LayerID = "LAYER_4_KERNEL_EXECUTION_CONTROL"
+	Layer5GatewayPEP          LayerID = "LAYER_5_GATEWAY_PEP"
+
+	// Backward-compatibility aliases
 	LayerACooperativeHooks    LayerID = "LAYER_A_COOPERATIVE_HOOKS"
 	LayerBKernelExecutionCtrl LayerID = "LAYER_B_KERNEL_EXECUTION_CONTROL"
 	LayerCNetworkEgressPin    LayerID = "LAYER_C_NETWORK_EGRESS_PINNING"
@@ -113,95 +120,125 @@ func NewManager(signingKey string) *Manager {
 	}
 }
 
-// GetLayersReference returns the authoritative 3-tier architectural definition mapped per OS.
+// GetLayersReference returns the authoritative 5-layer defense-in-depth definition mapped per OS.
 func (m *Manager) GetLayersReference(osName string) []LayerStatus {
 	osLower := strings.ToLower(osName)
-	var primB, primC, primA []string
+	var prim4, prim1 []string
 
-	primA = []string{
+	prim1 = []string{
 		"Claude Code PreToolUse hooks",
 		"Cursor / VS Code MCP proxy wrapper",
 		"User-immutable managed-settings.json (dangerouslySkipPermissions: false)",
+		"Antigravity & Copilot rule injection (GEMINI.md, AGENTS.md)",
+	}
+
+	prim2 := []string{
+		"bapmcp.exe managed server",
+		"Cedar-gated bap_execute tool execution",
+		"bap_status & bap_explain_policy introspection",
+	}
+
+	prim3 := []string{
+		".bapstate/shims-$SessionId dynamic PATH interception",
+		"CLI shims: git, python, curl, wget, powershell, cat, rm",
+		"Broker re-entrancy unwrapper (BAP_IN_BROKER=1)",
 	}
 
 	switch {
 	case strings.Contains(osLower, "darwin") || strings.Contains(osLower, "mac"):
-		primB = []string{"Endpoint Security Framework (AUTH_EXEC, AUTH_OPEN)", "Seatbelt sandbox profile"}
-		primC = []string{"NetworkExtension content filter", "Gateway PEP reverse proxy"}
+		prim4 = []string{"Endpoint Security Framework (AUTH_EXEC, AUTH_OPEN)", "Seatbelt sandbox profile", "NetworkExtension content filter"}
 	case strings.Contains(osLower, "linux"):
-		primB = []string{"Landlock LSM", "eBPF-LSM (bprm_check_security)", "bubblewrap + seccomp-bpf"}
-		primC = []string{"eBPF cgroup socket filter", "Gateway PEP reverse proxy"}
+		prim4 = []string{"Landlock LSM", "eBPF-LSM (bprm_check_security)", "bubblewrap + seccomp-bpf", "eBPF cgroup socket filter"}
 	default: // Windows
-		primB = []string{"Restricted Tokens (LUA)", "Windows Job Objects", "AppContainer isolation"}
-		primC = []string{"Windows Filtering Platform (WFP)", "Gateway PEP reverse proxy"}
+		prim4 = []string{"Restricted Tokens (LUA)", "Windows Job Objects (Kill-on-Close)", "AppContainer isolation", "Windows Filtering Platform (WFP)"}
+	}
+
+	prim5 := []string{
+		"Gateway PEP reverse proxy (ext_authz)",
+		"Independent operation derivation (deriveOperation)",
+		"Atomic single-use JWT grant burning (ZSP maxUses=1)",
+		"Multi-tenant SaaS egress validation (BAP-530)",
 	}
 
 	return []LayerStatus{
 		{
-			LayerID:     LayerACooperativeHooks,
-			Name:        "Layer A: Agent-Native Cooperative Hooks",
+			LayerID:     Layer1CooperativeHooks,
+			Name:        "Layer 1: Agent-Native Cooperative Hooks",
 			Active:      true,
 			Enforcing:   true,
-			Primitives:  primA,
-			Description: "Fast user-space interception. Best-effort UX; jailbroken agents can attempt bypass, so it is never trusted alone.",
+			Primitives:  prim1,
+			Description: "Fast user-space interception (<1ms). PreToolUse hooks, prompt classification, and workspace invariants.",
 		},
 		{
-			LayerID:     LayerBKernelExecutionCtrl,
-			Name:        "Layer B: OS Execution & Boundary Control",
+			LayerID:     Layer2MCPAuthority,
+			Name:        "Layer 2: Model Context Protocol (MCP) Authority Boundary",
 			Active:      true,
 			Enforcing:   true,
-			Primitives:  primB,
-			Description: "Kernel-level hard control. Denies unauthorized process spawns, hidden subshells, and direct access to standing secrets (.env, id_rsa).",
+			Primitives:  prim2,
+			Description: "Managed MCP tool catalog (bapmcp.exe) gating tool execution with Cedar policy authorization.",
 		},
 		{
-			LayerID:     LayerCNetworkEgressPin,
-			Name:        "Layer C: Network Egress Pinning",
+			LayerID:     Layer3TerminalShims,
+			Name:        "Layer 3: Tool Call & Terminal Interceptor Shims",
 			Active:      true,
 			Enforcing:   true,
-			Primitives:  primC,
-			Description: "Forces all agent traffic through BAP proxy. Direct egress is dropped; protected resources require verified BAP Bearer grants.",
+			Primitives:  prim3,
+			Description: "Dynamic PATH shims (.bapstate/shims-*) trapping unmediated child subshells and routing to bapedge exec.",
+		},
+		{
+			LayerID:     Layer4KernelExecutionCtrl,
+			Name:        "Layer 4: OS Kernel Boundary Sandbox & Local Broker",
+			Active:      true,
+			Enforcing:   true,
+			Primitives:  prim4,
+			Description: "Kernel-level hard containment (Job Objects/Landlock/Seatbelt) and in-process Cedar execution broker.",
+		},
+		{
+			LayerID:     Layer5GatewayPEP,
+			Name:        "Layer 5: Authoritative Network Gateway PEP & Perimeter Backstop",
+			Active:      true,
+			Enforcing:   true,
+			Primitives:  prim5,
+			Description: "Enterprise perimeter policy enforcement point guarding microservices, APIs, and databases via single-use grant burning.",
 		},
 	}
 }
 
-// EvaluateCompliance determines the compliance posture of an endpoint.
+// EvaluateCompliance determines the compliance posture of an endpoint across the 5-layer defense architecture.
 func (m *Manager) EvaluateCompliance(report EndpointReport) EndpointReport {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	report.EvaluatedAt = time.Now().UTC()
-	hasLayerA := false
-	hasLayerB := false
-	hasLayerC := false
-
-	for _, l := range report.Layers {
-		if l.Active && l.Enforcing {
-			switch l.LayerID {
-			case LayerACooperativeHooks:
-				hasLayerA = true
-			case LayerBKernelExecutionCtrl:
-				hasLayerB = true
-			case LayerCNetworkEgressPin:
-				hasLayerC = true
-			}
-		}
-	}
 
 	if report.IsManagedFleet {
-		if hasLayerA && hasLayerB && hasLayerC {
+		var missing []string
+		for _, l := range report.Layers {
+			if !l.Active || !l.Enforcing {
+				switch l.LayerID {
+				case Layer1CooperativeHooks, LayerACooperativeHooks:
+					missing = append(missing, "Layer A / Layer 1 (Hooks)")
+				case Layer2MCPAuthority:
+					missing = append(missing, "Layer 2 (MCP Authority)")
+				case Layer3TerminalShims:
+					missing = append(missing, "Layer 3 (Terminal Shims)")
+				case Layer4KernelExecutionCtrl, LayerBKernelExecutionCtrl:
+					missing = append(missing, "Layer B / Layer 4 (Kernel Execution Control)")
+				case Layer5GatewayPEP, LayerCNetworkEgressPin:
+					missing = append(missing, "Layer C / Layer 5 (Network Gateway PEP)")
+				default:
+					missing = append(missing, string(l.LayerID))
+				}
+			}
+		}
+
+		if len(missing) == 0 && len(report.Layers) > 0 {
 			report.ComplianceState = StateCompliant
 			report.QuarantineReason = ""
 		} else {
 			report.ComplianceState = StateQuarantined
-			var missing []string
-			if !hasLayerA {
-				missing = append(missing, "Layer A (Hooks)")
-			}
-			if !hasLayerB {
-				missing = append(missing, "Layer B (Kernel Execution Control)")
-			}
-			if !hasLayerC {
-				missing = append(missing, "Layer C (Network Pinning)")
+			if len(missing) == 0 {
+				missing = append(missing, "Missing layer reports")
 			}
 			report.QuarantineReason = fmt.Sprintf("Managed fleet device failed zero-trust boundary verification. Missing: %s", strings.Join(missing, ", "))
 		}

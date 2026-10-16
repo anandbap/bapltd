@@ -477,7 +477,7 @@ function ingestServerData(data){
         state: compState,
         liveness: liveness,
         lastHeartbeat: a.last_heartbeat_at ? new Date(a.last_heartbeat_at) : null,
-        layers: [1, 1, 1],
+        layers: [1, 1, 1, 1, 1],
         mission: a.mission || 'Agent workload execution',
         risk: isRev ? 0.95 : 0.15,
         raw: a
@@ -508,7 +508,7 @@ function ingestServerData(data){
           state: isRev ? 'QUARANTINED' : 'COMPLIANT',
           liveness: isRev ? 'REVOKED' : (isLive ? 'LIVE' : 'OFFLINE'),
           lastHeartbeat: lastAct ? new Date(lastAct) : null,
-          layers: [1, 1, 1],
+          layers: [1, 1, 1, 1, 1],
           mission: sess.user_prompt || (sess.intent && sess.intent.primary) || 'Autonomous operations',
           risk: isRev ? 0.95 : (sess.denied_count > 0 ? 0.65 : 0.12),
           raw: sess
@@ -654,7 +654,7 @@ const META={
   addons:['Add-on Supply Chain','Skills, MCP servers, plugins and hooks. Scan and vet before agents can load them.'],
   recon:['Reconciliation Queue','Rule R3: Operations authorized by PEP but lacking confirmed execution receipts.'],
   whyblocked:['Why was it blocked?','Plain-language diagnosis and remediation guidance for helpdesk and end users.'],
-  rollout:['Rollout & Friction','Device layer adoption funnel (A/B/C) and user workflow friction diagnostics.'],
+  rollout:['Rollout & Friction','Device 5-layer adoption funnel (L1-L5) and user workflow friction diagnostics.'],
   settings:['Connection & Access','Control plane connection settings, admin authentication, and zero-trust checklist.']
 };
 
@@ -1452,7 +1452,7 @@ VIEWS.agents={
         <td>${esc(a.host)}<div style="color:var(--muted);font-size:12.5px">${esc(a.os)}</div></td>
         <td>${sessHtml}</td>
         <td class="mono" style="color:var(--muted);font-size:12px">${actTime}</td>
-        <td>${a.layers.map((l,i)=>`<span class="tag ${l?'t-ALLOW':'t-DENY'}" title="Layer ${'ABC'[i]} ${l?'enforcing':'not enforcing'}">${'ABC'[i]} ${l?'on':'off'}</span>`).join(' ')}</td>
+        <td>${(a.layers||[1,1,1,1,1]).map((l,i)=>`<span class="tag ${l?'t-ALLOW':'t-DENY'}" title="Layer ${i+1} ${l?'enforcing':'not enforcing'}">L${i+1} ${l?'on':'off'}</span>`).join(' ')}</td>
         <td style="min-width:70px"><div class="bar"><div style="width:${a.risk*100}%;background:${a.risk>.7?'var(--deny)':a.risk>.4?'var(--unk)':'var(--allow)'}"></div></div><span class="mono">${a.risk.toFixed(2)}</span></td>
         <td style="white-space:nowrap">${a.state==='QUARANTINED'?`<button class="btn sm" data-rel="${a.id}">Release</button>`:`<button class="btn sm danger" data-q="${a.id}">Quarantine</button>`}</td>
       </tr>`;
@@ -1482,7 +1482,7 @@ VIEWS.agents={
         drawNav();render();
       } catch(err){console.error(err); toast('Quarantine error: ' + err.message);}
     },true);
-    if(r)confirmBox('Release this agent?','Only release after Layer B is enforcing again. Compliance is re-checked on the next heartbeat.','Release agent',async()=>{
+    if(r)confirmBox('Release this agent?','Only release after Layer 4 (Kernel Sandbox) and Layer 5 (Gateway PEP) are enforcing again. Compliance is re-checked on the next heartbeat.','Release agent',async()=>{
       const targetId = r.dataset.rel;
       try {
         const res = await fetch(S.api.base + '/api/v1/control/agent/kill', {
@@ -1497,7 +1497,7 @@ VIEWS.agents={
           return;
         }
         const a=S.agents.find(x=>x.id===targetId);
-        if(a) { a.state='COMPLIANT'; a.layers=[1,1,1]; }
+        if(a) { a.state='COMPLIANT'; a.layers=[1,1,1,1,1]; }
         audit('agent.release',targetId);
         toast((a?a.name:targetId)+' released');
         drawNav();render();
@@ -1643,14 +1643,14 @@ async function verifyChain(){
 
 /* Endpoint */
 const LAYERS={
- windows:[['A','Cooperative hooks','Claude Code PreToolUse hook wired to bapedge exec'],['B','Kernel execution control','Windows Job Objects and restricted tokens'],['C','Network egress pinning','Traffic pinned to the Gateway PEP perimeter']],
- macos:[['A','Cooperative hooks','Managed settings push the PreToolUse hook'],['B','Kernel execution control','Apple Seatbelt sandbox-exec kernel profiles'],['C','Network egress pinning','Network extension pinned to the Gateway PEP']],
- linux:[['A','Cooperative hooks','Managed settings and wrapped agent binaries'],['B','Kernel execution control','seccomp, namespaces and eBPF execution gate'],['C','Network egress pinning','nftables egress rules pinned to the Gateway PEP']],
+ windows:[['1','Cooperative hooks','Claude Code PreToolUse hook, prompt classification & workspace invariants'],['2','MCP Authority Boundary','Managed bapmcp.exe server with Cedar policy gate'],['3','Terminal interceptor shims','PATH shims trapping raw subshells (.bapstate/shims-*)'],['4','Kernel execution sandbox','Windows Job Objects and Restricted Tokens process boundary'],['5','Gateway PEP & egress pinning','Authoritative bapgateway Envoy ext_authz proxy & ZSP grant burning']],
+ macos:[['1','Cooperative hooks','Managed settings push PreToolUse hook & prompt invariants'],['2','MCP Authority Boundary','Managed bapmcp.exe server with Cedar policy gate'],['3','Terminal interceptor shims','PATH shims trapping raw subshells'],['4','Kernel execution sandbox','Apple Seatbelt sandbox-exec kernel profiles'],['5','Gateway PEP & egress pinning','Authoritative bapgateway Envoy ext_authz proxy & ZSP grant burning']],
+ linux:[['1','Cooperative hooks','Managed settings, PreToolUse interceptor hooks & prompt invariants'],['2','MCP Authority Boundary','Managed bapmcp.exe server with Cedar policy gate'],['3','Terminal interceptor shims','PATH shims trapping raw subshells'],['4','Kernel execution sandbox','Landlock LSM and eBPF bprm_check_security probes'],['5','Gateway PEP & egress pinning','Authoritative bapgateway Envoy ext_authz proxy & ZSP grant burning']],
 };
 let epOS='windows',epMDM='intune',stepTok=null;
 VIEWS.endpoint={
   html(){return `<div class="grid g-eq">
-   <div class="panel"><h2>Three-layer enforcement</h2><p class="hint">Missing Layer B quarantines a managed device</p>
+   <div class="panel"><h2>Five-layer defense-in-depth enforcement</h2><p class="hint">Missing Layer 4 (Kernel Sandbox) or Layer 5 (Gateway PEP) quarantines a managed device</p>
     <div class="seg" id="osSeg">${['windows','macos','linux'].map(o=>`<button aria-pressed="${o===epOS}" data-os="${o}">${o==='macos'?'macOS':o[0].toUpperCase()+o.slice(1)}</button>`).join('')}</div>
     <div style="margin-top:14px" id="layers"></div></div>
    <div class="panel"><h2>MDM packaging</h2><p class="hint">Deploy the hooks and sandbox through your device manager</p>
@@ -1904,20 +1904,24 @@ function showWB(id) {
 VIEWS.rollout = {
   html() {
     const totalAgents = S.agents.length || 1;
-    const lA = S.agents.filter(a => a.layers && a.layers[0]).length;
-    const lB = S.agents.filter(a => a.layers && a.layers[1]).length;
-    const lC = S.agents.filter(a => a.layers && a.layers[2]).length;
+    const l1 = S.agents.filter(a => a.layers && a.layers[0]).length;
+    const l2 = S.agents.filter(a => a.layers && a.layers[1]).length;
+    const l3 = S.agents.filter(a => a.layers && a.layers[2]).length;
+    const l4 = S.agents.filter(a => a.layers && a.layers[3]).length;
+    const l5 = S.agents.filter(a => a.layers && a.layers[4]).length;
     const shadowCount = (S.shadow || []).length;
     return `
     <div class="grid g-2">
       <div class="panel funnel">
         <h2>Endpoint Containment Rollout Funnel</h2>
-        <p class="hint">Enforcement progression across enrolled fleet endpoints</p>
+        <p class="hint">5-layer defense-in-depth progression across enrolled fleet endpoints</p>
         <div style="display:grid;gap:12px;margin-top:14px">
           <div class="fr"><span>Enrolled Agents</span><div class="bar"><div style="width:100%"></div></div><b class="mono">${totalAgents}</b></div>
-          <div class="fr"><span>Layer A (Hooks)</span><div class="bar"><div style="width:${Math.round(lA/totalAgents*100)}%"></div></div><b class="mono">${lA} (${Math.round(lA/totalAgents*100)}%)</b></div>
-          <div class="fr"><span>Layer B (Kernel Sandbox)</span><div class="bar"><div style="width:${Math.round(lB/totalAgents*100)}%"></div></div><b class="mono">${lB} (${Math.round(lB/totalAgents*100)}%)</b></div>
-          <div class="fr"><span>Layer C (Egress Pinning)</span><div class="bar"><div style="width:${Math.round(lC/totalAgents*100)}%"></div></div><b class="mono">${lC} (${Math.round(lC/totalAgents*100)}%)</b></div>
+          <div class="fr"><span>Layer 1 (Hooks)</span><div class="bar"><div style="width:${Math.round(l1/totalAgents*100)}%"></div></div><b class="mono">${l1} (${Math.round(l1/totalAgents*100)}%)</b></div>
+          <div class="fr"><span>Layer 2 (MCP Authority)</span><div class="bar"><div style="width:${Math.round(l2/totalAgents*100)}%"></div></div><b class="mono">${l2} (${Math.round(l2/totalAgents*100)}%)</b></div>
+          <div class="fr"><span>Layer 3 (Terminal Shims)</span><div class="bar"><div style="width:${Math.round(l3/totalAgents*100)}%"></div></div><b class="mono">${l3} (${Math.round(l3/totalAgents*100)}%)</b></div>
+          <div class="fr"><span>Layer 4 (Kernel Sandbox)</span><div class="bar"><div style="width:${Math.round(l4/totalAgents*100)}%"></div></div><b class="mono">${l4} (${Math.round(l4/totalAgents*100)}%)</b></div>
+          <div class="fr"><span>Layer 5 (Gateway PEP)</span><div class="bar"><div style="width:${Math.round(l5/totalAgents*100)}%"></div></div><b class="mono">${l5} (${Math.round(l5/totalAgents*100)}%)</b></div>
         </div>
       </div>
       <div class="panel">
@@ -2278,7 +2282,7 @@ const ACT = {
           host: s.host,
           os: 'windows',
           state: 'COMPLIANT',
-          layers: [1,1,1],
+          layers: [1,1,1,1,1],
           liveness: 'LIVE',
           risk: 0.15,
           mission: 'Governed developer workload'

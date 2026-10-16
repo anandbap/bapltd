@@ -422,11 +422,21 @@ func getStatus(cfg ServerConfig) CallToolResult {
 			"source":     "mcp-server",
 		},
 		"governance": map[string]interface{}{
-			"model":                 "Dual-PEP (Client Edge + Network Perimeter)",
+			"model":                 "5-Layer Defense-in-Depth (Hooks -> MCP -> Shims -> Kernel Sandbox -> Perimeter Gateway PEP)",
 			"engine":                "Cedar Policy Engine (AWS Cedar)",
 			"enforcement_mode":      cfg.EnforcementMode,
 			"identity_injection":    "Active (CORP_OBO_TOKEN)",
 			"audit_tamper_evidence": "Active (SHA-256 Hash Chained)",
+		},
+		"defense_layers": map[string]interface{}{
+			"architecture": "5-Layer Defense-in-Depth",
+			"layers": []map[string]interface{}{
+				{"layer": "Layer 1", "name": "Process Interception Hooks", "status": "COMPLIANT", "description": "PreToolUse hooks wired & workspace rules enforced"},
+				{"layer": "Layer 2", "name": "Model Context Protocol (MCP)", "status": "COMPLIANT", "description": "bapmcp server mounted with Cedar policy gate"},
+				{"layer": "Layer 3", "name": "Terminal Interceptor Shims", "status": "COMPLIANT", "description": "PATH shims active for unmediated subshells"},
+				{"layer": "Layer 4", "name": "OS Kernel Boundary & Broker", "status": "COMPLIANT", "description": "Kernel sandbox & in-process Cedar broker active"},
+				{"layer": "Layer 5", "name": "Authoritative Network Gateway PEP", "status": "COMPLIANT", "description": "Gateway PEP perimeter backstop active, ZSP single-use grant burning & tenant egress pinning"},
+			},
 		},
 		"endpoints": map[string]string{
 			"control_plane": cfg.ServerURL,

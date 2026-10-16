@@ -21,7 +21,7 @@ This document represents the complete functional and non-functional requirements
 | `BAP-222` | Real protected-resource proof | **DONE** | Zero-trust Gateway PEP and control plane atomically consume bounded grants (maxUses=1) with strict bypass rejection; verified by 10-point test matrix. |
 | `BAP-520`–`BAP-525` | Agent Watch Persona Control Plane & Canonical Activity Engine | **DONE** | Persona switching (CIO/CISO/Ops/IT), canonical activity events, live SSE stream, CIO Pulse, Live Topology Map, and Intent Contract with Critical Deviation Detection. Pure live unsimulated telemetry decoupled from `-demo-mode` / `?demo=true`. |
 | `BAP-477` | CIO Agent Activity Pulse & Dynamic Work Themes | **DONE** | Privacy-first executive pulse ("See the work, not the worker"), 10 extensible work categories, dynamic lifecycle stage progression, assisted capacity metrics (hours + FTE eq), multi-vendor fleet aggregation (2,000+ agents). |
-| `BAP-540` | 4-Layer Tool Defense-in-Depth Architecture | **DONE** | Redundant 4-layer execution control (Hooks $\rightarrow$ MCP $\rightarrow$ PATH Shims $\rightarrow$ Broker). Verified via `tests/test_multi_layer_defense.py`. |
+| `BAP-540` | 5-Layer Tool Defense-in-Depth Architecture | **DONE** | Redundant 5-layer execution control (Hooks $\rightarrow$ MCP $\rightarrow$ PATH Shims $\rightarrow$ Kernel Sandbox $\rightarrow$ Gateway PEP). Verified via `tests/test_multi_layer_defense.py`. |
 | `BAP-541` | Google Antigravity IDE & CLI Zero-Trust Governance | **DONE** | Electron GUI process supervision, active session guard, 120ms `transcript.jsonl` tailing, `GEMINI.md` policy & MCP injection. |
 | `BAP-542` | GitHub Copilot CLI Standalone v1.0.97+ & Token Accounting | **DONE** | Standalone `copilot.exe` priority, `events.jsonl` streaming, `AGENTS.md`, and session exit `accountingSnapshot` audit ingestion. |
 | `BAP-543` | Subagent & Inspection Tool Routing & Broker Unwrapping | **DONE** | `isSafeSubagentOrInspectionTool` eliminates false denials for read-only tools (`search_code_subagent`, `Glob`, `Grep`); `unwrapBrokerCommand` unwraps direct agent `bapedge.exe exec` calls. |
@@ -79,7 +79,7 @@ This document represents the complete functional and non-functional requirements
    - [Epic 27: Fleet Telemetry Consistency, Dynamic Liveness Coupling & Unified State Architecture (BAP-EPIC-27)](#epic-27-fleet-telemetry-consistency-dynamic-liveness-coupling--unified-state-architecture-bap-epic-27)
    - [Epic 28: Agent Watch Persona Architecture, Canonical Activity Event & Live Enterprise Topology (BAP-EPIC-28)](#epic-28-agent-watch-persona-architecture-canonical-activity-event--live-enterprise-topology-bap-epic-28)
    - [Epic 29: Beyond-Hook Enforcement & Enterprise Defense Hardening (BAP-EPIC-29)](#epic-29-beyond-hook-enforcement--enterprise-defense-hardening-bap-epic-29)
-   - [Epic 30: Multi-Agent Tool Governance & 4-Layer Defense-in-Depth (BAP-EPIC-30)](#epic-30-multi-agent-tool-governance--4-layer-defense-in-depth-bap-epic-30)
+   - [Epic 30: Multi-Agent Tool Governance & 5-Layer Defense-in-Depth (BAP-EPIC-30)](#epic-30-multi-agent-tool-governance--5-layer-defense-in-depth-bap-epic-30)
    - [Epic 31: Enterprise Launch Readiness, Client–Server Versioning Scheme & Protocol Compatibility Governance (BAP-EPIC-31)](#epic-31-enterprise-launch-readiness-client-server-versioning-scheme--protocol-compatibility-governance-bap-epic-31)
    - [Core Architectural Invariants & Adversarial Test Matrix](#core-architectural-invariants--adversarial-test-matrix)
 
@@ -117,7 +117,7 @@ This document represents the complete functional and non-functional requirements
 | `BAP-EPIC-27` | Fleet Telemetry Consistency, Dynamic Liveness Coupling & Unified State Architecture (BAP-510–BAP-513) | MVP Core & Telemetry | **DONE** |
 | `BAP-EPIC-28` | Agent Watch Persona Architecture, Canonical Activity Event & Live Enterprise Topology (BAP-520–BAP-525) | MVP Post-Pilot / v2.1 | **DONE** |
 | `BAP-EPIC-29` | Beyond-Hook Enforcement & Enterprise Defense Hardening (BAP-530–BAP-539) | Enterprise Hardening v2.2 | **BACKLOG** |
-| `BAP-EPIC-30` | Multi-Agent Tool Governance & 4-Layer Defense-in-Depth (BAP-540–BAP-548) | Enterprise Pack v2.3 | **DONE** |
+| `BAP-EPIC-30` | Multi-Agent Tool Governance & 5-Layer Defense-in-Depth (BAP-540–BAP-548) | Enterprise Pack v2.3 | **DONE** |
 | `BAP-EPIC-31` | Enterprise Launch Readiness, Client–Server Versioning Scheme & Protocol Compatibility Governance (BAP-550–BAP-554) | Enterprise Launch v1.0 | **DONE** |
 
 ---
@@ -1691,10 +1691,12 @@ operation or produce authoritative evidence of the violation.
 ## Epic 23: Layered Endpoint Enforcement & Workstation Hardening (BAP-EPIC-23)
 
 ### Executive Summary
-Enforces defense-in-depth on developer workstations using an explicit 3-layer architecture:
-- **Layer A**: Cooperative Agent Lifecycle Hooks (PreToolUse hooks, Cursor MCP wrappers, user-immutable `managed-settings.json` blocking `--dangerously-skip-permissions`).
-- **Layer B**: OS Process & Boundary Control (Windows Job Objects/Restricted Tokens, Linux Landlock LSM/eBPF `bprm_check_security`, macOS Endpoint Security AUTH_EXEC).
-- **Layer C**: Network Egress Pinning (Local proxy redirection + Gateway PEP backstop).
+Enforces defense-in-depth on developer workstations using an authoritative 5-layer architecture (with backwards-compatible aliases for legacy Layer A/B/C):
+- **Layer 1 (Layer A)**: Process & Application Lifecycle Hooks (PreToolUse hooks, Cursor MCP wrappers, user-immutable `managed-settings.json` blocking `--dangerously-skip-permissions`).
+- **Layer 2**: Model Context Protocol (MCP) Authority Boundary (`bapmcp.exe`, Cedar-gated `bap_execute`, `bap_status`, `bap_explain_policy`).
+- **Layer 3**: Tool Call & Terminal Interceptor Shims (`.bapstate/shims-$SessionId/` trapping raw subshells).
+- **Layer 4 (Layer B)**: OS Kernel Boundary Sandbox & Local Broker (Windows Job Objects/Restricted Tokens, Linux Landlock LSM/eBPF `bprm_check_security`, macOS Endpoint Security / Seatbelt).
+- **Layer 5 (Layer C)**: Authoritative Network Gateway PEP & Perimeter Backstop (`bapgateway` Envoy `ext_authz`, single-use ZSP grant burning, tenant egress pinning).
 
 Includes enterprise MDM compliance gating (Intune/Jamf profile packaging), FIDO2/Windows Hello/Touch ID biometric step-up challenges for high-risk operations, and scoped offline degradation that keeps local compilation/tests functional while failing closed on protected enterprise resource egress.
 
@@ -1702,17 +1704,17 @@ Includes enterprise MDM compliance gating (Intune/Jamf profile packaging), FIDO2
 
 ### Stories
 
-#### BAP-460: 3-Tier Layered Endpoint Enforcement Architecture
+#### BAP-460: 5-Layer Defense-in-Depth Endpoint Enforcement Architecture
 * **Status**: DONE
 * **Type**: Technical Architecture & Core Enforcement
 * **As a**: Chief Information Security Officer (CISO)
-* **I want**: AI agent operations to be bounded across three independent layers (cooperative hooks, OS execution boundaries, and network egress pinning)
-* **So that**: Even if a jailbroken agent or adversarial tool bypasses user-space hooks (Layer A), the OS kernel (Layer B) blocks unauthorized process execution and file reading, and network pinning (Layer C) blocks unauthorized egress.
+* **I want**: AI agent operations to be bounded across five independent layers (hooks, MCP authority, terminal shims, OS kernel sandbox, and gateway network PEP)
+* **So that**: Even if a jailbroken agent or adversarial tool bypasses user-space hooks (Layer 1) or MCP boundaries (Layer 2), terminal shims (Layer 3) trap subshells, the OS kernel (Layer 4) blocks unauthorized process execution and file tampering, and the Gateway PEP (Layer 5) drops unauthorized network egress.
 * **Acceptance Criteria**:
-  1. System models and tracks enforcement status across Layer A, Layer B, and Layer C per connected workstation.
-  2. Managed endpoints must have all 3 layers active to achieve COMPLIANT status; missing Layer B or C triggers QUARANTINE.
+  1. System models and tracks enforcement status across all 5 layers (supporting Layer 1–5 alongside backwards-compatible Layer A/B/C aliases) per connected workstation.
+  2. Managed endpoints must have critical host boundaries active to achieve COMPLIANT status; missing Layer 4 (Kernel) or Layer 5 (Gateway) triggers QUARANTINE.
   3. Unmanaged/BYOD endpoints run in cooperative mode with Gateway PEP as the immutable perimeter backstop.
-  4. Platform primitives mapped per OS (macOS ES/NetworkExtension, Linux Landlock/eBPF-LSM, Windows Restricted Tokens/Job Objects/WFP).
+  4. Platform primitives mapped per OS (macOS ES/Seatbelt, Linux Landlock/eBPF-LSM, Windows Restricted Tokens/Job Objects).
 
 #### BAP-461: Enterprise MDM Packaging & Compliance Quarantine
 * **Status**: DONE
@@ -1796,7 +1798,7 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 * **I want**: To inspect workstation compliance (`bapedge status`) and query Cedar policy decisions directly in the terminal (`bapedge why "<command>"`)
 * **So that**: I can immediately understand why a command is allowed or denied without context-switching to a web browser.
 * **Acceptance Criteria**:
-  1. `bapedge status` prints active/stale sessions, cached Cedar policy version and rules digest, 3-tier layer compliance status (Layers A, B, C), and offline spool backlog count.
+  1. `bapedge status` prints active/stale sessions, cached Cedar policy version and rules digest, 5-layer defense-in-depth compliance status (Layers 1–5), and offline spool backlog count.
   2. `bapedge why "<cmd>"` parses target command, evaluates local Cedar policy and workspace boundaries, and outputs `ALLOWED` or `DENIED`.
   3. Displays specific Cedar policy rule ID / trigger reason, workspace escape detection status, and zero-trust principal/action/resource attributes.
 
@@ -2623,29 +2625,31 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 
 ---
 
-### Epic 30: Multi-Agent Tool Governance & 4-Layer Defense-in-Depth (BAP-EPIC-30)
+### Epic 30: Multi-Agent Tool Governance & 5-Layer Defense-in-Depth (BAP-EPIC-30)
 
-**Goal:** Establish a universal, multi-tiered defense-in-depth model (Layer 1 Hooks $\rightarrow$ Layer 2 MCP $\rightarrow$ Layer 3 PATH Shims $\rightarrow$ Layer 4 Broker) across all developer AI coding tools (Claude Code, Google Antigravity IDE & CLI, GitHub Copilot CLI standalone, and autonomous worker agents), pairing runtime least-privilege command authorization with real-time token/AI credit accounting.
+**Goal:** Establish a universal, multi-tiered defense-in-depth model (Layer 1 Hooks $\rightarrow$ Layer 2 MCP $\rightarrow$ Layer 3 PATH Shims $\rightarrow$ Layer 4 Kernel Sandbox & Broker $\rightarrow$ Layer 5 Gateway PEP) across all developer AI coding tools (Claude Code, Google Antigravity IDE & CLI, GitHub Copilot CLI standalone, and autonomous worker agents), pairing runtime least-privilege command authorization with real-time token/AI credit accounting.
 
 ---
 
-#### BAP-540: 4-Layer Tool Defense-in-Depth Architecture & Verification Harness
+#### BAP-540: 5-Layer Tool Defense-in-Depth Architecture & Verification Harness
 * **Epic**: `BAP-EPIC-30`
 * **Status**: `DONE`
 * **Priority**: `P0 - High`
 * **Implementation Evidence**:
-  - Implemented 4-layer execution defense in `scripts/bap_launcher_engine.ps1`:
+  - Implemented 5-layer execution defense across all BAP components:
     - Layer 1: Native lifecycle hooks (`PreToolUse`, `UserPromptSubmit`, `SessionStart`) and workspace invariant rule injection (`GEMINI.md`, `AGENTS.md`).
     - Layer 2: Model Context Protocol (MCP) server `bapmcp.exe` mounted with Cedar policy-gated `bap_execute`, `bap_explain_policy`, and `bap_status`.
     - Layer 3: Terminal and tool call command shims generated in `.bapstate/shims-$SessionId/` for `git`, `python`, `curl`, `wget`, `powershell`, `cat`, `rm` prepended to `$env:PATH`.
-    - Layer 4: In-process Cedar broker `bapedge exec` (<1.5ms evaluation) with sandbox flags (`BAP_MODE=enforce`, `BAP_AGENT_SANDBOX=1`) and detached watchdog supervision.
-  - Test verification: [`tests/test_multi_layer_defense.py`](file:///c:/Users/User/pyprj/bapltd/tests/test_multi_layer_defense.py) validates Layer 2 MCP gating, Layer 3 shim interception, and Layer 4 session enrollment and prompt telemetry streaming.
+    - Layer 4: In-process Cedar broker `bapedge exec` (<1.5ms evaluation) with sandbox flags (`BAP_MODE=enforce`, `BAP_AGENT_SANDBOX=1`), OS kernel process boundary containment (Job Objects / Restricted Tokens / Landlock / Seatbelt), and detached watchdog supervision.
+    - Layer 5: Authoritative Network Gateway PEP (`bapgateway` Envoy `ext_authz`), requiring single-use cryptographic Zero-Trust Session Protocol (ZSP) grant burning and tenant egress pinning before traffic exits the perimeter.
+  - Test verification: [`tests/test_multi_layer_defense.py`](file:///c:/Users/User/pyprj/bapltd/tests/test_multi_layer_defense.py) validates Layer 2 MCP gating, Layer 3 shim interception, Layer 4 session enrollment and prompt telemetry streaming, and Layer 5 Gateway PEP architecture inspection.
 * **Story**:
-  > As a Chief Security Officer, I want multiple redundant defense layers governing agent tool execution so that even if an agent bypasses user-space hooks or attempts raw subshell commands, execution is trapped and evaluated against Cedar policy.
+  > As a Chief Security Officer, I want multiple redundant defense layers governing agent tool execution so that even if an agent bypasses user-space hooks or attempts raw subshell commands, execution is trapped and evaluated against Cedar policy and network egress is gated by an authoritative PEP.
 * **Acceptance Criteria**:
-  1. Layer 2 MCP calls to `cat .env` are rejected with `isError=True` and `[DENIED]` message.
+  1. Layer 2 MCP calls to `cat .env` are rejected with `isError=True` and `[DENIED]` message; MCP `bap_status` reports the active 5-Layer Defense-in-Depth architecture.
   2. Direct terminal invocation of `git` or `curl` inside an agent session is intercepted by `.bapstate/shims-$SessionId` and evaluated through `bapedge exec`.
   3. Re-entrant execution inside the broker avoids circular invocation via `BAP_IN_BROKER=1`.
+  4. Layer 4 OS kernel sandboxing contains child process execution and Layer 5 Gateway PEP backstop enforces grant burning on cloud egress.
 
 ---
 

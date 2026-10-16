@@ -2,7 +2,7 @@
 Epic 23: Layered Endpoint Enforcement, MDM Packaging & Biometric Step-Up Test Suite
 =====================================================================================
 Validates BAP-460, BAP-461, BAP-462, and BAP-463:
-1. 3-Tier Layered Enforcement Architecture (Layers A, B, C).
+1. 5-Layer Defense-in-Depth Enforcement Architecture (Layers 1 to 5).
 2. Endpoint Compliance Evaluation & Quarantine for missing boundaries.
 3. MDM Profile Generation for Intune and Jamf (managed-settings.json locking).
 4. Biometric Step-Up Elevation Challenges (Windows Hello, Touch ID, FIDO2).
@@ -118,20 +118,26 @@ class TestEndpointLayeredEnforcement(unittest.TestCase):
             shutil.rmtree(cls.temp_dir, ignore_errors=True)
 
     def test_01_endpoint_layers_reference(self):
-        """BAP-460: GET /api/v1/endpoint/layers returns Layers A, B, and C with active OS primitives."""
+        """BAP-460: GET /api/v1/endpoint/layers returns the 5-layer defense architecture with active OS primitives."""
         status, data, _ = http_req(f"{CP_URL}/api/v1/endpoint/layers?os=windows")
         self.assertEqual(status, 200)
         self.assertIn("layers", data)
-        self.assertEqual(len(data["layers"]), 3)
+        self.assertEqual(len(data["layers"]), 5)
 
         layer_ids = [l["layer_id"] for l in data["layers"]]
-        self.assertIn("LAYER_A_COOPERATIVE_HOOKS", layer_ids)
-        self.assertIn("LAYER_B_KERNEL_EXECUTION_CONTROL", layer_ids)
-        self.assertIn("LAYER_C_NETWORK_EGRESS_PINNING", layer_ids)
+        self.assertIn("LAYER_1_COOPERATIVE_HOOKS", layer_ids)
+        self.assertIn("LAYER_2_MCP_AUTHORITY", layer_ids)
+        self.assertIn("LAYER_3_TERMINAL_SHIMS", layer_ids)
+        self.assertIn("LAYER_4_KERNEL_EXECUTION_CONTROL", layer_ids)
+        self.assertIn("LAYER_5_GATEWAY_PEP", layer_ids)
 
-        # Check Windows primitives
-        layer_b = next(l for l in data["layers"] if l["layer_id"] == "LAYER_B_KERNEL_EXECUTION_CONTROL")
-        self.assertTrue(any("Restricted Tokens" in p for p in layer_b["primitives"]))
+        # Check Windows primitives in Layer 4
+        layer_4 = next(l for l in data["layers"] if l["layer_id"] == "LAYER_4_KERNEL_EXECUTION_CONTROL")
+        self.assertTrue(any("Restricted Tokens" in p for p in layer_4["primitives"]))
+
+        # Check Gateway PEP in Layer 5
+        layer_5 = next(l for l in data["layers"] if l["layer_id"] == "LAYER_5_GATEWAY_PEP")
+        self.assertTrue(any("Envoy" in p or "ZSP" in p or "Gateway" in p for p in layer_5["primitives"]))
 
     def test_02_endpoint_compliance_managed_clean(self):
         """BAP-460: Managed laptop with all 3 layers active achieves COMPLIANT status."""

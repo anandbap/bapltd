@@ -368,6 +368,8 @@ func runStatus(args []string) {
 	if mode, ok := data["mode"]; ok {
 		fmt.Printf("  Proxy Mode:       %v\n", mode)
 	}
+	fmt.Printf("  Defense Layer:    Layer 5 (Authoritative Network Gateway PEP)\n")
+	fmt.Printf("  Perimeter Role:   Authoritative Enterprise Policy Enforcement Point (PEP) Backstop\n")
 	fmt.Println("================================================================================")
 }
 
@@ -400,10 +402,11 @@ func runEnable(args []string) {
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"service":   "bap-gateway-pep",
-		"status":    "healthy",
-		"mode":      "envoy-ext-authz-emulator",
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"service":       "bap-gateway-pep",
+		"status":        "healthy",
+		"mode":          "envoy-ext-authz-emulator",
+		"defense_layer": "Layer 5 (Authoritative Network Gateway PEP & Perimeter Backstop)",
+		"timestamp":     time.Now().UTC().Format(time.RFC3339),
 	})
 }
 
