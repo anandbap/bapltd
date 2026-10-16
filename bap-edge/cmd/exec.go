@@ -17,6 +17,7 @@ import (
 	"bap-edge/internal/audit"
 	"bap-edge/internal/authz"
 	"bap-edge/internal/config"
+	"bap-edge/internal/fim"
 	"bap-edge/internal/pinning"
 	"bap-edge/internal/sandbox"
 	"bap-edge/internal/snapshot"
@@ -727,6 +728,48 @@ func RunExec(args []string) {
 			return
 		}
 		ec.contentHash = matchedHash
+	}
+
+	workspaceRoot, _ := os.Getwd()
+
+	// Pre-flight File-Integrity Monitoring (FIM) & Anti-Tamper Check (BAP-537)
+	fimReport, fimErr := fim.VerifyIntegrity(workspaceRoot)
+	if fimErr != nil {
+		resp := types.ExecResponse{
+			Allowed: false,
+			Reason:  fmt.Sprintf("TamperDetected: %v", fimErr),
+			Mode:    ec.enforcementMode,
+		}
+		ec.exit(resp, 1)
+		return
+	}
+
+	// Tiered Fail-Closed Enforcement for Quarantined Endpoints (BAP-537)
+	if fimReport != nil && fimReport.IsQuarantined {
+		actions, _ := authz.DecomposePipeline(fullCommand, workspaceRoot)
+		isEgress := false
+		cmdLower := strings.ToLower(fullCommand)
+		if strings.Contains(cmdLower, "curl") || strings.Contains(cmdLower, "wget") ||
+			strings.Contains(cmdLower, "ssh") || strings.Contains(cmdLower, "nc ") ||
+			strings.Contains(cmdLower, "aws ") || strings.Contains(cmdLower, "gh ") ||
+			strings.Contains(cmdLower, "http://") || strings.Contains(cmdLower, "https://") {
+			isEgress = true
+		}
+		for _, act := range actions {
+			if act.ActionType == "network" || act.ActionType == "credential" || strings.HasPrefix(act.CanonicalResource, "http") {
+				isEgress = true
+				break
+			}
+		}
+		if isEgress {
+			resp := types.ExecResponse{
+				Allowed: false,
+				Reason:  fmt.Sprintf("QuarantinedEndpointBlocked: %s (external network egress blocked; only local offline operations permitted)", fimReport.QuarantineReason),
+				Mode:    ec.enforcementMode,
+			}
+			ec.exit(resp, 1)
+			return
+		}
 	}
 
 	// 1. Initialize Cedar authorizer

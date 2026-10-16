@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -80,6 +81,7 @@ type Server struct {
 	categoriesMu     sync.RWMutex
 	customCategories []types.WorkCategoryMeta
 	minEdgeVersion   string
+	saasTokenMgr     *authz.SaaSTokenManager
 }
 
 type deviceAuthSession struct {
@@ -132,6 +134,7 @@ func NewServer(reg *registry.Store, otcStore *otc.Store, minter *authz.TokenMint
 		ebpfProbe:       ebpfProbe,
 		scanner:         scanner,
 		endpointMgr:     endpointMgr,
+		saasTokenMgr:    authz.NewSaaSTokenManager(),
 		envMode:         "dev",
 		deviceSessions:  make(map[string]*deviceAuthSession),
 		deviceUserCodes: make(map[string]*deviceAuthSession),
@@ -307,6 +310,10 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/control/revocations", s.handleGetRevocations)
 	s.mux.HandleFunc("/api/v1/control/chain/verify", s.handleVerifyChain)
 	s.mux.HandleFunc("/api/v1/control/sweep", s.handleControlSweep)
+	s.mux.HandleFunc("/api/v1/control/quarantine", s.handleControlQuarantine)
+	s.mux.HandleFunc("/api/v1/saas/tokens/bind", s.handleBindSaaSToken)
+	s.mux.HandleFunc("/api/v1/saas/tokens/verify", s.handleVerifySaaSToken)
+	s.mux.HandleFunc("/api/v1/saas/tokens", s.handleListSaaSTokens)
 
 	// Web Inspector & React Admin Handshake / Login
 	s.mux.HandleFunc("/api/v1/auth/inspector-handshake", s.handleInspectorHandshake)
@@ -932,6 +939,10 @@ func (s *Server) handleAcquireGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if agent.Status == types.StatusQuarantined {
+		writeError(w, http.StatusForbidden, "EndpointQuarantined: device quarantined due to missing heartbeats or hook tampering")
+		return
+	}
 	if agent.Status != types.StatusActive {
 		writeError(w, http.StatusForbidden, fmt.Sprintf("Agent is not active (current status: %s)", agent.Status))
 		return
@@ -1592,6 +1603,17 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
+			if sess.Status == "quarantined" {
+				writeJSON(w, http.StatusOK, map[string]any{
+					"id":         id,
+					"session_id": id,
+					"status":     "quarantined",
+					"action":     "quarantine",
+					"reason":     "Session quarantined by administrator or missing heartbeats",
+					"time":       time.Now().UTC(),
+				})
+				return
+			}
 			if s.registry != nil {
 				instanceID := sess.InstanceID
 				if instanceID == "" {
@@ -1616,6 +1638,17 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 				"status":   "revoked",
 				"action":   "terminate",
 				"reason":   "Agent authority revoked by administrator",
+				"time":     time.Now().UTC(),
+			})
+			return
+		}
+		if agent, err := s.registry.Get(id); err == nil && agent.Status == types.StatusQuarantined {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"id":       id,
+				"agent_id": id,
+				"status":   "quarantined",
+				"action":   "quarantine",
+				"reason":   "Agent endpoint quarantined: missing heartbeats or hook tampering detected",
 				"time":     time.Now().UTC(),
 			})
 			return
@@ -3999,4 +4032,195 @@ func (s *Server) handleEndpointOfflineClassify(w http.ResponseWriter, r *http.Re
 	eval := s.endpointMgr.ClassifyCapability(req.Operation)
 	writeJSON(w, http.StatusOK, eval)
 }
+
+// BAP-537: handleControlQuarantine allows administrators to inspect and manage endpoint quarantine states
+func (s *Server) handleControlQuarantine(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		quarantined := make([]*types.RegisteredAgent, 0)
+		if s.registry != nil {
+			for _, a := range s.registry.List() {
+				if a.Status == types.StatusQuarantined {
+					quarantined = append(quarantined, a)
+				}
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"quarantined": quarantined,
+			"count":       len(quarantined),
+		})
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		if !s.isAdminCaller(r) {
+			writeError(w, http.StatusUnauthorized, "Admin authentication required")
+			return
+		}
+		var req struct {
+			Target string `json:"target"`
+			Action string `json:"action"` // "quarantine" or "restore"
+			Reason string `json:"reason"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+			return
+		}
+
+		if req.Action == "restore" || req.Action == "unquarantine" {
+			agent, err := s.registry.UnquarantineTarget(req.Target)
+			if err != nil {
+				writeError(w, http.StatusNotFound, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"status":  "restored",
+				"target":  req.Target,
+				"agent":   agent,
+				"message": fmt.Sprintf("Agent %s successfully restored from quarantine.", req.Target),
+			})
+			return
+		}
+
+		reason := req.Reason
+		if reason == "" {
+			reason = "Endpoint quarantined by administrator: missing heartbeats or hook tampering"
+		}
+		agent, err := s.registry.QuarantineTarget(req.Target, reason)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":  "quarantined",
+			"target":  req.Target,
+			"agent":   agent,
+			"reason":  reason,
+			"message": fmt.Sprintf("Agent %s successfully quarantined across fleet.", req.Target),
+		})
+		return
+	}
+
+	writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+}
+
+// handleBindSaaSToken creates an attested session-binding for a SaaS/OAuth token (BAP-539)
+func (s *Server) handleBindSaaSToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req types.BindSaaSTokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+
+	if strings.TrimSpace(req.SessionID) == "" {
+		writeError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+	if strings.TrimSpace(req.Provider) == "" {
+		writeError(w, http.StatusBadRequest, "provider is required")
+		return
+	}
+
+	ttl := 15 * time.Minute
+	if req.TTLSeconds > 0 {
+		ttl = time.Duration(req.TTLSeconds) * time.Second
+	}
+
+	binding, err := s.saasTokenMgr.BindToken(req.Provider, req.TokenID, req.SessionID, req.AgentID, req.UserEmail, req.Scopes, ttl)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if s.auditStore != nil {
+		s.auditStore.Ingest([]audit.Event{{
+			EventID:     fmt.Sprintf("evt-saas-%d", time.Now().UnixNano()),
+			AgentID:     req.AgentID,
+			SessionID:   binding.BoundSessionID,
+			UserEmail:   req.UserEmail,
+			Timestamp:   time.Now().UTC().Format(time.RFC3339),
+			Source:      "saas_token_governance",
+			Executable:  "saas_binding",
+			FullCommand: fmt.Sprintf("saas bind provider=%s token=%s scopes=%v", binding.SaaSProvider, binding.TokenID, binding.Scopes),
+			Decision:    "ALLOW",
+			Reason:      "SaaS token bound to attested session",
+		}})
+	}
+
+	writeJSON(w, http.StatusCreated, binding)
+}
+
+// handleVerifySaaSToken enforces session-bound SaaS token authorization (BAP-539)
+func (s *Server) handleVerifySaaSToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req types.VerifySaaSTokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+
+	if strings.TrimSpace(req.TokenID) == "" {
+		writeError(w, http.StatusBadRequest, "token_id is required")
+		return
+	}
+	if strings.TrimSpace(req.CallerSessionID) == "" {
+		writeError(w, http.StatusBadRequest, "caller_session_id is required")
+		return
+	}
+
+	allowed, status, err := s.saasTokenMgr.VerifyUsage(req.TokenID, req.CallerSessionID, req.RequestedScope)
+	if !allowed {
+		if s.auditStore != nil {
+			s.auditStore.Ingest([]audit.Event{{
+				EventID:     fmt.Sprintf("evt-saas-viol-%d", time.Now().UnixNano()),
+				SessionID:   req.CallerSessionID,
+				Timestamp:   time.Now().UTC().Format(time.RFC3339),
+				Source:      "saas_token_governance",
+				Executable:  "saas_verify",
+				FullCommand: fmt.Sprintf("saas verify token=%s caller_session=%s scope=%s", req.TokenID, req.CallerSessionID, req.RequestedScope),
+				Decision:    "DENY",
+				Reason:      err.Error(),
+			}})
+		}
+
+		statusCode := http.StatusForbidden
+		if errors.Is(err, authz.ErrTokenNotFound) {
+			statusCode = http.StatusNotFound
+		}
+		writeJSON(w, statusCode, types.VerifySaaSTokenResponse{
+			Allowed: false,
+			Status:  status,
+			Reason:  err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, types.VerifySaaSTokenResponse{
+		Allowed: true,
+		Status:  status,
+	})
+}
+
+// handleListSaaSTokens returns all active SaaS token bindings
+func (s *Server) handleListSaaSTokens(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	bindings := s.saasTokenMgr.ListBindings()
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"tokens": bindings,
+		"count":  len(bindings),
+	})
+}
+
 

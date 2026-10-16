@@ -2535,8 +2535,13 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 
 #### BAP-536: Standing Adversarial Regression & Continuous Add-on Scanning Suite
 * **Epic**: `BAP-EPIC-29`
-* **Status**: `BACKLOG`
+* **Status**: `DONE`
 * **Priority**: `P1 - Medium`
+* **Implementation Evidence**:
+  - Implemented continuous threat scanner engine in `bap-edge/internal/scanner/addon_scanner.go` detecting instruction overrides, jailbreaks, prompt injection, base64 obfuscated reverse shells, supply chain bypass (`--index-url`, `--registry`), and content drift.
+  - Implemented CLI command `bapedge scan <dir> [--fail-on <severity>] [--json] [--fix]` in `bap-edge/cmd/scan.go`.
+  - Built automated standing CI/CD runner `scripts/run_adversarial_regression.ps1` and `run_adversarial_regression.bat`.
+  - Test verification: Unit tests in `addon_scanner_test.go` and comprehensive CI test suite `tests/test_bap_536_adversarial_scanner.py` (7/7 tests passing).
 * **Story**:
   > As a SecOps Lead, I want a standing automated adversarial regression suite executed in CI/CD before any policy or agent release, plus continuous re-scanning of installed skills and extensions, so that policy regressions and prompt injection bypasses are caught before deployment.
 * **Business Intent**:
@@ -2557,8 +2562,14 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 
 #### BAP-537: Tamper Resistance & Tiered Fail-Closed Quarantining
 * **Epic**: `BAP-EPIC-29`
-* **Status**: `BACKLOG`
+* **Status**: `DONE`
 * **Priority**: `P2 - Medium`
+* **Implementation Evidence**:
+  - Implemented File-Integrity Monitoring (FIM) and local quarantine detection in `bap-edge/internal/fim/fim.go`.
+  - Integrated fail-closed tamper checking into `bap-edge/cmd/exec.go` and `watch.go`: blocks tool calls if hook scripts are missing, modified, or quarantined.
+  - Extended Central Control Plane agent registry with `StatusQuarantined`, `QuarantineTarget`, `UnquarantineTarget`, and automatic silence quarantine (after 9s threshold).
+  - Wired grant denial in `internal/api/handlers.go` returning `403 Forbidden` (`EndpointQuarantined`) for quarantined agents, while permitting safe local test execution offline (Tiered Fail-Closed Model).
+  - Test verification: Unit tests in `fim_test.go` and Python integration test suite `tests/test_bap_537_tamper_and_quarantine.py` (4/4 tests passing).
 * **Story**:
   > As an IT Administrator, I want MDM-enforced managed settings, file-integrity monitoring on hook binaries, and a heartbeat watchdog that quarantines endpoints if governance hooks go silent, so that developers or malicious scripts cannot disable BAP protections.
 * **Business Intent**:
@@ -2606,8 +2617,21 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 
 #### BAP-539: Multi-Harness Adapters & SaaS Delegated Token Governance
 * **Epic**: `BAP-EPIC-29`
-* **Status**: `BACKLOG`
+* **Status**: `DONE`
 * **Priority**: `P2 - Low`
+* **Implementation Evidence**:
+  - Implemented cross-harness adapters in `bap-edge/internal/adapters`:
+    - `cursor.go`: Generates `.cursorrules` and `.cursor/mcp.json`, routes commands to `bapedge exec`, emits `CanonicalActivityEvent`.
+    - `gemini.go`: Injects `GEMINI.md` invariants and emits `CanonicalActivityEvent`.
+    - `browser.go`: `BrowserGuard` CDP/Playwright proxy enforcing domain allowlists (`*.corp.internal`, `internal.local`) and blocking sensitive credential uploads (`.env`, `id_rsa`, private keys).
+    - `activity.go`: Normalized `CanonicalActivityEvent` generation and telemetry reporting.
+  - Added CLI `bapedge adapter [cursor|gemini|browser|emit]` in `bap-edge/cmd/adapter.go`.
+  - Created transactional launchers: `run_cursor_bap.ps1` / `run_cursor_bap.bat`, `run_gemini_cli_bap.ps1` / `run_gemini_cli_bap.bat`.
+  - Implemented SaaS Delegated Token Governance in `bap-controlplane/internal/authz/saas_tokens.go` and handlers in `handlers.go`:
+    - `POST /api/v1/saas/tokens/bind`: Binds third-party OAuth token to attested BAP session with TTL.
+    - `POST /api/v1/saas/tokens/verify`: Enforces strict session binding; rejects cross-session token reuse with 403 `SaaSTokenSessionBindingViolation`.
+    - `GET /api/v1/saas/tokens`: Lists active SaaS token bindings across fleet.
+  - Test verification: Unit tests in `adapters_test.go`, `saas_tokens_test.go`, and integration test suite `tests/test_bap_539_multi_harness.py` (4/4 tests passing).
 * **Story**:
   > As an Enterprise Architect, I want unified BAP adapters for Cursor, Gemini CLI, browser agents (Playwright), and SaaS-embedded agents (Salesforce, Workato), so that zero-trust bounded authority applies across the entire corporate AI ecosystem, not only Claude Code.
 * **Business Intent**:

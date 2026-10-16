@@ -30,6 +30,8 @@ Zero-Trust Governance & HITL Authorization:
   why          Explain Cedar policy decision for a command directly in the terminal
   rollback     Forensically revert file mutations to pre-execution cryptographic checkpoints (BAP-538)
   pin          Cryptographically pin, verify, and re-attest skills, prompts, and MCP tools (BAP-531)
+  scan         Audit workspace skills, prompt templates, and configs for prompt injection & drift (BAP-536)
+  adapter      Unified multi-harness adapter for Cursor, Gemini CLI, Browser, and SaaS agents (BAP-539)
 
 Execution & Protocol Integration:
   exec         Evaluate command against Cedar policy and run in sandboxed kernel namespace
@@ -168,6 +170,16 @@ func main() {
 	case "pin":
 		if err := cmd.RunPin(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error in pin: %v\n", err)
+			os.Exit(1)
+		}
+	case "scan":
+		if err := cmd.RunScan(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error in scan: %v\n", err)
+			os.Exit(1)
+		}
+	case "adapter":
+		if err := cmd.RunAdapter(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error in adapter: %v\n", err)
 			os.Exit(1)
 		}
 	case "delegate", "subagent":

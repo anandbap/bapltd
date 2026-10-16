@@ -19,6 +19,7 @@ const (
 	StatusActive            AgentStatus = "active"
 	StatusRevoked           AgentStatus = "revoked"
 	StatusOffline           AgentStatus = "offline"
+	StatusQuarantined       AgentStatus = "quarantined"
 	StatusDeregistered      AgentStatus = "deregistered"
 )
 
@@ -264,6 +265,29 @@ type OIDCConfig struct {
 	ClaimDepartment string   `json:"claim_department,omitempty"`// Claim key for department (default: "department")
 	ClaimGroups     string   `json:"claim_groups,omitempty"`    // Claim key for groups (default: "groups")
 	ClaimEmail      string   `json:"claim_email,omitempty"`     // Claim key for email (default: "email")
+}
+
+// SaaS Delegated Token Governance Types (BAP-539)
+type BindSaaSTokenRequest struct {
+	Provider   string   `json:"provider"`
+	TokenID    string   `json:"token_id,omitempty"`
+	SessionID  string   `json:"session_id"`
+	AgentID    string   `json:"agent_id"`
+	UserEmail  string   `json:"user_email,omitempty"`
+	Scopes     []string `json:"scopes,omitempty"`
+	TTLSeconds int      `json:"ttl_seconds,omitempty"`
+}
+
+type VerifySaaSTokenRequest struct {
+	TokenID         string `json:"token_id"`
+	CallerSessionID string `json:"caller_session_id"`
+	RequestedScope  string `json:"requested_scope,omitempty"`
+}
+
+type VerifySaaSTokenResponse struct {
+	Allowed bool   `json:"allowed"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 

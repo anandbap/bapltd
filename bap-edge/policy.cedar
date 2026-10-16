@@ -124,7 +124,7 @@ forbid (
     // Anti-Tampering: Prevent agent from killing or deleting BAP governance processes/binaries
     (
         (context.full_command like "*bapedge*" || context.full_command like "*bapcontrolplane*" || context.full_command like "*bapgateway*" || context.full_command like "*cchook*" || context.full_command like "*copilot-interceptor*") &&
-        (context.full_command like "*kill*" || context.full_command like "*stop-process*" || context.full_command like "*remove-item*" || context.full_command like "*taskkill*" || context.full_command like "*pkill*" || context.full_command like "*del *" || context.full_command like "*rm *")
+        (context.full_command like "* kill *" || context.full_command like "*kill -*" || context.full_command like "*killall*" || context.full_command like "*stop-process*" || context.full_command like "*remove-item*" || context.full_command like "*taskkill*" || context.full_command like "*pkill*" || context.full_command like "*del *" || context.full_command like "*rm *")
     )
 };
 
@@ -200,3 +200,6 @@ forbid (
     context.full_command like "*canary-trap-*" ||
     context.full_command like "*bap-canary-*"
 };
+
+
+

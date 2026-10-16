@@ -18,6 +18,7 @@ import (
 
 	"bap-edge/internal/audit"
 	"bap-edge/internal/config"
+	"bap-edge/internal/fim"
 	"bap-edge/internal/state"
 )
 
@@ -570,6 +571,17 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string, instanceIDOp
 			cleanupSessionMarker(sessionID, watchPID)
 			return
 		}
+
+		if statusHB == "quarantined" {
+			reason := reasonHB
+			if reason == "" {
+				reason = "Endpoint quarantined by control plane due to missing heartbeats or hook tampering"
+			}
+			fmt.Fprintf(os.Stderr, "[bapedge watch] 🛑 Endpoint %s QUARANTINED by control plane: %s\n", sessionID, reason)
+			_ = fim.SetQuarantineStatus(".", true, reason)
+		} else if statusHB == "ok" {
+			_ = fim.SetQuarantineStatus(".", false, "")
+		}
 	}
 }
 
@@ -672,6 +684,9 @@ func pulseHeartbeat(serverURL, sessionID string) (string, string, int64) {
 		}
 		if res.Status == "revoked" || res.Action == "terminate" {
 			return "revoked", res.Reason, res.ScanEpoch
+		}
+		if res.Status == "quarantined" || res.Action == "quarantine" {
+			return "quarantined", res.Reason, res.ScanEpoch
 		}
 		return "ok", "", res.ScanEpoch
 	}

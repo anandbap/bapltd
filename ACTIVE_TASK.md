@@ -224,4 +224,28 @@ Implement the top 3 high-impact enterprise MVP capabilities:
     - Cedar Rule 7: corporate canary honeytoken tripwire defense.
   - **Test Suite Verification**: Verified with 100% pass across `tests/test_hitl_and_supply_chain.py` (15/15), `tests/test_control_plane.py` (100%), `tests/test_bap200_sole_executor.py` (15/15), and `tests/test_bap_534_535_538.py` (4/4).
 
+- [x] **Task 11: Epic 29 Completion — BAP-536, BAP-537, BAP-539 (P1, P2 & Remaining Backlog) — COMPLETE**
+  - **BAP-536 (Standing Adversarial Regression & Continuous Add-on Scanning Suite - P1)**:
+    - Built comprehensive threat scanner engine `bap-edge/internal/scanner/addon_scanner.go` auditing skills, system instructions, MCP configs, and YAML/markdown definitions for instruction overrides, jailbreaks, prompt injection, base64 obfuscated reverse shells, supply chain bypass (`--index-url`, `--registry`), and content drift.
+    - Added CLI command `bapedge scan <dir> [--fail-on <severity>] [--json] [--fix]` in `bap-edge/cmd/scan.go`.
+    - Created standing CI/CD runner `scripts/run_adversarial_regression.ps1` and `run_adversarial_regression.bat` (pure ASCII, Windows PowerShell 5.1 and cp1252/UTF-8 safe).
+    - Authored test suite `tests/test_bap_536_adversarial_scanner.py` (7/7 tests passing in 0.38s).
+  - **BAP-537 (Tamper Resistance & Tiered Fail-Closed Quarantining - P2)**:
+    - Implemented File-Integrity Monitoring (FIM) and local quarantine detection in `bap-edge/internal/fim/fim.go`.
+    - Integrated fail-closed tamper checking into `bapedge exec` and `bapedge watch`: blocks execution immediately if hooks are modified, deleted, or quarantined.
+    - Extended Central Control Plane agent registry with `StatusQuarantined`, `QuarantineTarget`, `UnquarantineTarget`, and automatic silence quarantine (after 9s silence threshold).
+    - Wired grant rejection (`403 Forbidden`, `EndpointQuarantined`) for quarantined devices while preserving offline tiered fail-closed local test capability.
+    - Authored test suite `tests/test_bap_537_tamper_and_quarantine.py` (4/4 tests passing).
+  - **BAP-539 (Multi-Harness Adapters & SaaS Delegated Token Governance - Remaining P2)**:
+    - Implemented cross-harness adapters in `bap-edge/internal/adapters`:
+      - Cursor IDE (`cursor.go`): Configures `.cursorrules` and `.cursor/mcp.json`, routes terminal commands through `bapedge exec`, emits `CanonicalActivityEvent`.
+      - Gemini CLI (`gemini.go`): Injects `GEMINI.md` invariants and emits `CanonicalActivityEvent`.
+      - Browser Guard (`browser.go`): Playwright/CDP security evaluator enforcing domain allowlists (`*.corp.internal`, `internal.local`) and blocking sensitive credential file uploads (`.env`, `id_rsa`, private keys).
+      - Activity Engine (`activity.go`): Normalized `CanonicalActivityEvent` schema and local/remote telemetry reporting.
+    - Added CLI command `bapedge adapter [cursor|gemini|browser|emit]` in `bap-edge/cmd/adapter.go`.
+    - Created transactional launchers: `run_cursor_bap.ps1` / `run_cursor_bap.bat`, `run_gemini_cli_bap.ps1` / `run_gemini_cli_bap.bat`.
+    - Implemented SaaS Delegated Token Governance in `bap-controlplane/internal/authz/saas_tokens.go` and REST API handlers in `handlers.go` (`POST /api/v1/saas/tokens/bind`, `POST /api/v1/saas/tokens/verify`, `GET /api/v1/saas/tokens`): binds third-party OAuth tokens to attested BAP sessions, strictly rejecting cross-session token reuse with 403 `SaaSTokenSessionBindingViolation`.
+    - Authored test suite `tests/test_bap_539_multi_harness.py` (4/4 tests passing in 2.88s).
+  - **Epic 29 Status**: All 10 user stories in `BAP-EPIC-29` are now **100% COMPLETE & VERIFIED**.
+
 

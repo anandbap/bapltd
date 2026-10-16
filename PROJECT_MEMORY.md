@@ -222,5 +222,24 @@ All BAP components (`bap-edge`, `bap-controlplane`, `bap-gateway`, `python-agent
     - Purges abandoned shims (`shims-*`) and temporary files (`*.tmp.*`).
     - Flushes pending offline audit entries and triggers control plane crash recovery.
 
+### 11. Standing Adversarial Regression, Tamper Resistance, Multi-Harness & SaaS Governance (`BAP-536`, `BAP-537`, `BAP-539`)
+- **Continuous Add-on & Threat Scanner (`BAP-536`)**:
+  - Built-in scanner (`bap-edge/internal/scanner/addon_scanner.go`): continuously audits workspace skills, markdown instructions, and MCP configs for prompt injection (system prompt overrides, jailbreaks, BAP bypass), obfuscated reverse shells (base64/hex decoding, socket piping), supply chain bypass (`--index-url`, `--registry`), and content drift.
+  - CLI: `bapedge scan <dir> [--fail-on <severity>] [--json] [--fix]`.
+  - Standing CI/CD runner: `scripts/run_adversarial_regression.ps1` and `run_adversarial_regression.bat` executing the full adversarial regression matrix before policy releases.
+- **Tamper Resistance & Tiered Fail-Closed Quarantine (`BAP-537`)**:
+  - File-Integrity Monitoring (FIM) (`bap-edge/internal/fim/fim.go`) verifies hook scripts, policies, and managed settings before every execution broker command.
+  - Missing or tampered hooks fail-closed immediately with zero command execution.
+  - Control Plane monitors heartbeat silence (9s / 3 heartbeat threshold); marks endpoints as `quarantined` and rejects grant minting.
+  - Tiered fail-closed design: offline or quarantined endpoints retain local offline execution under cached policy, but all external network egress and credential brokering strictly fail-closed.
+- **Multi-Harness Adapters & SaaS Delegated Token Governance (`BAP-539`)**:
+  - Universal adapters (`bap-edge/internal/adapters`):
+    - Cursor IDE (`cursor.go`): Configures `.cursorrules` and `.cursor/mcp.json`, routes executions to `bapedge exec`, emits `CanonicalActivityEvent`.
+    - Gemini CLI (`gemini.go`): Injects `GEMINI.md` invariants and emits `CanonicalActivityEvent`.
+    - Browser Guard (`browser.go`): Playwright/CDP security evaluator enforcing domain allowlists (`*.corp.internal`, `internal.local`) and blocking sensitive credential file uploads (`.env`, `id_rsa`, private keys).
+    - Normalized Activity Engine (`activity.go`): Standardized `CanonicalActivityEvent` schema and local/remote telemetry reporting.
+  - Transactional launchers: `run_cursor_bap.ps1` / `run_cursor_bap.bat`, `run_gemini_cli_bap.ps1` / `run_gemini_cli_bap.bat`.
+  - SaaS Token Manager (`bap-controlplane/internal/authz/saas_tokens.go`): Binds third-party cloud OAuth tokens to active attested BAP sessions (`/api/v1/saas/tokens/bind`); strictly rejects cross-session token reuse (`/api/v1/saas/tokens/verify`) with 403 `SaaSTokenSessionBindingViolation`.
+
 
 

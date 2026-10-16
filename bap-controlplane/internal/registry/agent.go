@@ -75,8 +75,11 @@ func (s *Store) Get(agentID string) (*types.RegisteredAgent, error) {
 		if copy.LastHeartbeatAt != nil {
 			lastAct = *copy.LastHeartbeatAt
 		}
-		if time.Since(lastAct) > 45*time.Second {
+		elapsed := time.Since(lastAct)
+		if elapsed > 45*time.Second {
 			copy.Status = types.StatusOffline
+		} else if elapsed > 9*time.Second {
+			copy.Status = types.StatusQuarantined
 		}
 	}
 	return &copy, nil
@@ -313,8 +316,11 @@ func (s *Store) List() []*types.RegisteredAgent {
 			if copy.LastHeartbeatAt != nil {
 				lastAct = *copy.LastHeartbeatAt
 			}
-			if now.Sub(lastAct) > 45*time.Second {
+			elapsed := now.Sub(lastAct)
+			if elapsed > 45*time.Second {
 				copy.Status = types.StatusOffline
+			} else if elapsed > 9*time.Second {
+				copy.Status = types.StatusQuarantined
 			}
 		}
 		list = append(list, &copy)
@@ -331,7 +337,7 @@ func (s *Store) ListVisible(maxAge time.Duration, isUserRevoked func(string) boo
 	now := time.Now()
 	list := make([]*types.RegisteredAgent, 0, len(s.agents))
 	for _, a := range s.agents {
-		isRevoked := a.Status == types.StatusRevoked || (isUserRevoked != nil && isUserRevoked(a.OwnerEmail))
+		isRevoked := a.Status == types.StatusRevoked || a.Status == types.StatusQuarantined || (isUserRevoked != nil && isUserRevoked(a.OwnerEmail))
 		if !isRevoked && maxAge > 0 {
 			lastAct := a.CreatedAt
 			if a.LastHeartbeatAt != nil {
@@ -349,13 +355,55 @@ func (s *Store) ListVisible(maxAge time.Duration, isUserRevoked func(string) boo
 			if copy.LastHeartbeatAt != nil {
 				lastAct = *copy.LastHeartbeatAt
 			}
-			if now.Sub(lastAct) > 45*time.Second {
+			elapsed := now.Sub(lastAct)
+			if elapsed > 45*time.Second {
 				copy.Status = types.StatusOffline
+			} else if elapsed > 9*time.Second {
+				copy.Status = types.StatusQuarantined
 			}
 		}
 		list = append(list, &copy)
 	}
 	return list
+}
+
+// QuarantineTarget marks an agent or instance as quarantined
+func (s *Store) QuarantineTarget(target, reason string) (*types.RegisteredAgent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return nil, fmt.Errorf("target is required")
+	}
+	for _, a := range s.agents {
+		if a.AgentID == target || a.AppID == target || (a.InstanceID != "" && a.InstanceID == target) {
+			a.Status = types.StatusQuarantined
+			now := time.Now()
+			a.RevokedAt = &now
+			return a, nil
+		}
+	}
+	return nil, fmt.Errorf("no agent found matching %q", target)
+}
+
+// UnquarantineTarget restores an agent or instance from quarantine
+func (s *Store) UnquarantineTarget(target string) (*types.RegisteredAgent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return nil, fmt.Errorf("target is required")
+	}
+	for _, a := range s.agents {
+		if a.AgentID == target || a.AppID == target || (a.InstanceID != "" && a.InstanceID == target) {
+			a.Status = types.StatusActive
+			a.RevokedAt = nil
+			return a, nil
+		}
+	}
+	return nil, fmt.Errorf("no agent found matching %q", target)
 }
 
 func (s *Store) TrustDomain() string {
