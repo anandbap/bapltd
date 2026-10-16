@@ -106,20 +106,24 @@ jobs:
           DIST_DIR="dist/${{ matrix.target.platform_name }}"
           mkdir -p "$DIST_DIR"
 
-          echo "Compiling bapedge..."
-          (cd bap-edge && go build -trimpath -ldflags "-s -w -X main.Version=${RELEASE_VERSION}" -o "../$DIST_DIR/bapedge${{ matrix.target.ext }}" .)
+          GIT_COMMIT="${GITHUB_SHA::7}"
+          BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          SEMVER="v${RELEASE_VERSION#v}"
+
+          echo "Compiling bapedge (Version: ${SEMVER}, Commit: ${GIT_COMMIT})..."
+          (cd bap-edge && go build -trimpath -ldflags "-s -w -X bap-edge/pkg/version.Version=${SEMVER} -X bap-edge/pkg/version.GitCommit=${GIT_COMMIT} -X bap-edge/pkg/version.BuildDate=${BUILD_DATE}" -o "../$DIST_DIR/bapedge${{ matrix.target.ext }}" .)
 
           echo "Compiling bapcontrolplane..."
-          (cd bap-controlplane && go build -trimpath -ldflags "-s -w -X main.Version=${RELEASE_VERSION}" -o "../$DIST_DIR/bapcontrolplane${{ matrix.target.ext }}" ./cmd/server)
+          (cd bap-controlplane && go build -trimpath -ldflags "-s -w -X bap-controlplane/pkg/version.Version=${SEMVER} -X bap-controlplane/pkg/version.GitCommit=${GIT_COMMIT} -X bap-controlplane/pkg/version.BuildDate=${BUILD_DATE}" -o "../$DIST_DIR/bapcontrolplane${{ matrix.target.ext }}" ./cmd/server)
 
           if [ -d "bap-gateway" ]; then
             echo "Compiling bapgateway..."
-            (cd bap-gateway && go build -trimpath -ldflags "-s -w" -o "../$DIST_DIR/bapgateway${{ matrix.target.ext }}" . || true)
+            (cd bap-gateway && go build -trimpath -ldflags "-s -w -X bap-gateway/pkg/version.Version=${SEMVER} -X bap-gateway/pkg/version.GitCommit=${GIT_COMMIT} -X bap-gateway/pkg/version.BuildDate=${BUILD_DATE}" -o "../$DIST_DIR/bapgateway${{ matrix.target.ext }}" . || true)
           fi
 
           if [ -d "bap-controlplane/cmd/dashboard" ]; then
             echo "Compiling bapdashboard..."
-            (cd bap-controlplane && go build -trimpath -ldflags "-s -w" -o "../$DIST_DIR/bapdashboard${{ matrix.target.ext }}" ./cmd/dashboard || true)
+            (cd bap-controlplane && go build -trimpath -ldflags "-s -w -X bap-controlplane/pkg/version.Version=${SEMVER} -X bap-controlplane/pkg/version.GitCommit=${GIT_COMMIT} -X bap-controlplane/pkg/version.BuildDate=${BUILD_DATE}" -o "../$DIST_DIR/bapdashboard${{ matrix.target.ext }}" ./cmd/dashboard || true)
           fi
 
       # -----------------------------------------------------------------------

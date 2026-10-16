@@ -60,28 +60,15 @@ jobs:
           pip install -r requirements-test.txt
 
       - name: Build Windows amd64 Binaries
+        shell: powershell
         run: |
-          mkdir -p dist/windows-amd64/controlplane
-          mkdir -p dist/windows-amd64/claude-client
-          cd bap-controlplane
-          go build -o ../dist/windows-amd64/bapcontrolplane.exe ./cmd/server
-          go build -o ../dist/windows-amd64/controlplane/bapcontrolplane.exe ./cmd/server
-          go build -o ../bapcontrolplane.exe ./cmd/server
-          go build -o ../dist/windows-amd64/bapdashboard.exe ./cmd/dashboard
-          go build -o ../bapdashboard.exe ./cmd/dashboard
-          cd ../bap-edge
-          go build -o ../dist/windows-amd64/bapedge.exe .
-          go build -o ../dist/windows-amd64/claude-client/bapedge.exe .
-          go build -o ../bapedge.exe .
-          go build -o ../bapmcp.exe .
-          cd ../bap-gateway
-          go build -o ../dist/windows-amd64/bapgateway.exe .
-          go build -o ../bapgateway.exe .
-          cd ../cchook
+          New-Item -ItemType Directory -Path "dist\windows-amd64\claude-client" -Force | Out-Null
+          & .\update_binaries.ps1
+          Push-Location cchook
           go build -o interceptor.exe interceptor.go
-          cp interceptor.exe ../dist/windows-amd64/interceptor.exe
-          cp interceptor.exe ../dist/windows-amd64/claude-client/interceptor.exe
-          cd ..
+          Copy-Item -Force interceptor.exe ..\dist\windows-amd64\interceptor.exe
+          Copy-Item -Force interceptor.exe ..\dist\windows-amd64\claude-client\interceptor.exe
+          Pop-Location
 
       - name: Run Full Python Test Suite (100+ Tests)
         run: |

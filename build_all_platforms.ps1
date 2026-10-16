@@ -7,12 +7,22 @@ param(
     [switch]$Archive = $true,
     [switch]$ForceRegenCerts = $false,
     [string]$Domain = "a.b.com",
-    [string]$Version = "v1.1.0"
+    [string]$Version = ""
 )
 
 $ErrorActionPreference = "Stop"
 $rootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $rootDir) { $rootDir = (Get-Location).Path }
 Set-Location $rootDir
+
+if (-not $Version) {
+    if (Test-Path (Join-Path $rootDir "bap-edge\pkg\version\version.go")) {
+        $vMatch = Select-String -Path (Join-Path $rootDir "bap-edge\pkg\version\version.go") -Pattern 'Version\s*=\s*"(v?[0-9]+\.[0-9]+\.[0-9]+)"'
+        if ($vMatch) { $Version = $vMatch.Matches[0].Groups[1].Value }
+    }
+    if (-not $Version) { $Version = "v1.1.0" }
+}
+if (-not $Version.StartsWith("v")) { $Version = "v$Version" }
 
 $gitCommit = try { (git rev-parse --short HEAD 2>$null) } catch { "dev" }
 if (-not $gitCommit) { $gitCommit = "dev" }
@@ -20,11 +30,26 @@ $buildDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 
 function Safe-CopyItem {
     param($Source, $Destination)
+    if (-not (Test-Path $Source)) { return }
+    $dstDir = Split-Path -Parent $Destination
+    if ($dstDir -and -not (Test-Path $dstDir)) {
+        New-Item -ItemType Directory -Path $dstDir -Force | Out-Null
+    }
     try {
         Microsoft.PowerShell.Management\Copy-Item -LiteralPath $Source -Destination $Destination -Force
     }
-    catch [System.IO.IOException] {
-        Write-Warning "File in use ($Destination); skipping overwrite."
+    catch {
+        # If file is locked, rotate to .old, copy fresh, and attempt cleanup
+        $tempOld = "$Destination.old"
+        Remove-Item -LiteralPath $tempOld -Force -ErrorAction SilentlyContinue
+        try {
+            Microsoft.PowerShell.Management\Move-Item -LiteralPath $Destination -Destination $tempOld -Force
+            Microsoft.PowerShell.Management\Copy-Item -LiteralPath $Source -Destination $Destination -Force
+            Remove-Item -LiteralPath $tempOld -Force -ErrorAction SilentlyContinue
+        }
+        catch {
+            Write-Warning "Could not overwrite $Destination (process locked by running service)"
+        }
     }
 }
 
@@ -109,6 +134,17 @@ foreach ($p in $platforms) {
         finally {
             Pop-Location
         }
+    }
+
+    # If building host platform (windows-amd64), synchronize root binaries
+    if ($p.Name -eq "windows-amd64") {
+        Write-Host "`n>>> Synchronizing freshly compiled Windows binaries to root workspace..." -ForegroundColor Cyan
+        Safe-CopyItem (Join-Path $platformDir "bapedge.exe") (Join-Path $rootDir "bapedge.exe")
+        Safe-CopyItem (Join-Path $platformDir "bapedge.exe") (Join-Path $rootDir "bapmcp.exe")
+        Safe-CopyItem (Join-Path $platformDir "bapedge.exe") (Join-Path $rootDir "ltd-agent.exe")
+        Safe-CopyItem (Join-Path $platformDir "bapcontrolplane.exe") (Join-Path $rootDir "bapcontrolplane.exe")
+        Safe-CopyItem (Join-Path $platformDir "bapdashboard.exe") (Join-Path $rootDir "bapdashboard.exe")
+        Safe-CopyItem (Join-Path $platformDir "bapgateway.exe") (Join-Path $rootDir "bapgateway.exe")
     }
 
     # Root files for platform
@@ -386,6 +422,9 @@ Features:
 # Clean environment
 Remove-Item Env:\GOOS -ErrorAction SilentlyContinue
 Remove-Item Env:\GOARCH -ErrorAction SilentlyContinue
+
+# Purge any stale temporary backup files from root
+Get-ChildItem -Path $rootDir -Filter "*.old" -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
 # Verify asset synchronization across all platforms and packages
 $checkScript = Join-Path $rootDir "scripts\check_stale_copies.ps1"

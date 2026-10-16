@@ -10,7 +10,10 @@ if "%1"=="-all" goto :build_all
 
 for /f "tokens=*" %%i in ('git rev-parse --short HEAD 2^>nul') do set "GIT_COMMIT=%%i"
 if "%GIT_COMMIT%"=="" set "GIT_COMMIT=dev"
-if "%BAP_VERSION%"=="" set "BAP_VERSION=v1.0.0"
+if "%BAP_VERSION%"=="" (
+    for /f "tokens=4" %%v in ('python "%ROOT_DIR%scripts\bump_version.py" --current 2^>nul') do set "BAP_VERSION=v%%v"
+)
+if "%BAP_VERSION%"=="" set "BAP_VERSION=v1.1.0"
 for /f "tokens=*" %%i in ('powershell -NoProfile -Command "(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')"') do set "BUILD_DATE=%%i"
 
 echo [0/6] Ensuring BAP Root CA and TLS credentials...
@@ -26,13 +29,18 @@ if %ERRORLEVEL% neq 0 (
     echo Failed to build bapcontrolplane.exe
     exit /b 1
 )
+if exist "%ROOT_DIR%bapcontrolplane.exe" move /y "%ROOT_DIR%bapcontrolplane.exe" "%ROOT_DIR%bapcontrolplane.old" >nul 2>&1
 copy /y bapcontrolplane.exe "%ROOT_DIR%bapcontrolplane.exe" >nul
+del /f /q "%ROOT_DIR%bapcontrolplane.old" >nul 2>&1
+
 go build -trimpath -ldflags "-s -w -X 'bap-controlplane/pkg/version.Version=%BAP_VERSION%' -X 'bap-controlplane/pkg/version.GitCommit=%GIT_COMMIT%' -X 'bap-controlplane/pkg/version.BuildDate=%BUILD_DATE%'" -o bapdashboard.exe ./cmd/dashboard
 if %ERRORLEVEL% neq 0 (
     echo Failed to build bapdashboard.exe
     exit /b 1
 )
+if exist "%ROOT_DIR%bapdashboard.exe" move /y "%ROOT_DIR%bapdashboard.exe" "%ROOT_DIR%bapdashboard.old" >nul 2>&1
 copy /y bapdashboard.exe "%ROOT_DIR%bapdashboard.exe" >nul
+del /f /q "%ROOT_DIR%bapdashboard.old" >nul 2>&1
 
 echo [2/6] Building bap-edge (Version: %BAP_VERSION%, Commit: %GIT_COMMIT%)...
 cd /d "%ROOT_DIR%bap-edge"
@@ -41,8 +49,15 @@ if %ERRORLEVEL% neq 0 (
     echo Failed to build bapedge.exe
     exit /b 1
 )
-copy /y bapedge.exe "%ROOT_DIR%bapedge.exe" >nul 2>&1
-copy /y bapedge.exe "%ROOT_DIR%bapmcp.exe" >nul 2>&1
+if exist "%ROOT_DIR%bapedge.exe" move /y "%ROOT_DIR%bapedge.exe" "%ROOT_DIR%bapedge.old" >nul 2>&1
+copy /y bapedge.exe "%ROOT_DIR%bapedge.exe" >nul
+del /f /q "%ROOT_DIR%bapedge.old" >nul 2>&1
+
+if exist "%ROOT_DIR%bapmcp.exe" move /y "%ROOT_DIR%bapmcp.exe" "%ROOT_DIR%bapmcp.old" >nul 2>&1
+copy /y bapedge.exe "%ROOT_DIR%bapmcp.exe" >nul
+del /f /q "%ROOT_DIR%bapmcp.old" >nul 2>&1
+
+copy /y bapedge.exe "%ROOT_DIR%ltd-agent.exe" >nul 2>&1
 
 echo [3/6] Building bap-gateway (Version: %BAP_VERSION%, Commit: %GIT_COMMIT%)...
 cd /d "%ROOT_DIR%bap-gateway"
@@ -51,7 +66,10 @@ if %ERRORLEVEL% neq 0 (
     echo Failed to build bapgateway.exe
     exit /b 1
 )
+if exist "%ROOT_DIR%bapgateway.exe" move /y "%ROOT_DIR%bapgateway.exe" "%ROOT_DIR%bapgateway.old" >nul 2>&1
 copy /y bapgateway.exe "%ROOT_DIR%bapgateway.exe" >nul
+del /f /q "%ROOT_DIR%bapgateway.old" >nul 2>&1
+
 
 echo [4/6] Building cchook (Claude Code interceptor)...
 cd /d "%ROOT_DIR%cchook"
@@ -106,6 +124,8 @@ if %ERRORLEVEL% neq 0 (
     echo [ERROR] Stale asset audit detected mismatches!
     exit /b %ERRORLEVEL%
 )
+
+del /f /q "%ROOT_DIR%*.old" >nul 2>&1
 
 echo All Windows binaries built and synchronized successfully.
 echo (Tip: Run 'build_binaries.bat --all' or 'build_all_platforms.bat' to build Linux and macOS binaries)

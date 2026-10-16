@@ -99,4 +99,8 @@ if (Test-Path "dist\windows-amd64") {
     }
 }
 
+# Purge any stale temporary backup files from root
+Get-ChildItem -Path $rootDir -Filter "*.old" -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+
 Write-Host ">>> Binaries successfully compiled and updated to version $Version." -ForegroundColor Green
+
