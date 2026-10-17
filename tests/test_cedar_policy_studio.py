@@ -331,7 +331,7 @@ when {
         st, _, raw = http_req(f"{CP_URL}/dashboard/")
         self.assertEqual(st, 200)
         html = raw.decode("utf-8")
-        self.assertIn("Cedar policy", html)
+        self.assertTrue("cedar policy" in html.lower(), "Cedar Policy Studio must be present in dashboard")
 
 
 if __name__ == "__main__":

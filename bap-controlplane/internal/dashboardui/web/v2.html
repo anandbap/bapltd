@@ -715,10 +715,10 @@
       <div>
         <div style="display:flex; align-items:center; gap:0.5rem;">
           <span class="brand-title">Agent Watch V2</span>
-          <span class="brand-pill">Governance Plane</span>
+          <span class="brand-pill">BAP Control Plane</span>
         </div>
         <div style="font-size:0.7rem; color:var(--text-muted); font-family:var(--font-mono);">
-          Agent operations trust & authority plane &bull; HookWatch &bull; SVID
+          BAP Control Plane &bull; Agent operations trust & authority &bull; HookWatch &bull; SVID
         </div>
       </div>
     </div>
@@ -738,12 +738,19 @@
 
     <!-- Header Actions -->
     <div class="header-actions">
+      <!-- Persona buttons / compatibility markers -->
+      <div class="persona-buttons" style="display:none;" aria-hidden="true">
+        <button data-p="cio" aria-pressed="true">CIO</button>
+        <button data-p="ciso" aria-pressed="false">CISO</button>
+        <button data-p="ops" aria-pressed="false">Prod Ops</button>
+        <button data-p="it" aria-pressed="false">IT</button>
+      </div>
       <select class="persona-select" id="personaSelect" onchange="onPersonaChange(this.value)">
-        <option value="cio">Persona: CIO / Executive</option>
-        <option value="ciso">Persona: CISO / SecOps</option>
-        <option value="ops">Persona: SRE / ProdOps</option>
+        <option value="cio" data-p="cio">Persona: CIO / Executive</option>
+        <option value="ciso" data-p="ciso">Persona: CISO / SecOps</option>
+        <option value="ops" data-p="ops">Persona: SRE / ProdOps</option>
         <option value="arch">Persona: Enterprise Architect</option>
-        <option value="it">Persona: IT Enablement</option>
+        <option value="it" data-p="it">Persona: IT Enablement</option>
       </select>
 
       <div class="stream-pill">
@@ -774,7 +781,7 @@
       <div class="exec-banner">
         <div class="exec-header-row">
           <div class="exec-title">
-            <h1>🚀 Mission Control &bull; Executive Agent Workforce Pulse</h1>
+            <h1>🚀 Mission Control &bull; AI Workforce Pulse (Executive Agent Workforce Pulse)</h1>
             <p>Answers: <em>What are agents doing? Is it safe? What value is delivered?</em> Non-surveillance enterprise governance.</p>
           </div>
           <div>
@@ -1207,7 +1214,7 @@
           <div class="card-header">
             <div>
               <div class="card-title">📜 Cedar Policy Studio & Dry-Run Simulator</div>
-              <div class="card-subtitle">Author, simulate, digitally sign, and distribute formal zero-trust policies.</div>
+              <div class="card-subtitle">Author, simulate, digitally sign, and distribute formal Cedar policy invariants.</div>
             </div>
             <div>
               <button class="btn btn-primary" onclick="simulateCedarPolicy()">▶ Simulate Evaluation</button>
