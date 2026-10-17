@@ -146,23 +146,62 @@ def post_json(url, data):
     except Exception as e:
         return 0, {"error": str(e)}
 
+def get_agent_intent_and_prompt(agent):
+    role = (agent.get("role") or "").lower()
+    if "front" in role or "ui" in role or "react" in role:
+        return "FEATURE_ENHANCEMENT", "Build responsive TypeScript React UI components and navigation flow"
+    elif "back" in role or "payment" in role or "api" in role or "ledger" in role:
+        return "REFACTOR", "Optimize payment gateway reconciliation pipeline and database queries"
+    elif "cloud" in role or "sre" in role or "infra" in role or "k8s" in role:
+        return "PRODUCTION_OPS", "Monitor Kubernetes pod autoscaler metrics and VPC egress boundary"
+    elif "sec" in role or "audit" in role or "iam" in role:
+        return "SECURITY_AUDIT", "Audit IAM wildcard policies and verify container CVE vulnerability posture"
+    elif "data" in role or "analytics" in role or "etl" in role:
+        return "DATA_ANALYTICS", "Execute dbt data transformation models and verify schema lineage"
+    elif "doc" in role or "techwrite" in role:
+        return "DOCUMENTATION", "Author OpenAPI 3.1 documentation and architectural runbooks"
+    elif "support" in role or "help" in role:
+        return "AUTOMATION", "Triage customer ticket escalations and auto-generate resolution steps"
+    return "FEATURE_ENHANCEMENT", f"Autonomous workload execution for {agent.get('role', 'Engineering')}"
+
 def enroll_fleet(server_url, agents):
+    import hashlib
     print(f"[*] Enrolling {len(agents)} autonomous agent workloads into BAP Control Plane ({server_url})...")
     enrolled = 0
     for a in agents:
+        intent_cat, task_prompt = get_agent_intent_and_prompt(a)
+        sess_id = f"sess-{a['instance_id']}-{random.randint(1000, 9999)}"
         payload = {
-            "session_id": f"sess-{a['instance_id']}-{random.randint(1000, 9999)}",
+            "session_id": sess_id,
             "app_id": a["app_id"],
+            "agent_name": f"{a.get('role', 'Developer Agent')} ({a['name']})",
             "instance_id": a["instance_id"],
             "user_id": a["user_id"],
             "user_email": a["user_email"],
             "spiffe_id": a["spiffe_id"],
             "client_pid": a["pid"],
-            "hostname": a["hostname"]
+            "hostname": a["hostname"],
+            "user_prompt": task_prompt,
+            "intent": {
+                "primary": intent_cat,
+                "confidence": 0.95,
+                "classifier_version": "bap-intent-rules-v1",
+                "source": "bap-agent"
+            }
         }
         code, resp = post_json(f"{server_url}/api/v1/sessions/start", payload)
         if code == 200:
             enrolled += 1
+            prompt_hash = hashlib.sha256(task_prompt.encode("utf-8")).hexdigest()
+            prompt_payload = {
+                "session_id": sess_id,
+                "user_prompt": task_prompt,
+                "producer": "bap-agent",
+                "prompt_hash": prompt_hash,
+                "prompt_capture_enabled": True,
+                "intent": payload["intent"]
+            }
+            post_json(f"{server_url}/api/v1/sessions/prompt", prompt_payload)
             print(f"  [+] {a['name']:<28} | {a['app_id']:<12} | PID: {a['pid']:<6} | {a['spiffe_id']}")
         else:
             print(f"  [-] Failed to enroll {a['name']}: {resp}")

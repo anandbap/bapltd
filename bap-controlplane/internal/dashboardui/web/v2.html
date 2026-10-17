@@ -2173,9 +2173,9 @@ Click "Simulate Evaluation" to run Cedar formal invariants against current fleet
         }
 
         if (liveRes.status === 'fulfilled' && liveRes.value) {
-          AppState.activeAgents = liveRes.value.agents || (Array.isArray(liveRes.value) ? liveRes.value : []);
+          AppState.activeAgents = liveRes.value.agents || liveRes.value.activities || (Array.isArray(liveRes.value) ? liveRes.value : []);
           renderFleetTable(AppState.activeAgents);
-          renderWorkstreams(AppState.activeAgents);
+          renderWorkstreams(AppState.activeAgents, AppState.actSummary);
         } else if (AppState.isDemo) {
           const mockAgents = [
             { id: 'agent-46ce-01', svid: 'spiffe://bap.local/agent/coder-prod', host: 'DESKTOP-LTD-WIN32', layer: 'Layer A', intent: 'Build / Engineering', status: 'Governed' },
@@ -2186,7 +2186,9 @@ Click "Simulate Evaluation" to run Cedar formal invariants against current fleet
           ];
           AppState.activeAgents = mockAgents;
           renderFleetTable(mockAgents);
-          renderWorkstreams(mockAgents);
+          renderWorkstreams(mockAgents, AppState.actSummary);
+        } else {
+          renderWorkstreams([], AppState.actSummary);
         }
 
         if (auditRes.status === 'fulfilled' && auditRes.value) {
@@ -2230,26 +2232,59 @@ Click "Simulate Evaluation" to run Cedar formal invariants against current fleet
     }
 
     // Render Canonical Workstreams
-    function renderWorkstreams(agents) {
+    function renderWorkstreams(agents, summary) {
       const container = document.getElementById('workstreamContainer');
+      if (!container) return;
       container.innerHTML = '';
 
-      const counts = { build: 0, operate: 0, analyze: 0, document: 0, support: 0, unknown: 0 };
-      const total = agents.length || 1;
+      agents = (agents && agents.length > 0) ? agents : (AppState.activeAgents || []);
+      summary = summary || AppState.actSummary || {};
 
-      agents.forEach(a => {
-        const intent = (a.intent || '').toLowerCase();
-        if (intent.includes('build') || intent.includes('feature') || intent.includes('eng')) counts.build++;
-        else if (intent.includes('operate') || intent.includes('sre') || intent.includes('deploy')) counts.operate++;
-        else if (intent.includes('analyze') || intent.includes('sec') || intent.includes('triage')) counts.analyze++;
-        else if (intent.includes('doc')) counts.document++;
-        else if (intent.includes('support') || intent.includes('help')) counts.support++;
-        else counts.unknown++;
-      });
+      const counts = { build: 0, operate: 0, analyze: 0, document: 0, support: 0, unknown: 0 };
+      let total = agents.length;
+
+      // 1. Tally directly from agent instances
+      if (agents.length > 0) {
+        agents.forEach(a => {
+          const intent = ((a.intent || '') + ' ' + (a.intent_category || '') + ' ' + (a.prompt_summary || '') + ' ' + (a.agent_type || '') + ' ' + (a.role || '') + ' ' + (a.business_unit || '')).toLowerCase();
+          if (intent.includes('build') || intent.includes('feature') || intent.includes('refactor') || intent.includes('eng') || intent.includes('code') || intent.includes('bug') || intent.includes('test') || intent.includes('patch')) {
+            counts.build++;
+          } else if (intent.includes('operate') || intent.includes('sre') || intent.includes('deploy') || intent.includes('prod') || intent.includes('infra') || intent.includes('k8s') || intent.includes('auto') || intent.includes('workflow')) {
+            counts.operate++;
+          } else if (intent.includes('analyze') || intent.includes('sec') || intent.includes('triage') || intent.includes('investigat') || intent.includes('audit') || intent.includes('risk') || intent.includes('data') || intent.includes('etl') || intent.includes('research')) {
+            counts.analyze++;
+          } else if (intent.includes('doc') || intent.includes('readme') || intent.includes('guide') || intent.includes('write')) {
+            counts.document++;
+          } else if (intent.includes('support') || intent.includes('help') || intent.includes('ticket') || intent.includes('crm') || intent.includes('it-')) {
+            counts.support++;
+          } else {
+            counts.unknown++;
+          }
+        });
+      }
+
+      // 2. Fallback to summary category_mix / intent_mix if individual agent telemetry was summarized or empty
+      const catMix = summary.category_mix || summary.intent_mix;
+      if (total === 0 && catMix && Object.keys(catMix).length > 0) {
+        const totalActive = summary.total_active_agents || summary.completed_work_count || 1;
+        total = totalActive;
+        for (const [k, v] of Object.entries(catMix)) {
+          const key = k.toLowerCase();
+          const count = Math.round((v / 100) * totalActive) || (v > 0 ? 1 : 0);
+          if (key.includes('feature') || key.includes('bug') || key.includes('test') || key.includes('build')) counts.build += count;
+          else if (key.includes('prod') || key.includes('operate') || key.includes('auto') || key.includes('sre')) counts.operate += count;
+          else if (key.includes('sec') || key.includes('data') || key.includes('research') || key.includes('analyze') || key.includes('investigat')) counts.analyze += count;
+          else if (key.includes('doc')) counts.document += count;
+          else if (key.includes('support') || key.includes('help')) counts.support += count;
+          else counts.unknown += count;
+        }
+      }
+
+      const denom = total > 0 ? total : 1;
 
       CANONICAL_WORKSTREAMS.forEach(ws => {
         const count = counts[ws.id] || 0;
-        const pct = Math.round((count / total) * 100);
+        const pct = total > 0 ? Math.round((count / denom) * 100) : 0;
 
         const card = document.createElement('div');
         card.className = 'workstream-card';
@@ -2260,7 +2295,7 @@ Click "Simulate Evaluation" to run Cedar formal invariants against current fleet
             <span class="ws-badge" style="background:${ws.color};"></span>
           </div>
           <div class="ws-pct" style="color:${ws.color};">${pct}%</div>
-          <div class="ws-agents">${count} verified agents</div>
+          <div class="ws-agents">${count} verified agent${count === 1 ? '' : 's'}</div>
         `;
         container.appendChild(card);
       });
