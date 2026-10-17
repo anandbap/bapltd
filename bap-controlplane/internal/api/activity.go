@@ -118,6 +118,15 @@ func (s *Server) sessionToActivityEvent(sess *session.Session) *types.AgentActiv
 	if sess.Intent.Primary != "" {
 		intentCat = s.classifyIntentCategory(sess.Intent.Primary, sess.Intent.Confidence)
 	}
+	if intentCat == "Other / Unclassified" && sess.UserPrompt != "" {
+		intentCat = s.classifyIntentCategory(sess.UserPrompt, 1.0)
+	}
+	if intentCat == "Other / Unclassified" && sess.AgentName != "" {
+		intentCat = s.classifyIntentCategory(sess.AgentName, 1.0)
+	}
+	if intentCat == "Other / Unclassified" && sess.AppID != "" {
+		intentCat = s.classifyIntentCategory(sess.AppID, 1.0)
+	}
 	devLevel := "NONE"
 	if sess.DeniedCount > 0 {
 		devLevel = "ELEVATED"
@@ -695,6 +704,15 @@ func (s *Server) handleActivitySummary(w http.ResponseWriter, r *http.Request) {
 
 			// Classify into canonical extensible category (BAP-477)
 			cat := s.classifyIntentCategory(sess.Intent.Primary, sess.Intent.Confidence)
+			if cat == "Other / Unclassified" && sess.UserPrompt != "" {
+				cat = s.classifyIntentCategory(sess.UserPrompt, 1.0)
+			}
+			if cat == "Other / Unclassified" && sess.AgentName != "" {
+				cat = s.classifyIntentCategory(sess.AgentName, 1.0)
+			}
+			if cat == "Other / Unclassified" && sess.AppID != "" {
+				cat = s.classifyIntentCategory(sess.AppID, 1.0)
+			}
 			categoryTally[cat]++
 			intentTally[cat]++
 

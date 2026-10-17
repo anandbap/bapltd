@@ -2064,7 +2064,7 @@ Click "Simulate Evaluation" to run Cedar formal invariants against current fleet
       initSSE();
       loadData();
       renderAtlasTable();
-      setInterval(loadData, 10000);
+      setInterval(loadData, 2000);
     });
 
     function initRoute() {
@@ -2110,12 +2110,16 @@ Click "Simulate Evaluation" to run Cedar formal invariants against current fleet
           document.getElementById('streamDot').classList.remove('offline');
           document.getElementById('streamStatus').textContent = 'LIVE STREAM';
         };
-        evtSource.onmessage = (e) => {
+        const onStreamMsg = (e) => {
           try {
             const data = JSON.parse(e.data);
             handleStreamEvent(data);
           } catch(err) {}
         };
+        evtSource.addEventListener('activity', onStreamMsg);
+        evtSource.addEventListener('snapshot', onStreamMsg);
+        evtSource.addEventListener('message', onStreamMsg);
+        evtSource.onmessage = onStreamMsg;
         evtSource.onerror = () => {
           AppState.streamConnected = false;
           document.getElementById('streamDot').classList.add('offline');
@@ -2128,10 +2132,35 @@ Click "Simulate Evaluation" to run Cedar formal invariants against current fleet
     }
 
     function handleStreamEvent(event) {
-      if (event.type === 'decision' || event.action) {
+      if (!event) return;
+      if (Array.isArray(event)) {
+        event.forEach(e => handleSingleEvent(e));
+      } else {
+        handleSingleEvent(event);
+      }
+      renderFleetTable(AppState.activeAgents);
+      renderWorkstreams(AppState.activeAgents, AppState.actSummary);
+    }
+
+    function handleSingleEvent(event) {
+      if (!event) return;
+      if (event.type === 'decision' || event.action || event.policy_decision) {
         AppState.decisions.unshift(event);
         if (AppState.decisions.length > 50) AppState.decisions.pop();
         renderDecisionsTable();
+      }
+      const agentId = event.agent_id || event.session_id;
+      if (agentId) {
+        const idx = AppState.activeAgents.findIndex(a => (a.agent_id || a.id || a.session_id) === agentId);
+        if (idx >= 0) {
+          AppState.activeAgents[idx] = Object.assign({}, AppState.activeAgents[idx], event);
+        } else {
+          AppState.activeAgents.unshift(event);
+        }
+        const activeCount = AppState.activeAgents.filter(a => a.action_status !== 'completed' && a.action_status !== 'closed' && a.status !== 'closed').length;
+        if (activeCount > 0) {
+          document.getElementById('mcActiveAgents').textContent = activeCount;
+        }
       }
     }
 

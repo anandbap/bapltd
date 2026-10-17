@@ -1966,6 +1966,9 @@ func (s *Server) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	actEv := s.sessionToActivityEvent(sess)
+	actEv.ActionStatus = "working"
+	s.IngestActivity(actEv)
 	s.writeTelemetry(w, r, sess)
 }
 
