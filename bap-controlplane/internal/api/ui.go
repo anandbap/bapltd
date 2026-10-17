@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"strings"
@@ -11,10 +12,11 @@ import (
 )
 
 func (s *Server) registerControlPlaneRoutes() {
-	// BAP-210: Mount unified CIO Cockpit (React Dashboard)
+	// BAP-210 & Agent Watch V2: Mount Mission Control, Trust Command & Capability Atlas
 	webFS := dashboardui.AssetsFS()
 	files := http.StripPrefix("/dashboard/", http.FileServer(http.FS(webFS)))
-	s.mux.HandleFunc("/dashboard/", func(w http.ResponseWriter, r *http.Request) {
+
+	setAuthCookie := func(w http.ResponseWriter, r *http.Request) {
 		if isLoopbackAddress(r.RemoteAddr) && s.adminToken != "" {
 			http.SetCookie(w, &http.Cookie{
 				Name:     "bap_admin_token",
@@ -23,6 +25,55 @@ func (s *Server) registerControlPlaneRoutes() {
 				SameSite: http.SameSiteLaxMode,
 				HttpOnly: false,
 			})
+		}
+	}
+
+	serveV2 := func(w http.ResponseWriter, r *http.Request) {
+		setAuthCookie(w, r)
+		v2Data, err := fs.ReadFile(webFS, "v2.html")
+		if err != nil {
+			http.Error(w, "v2 asset unavailable", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(v2Data)
+	}
+
+	serveV1 := func(w http.ResponseWriter, r *http.Request) {
+		setAuthCookie(w, r)
+		v1Data, err := fs.ReadFile(webFS, "index.html")
+		if err != nil {
+			http.Error(w, "legacy asset unavailable", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(v1Data)
+	}
+
+	s.mux.HandleFunc("/dashboard/v2", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/dashboard/v2/", http.StatusTemporaryRedirect)
+	})
+	s.mux.HandleFunc("/dashboard/v2/", func(w http.ResponseWriter, r *http.Request) {
+		serveV2(w, r)
+	})
+	s.mux.HandleFunc("/dashboard/legacy", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/dashboard/?v=legacy", http.StatusTemporaryRedirect)
+	})
+	s.mux.HandleFunc("/dashboard/legacy/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/dashboard/?v=legacy", http.StatusTemporaryRedirect)
+	})
+
+	s.mux.HandleFunc("/dashboard/", func(w http.ResponseWriter, r *http.Request) {
+		setAuthCookie(w, r)
+		if r.URL.Path == "/dashboard/" {
+			if r.URL.Query().Get("v") == "legacy" || r.URL.Query().Get("v") == "v1" {
+				serveV1(w, r)
+			} else {
+				serveV2(w, r)
+			}
+			return
 		}
 		files.ServeHTTP(w, r)
 	})
