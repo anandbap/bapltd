@@ -11,7 +11,7 @@ import (
 var (
 	// Version is the semantic release version (e.g. "v1.0.0").
 	// Injected at compile-time via -ldflags "-X 'bap-edge/pkg/version.Version=...'"
-	Version = "v1.1.3"
+	Version = "v1.2.0"
 
 	// GitCommit is the git SHA hash.
 	GitCommit = "dev"
