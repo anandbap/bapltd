@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BAP Enterprise SOC Detection Rules",
+  "version": "1.0.0",
+  "rules": [
+    {
+      "rule_id": "BAP-DET-001",
+      "name": "Denied Prohibited Destructive Action by AI Agent",
+      "severity": "HIGH",
+      "category": "Execution / Impact",
+      "description": "Triggers when an autonomous coding agent attempts to execute an unpermitted destructive command (e.g. recursive deletion, database wipe, cloud teardown).",
+      "condition": "outcome == 'DENY' AND (act IN ['rm -rf', 'drop database', 'aws s3 rm', 'terraform destroy', 'truncate'])",
+      "playbook": "Verify developer session, inspect task proposal lineage in BAP Mission Control, revoke session if unapproved."
+    },
+    {
+      "rule_id": "BAP-DET-002",
+      "name": "Honeytoken Canary Exfiltration Tripped",
+      "severity": "CRITICAL",
+      "category": "Credential Access / Discovery",
+      "description": "Triggers when an agent process attempts to read or transmit a planted BAP tripwire honeytoken (.bap_canary_token / CORP_CANARY_TOKEN).",
+      "condition": "event_type == 'CANARY_TRIPPED' OR res CONTAINS '.bap_canary_token'",
+      "playbook": "Immediate automated session freeze; isolate agent runtime host and initiate compromised credential sweep."
+    },
+    {
+      "rule_id": "BAP-DET-003",
+      "name": "Unmediated Shell or Socket Bypass Attempt",
+      "severity": "HIGH",
+      "category": "Defense Evasion",
+      "description": "Triggers when an agent process attempts to bypass BAP Edge mediation using raw network sockets, proxy environment unsets, or direct curls.",
+      "condition": "event_type == 'BYPASS_ATTEMPT' OR msg CONTAINS 'AntiBypassViolation'",
+      "playbook": "Inspect command ancestry tree; ensure Windows restricted token / Landlock boundary contained the breakout."
+    },
+    {
+      "rule_id": "BAP-DET-004",
+      "name": "Scope Escalation Attempt in OAuth 2.0 Token Exchange",
+      "severity": "HIGH",
+      "category": "Privilege Escalation",
+      "description": "Triggers when an RFC 8693 token exchange request specifies scopes exceeding the authorized proposal grant boundary.",
+      "condition": "event_type == 'TOKEN_EXCHANGE_DENIED' AND msg CONTAINS 'privilege escalation blocked'",
+      "playbook": "Review agent task scope; investigate whether prompt injection induced the agent to request broader administrative authority."
+    },
+    {
+      "rule_id": "BAP-DET-005",
+      "name": "Unattested Workload or SPIFFE Identity Mismatch",
+      "severity": "CRITICAL",
+      "category": "Initial Access / Impersonation",
+      "description": "Triggers when a request presents an unregistered SPIFFE ID, expired SVID, or invalid certificate serial.",
+      "condition": "event_type == 'ATTESTATION_FAILED' OR outcome == 'DENY_INVALID_SVID'",
+      "playbook": "Block workload enrollment; check endpoint attestation TPM / platform posture; verify binary hash integrity."
+    }
+  ]
+}

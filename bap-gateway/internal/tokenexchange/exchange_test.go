@@ -58,6 +58,63 @@ func TestTokenExchangeGateway_BrokerDownstreamCredential(t *testing.T) {
 	// Unapproved service: attacker-service
 	_, errUnapproved := gw.BrokerDownstreamCredential("unapproved-service", "dev", "task-002", "sess-123", "grant-fresh-002")
 	if errUnapproved == nil {
-		t.Fatal("expected unapproved service to fail")
+		t.Fatal("expected unapproved service to be rejected")
+	}
+}
+
+func TestTokenExchangeGateway_RFC8693Exchange(t *testing.T) {
+	gw := NewTokenExchangeGateway("test-secret-rfc8693-key")
+
+	req := RFC8693TokenExchangeRequest{
+		GrantType:        RFC8693GrantTypeTokenExchange,
+		Resource:         "https://api.github.com",
+		Audience:         "https://api.github.com",
+		Scope:            "repo:read issues:read",
+		AuthorizedScopes: "repo:read issues:read repo:write",
+		SubjectToken:     "bap-grant-single-use-7788",
+		SubjectTokenType: RFC8693TokenTypeAccessToken,
+		SessionID:        "sess-copilot-01",
+		TaskID:           "task-code-review",
+	}
+
+	// 1. Successful RFC 8693 exchange
+	resp, err := gw.ExchangeRFC8693Token(req)
+	if err != nil {
+		t.Fatalf("expected RFC 8693 exchange to succeed, got: %v", err)
+	}
+	if resp.TokenType != "Bearer" || resp.ExpiresIn != 300 {
+		t.Fatalf("unexpected token response format: %+v", resp)
+	}
+	if resp.Scope != "repo:read issues:read" {
+		t.Fatalf("expected scope 'repo:read issues:read', got %s", resp.Scope)
+	}
+
+	// 2. Replay attack rejection (subject token burned)
+	_, errReplay := gw.ExchangeRFC8693Token(req)
+	if errReplay == nil {
+		t.Fatalf("expected replay attack to be rejected with burned token")
+	}
+
+	// 3. Scope escalation rejection
+	escalationReq := RFC8693TokenExchangeRequest{
+		GrantType:        RFC8693GrantTypeTokenExchange,
+		Resource:         "https://api.github.com",
+		Scope:            "admin:org repo:delete", // Unauthorized scope
+		AuthorizedScopes: "repo:read",
+		SubjectToken:     "bap-grant-single-use-9999",
+		SubjectTokenType: RFC8693TokenTypeAccessToken,
+	}
+	_, errEscalation := gw.ExchangeRFC8693Token(escalationReq)
+	if errEscalation == nil {
+		t.Fatalf("expected scope escalation attempt to be blocked")
+	}
+
+	// 4. Invalid grant type rejection
+	invalidGrantReq := req
+	invalidGrantReq.GrantType = "authorization_code"
+	invalidGrantReq.SubjectToken = "bap-grant-fresh-1111"
+	_, errGrantType := gw.ExchangeRFC8693Token(invalidGrantReq)
+	if errGrantType == nil {
+		t.Fatalf("expected invalid grant_type to be rejected")
 	}
 }

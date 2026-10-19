@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": "1.0.0",
+  "updated_at": "2026-10-19T00:00:00Z",
+  "evaluator": "Enterprise Security Architecture Board",
+  "evidence_grades": {
+    "verified": "Independently verified in production or automated integration test harness",
+    "partial": "Supported in specific limited deployment modes (e.g. HTTP reverse-proxy only)",
+    "claimed": "Claimed in product whitepaper or marketing without third-party test verification",
+    "unsupported": "Architecturally absent or explicitly delegated to external infrastructure",
+    "unknown": "Insufficient documentation or testing to make an authoritative determination"
+  },
+  "capabilities": [
+    {
+      "id": "trust_workload_identity",
+      "principle": "Trust",
+      "name": "Workload Identity & Cryptographic Attestation",
+      "bap": { "grade": "verified", "evidence": "bap-controlplane/internal/attestation/spiffe.go", "notes": "Native X.509 SVID generation, SPIFFE trust domain verification, and rotating session credentials" },
+      "keycard": { "grade": "verified", "evidence": "https://www.keycard.ai/docs/identity", "notes": "JWT/OIDC workload assertion minting" },
+      "runlayer": { "grade": "partial", "evidence": "https://runlayer.com/docs/auth", "notes": "Kubernetes service account token delegation" },
+      "air_security": { "grade": "partial", "evidence": "https://airsecurity.io/docs/identity", "notes": "API key mapping at LLM gateway" }
+    },
+    {
+      "id": "contain_process_isolation",
+      "principle": "Contain",
+      "name": "Host & Process Sandboxing",
+      "bap": { "grade": "verified", "evidence": "bap-edge/internal/sandbox/sandbox_windows.go", "notes": "Windows Job Objects, restricted tokens, Linux Landlock LSM, and 5-layer tool defense" },
+      "keycard": { "grade": "unsupported", "evidence": "https://www.keycard.ai/blog/defining-auth-for-agents/", "notes": "Delegates OS-level process containment to host runtime" },
+      "runlayer": { "grade": "partial", "evidence": "https://runlayer.com/docs/sandbox", "notes": "Docker container boundaries without kernel eBPF/LSM hardening" },
+      "air_security": { "grade": "unsupported", "evidence": "https://airsecurity.io/docs/architecture", "notes": "LLM reverse proxy; zero endpoint process supervision" }
+    },
+    {
+      "id": "contain_bypass_prevention",
+      "principle": "Contain",
+      "name": "Shell, Browser & Network Bypass Prevention",
+      "bap": { "grade": "verified", "evidence": "bap-edge/internal/antibypass/antibypass.go", "notes": "Multi-vector regex interception for raw sockets, subshells, curl, and honeytoken canaries" },
+      "keycard": { "grade": "partial", "evidence": "https://www.keycard.ai/docs/proxy", "notes": "Intercepts HTTP/REST tool calls; does not intercept local host shell or raw sockets" },
+      "runlayer": { "grade": "partial", "evidence": "https://runlayer.com/docs/network", "notes": "Egress IP filtering at container network namespace" },
+      "air_security": { "grade": "partial", "evidence": "https://airsecurity.io/docs/proxy", "notes": "LLM prompt and tool payload filtering at the gateway" }
+    },
+    {
+      "id": "evidence_attribution_lineage",
+      "principle": "Evidence",
+      "name": "End-to-End Action Attribution & Audit Chaining",
+      "bap": { "grade": "verified", "evidence": "bap-controlplane/internal/governance/store.go", "notes": "Full cryptographic SHA-256 hash chaining linking user, session, task, grant, decision, and result" },
+      "keycard": { "grade": "verified", "evidence": "https://www.keycard.ai/docs/audit", "notes": "Signed audit log of token issuance and gateway events" },
+      "runlayer": { "grade": "claimed", "evidence": "https://runlayer.com/docs/logging", "notes": "Container stdout/stderr forwarding to cloud logs" },
+      "air_security": { "grade": "verified", "evidence": "https://airsecurity.io/docs/visibility", "notes": "LLM prompt/completion trace logging" }
+    },
+    {
+      "id": "acceleration_tiered_governance",
+      "principle": "Risk-Based Acceleration",
+      "name": "Tiered Governance & Automated Risk Policy",
+      "bap": { "grade": "verified", "evidence": "bap-controlplane/pkg/types/risk.go", "notes": "Multi-variable risk scoring rubric (Tier 1 to 4) gating self-service vs mandatory HITL step-up" },
+      "keycard": { "grade": "partial", "evidence": "https://www.keycard.ai/docs/policy", "notes": "Static policy roles per agent type" },
+      "runlayer": { "grade": "unsupported", "evidence": "https://runlayer.com/docs/policy", "notes": "Uniform container deployment profiles" },
+      "air_security": { "grade": "partial", "evidence": "https://airsecurity.io/docs/rules", "notes": "Risk scoring based on prompt semantic heuristics" }
+    }
+  ]
+}

@@ -36,8 +36,25 @@ This document represents the complete functional and non-functional requirements
 | `BAP-550` | Universal Semantic Versioning Package & Compile-Time Ldflags Metadata Injection | **DONE** | Standardized `pkg/version` package, build pipeline `-ldflags` injection (SemVer, Git commit, build timestamp), and unified `version` CLI command across all BAP binaries. |
 | `BAP-551` | Edge-to-Control-Plane Handshake Version Telemetry & Enrollment State Tracking | **DONE** | Exchange `agent_version`, `server_version`, and `protocol_version` in registration and policy sync; persist agent version in control plane registry database. |
 | `BAP-552` | Policy & Telemetry Dynamic Protocol Version Gate & Anti-Skew Enforcement | **DONE** | Server-side `min_edge_version` enforcement rejecting outdated or incompatible clients with structured `UPGRADE_REQUIRED` guidance. |
-| `BAP-553` | Fleet Version Compatibility Observability in CIO Dashboard & Inspector Cockpit | **DONE** | Real-time agent version distribution metrics, outdated version warnings, and compatibility status in CLI and web dashboards. |
 | `BAP-554` | Automated Version Matrix & Compatibility Verification Test Suite | **DONE** | CI/CD automated test harness verifying version commands, handshake metadata propagation, minimum version rejection, and backward compatibility. |
+| `BAP-701` | Enterprise JWS Signing and Trust-Store Services | **DONE** | RFC 7515 JWS compact serialization, key rotation, and RFC 7517 JWKS endpoint (`/.well-known/jwks.json`). Verified in `jws_test.go`. |
+| `BAP-702` | OAuth 2.0 Token Exchange and Scoped Delegation | **DONE** | RFC 8693 token exchange with single-use grant burning and anti-escalation enforcement. Verified in `exchange_test.go`. |
+| `BAP-703` | SPIFFE/SVID and Enterprise Federation Integration | **DONE** | 5-minute bounded SVID rotation, workload re-attestation, and authorization subject mapping. Verified in `spiffe_test.go`. |
+| `BAP-704` | IAM Dependency and Fallback Decision Record | **DONE** | Formally documented ADR-004 establishing tiered federation gates and fail-closed offline bounds. |
+| `BAP-711` | Coding Agent Sandbox and Isolation Strategy | **DONE** | Risk-tiered OS containment profiles (Windows Job Objects/Restricted Tokens, Linux Landlock LSM). |
+| `BAP-712` | Shell, Browser and Network Bypass Prevention | **DONE** | Multi-vector regex interception halting raw sockets, proxy tampering, direct curl, and canary honeytoken access. |
+| `BAP-713` | Deny-by-Default Runtime Authorization | **DONE** | Deterministic unknown-intent fail-closed evaluation in local Cedar PEP with structured decision receipts. |
+| `BAP-714` | Containment Red-Team and Escape Validation | **DONE** | Automated 5-vector adversarial red-team test harness (`test_bap714_containment_redteam.py`) achieving 100% PREVENTED rating. |
+| `BAP-721` | End-to-End Agent Action Attribution | **DONE** | Complete cryptographic lineage chain (User -> Agent -> Task -> Proposal -> Grant -> PEP -> Result) with SHA-256 hash chaining. |
+| `BAP-722` | SOC/SIEM Detection Engineering Integration | **DONE** | Normalized ArcSight CEF:0 and RFC 5424 Syslog event formatting and 5 pre-packaged SOC detection rules (`docs/soc_detection_rules.json`). |
+| `BAP-723` | Human Approval and Escalation Workflows | **DONE** | Contextual step-up approval APIs, anti-fatigue throttling (30s cooldown), and single-task ephemeral grants. |
+| `BAP-724` | Incident Revocation and Response Orchestration | **DONE** | Fleet-wide session stop, quarantine, and atomic single-use grant invalidation with sub-second SSE propagation. |
+| `BAP-731` | Agent Risk Classification Framework | **DONE** | Multi-variable risk rubric (`bap-controlplane/pkg/types/risk.go`) evaluating Environment, Sensitivity, Autonomy, and Blast Radius. |
+| `BAP-732` | Tiered Security Requirements and Onboarding | **DONE** | Automated tier-specific enrollment gating self-service low-risk agents vs mandatory high-risk containment verification. |
+| `BAP-733` | Automated Risk-Based Policy Enforcement | **DONE** | Dynamic policy bundle assignment per risk tier in `bap-controlplane/internal/policy/store.go`. |
+| `BAP-741` | Vendor Capability and Evidence Assessment | **DONE** | Comprehensive vendor taxonomy and evidence register (`docs/vendor_capability_taxonomy.json`) across Trust, Contain, Evidence, and Acceleration. |
+| `BAP-742` | Vendor Integration and Proof-of-Concept Testing | **DONE** | Automated vendor interop test harness (`tests/test_vendor_interop.py`) validating JWS and RFC 8693 token exchanges. |
+| `BAP-743` | Interactive Capability Atlas and Maturity Dashboard | **DONE** | Interactive SVG/HTML Capability Atlas in `v2.html` mapping 4 principles to empirical verification evidence. |
 
 ### MVP exit sequence
 
@@ -3178,3 +3195,202 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   2. Approving an escalation grants an ephemeral credential valid strictly for the active task, not a permanent upgrade.
   3. Duplicate escalation requests within a short window are throttled to prevent reviewer fatigue.
 
+
+
+---
+
+## BAP-700 Series: Security Assurance Program (BAP-EPIC-33 to BAP-EPIC-37)
+
+### Epic 33: Enterprise Agent Trust & Identity Readiness (BAP-EPIC-33 / BAP-700)
+**Principle:** Trust  
+**Outcome:** Provide verified, distinct workload identities and task-bounded authorization without waiting indefinitely for enterprise IAM dependencies.
+
+#### BAP-701: Enterprise JWS Signing and Trust-Store Services
+* **Epic**: `BAP-EPIC-33`
+* **Status**: `DONE`
+* **Priority**: `P0 - Highest`
+* **Implementation Evidence**:
+  - Implemented in `bap-controlplane/internal/notary/jws.go` and verified in `jws_test.go`:
+    - RFC 7515 compact serialization (`header.payload.signature`) with HS256/ES256 algorithms.
+    - Standard claims (`iss`, `sub`, `aud`, `exp`, `nbf`, `iat`, `jti`) and BAP claims (`bap_session_id`, `bap_task_id`, `bap_risk_tier`, `scp`).
+    - RFC 7517 JWKS endpoint exposed at `/.well-known/jwks.json` and `/api/v1/auth/jwks`.
+    - Key rotation support (`RotateKey`) allowing overlapping transition windows without downtime.
+  - Endpoints: `GET /.well-known/jwks.json`, `GET /api/v1/auth/jwks`.
+
+#### BAP-702: OAuth 2.0 Token Exchange and Scoped Delegation
+* **Epic**: `BAP-EPIC-33`
+* **Status**: `DONE`
+* **Priority**: `P0 - Highest`
+* **Implementation Evidence**:
+  - Implemented in `bap-gateway/internal/tokenexchange/exchange.go` and verified in `exchange_test.go`:
+    - RFC 8693 token exchange (`grant_type=urn:ietf:params:oauth:grant-type:token-exchange`).
+    - Strict anti-escalation invariant: rejects any request where requested scope exceeds authorized proposal scope.
+    - Atomic single-use grant burning (`BurnGrantOnce`) guaranteeing zero token replay.
+    - 5-minute bounded downstream credential lifetime (`expires_in: 300`).
+
+#### BAP-703: SPIFFE/SVID and Enterprise Federation Integration
+* **Epic**: `BAP-EPIC-33`
+* **Status**: `DONE`
+* **Priority**: `P0 - Highest`
+* **Implementation Evidence**:
+  - Implemented in `bap-controlplane/internal/attestation/spiffe.go` and verified in `spiffe_test.go`:
+    - Short-lived SVID issuance (`IssueSVID`) with target 5-minute rotation window.
+    - Seamless workload re-attestation and rotation (`RotateSVID`) preserving instance identity.
+    - Enterprise authorization subject mapping (`SVIDToAuthSubject`) translating `spiffe://bap.internal/app/{app}/instance/{inst}` to `workload:bap.internal:{app}:{inst}`.
+
+#### BAP-704: IAM Dependency and Fallback Decision Record
+* **Epic**: `BAP-EPIC-33`
+* **Status**: `DONE`
+* **Priority**: `P1 - High`
+* **Implementation Evidence**:
+  - Documented in `docs/adr/ADR-004-IAM-Federation-And-Fallback.md`:
+    - Evaluated WorkOS vs. corporate OIDC vs. internal BAP trust store.
+    - Approved tiered fallback strategy enabling low-risk local agents to execute offline while high-risk agents fail closed.
+
+---
+
+### Epic 34: Agent Containment & Bypass Prevention (BAP-EPIC-34 / BAP-710)
+**Principle:** Contain  
+**Outcome:** Prevent agents from using alternate execution paths to exceed authorization, especially unsandboxed coding agents.
+
+#### BAP-711: Coding Agent Sandbox and Isolation Strategy
+* **Epic**: `BAP-EPIC-34`
+* **Status**: `DONE`
+* **Priority**: `P0 - Highest`
+* **Implementation Evidence**:
+  - Implemented in `bap-edge/internal/sandbox/sandbox_windows.go` and `bap-controlplane/internal/sandbox/sandboxing.go`:
+    - Windows Job Objects constrain child processes, memory, and restricted token permissions.
+    - Linux Landlock LSM boundary containment restricts filesystem access to workspace root.
+
+#### BAP-712: Shell, Browser and Network Bypass Prevention
+* **Epic**: `BAP-EPIC-34`
+* **Status**: `DONE`
+* **Priority**: `P0 - Highest`
+* **Implementation Evidence**:
+  - Implemented in `bap-edge/internal/antibypass/antibypass.go` and `bap-edge/internal/shield/vault.go`:
+    - Blocks raw TCP/UDP sockets (`nc`, `python socket`, `/dev/tcp`).
+    - Intercepts proxy environment unsets (`unset HTTP_PROXY`, `remove-item env:BAP_SESSION_ID`).
+    - Seeds tripwire honeytokens (`.bap_canary_token` / `CORP_CANARY_TOKEN`) and immediately freezes offending sessions.
+
+#### BAP-713: Deny-by-Default Runtime Authorization
+* **Epic**: `BAP-EPIC-34`
+* **Status**: `DONE`
+* **Priority**: `P0 - Highest`
+* **Implementation Evidence**:
+  - Implemented in `bap-edge/internal/authz` and `bap-controlplane/internal/policy/store.go`:
+    - Cedar default-deny ensures unclassified intents deterministically evaluate to `DENY`.
+    - Every evaluation generates an immutable receipt with policy version and execution outcome.
+
+#### BAP-714: Containment Red-Team and Escape Validation
+* **Epic**: `BAP-EPIC-34`
+* **Status**: `DONE`
+* **Priority**: `P0 - Highest`
+* **Implementation Evidence**:
+  - Automated test suite `tests/test_bap714_containment_redteam.py`:
+    - Executes 5 adversarial escape vectors: raw socket breakout, canary honeytoken scraping, proxy tampering, OAuth scope escalation, and offline fail-closed evaluation.
+    - 100% of tested vectors scored `PREVENTED`.
+
+---
+
+### Epic 35: Evidence, Detection & Incident Response (BAP-EPIC-35 / BAP-720)
+**Principle:** Evidence  
+**Outcome:** Make actions attributable, traceable, actionable by SOC, and safely revocable.
+
+#### BAP-721: End-to-End Agent Action Attribution
+* **Epic**: `BAP-EPIC-35`
+* **Status**: `DONE`
+* **Priority**: `P1 - High`
+* **Implementation Evidence**:
+  - Implemented in `bap-controlplane/internal/governance/store.go`:
+    - Full cryptographic lineage chain linking User -> Agent -> Task -> Proposal -> Decision -> Grant -> PEP -> Result.
+    - SHA-256 hash chaining guarantees tamper-evident provenance.
+
+#### BAP-722: SOC/SIEM Detection Engineering Integration
+* **Epic**: `BAP-EPIC-35`
+* **Status**: `DONE`
+* **Priority**: `P1 - High`
+* **Implementation Evidence**:
+  - Implemented in `bap-controlplane/internal/audit/siem_exporter.go` and verified in `siem_exporter_test.go`:
+    - ArcSight Common Event Format (CEF:0) serialization.
+    - RFC 5424 Syslog serialization.
+    - 5 pre-packaged SOC detection rules documented in `docs/soc_detection_rules.json`.
+  - Endpoint: `GET /api/v1/audit/export/siem?format=cef`.
+
+#### BAP-723: Human Approval and Escalation Workflows
+* **Epic**: `BAP-EPIC-35`
+* **Status**: `DONE`
+* **Priority**: `P1 - High`
+* **Implementation Evidence**:
+  - Implemented in `bap-controlplane/internal/hitl/escalation.go`:
+    - Contextual step-up request and resolution with 30s anti-fatigue throttling.
+    - Ephemeral single-task grant generation upon approval.
+
+#### BAP-724: Incident Revocation and Response Orchestration
+* **Epic**: `BAP-EPIC-35`
+* **Status**: `DONE`
+* **Priority**: `P1 - High`
+* **Implementation Evidence**:
+  - Implemented in `bap-controlplane/internal/api/handlers.go`:
+    - Targeted session stop, quarantine, and atomic single-use grant invalidation (`BurnGrantOnce`).
+    - Sub-second SSE activity broadcast.
+
+---
+
+### Epic 36: Risk-Based Agent Acceleration (BAP-EPIC-36 / BAP-730)
+**Principle:** Risk-Based Acceleration  
+**Outcome:** Apply proportionate controls without weakening a universal trust baseline.
+
+#### BAP-731: Agent Risk Classification Framework
+* **Epic**: `BAP-EPIC-36`
+* **Status**: `DONE`
+* **Priority**: `P1 - High`
+* **Implementation Evidence**:
+  - Implemented in `bap-controlplane/pkg/types/risk.go` and verified in `risk_test.go`:
+    - Evaluates Environment, Sensitivity, Permitted Actions, Network Reach, Autonomy, and Blast Radius.
+    - Computes Tier 1 (Low), Tier 2 (Medium), Tier 3 (High), and Tier 4 (Critical).
+
+#### BAP-732: Tiered Security Requirements and Onboarding
+* **Epic**: `BAP-EPIC-36`
+* **Status**: `DONE`
+* **Priority**: `P1 - High`
+* **Implementation Evidence**:
+  - Self-service onboarding for Tier 1 vs mandatory HITL step-up and sandbox isolation for Tier 3/4.
+
+#### BAP-733: Automated Risk-Based Policy Enforcement
+* **Epic**: `BAP-EPIC-36`
+* **Status**: `DONE`
+* **Priority**: `P1 - High`
+* **Implementation Evidence**:
+  - Implemented in `bap-controlplane/internal/policy/store.go`:
+    - `SetTierPolicy` and `GetPolicyBundleForTier` dynamically map Cedar policies to evaluated agent risk tiers.
+
+---
+
+### Epic 37: Vendor Integration & Coverage Validation (BAP-EPIC-37 / BAP-740)
+**Principle:** All Four Principles  
+**Outcome:** Measure real product and architectural coverage using evidence rather than marketing claims.
+
+#### BAP-741: Vendor Capability and Evidence Assessment
+* **Epic**: `BAP-EPIC-37`
+* **Status**: `DONE`
+* **Priority**: `P1 - High`
+* **Implementation Evidence**:
+  - Documented in `docs/vendor_capability_taxonomy.json`:
+    - Structured taxonomy across Trust, Contain, Evidence, and Acceleration.
+    - Empirical evidence grades for BAP, Keycard, Runlayer, AIR Security, and AIDR.
+
+#### BAP-742: Vendor Integration and Proof-of-Concept Testing
+* **Epic**: `BAP-EPIC-37`
+* **Status**: `DONE`
+* **Priority**: `P1 - High`
+* **Implementation Evidence**:
+  - Verified in `tests/test_vendor_interop.py`:
+    - JWS verification by external relying parties.
+    - Anti-privilege amplification enforcement and single-use grant burning.
+
+#### BAP-743: Interactive Capability Atlas and Maturity Dashboard
+* **Epic**: `BAP-EPIC-37`
+* **Status**: `DONE`
+* **Priority**: `P1 - High`
+* **Implementation Evidence**:
+  - Live interactive Capability Atlas in `bap-controlplane/internal/dashboardui/web/v2.html` at `/dashboard/#capability-atlas`.

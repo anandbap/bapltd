@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// SVIDBundle represents an X.509 SVID document issued to an agent workload (BAP-1101).
+// SVIDBundle represents an X.509 SVID document issued to an agent workload (BAP-1101, BAP-703).
 type SVIDBundle struct {
 	SPIFFEID    string    `json:"spiffe_id"`
 	TrustDomain string    `json:"trust_domain"`
@@ -32,7 +32,7 @@ func IssueSVID(trustDomain, appID, instanceID string, ttlMins int) SVIDBundle {
 		trustDomain = "bap.internal"
 	}
 	if ttlMins <= 0 {
-		ttlMins = 60 // 1 hour rotation per BAP-1101
+		ttlMins = 5 // BAP-703 target: 5-minute bounded rotation
 	}
 
 	spiffeID := fmt.Sprintf("spiffe://%s/app/%s/instance/%s", trustDomain, appID, instanceID)
@@ -69,4 +69,45 @@ func ValidateSVID(spiffeID, expectedTrustDomain string) (bool, string, string, e
 		return false, "", "", fmt.Errorf("trust domain mismatch: got %s, expected %s", trustDomain, expectedTrustDomain)
 	}
 	return true, trustDomain, appID, nil
+}
+
+// RotateSVID seamlessly rotates an existing SVID bundle, refreshing its certificate serial and expiry (BAP-703).
+func RotateSVID(existing SVIDBundle, newTTLSeconds int) (SVIDBundle, error) {
+	valid, domain, appID, err := ValidateSVID(existing.SPIFFEID, existing.TrustDomain)
+	if !valid || err != nil {
+		return SVIDBundle{}, fmt.Errorf("cannot rotate invalid SVID: %w", err)
+	}
+
+	trimmed := strings.TrimPrefix(existing.SPIFFEID, "spiffe://")
+	parts := strings.Split(trimmed, "/")
+	instanceID := parts[len(parts)-1]
+
+	if newTTLSeconds <= 0 {
+		newTTLSeconds = 300 // 5 minutes default
+	}
+
+	ttlMins := newTTLSeconds / 60
+	if ttlMins <= 0 {
+		ttlMins = 1
+	}
+
+	return IssueSVID(domain, appID, instanceID, ttlMins), nil
+}
+
+// SVIDToAuthSubject maps a verified SPIFFE workload identity to an enterprise authorization subject (BAP-703).
+func SVIDToAuthSubject(spiffeID string) (string, error) {
+	valid, domain, appID, err := ValidateSVID(spiffeID, "")
+	if !valid || err != nil {
+		return "", err
+	}
+	trimmed := strings.TrimPrefix(spiffeID, "spiffe://")
+	parts := strings.Split(trimmed, "/")
+	instanceID := parts[len(parts)-1]
+
+	return fmt.Sprintf("workload:%s:%s:%s", domain, appID, instanceID), nil
+}
+
+// IsSVIDExpired checks whether an SVID bundle has passed its expiration time.
+func IsSVIDExpired(bundle SVIDBundle) bool {
+	return time.Now().UTC().After(bundle.ExpiresAt)
 }

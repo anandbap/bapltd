@@ -86,6 +86,8 @@ type Server struct {
 	saasTokenMgr     *authz.SaaSTokenManager
 	intentMgr        *intent.IntentManager
 	escalationMgr    *hitl.EscalationManager
+	jwsTrustStore    *notary.JWSTrustStore
+	siemExporter     *audit.SIEMExporter
 }
 
 type deviceAuthSession struct {
@@ -141,6 +143,8 @@ func NewServer(reg *registry.Store, otcStore *otc.Store, minter *authz.TokenMint
 		saasTokenMgr:    authz.NewSaaSTokenManager(),
 		intentMgr:       intent.NewIntentManager(""),
 		escalationMgr:   hitl.NewEscalationManager("", 30*time.Second, 5),
+		jwsTrustStore:   notary.NewJWSTrustStore("https://controlplane.bap.internal", "https://gateway.bap.internal", "bap-default-jws-enterprise-signing-secret"),
+		siemExporter:    audit.NewSIEMExporter(""),
 		envMode:         "dev",
 		deviceSessions:  make(map[string]*deviceAuthSession),
 		deviceUserCodes: make(map[string]*deviceAuthSession),
@@ -291,6 +295,9 @@ func (s *Server) registerRoutes() {
 	// Public and Agent Endpoints
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/api/v1/health", s.handleHealth)
+	s.mux.HandleFunc("/.well-known/jwks.json", s.handleJWKS)
+	s.mux.HandleFunc("/api/v1/auth/jwks", s.handleJWKS)
+	s.mux.HandleFunc("/api/v1/audit/export/siem", s.handleExportSIEM)
 	s.mux.HandleFunc("/api/v1/agents/pre-register", s.requireAdminAuth(s.handlePreRegister))
 	s.mux.HandleFunc("/api/v1/agents/register", s.handleRegisterEdge)
 	s.mux.HandleFunc("/api/v1/agents/register-edge", s.handleRegisterEdge)
@@ -446,6 +453,48 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		resp["min_edge_version"] = s.minEdgeVersion
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// BAP-701: handleJWKS publishes the JSON Web Key Set for enterprise trust stores
+func (s *Server) handleJWKS(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	if s.jwsTrustStore == nil {
+		writeError(w, http.StatusInternalServerError, "JWS trust store not configured")
+		return
+	}
+	jwks := s.jwsTrustStore.GetJWKS()
+	writeJSON(w, http.StatusOK, jwks)
+}
+
+// BAP-722: handleExportSIEM exports security events formatted for SOC/SIEM consumption
+func (s *Server) handleExportSIEM(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	if s.siemExporter == nil {
+		writeError(w, http.StatusInternalServerError, "SIEM exporter not initialized")
+		return
+	}
+	format := r.URL.Query().Get("format")
+	if strings.ToLower(format) == "cef" {
+		cefList := s.siemExporter.ExportAllAsCEF()
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(strings.Join(cefList, "\n")))
+		return
+	}
+	data, err := s.siemExporter.ExportJSON()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to export SIEM events: "+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
 }
 
 func (s *Server) handlePreRegister(w http.ResponseWriter, r *http.Request) {

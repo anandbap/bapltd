@@ -13,9 +13,18 @@ import (
 )
 
 var (
-	ErrGrantAlreadyBurned = errors.New("GrantAlreadyBurned: single-use grant token has already been consumed")
-	ErrGrantExpired       = errors.New("GrantExpired: grant token has expired")
-	ErrUnapprovedService  = errors.New("UnapprovedService: destination service not permitted for JIT credential brokering")
+	ErrGrantAlreadyBurned    = errors.New("GrantAlreadyBurned: single-use grant token has already been consumed")
+	ErrGrantExpired          = errors.New("GrantExpired: grant token has expired")
+	ErrUnapprovedService     = errors.New("UnapprovedService: destination service not permitted for JIT credential brokering")
+	ErrInvalidGrantType      = errors.New("unsupported_grant_type: grant_type must be urn:ietf:params:oauth:grant-type:token-exchange")
+	ErrInvalidSubjectToken   = errors.New("invalid_grant: subject_token is missing or invalid")
+	ErrScopeEscalationDenied = errors.New("invalid_scope: requested scope exceeds authorized boundary (privilege escalation blocked)")
+)
+
+const (
+	RFC8693GrantTypeTokenExchange = "urn:ietf:params:oauth:grant-type:token-exchange"
+	RFC8693TokenTypeAccessToken   = "urn:ietf:params:oauth:token-type:access_token"
+	RFC8693TokenTypeJWT           = "urn:ietf:params:oauth:token-type:jwt"
 )
 
 // ExchangedCredential represents an ephemeral, short-lived credential brokered for a downstream service
@@ -30,9 +39,34 @@ type ExchangedCredential struct {
 	BurnedGrantTokenID string    `json:"burned_grant_token_id"`
 }
 
+// RFC8693TokenExchangeRequest represents an RFC 8693 Token Exchange request (BAP-702).
+type RFC8693TokenExchangeRequest struct {
+	GrantType          string `json:"grant_type"`
+	Resource           string `json:"resource,omitempty"`
+	Audience           string `json:"audience,omitempty"`
+	Scope              string `json:"scope,omitempty"`
+	RequestedTokenType string `json:"requested_token_type,omitempty"`
+	SubjectToken       string `json:"subject_token"`
+	SubjectTokenType   string `json:"subject_token_type"`
+	ActorToken         string `json:"actor_token,omitempty"`
+	ActorTokenType     string `json:"actor_token_type,omitempty"`
+	SessionID          string `json:"session_id,omitempty"`
+	TaskID             string `json:"task_id,omitempty"`
+	AuthorizedScopes   string `json:"authorized_scopes,omitempty"`
+}
+
+// RFC8693TokenExchangeResponse represents the standard RFC 8693 Token Exchange response.
+type RFC8693TokenExchangeResponse struct {
+	AccessToken     string `json:"access_token"`
+	IssuedTokenType string `json:"issued_token_type"`
+	TokenType       string `json:"token_type"` // "Bearer"
+	ExpiresIn       int    `json:"expires_in"` // seconds (e.g. 300)
+	Scope           string `json:"scope,omitempty"`
+}
+
 // TokenExchangeGateway governs single-use grant burning and downstream JIT credential translation
 type TokenExchangeGateway struct {
-	mu           sync.Mutex
+	mu             sync.Mutex
 	consumedGrants map[string]time.Time // grantToken -> burnedAt
 	signingSecret  []byte
 }
@@ -108,4 +142,68 @@ func (g *TokenExchangeGateway) BrokerDownstreamCredential(service, targetEnv, ta
 	}
 
 	return cred, nil
+}
+
+// ExchangeRFC8693Token performs RFC 8693 token exchange with single-use burning and anti-escalation enforcement.
+func (g *TokenExchangeGateway) ExchangeRFC8693Token(req RFC8693TokenExchangeRequest) (*RFC8693TokenExchangeResponse, error) {
+	if req.GrantType != RFC8693GrantTypeTokenExchange {
+		return nil, fmt.Errorf("%w: received %s", ErrInvalidGrantType, req.GrantType)
+	}
+
+	trimmedSubject := strings.TrimSpace(req.SubjectToken)
+	if trimmedSubject == "" {
+		return nil, ErrInvalidSubjectToken
+	}
+
+	// Scope verification: requested scope cannot exceed authorized scopes (no privilege amplification)
+	if req.Scope != "" && req.AuthorizedScopes != "" {
+		reqScopes := strings.Fields(req.Scope)
+		authScopes := strings.Fields(req.AuthorizedScopes)
+		authMap := make(map[string]bool)
+		for _, s := range authScopes {
+			authMap[s] = true
+		}
+		for _, s := range reqScopes {
+			if !authMap[s] {
+				return nil, fmt.Errorf("%w: requested %q not in authorized list", ErrScopeEscalationDenied, s)
+			}
+		}
+	}
+
+	// Atomically burn single-use subject grant token
+	burned, status, err := g.BurnGrantOnce(trimmedSubject)
+	if !burned || err != nil {
+		return nil, fmt.Errorf("token exchange rejected: %s (%w)", status, err)
+	}
+
+	// Mint scoped ephemeral token
+	b := make([]byte, 24)
+	_, _ = rand.Read(b)
+	rawToken := fmt.Sprintf("bap-exchanged-%s", hex.EncodeToString(b))
+
+	mac := hmac.New(sha256.New, g.signingSecret)
+	mac.Write([]byte(rawToken))
+	sig := hex.EncodeToString(mac.Sum(nil))[:16]
+	accessToken := fmt.Sprintf("%s.%s", rawToken, sig)
+
+	scope := req.Scope
+	if scope == "" {
+		scope = req.AuthorizedScopes
+	}
+	if scope == "" {
+		scope = "read"
+	}
+
+	issuedType := req.RequestedTokenType
+	if issuedType == "" {
+		issuedType = RFC8693TokenTypeAccessToken
+	}
+
+	return &RFC8693TokenExchangeResponse{
+		AccessToken:     accessToken,
+		IssuedTokenType: issuedType,
+		TokenType:       "Bearer",
+		ExpiresIn:       300, // 5-minute bounded TTL
+		Scope:           scope,
+	}, nil
 }

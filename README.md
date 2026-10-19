@@ -13,8 +13,10 @@ BAP is an open reference architecture and implementation for governing AI agents
 - [🌟 Strategic Vision Document (`VISION.md`)](VISION.md) — The executive problem statement, the AI agent crisis, and strategic North Star.
 - [🏛️ Architecture & Technical Design (`ARCHITECTURE.md`)](ARCHITECTURE.md) — Complete 4-Plane technical architecture, state machines, and threat mitigations.
 - [📁 `.bapstate` Architecture & Troubleshooting (`docs/BAPSTATE_AND_TROUBLESHOOTING.md`)](docs/BAPSTATE_AND_TROUBLESHOOTING.md) — Unified state directory, command operations, and troubleshooting playbooks.
-- [📋 Jira Backlog & Stories (`JIRA_STORIES.md`)](JIRA_STORIES.md) — Complete epics, user stories, and delivery boards (BAP-100 through BAP-438).
+- [📋 Jira Backlog & Stories (`JIRA_Stories.md`)](JIRA_Stories.md) — Complete epics, user stories, and delivery boards (BAP-100 through BAP-743).
+- [🔒 Security Assurance Program: BAP-700 Series (`docs/adr/ADR-004-IAM-Federation-And-Fallback.md`)](docs/adr/ADR-004-IAM-Federation-And-Fallback.md) — Enterprise Trust, Containment, Evidence, and Risk-Based Acceleration (BAP-701 to BAP-743).
 - [🧪 10-Point Adversarial Test Matrix (`tests/test_bounded_authority_matrix.py`)](tests/test_bounded_authority_matrix.py) — 100% automated regression matrix.
+- [🎯 Adversarial Red-Team Test Suite (`tests/test_bap714_containment_redteam.py`)](tests/test_bap714_containment_redteam.py) — Automated escape validation across 5 attack vectors.
 
 ---
 
