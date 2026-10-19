@@ -58,6 +58,12 @@ func (s *Server) registerControlPlaneRoutes() {
 	s.mux.HandleFunc("/dashboard/v2/", func(w http.ResponseWriter, r *http.Request) {
 		serveV2(w, r)
 	})
+	s.mux.HandleFunc("/dashboard/v1", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/dashboard/v1/", http.StatusTemporaryRedirect)
+	})
+	s.mux.HandleFunc("/dashboard/v1/", func(w http.ResponseWriter, r *http.Request) {
+		serveV1(w, r)
+	})
 	s.mux.HandleFunc("/dashboard/legacy", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard/?v=legacy", http.StatusTemporaryRedirect)
 	})

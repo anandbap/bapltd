@@ -81,6 +81,12 @@ func Handler(controlPlane *url.URL, transport http.RoundTripper, allowRemoteAdmi
 	mux.HandleFunc("/dashboard/v2/", func(w http.ResponseWriter, r *http.Request) {
 		serveV2(w, r)
 	})
+	mux.HandleFunc("/dashboard/v1", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/dashboard/v1/", http.StatusTemporaryRedirect)
+	})
+	mux.HandleFunc("/dashboard/v1/", func(w http.ResponseWriter, r *http.Request) {
+		serveV1(w, r)
+	})
 	mux.HandleFunc("/dashboard/legacy", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard/?v=legacy", http.StatusTemporaryRedirect)
 	})

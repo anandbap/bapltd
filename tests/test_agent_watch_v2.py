@@ -30,6 +30,7 @@ class TestAgentWatchV2(unittest.TestCase):
     def test_routing_and_legacy_preservation_in_server(self):
         """Verify server.go provides dual routing for V2 and legacy V1."""
         self.assertIn("/dashboard/v2", self.server_go)
+        self.assertIn("/dashboard/v1", self.server_go)
         self.assertIn("/dashboard/legacy", self.server_go)
         self.assertIn("v2.html", self.server_go)
         self.assertIn("index.html", self.server_go)
@@ -42,7 +43,7 @@ class TestAgentWatchV2(unittest.TestCase):
 
     def test_v2_has_v1_switcher(self):
         """Verify V2 provides a seamless return toggle to Classic V1."""
-        self.assertIn("/dashboard/?v=legacy", self.v2_content)
+        self.assertIn("/dashboard/v1", self.v2_content)
         self.assertIn("Classic V1", self.v2_content)
 
     def test_three_purpose_built_workspaces_present(self):

@@ -59,6 +59,19 @@ func TestDashboardServesAssetsAndProxiesAPI(t *testing.T) {
 		t.Fatalf("v2 dashboard asset response: %d", v2Page.Code)
 	}
 
+	// Dedicated V1 routes test
+	v1Redirect := httptest.NewRecorder()
+	handler.ServeHTTP(v1Redirect, httptest.NewRequest("GET", "/dashboard/v1", nil))
+	if v1Redirect.Code != 307 || v1Redirect.Header().Get("Location") != "/dashboard/v1/" {
+		t.Fatalf("v1 redirect response: %d, location: %s", v1Redirect.Code, v1Redirect.Header().Get("Location"))
+	}
+
+	v1Page := httptest.NewRecorder()
+	handler.ServeHTTP(v1Page, httptest.NewRequest("GET", "/dashboard/v1/", nil))
+	if v1Page.Code != 200 || !strings.Contains(v1Page.Body.String(), "BAP Control Plane") {
+		t.Fatalf("v1 dashboard asset response: %d", v1Page.Code)
+	}
+
 	// Legacy V1 preservation route test
 	legacyPage := httptest.NewRecorder()
 	handler.ServeHTTP(legacyPage, httptest.NewRequest("GET", "/dashboard/?v=legacy", nil))
