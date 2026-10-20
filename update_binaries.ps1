@@ -97,6 +97,12 @@ if (Test-Path "dist\windows-amd64") {
     if (Test-Path "dist\windows-amd64\dashboard") {
         Safe-Copy "bap-controlplane\bapdashboard.exe" "dist\windows-amd64\dashboard\bapdashboard.exe"
     }
+    if (Test-Path "dist\windows-amd64\claude-client") {
+        Safe-Copy "bap-edge\bapedge.exe" "dist\windows-amd64\claude-client\bapedge.exe"
+        if (Test-Path "cchook\interceptor.exe") {
+            Safe-Copy "cchook\interceptor.exe" "dist\windows-amd64\claude-client\interceptor.exe"
+        }
+    }
     if (Test-Path "cchook\interceptor.exe") {
         Safe-Copy "cchook\interceptor.exe" "dist\windows-amd64\interceptor.exe"
         Safe-Copy "cchook\interceptor.exe" "dist\windows-amd64\cchook-interceptor.exe"

@@ -70,6 +70,10 @@ jobs:
           Copy-Item -Force interceptor.exe ..\dist\windows-amd64\claude-client\interceptor.exe
           Pop-Location
 
+      - name: Build Python Wheel Package
+        run: |
+          python scripts/build_wheel.py
+
       - name: Run Full Python Test Suite (100+ Tests)
         run: |
           python -m unittest discover tests
@@ -85,4 +89,5 @@ jobs:
             bapgateway.exe
             bapmcp.exe
             dist/windows-amd64/*.exe
+            dist/*.whl
           retention-days: 14
