@@ -13,6 +13,7 @@ import subprocess
 from . import __version__
 from .install import main as install_main
 from .launch import main as launch_main
+from .doctor import main as doctor_main
 
 USAGE = f"""BAP Zero-Trust Governance CLI (v{__version__})
 Usage: bap <command> [options]
@@ -20,6 +21,7 @@ Usage: bap <command> [options]
 Commands:
   install       Run single-click user-mode onboarding installer
   launch        Start developer cockpit, verify hooks & monitor agents
+  doctor        Run comprehensive pre-flight diagnostic health check
   status        Check health of local edge daemon and central control plane
   exec <cmd>    Execute a shell command under Zero-Trust Cedar invariants
   pin <subcmd>  Manage cryptographic content pins (scan, list, verify)
@@ -27,6 +29,7 @@ Commands:
 
 Examples:
   bap install
+  bap doctor
   bap launch
   bap status
   bap exec "npm test"
@@ -69,6 +72,9 @@ def main():
     elif cmd == "launch":
         sys.argv = [sys.argv[0]] + rest
         launch_main()
+    elif cmd == "doctor":
+        sys.argv = [sys.argv[0]] + rest
+        doctor_main()
     elif cmd in ["exec", "run"]:
         bapedge = find_bapedge()
         if not os.path.isfile(bapedge):

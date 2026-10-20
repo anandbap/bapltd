@@ -7,7 +7,10 @@
 BAP is an open reference architecture and implementation for governing AI agents (Claude Code, GitHub Copilot CLI, autonomous worker scripts, and MCP toolchains) that execute commands, touch source files, call APIs, and access enterprise resources.
 
 📖 **Core Documentation Links:**
-- [🚀 5-Minute Developer Onboarding Guide (`docs/ONBOARDING.md`)](docs/ONBOARDING.md) — Single-click user-mode setup for Claude Code, Antigravity, Copilot & Python.
+- [🚀 5-Minute Developer Onboarding Guide (`docs/ONBOARDING.md`)](docs/ONBOARDING.md) — Single-click user-mode setup for Claude Code, Antigravity, Copilot, Cursor & Python.
+- [📰 Launch Blog & Announcement (`docs/BLOG_LAUNCH_ANNOUNCEMENT.md`)](docs/BLOG_LAUNCH_ANNOUNCEMENT.md) — Why Autonomous AI Coding Agents Demand a Bounded Authority Plane.
+- [📋 Enterprise Pilot Runbook & Evaluation Protocol (`docs/PILOT_RUNBOOK.md`)](docs/PILOT_RUNBOOK.md) — 30-Day implementation guide for CISOs, Platform Engineering & DevLeads.
+- [🛡️ Security Assurance & Enterprise FAQ (`docs/FAQ_AND_SECURITY_ASSURANCE.md`)](docs/FAQ_AND_SECURITY_ASSURANCE.md) — Privacy, zero code exfiltration, compliance, and threat mitigation.
 - [🏢 Enterprise Fleet Deployment (`docs/ENTERPRISE_DEPLOYMENT.md`)](docs/ENTERPRISE_DEPLOYMENT.md) — IT Admin guide for Intune, Jamf, GPO, and Ansible rollouts.
 - [🐍 Python Agent SDK Guide (`docs/PYTHON_SDK_GUIDE.md`)](docs/PYTHON_SDK_GUIDE.md) — Zero-dependency governance client for custom Python autonomous agents.
 - [🌟 Strategic Vision Document (`VISION.md`)](VISION.md) — The executive problem statement, the AI agent crisis, and strategic North Star.
@@ -31,13 +34,17 @@ pip install bap-ltd
 # 2. Run single-click user-mode installer (No admin / UAC required)
 bap install
 
-# 3. Launch developer cockpit & verify governed agents
+# 3. Verify workstation health with pre-flight doctor
+bap doctor
+
+# 4. Launch developer cockpit & verify governed agents
 bap launch
 ```
 
 Or execute without package installation:
 ```bash
 python scripts/bap_install.py
+python scripts/bap_doctor.py
 python scripts/bap_launch.py
 ```
 

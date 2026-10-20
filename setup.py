@@ -13,7 +13,7 @@ with open(os.path.join(here, "README.md"), encoding="utf-8") as f:
 
 setup(
     name="bap-ltd",
-    version="1.3.0",
+    version="1.3.1",
     description="Bounded Authority Plane (BAP) - Zero-Trust Local Trusted Daemon & Governance for AI Developer Agents",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -28,6 +28,7 @@ setup(
             "bap = bap.cli:main",
             "bap-install = bap.install:main",
             "bap-launch = bap.launch:main",
+            "bap-doctor = bap.doctor:main",
         ]
     },
     classifiers=[
