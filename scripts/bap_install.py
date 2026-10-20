@@ -14,6 +14,7 @@ Supported Developer Agents:
   - Claude Code (Anthropic CLI)
   - Google Antigravity (Gemini Pair Programmer)
   - GitHub Copilot (VS Code & CLI)
+  - Cursor IDE (.cursorrules & broker routing)
   - Python Autonomous Agents (LangChain, AutoGen, CrewAI, custom SDK)
 
 Security Guarantee:
@@ -35,6 +36,7 @@ import time
 import urllib.request
 import urllib.error
 import ssl
+import platform
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -60,6 +62,18 @@ class TermColor:
     RESET = "\033[0m" if sys.platform != "win32" or "WT_SESSION" in os.environ or "ANSICON" in os.environ else ""
 
 
+def get_platform_id() -> str:
+    """Detects OS platform and architecture to select matching precompiled dist assets."""
+    machine = platform.machine().lower()
+    is_arm = machine in ("arm64", "aarch64", "armv8b", "armv8l")
+    if sys.platform == "win32":
+        return "windows-arm64" if is_arm else "windows-amd64"
+    elif sys.platform == "darwin":
+        return "darwin-arm64" if is_arm else "darwin-amd64"
+    else:
+        return "linux-arm64" if is_arm else "linux-amd64"
+
+
 def is_admin() -> bool:
     """Check if the current process has administrative/root privileges."""
     if sys.platform == "win32":
@@ -81,28 +95,46 @@ def resolve_default_install_dir() -> str:
 
 
 def get_source_binary(name: str) -> str:
-    """Finds built binaries in the repository dist or build directories."""
+    """Finds built binaries in the repository dist or build directories for the current OS and architecture."""
+    plat_id = get_platform_id()
     ext = ".exe" if sys.platform == "win32" else ""
-    binary_name = name + ext if not name.endswith(ext) else name
     
-    candidates = [
-        os.path.join(REPO_ROOT, "dist", "windows-amd64", binary_name),
-        os.path.join(REPO_ROOT, "dist", "windows-amd64", "claude-client", binary_name),
-        os.path.join(REPO_ROOT, "dist", "windows-amd64", "controlplane", binary_name),
-        os.path.join(REPO_ROOT, binary_name),
-        os.path.join(REPO_ROOT, "bap-edge", binary_name),
-        os.path.join(REPO_ROOT, "bap-controlplane", binary_name),
-        os.path.join(REPO_ROOT, "cchook", binary_name),
-        os.path.join(REPO_ROOT, "copilot", binary_name),
-    ]
-    for c in candidates:
-        if os.path.isfile(c):
-            return c
-    # Fallback to PATH
-    which_found = shutil.which(binary_name)
-    if which_found:
-        return which_found
-    return candidates[0]
+    # Try alternate names (e.g. interceptor vs cchook-interceptor)
+    aliases = [name]
+    if name == "interceptor":
+        aliases.append("cchook-interceptor")
+    elif name == "cchook-interceptor":
+        aliases.append("interceptor")
+
+    for alias in aliases:
+        binary_name = alias + ext if not alias.endswith(ext) else alias
+        candidates = [
+            # Priority 1: Specific architecture dist packages
+            os.path.join(REPO_ROOT, "dist", plat_id, "claude-client", binary_name),
+            os.path.join(REPO_ROOT, "dist", plat_id, binary_name),
+            os.path.join(REPO_ROOT, "dist", plat_id, "controlplane", binary_name),
+            # Priority 2: Fallback to general architecture if arm64/amd64 alias
+            os.path.join(REPO_ROOT, "dist", plat_id.replace("arm64", "amd64"), binary_name),
+            # Priority 3: Root and subproject folders
+            os.path.join(REPO_ROOT, binary_name),
+            os.path.join(REPO_ROOT, "bap-edge", binary_name),
+            os.path.join(REPO_ROOT, "bap-controlplane", binary_name),
+            os.path.join(REPO_ROOT, "cchook", binary_name),
+            os.path.join(REPO_ROOT, "copilot", binary_name),
+        ]
+        for c in candidates:
+            if os.path.isfile(c):
+                return c
+
+    # Fallback to system PATH
+    for alias in aliases:
+        binary_name = alias + ext if not alias.endswith(ext) else alias
+        which_found = shutil.which(binary_name)
+        if which_found:
+            return which_found
+
+    primary = name + ext if not name.endswith(ext) else name
+    return os.path.join(REPO_ROOT, "dist", plat_id, primary)
 
 
 def update_user_path(target_dir: str):
@@ -143,13 +175,25 @@ def update_user_path(target_dir: str):
             print(f"  {TermColor.YELLOW}[!] Notice: Could not update registry PATH automatically: {e}{TermColor.RESET}")
     else:
         # macOS / Linux: Append to shell profile
-        shell_profiles = [
-            os.path.expanduser("~/.bashrc"),
-            os.path.expanduser("~/.zshrc"),
-            os.path.expanduser("~/.profile"),
-        ]
+        home = os.path.expanduser("~")
+        shell = os.environ.get("SHELL", "")
+        if "zsh" in shell or sys.platform == "darwin":
+            preferred_profiles = [
+                os.path.join(home, ".zshrc"),
+                os.path.join(home, ".zprofile"),
+                os.path.join(home, ".bashrc"),
+                os.path.join(home, ".profile"),
+            ]
+        else:
+            preferred_profiles = [
+                os.path.join(home, ".bashrc"),
+                os.path.join(home, ".profile"),
+                os.path.join(home, ".zshrc"),
+            ]
+        
         export_line = f'export PATH="{clean_target}:$PATH"\n'
-        for profile in shell_profiles:
+        updated_any = False
+        for profile in preferred_profiles:
             if os.path.exists(profile):
                 try:
                     with open(profile, "r", encoding="utf-8") as f:
@@ -158,8 +202,20 @@ def update_user_path(target_dir: str):
                         with open(profile, "a", encoding="utf-8") as f:
                             f.write(f"\n# BAP Zero-Trust Path\n{export_line}")
                         print(f"  {TermColor.GREEN}[+] Appended PATH export to {profile}{TermColor.RESET}")
+                    else:
+                        print(f"  {TermColor.GREEN}[OK] {profile} already includes {clean_target}{TermColor.RESET}")
+                    updated_any = True
+                    break
                 except Exception as e:
                     print(f"  {TermColor.YELLOW}[!] Could not update {profile}: {e}{TermColor.RESET}")
+        if not updated_any:
+            fallback_profile = os.path.join(home, ".zshrc" if sys.platform == "darwin" else ".bashrc")
+            try:
+                with open(fallback_profile, "w", encoding="utf-8") as f:
+                    f.write(f"# BAP Zero-Trust Path\n{export_line}")
+                print(f"  {TermColor.GREEN}[+] Created {fallback_profile} with PATH export{TermColor.RESET}")
+            except Exception as e:
+                print(f"  {TermColor.YELLOW}[!] Could not create {fallback_profile}: {e}{TermColor.RESET}")
 
     # Also update current runtime process PATH
     if clean_target not in os.environ.get("PATH", "").split(os.pathsep):
@@ -169,9 +225,9 @@ def update_user_path(target_dir: str):
 def install_core_binaries(target_dir: str):
     """Copies BAP executables and configuration assets into the user-mode directory."""
     os.makedirs(target_dir, exist_ok=True)
-    print(f"\n[*] Deploying BAP Binaries to {target_dir}...")
+    plat_id = get_platform_id()
+    print(f"\n[*] Deploying BAP Binaries to {target_dir} (Platform: {plat_id})...")
 
-    # Assets to deploy
     binaries = [
         ("bapedge", "Edge Daemon & Execution Broker"),
         ("interceptor", "Claude Code Lifecycle Hook"),
@@ -182,25 +238,29 @@ def install_core_binaries(target_dir: str):
     ]
 
     deployed = 0
+    ext = ".exe" if sys.platform == "win32" else ""
     for bin_name, desc in binaries:
         src = get_source_binary(bin_name)
-        ext = ".exe" if sys.platform == "win32" else ""
         dst = os.path.join(target_dir, bin_name + ext)
         if os.path.isfile(src):
             try:
                 shutil.copy2(src, dst)
-                os.chmod(dst, 0o755)
+                if sys.platform != "win32":
+                    os.chmod(dst, 0o755)
                 size_kb = os.path.getsize(dst) / 1024
                 print(f"  {TermColor.GREEN}[+] {bin_name:<20}{TermColor.RESET} ({desc}) [{size_kb:.0f} KB]")
                 deployed += 1
             except Exception as e:
                 print(f"  {TermColor.YELLOW}[!] Failed copying {bin_name}: {e}{TermColor.RESET}")
         else:
-            print(f"  {TermColor.YELLOW}[-] Source binary not found: {bin_name} (Will build or download on demand){TermColor.RESET}")
+            if bin_name in ("bapedge", "interceptor"):
+                print(f"  {TermColor.YELLOW}[-] Essential binary not found: {bin_name} (Searched: {src}){TermColor.RESET}")
 
     # Deploy default Cedar baseline policy & schema
     for asset in ["policy.cedar", "schema.json", "bap-config.json"]:
         src = os.path.join(REPO_ROOT, asset)
+        if not os.path.isfile(src):
+            src = os.path.join(REPO_ROOT, "dist", plat_id, asset)
         dst = os.path.join(target_dir, asset)
         if os.path.isfile(src):
             shutil.copy2(src, dst)
@@ -209,13 +269,21 @@ def install_core_binaries(target_dir: str):
     # Deploy convenience wrapper scripts
     if sys.platform == "win32":
         wrappers = [
-            ("run_claude_bap.bat", os.path.join(REPO_ROOT, "dist", "windows-amd64", "claude-client", "run_claude_bap.bat")),
+            ("run_claude_bap.bat", os.path.join(REPO_ROOT, "dist", plat_id, "claude-client", "run_claude_bap.bat")),
             ("copilot-wrap.bat", os.path.join(REPO_ROOT, "copilot", "copilot-wrap.bat")),
         ]
-        for name, src in wrappers:
-            if os.path.isfile(src):
-                shutil.copy2(src, os.path.join(target_dir, name))
-                print(f"  {TermColor.GREEN}[+] Shell Wrapper: {name:<16}{TermColor.RESET}")
+    else:
+        wrappers = [
+            ("run_claude_bap.sh", os.path.join(REPO_ROOT, "dist", plat_id, "claude-client", "run_claude_bap.sh")),
+            ("copilot-wrap.sh", os.path.join(REPO_ROOT, "copilot", "copilot-wrap.sh")),
+        ]
+    for name, src in wrappers:
+        if os.path.isfile(src):
+            dst = os.path.join(target_dir, name)
+            shutil.copy2(src, dst)
+            if sys.platform != "win32":
+                os.chmod(dst, 0o755)
+            print(f"  {TermColor.GREEN}[+] Shell Wrapper: {name:<16}{TermColor.RESET}")
 
     return deployed
 
@@ -237,12 +305,12 @@ def configure_agent_hooks(workspace_root: str, target_dir: str):
     claude_hooks_dir = os.path.join(claude_dir, "hooks")
     os.makedirs(claude_hooks_dir, exist_ok=True)
     
-    # Copy interceptor into workspace hooks
     hook_dest = os.path.join(claude_hooks_dir, "interceptor.exe" if sys.platform == "win32" else "interceptor")
     if os.path.isfile(cchook_bin):
         try:
             shutil.copy2(cchook_bin, hook_dest)
-            os.chmod(hook_dest, 0o755)
+            if sys.platform != "win32":
+                os.chmod(hook_dest, 0o755)
         except Exception:
             pass
 
@@ -285,7 +353,7 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
 
 ## Mandatory Execution Rules
 1. **Always Use BAP Edge Execution Broker**:
-   - All shell executions MUST run through bapedge.exe exec:
+   - All shell executions MUST run through bapedge exec:
       {bapedge_bin} exec "<command>"
    - Never run raw, ungoverned shell commands on the host machine.
 2. **Zero-Trust Policy Enforcement**:
@@ -302,7 +370,23 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
         detected_agents.append("Google Antigravity (Existing GEMINI.md Preserved + MCP Installed)")
         print(f"  {TermColor.GREEN}[+] Google Antigravity:{TermColor.RESET} Verified active zero-trust rule at {gemini_md_path}")
 
-    # 3. GitHub Copilot (.vscode/settings.json + .vscode/mcp.json)
+    # 3. Cursor IDE (.cursorrules + .cursor/mcp.json)
+    cursor_dir = os.path.join(workspace_root, ".cursor")
+    os.makedirs(cursor_dir, exist_ok=True)
+    cursorrules_path = os.path.join(workspace_root, ".cursorrules")
+    if not os.path.isfile(cursorrules_path):
+        with open(cursorrules_path, "w", encoding="utf-8") as f:
+            f.write(f"""# BAP Zero-Trust Policy for Cursor Assistant
+All terminal and tool commands must be routed through the BAP broker:
+{bapedge_bin} exec "<command>"
+""")
+    cursor_mcp_path = os.path.join(cursor_dir, "mcp.json")
+    with open(cursor_mcp_path, "w", encoding="utf-8") as f:
+        json.dump(claude_mcp, f, indent=2)
+    detected_agents.append("Cursor IDE (.cursorrules + MCP Installed)")
+    print(f"  {TermColor.GREEN}[+] Cursor IDE:{TermColor.RESET} Configured broker routing in {cursorrules_path}")
+
+    # 4. GitHub Copilot (.vscode/settings.json + .vscode/mcp.json)
     vscode_dir = os.path.join(workspace_root, ".vscode")
     os.makedirs(vscode_dir, exist_ok=True)
     vscode_settings_path = os.path.join(vscode_dir, "settings.json")
@@ -314,12 +398,25 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
         except Exception:
             pass
 
-    wrap_bat = os.path.join(target_dir, "copilot-wrap.bat")
     if sys.platform == "win32":
+        wrap_bat = os.path.join(target_dir, "copilot-wrap.bat")
         vscode_settings["terminal.integrated.profiles.windows"] = {
             "CopilotSandbox": {"path": wrap_bat, "overrideName": True}
         }
         vscode_settings["terminal.integrated.defaultProfile.windows"] = "CopilotSandbox"
+    elif sys.platform == "darwin":
+        wrap_sh = os.path.join(target_dir, "copilot-wrap.sh")
+        vscode_settings["terminal.integrated.profiles.osx"] = {
+            "CopilotSandbox": {"path": wrap_sh, "overrideName": True}
+        }
+        vscode_settings["terminal.integrated.defaultProfile.osx"] = "CopilotSandbox"
+    else:
+        wrap_sh = os.path.join(target_dir, "copilot-wrap.sh")
+        vscode_settings["terminal.integrated.profiles.linux"] = {
+            "CopilotSandbox": {"path": wrap_sh, "overrideName": True}
+        }
+        vscode_settings["terminal.integrated.defaultProfile.linux"] = "CopilotSandbox"
+
     with open(vscode_settings_path, "w", encoding="utf-8") as f:
         json.dump(vscode_settings, f, indent=2)
 
@@ -338,7 +435,7 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
     detected_agents.append("GitHub Copilot (VS Code Profile + MCP Installed)")
     print(f"  {TermColor.GREEN}[+] GitHub Copilot:{TermColor.RESET} Configured VS Code sandbox in {vscode_settings_path}")
 
-    # 4. Python Agent SDK
+    # 5. Python Agent SDK
     py_agent_dir = os.path.join(REPO_ROOT, "python-agent")
     if os.path.isdir(py_agent_dir):
         print(f"  {TermColor.GREEN}[+] Python SDK:{TermColor.RESET} Local SDK available at {py_agent_dir}")
@@ -378,6 +475,89 @@ def run_pin_scan(target_dir: str, workspace_root: str):
             print(f"  {TermColor.YELLOW}[!] Could not execute pin scan: {e}{TermColor.RESET}")
 
 
+def uninstall(target_dir: str, workspace_root: str):
+    """Cleanly uninstalls BAP binaries, reverts PATH, and restores agent configurations across Windows, macOS, and Linux."""
+    print("=" * 80)
+    print(f"     {TermColor.YELLOW}{TermColor.BOLD}BAP ZERO-TRUST AGENT GOVERNANCE -- UNINSTALLATION{TermColor.RESET}")
+    print("=" * 80)
+    print(f"[*] Target Directory to Remove: {target_dir}")
+
+    # 1. Remove deployed files
+    if os.path.isdir(target_dir):
+        try:
+            shutil.rmtree(target_dir)
+            print(f"  {TermColor.GREEN}[+] Removed installation directory: {target_dir}{TermColor.RESET}")
+        except Exception as e:
+            print(f"  {TermColor.YELLOW}[!] Could not delete directory {target_dir}: {e}{TermColor.RESET}")
+
+    # 2. Revert User PATH
+    clean_target = os.path.normpath(target_dir)
+    if sys.platform == "win32":
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment", 0, winreg.KEY_READ | winreg.KEY_WRITE)
+            try:
+                current_path, _ = winreg.QueryValueEx(key, "Path")
+            except FileNotFoundError:
+                current_path = ""
+            paths = [p.strip() for p in current_path.split(";") if p.strip() and os.path.normpath(p.strip()) != clean_target]
+            new_path = ";".join(paths)
+            winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, new_path)
+            winreg.CloseKey(key)
+            print(f"  {TermColor.GREEN}[+] Cleaned {clean_target} from Windows User PATH{TermColor.RESET}")
+        except Exception as e:
+            print(f"  {TermColor.YELLOW}[!] Notice: Registry PATH reversion: {e}{TermColor.RESET}")
+    else:
+        home = os.path.expanduser("~")
+        for p_name in [".bashrc", ".zshrc", ".profile", ".zprofile"]:
+            prof = os.path.join(home, p_name)
+            if os.path.isfile(prof):
+                try:
+                    with open(prof, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+                    filtered = [l for l in lines if clean_target not in l and "# BAP Zero-Trust Path" not in l]
+                    if len(filtered) != len(lines):
+                        with open(prof, "w", encoding="utf-8") as f:
+                            f.writelines(filtered)
+                        print(f"  {TermColor.GREEN}[+] Removed BAP PATH export from {prof}{TermColor.RESET}")
+                except Exception:
+                    pass
+
+    # 3. Clean workspace hooks
+    claude_settings = os.path.join(workspace_root, ".claude", "settings.json")
+    if os.path.isfile(claude_settings):
+        try:
+            with open(claude_settings, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if "hooks" in data:
+                del data["hooks"]
+                with open(claude_settings, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                print(f"  {TermColor.GREEN}[+] Reverted Claude Code hooks in {claude_settings}{TermColor.RESET}")
+        except Exception:
+            pass
+
+    vscode_settings = os.path.join(workspace_root, ".vscode", "settings.json")
+    if os.path.isfile(vscode_settings):
+        try:
+            with open(vscode_settings, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data.pop("terminal.integrated.profiles.windows", None)
+            data.pop("terminal.integrated.defaultProfile.windows", None)
+            data.pop("terminal.integrated.profiles.osx", None)
+            data.pop("terminal.integrated.defaultProfile.osx", None)
+            data.pop("terminal.integrated.profiles.linux", None)
+            data.pop("terminal.integrated.defaultProfile.linux", None)
+            with open(vscode_settings, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            print(f"  {TermColor.GREEN}[+] Reverted VS Code Copilot terminal profiles{TermColor.RESET}")
+        except Exception:
+            pass
+
+    print("\n" + "=" * 80)
+    print(f"  {TermColor.GREEN}[SUCCESS] BAP Uninstallation Complete.{TermColor.RESET}")
+    print("=" * 80)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="BAP Universal User-Mode Installer — Single-click Zero-Trust onboarding for AI developer agents"
@@ -389,7 +569,12 @@ def main():
     parser.add_argument("--offline", action="store_true", help="Install in purely offline local governance mode")
     parser.add_argument("--no-path", action="store_true", help="Skip updating User environment PATH")
     parser.add_argument("--non-interactive", action="store_true", help="Bypass interactive prompts and use defaults")
+    parser.add_argument("--uninstall", action="store_true", help="Cleanly uninstall BAP binaries and restore original agent hooks")
     args = parser.parse_args()
+
+    if args.uninstall:
+        uninstall(args.dir, args.workspace)
+        sys.exit(0)
 
     selected_server = args.server
     is_offline = args.offline
@@ -417,9 +602,11 @@ def main():
             print("\n  Using default remote server.")
             selected_server = DEFAULT_REMOTE_SERVER
 
+    plat_id = get_platform_id()
     print("=" * 80)
     print(f"     {TermColor.CYAN}{TermColor.BOLD}BAP ZERO-TRUST ENTERPRISE AGENT GOVERNANCE -- UNIVERSAL INSTALLER{TermColor.RESET}")
     print("=" * 80)
+    print(f"[*] Detected Platform:    {plat_id} ({platform.system()} {platform.machine()})")
     print(f"[*] Target Install Mode:  {'SYSTEM SERVICE (Administrator)' if args.system else 'USER MODE (Zero Privilege / No Root)'}")
     print(f"[*] Target Directory:     {args.dir}")
     print(f"[*] Target Workspace:     {args.workspace}")

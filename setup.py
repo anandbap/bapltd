@@ -21,6 +21,10 @@ setup(
     author_email="security@bapltd.com",
     url="https://bap-controlplane.onrender.com",
     packages=find_packages(include=["bap", "bap.*", "bap_sdk", "bap_sdk.*"]),
+    package_data={
+        "bap": ["bin/*/*", "bin/*", "*.py"],
+    },
+    include_package_data=True,
     python_requires=">=3.8",
     install_requires=[],
     entry_points={

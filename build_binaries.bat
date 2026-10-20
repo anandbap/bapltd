@@ -5,6 +5,12 @@ set "ROOT_DIR=%~dp0"
 cd /d "%ROOT_DIR%"
 set "GOTOOLCHAIN=auto"
 
+set "BUILD_WHEEL=0"
+if "%1"=="--wheel" set "BUILD_WHEEL=1"
+if "%2"=="--wheel" set "BUILD_WHEEL=1"
+if "%1"=="-wheel" set "BUILD_WHEEL=1"
+if "%2"=="-wheel" set "BUILD_WHEEL=1"
+
 if "%1"=="--all" goto :build_all
 if "%1"=="-all" goto :build_all
 
@@ -127,10 +133,25 @@ if %ERRORLEVEL% neq 0 (
 
 del /f /q "%ROOT_DIR%*.old" >nul 2>&1
 
+if "%BUILD_WHEEL%"=="1" (
+    echo.
+    echo [*] Building Python Wheel (.whl) package with embedded Go binaries...
+    python "%ROOT_DIR%scripts\build_wheel.py"
+    if !ERRORLEVEL! neq 0 (
+        echo [ERROR] Failed to build Python wheel!
+        exit /b !ERRORLEVEL!
+    )
+)
+
 echo All Windows binaries built and synchronized successfully.
-echo (Tip: Run 'build_binaries.bat --all' or 'build_all_platforms.bat' to build Linux and macOS binaries)
+echo (Tip: Run 'build_binaries.bat --all' to build all platforms, or 'build_wheel.bat' to package the Python wheel)
 exit /b 0
 
 :build_all
 call "%ROOT_DIR%build_all_platforms.bat" %*
+if "%BUILD_WHEEL%"=="1" (
+    echo.
+    echo [*] Packaging universal multi-platform Python Wheel...
+    python "%ROOT_DIR%scripts\build_wheel.py" --all
+)
 exit /b %ERRORLEVEL%
