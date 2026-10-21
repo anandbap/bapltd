@@ -12,7 +12,7 @@ import (
 )
 
 func (s *Server) registerControlPlaneRoutes() {
-	// BAP-210 & Agent Watch V2: Mount Mission Control, Trust Command & Capability Atlas
+	// BAP-210 & Agent Watch V2/V3: Mount Mission Control, Trust Command & Capability Atlas
 	webFS := dashboardui.AssetsFS()
 	files := http.StripPrefix("/dashboard/", http.FileServer(http.FS(webFS)))
 
@@ -26,6 +26,18 @@ func (s *Server) registerControlPlaneRoutes() {
 				HttpOnly: false,
 			})
 		}
+	}
+
+	serveV3 := func(w http.ResponseWriter, r *http.Request) {
+		setAuthCookie(w, r)
+		v3Data, err := fs.ReadFile(webFS, "v3.html")
+		if err != nil {
+			http.Error(w, "v3 asset unavailable", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(v3Data)
 	}
 
 	serveV2 := func(w http.ResponseWriter, r *http.Request) {
@@ -52,6 +64,12 @@ func (s *Server) registerControlPlaneRoutes() {
 		_, _ = w.Write(v1Data)
 	}
 
+	s.mux.HandleFunc("/dashboard/v3", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/dashboard/v3/", http.StatusTemporaryRedirect)
+	})
+	s.mux.HandleFunc("/dashboard/v3/", func(w http.ResponseWriter, r *http.Request) {
+		serveV3(w, r)
+	})
 	s.mux.HandleFunc("/dashboard/v2", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard/v2/", http.StatusTemporaryRedirect)
 	})
@@ -74,10 +92,13 @@ func (s *Server) registerControlPlaneRoutes() {
 	s.mux.HandleFunc("/dashboard/", func(w http.ResponseWriter, r *http.Request) {
 		setAuthCookie(w, r)
 		if r.URL.Path == "/dashboard/" {
-			if r.URL.Query().Get("v") == "legacy" || r.URL.Query().Get("v") == "v1" {
+			switch r.URL.Query().Get("v") {
+			case "legacy", "v1":
 				serveV1(w, r)
-			} else {
+			case "v2":
 				serveV2(w, r)
+			default:
+				serveV3(w, r)
 			}
 			return
 		}
