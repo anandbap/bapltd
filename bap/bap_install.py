@@ -416,19 +416,24 @@ def configure_agent_hooks(workspace_root: str, target_dir: str):
 
     detected_agents = []
 
-    # 1. Claude Code - Global configuration (~/.claude)
-    home = os.path.expanduser("~")
-    global_claude_dir = os.path.join(home, ".claude")
-    configure_claude_code(global_claude_dir, cchook_bin, mcp_bin, bapedge_bin, is_global=True)
-    detected_agents.append("Claude Code (Global Hooks + MCP Installed)")
+    # 1. Claude Code - Workspace configuration
+    ws_claude_dir = os.path.join(workspace_root, ".claude")
+    configure_claude_code(ws_claude_dir, cchook_bin, mcp_bin, bapedge_bin, is_global=False)
+    detected_agents.append("Claude Code (Hooks + MCP Installed)")
 
-    # If workspace_root is distinct from user home, also configure workspace Claude Code
+    # Also configure Global User (~/.claude) if installing to the default user bin or from user home
+    home = os.path.expanduser("~")
     norm_workspace = os.path.normpath(workspace_root).lower()
     norm_home = os.path.normpath(home).lower()
-    if norm_workspace != norm_home:
-        ws_claude_dir = os.path.join(workspace_root, ".claude")
-        configure_claude_code(ws_claude_dir, cchook_bin, mcp_bin, bapedge_bin, is_global=False)
-        detected_agents.append("Claude Code (Workspace Hooks + MCP Installed)")
+    norm_target = os.path.normpath(target_dir).lower()
+    default_dir = os.path.normpath(resolve_default_install_dir()).lower()
+    roaming_dir = os.path.normpath(resolve_default_install_dir(roaming=True)).lower()
+
+    if norm_workspace == norm_home or norm_target in (default_dir, roaming_dir):
+        global_claude_dir = os.path.join(home, ".claude")
+        if os.path.normpath(global_claude_dir).lower() != os.path.normpath(ws_claude_dir).lower():
+            configure_claude_code(global_claude_dir, cchook_bin, mcp_bin, bapedge_bin, is_global=True)
+            detected_agents.append("Claude Code (Global Hooks + MCP Installed)")
 
     # 2. Google Antigravity
     antigravity_dir = os.path.join(workspace_root, ".antigravity")
@@ -602,13 +607,9 @@ def revert_claude_code(claude_dir: str):
                             del data["hooks"][event]
                 if not data["hooks"]:
                     del data["hooks"]
-            if data:
-                with open(claude_settings, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2)
-                print(f"  {TermColor.GREEN}[+] Reverted Claude Code hooks in {claude_settings}{TermColor.RESET}")
-            else:
-                os.remove(claude_settings)
-                print(f"  {TermColor.GREEN}[+] Removed Claude Code settings file {claude_settings}{TermColor.RESET}")
+            with open(claude_settings, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            print(f"  {TermColor.GREEN}[+] Reverted Claude Code hooks in {claude_settings}{TermColor.RESET}")
         except Exception as e:
             print(f"  {TermColor.YELLOW}[!] Could not revert Claude settings in {claude_settings}: {e}{TermColor.RESET}")
 
@@ -622,13 +623,9 @@ def revert_claude_code(claude_dir: str):
                 del data["mcpServers"]["bap-zero-trust"]
                 if not data["mcpServers"]:
                     del data["mcpServers"]
-            if data:
-                with open(claude_mcp, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2)
-                print(f"  {TermColor.GREEN}[+] Removed bap-zero-trust from {claude_mcp}{TermColor.RESET}")
-            else:
-                os.remove(claude_mcp)
-                print(f"  {TermColor.GREEN}[+] Removed Claude MCP file {claude_mcp}{TermColor.RESET}")
+            with open(claude_mcp, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            print(f"  {TermColor.GREEN}[+] Removed bap-zero-trust from {claude_mcp}{TermColor.RESET}")
         except Exception:
             pass
 
@@ -764,15 +761,22 @@ def uninstall(target_dir: str, workspace_root: str):
                 except Exception:
                     pass
 
-    # 3. Clean Claude Code Hooks (Global & Workspace)
-    global_claude_dir = os.path.join(home, ".claude")
-    revert_claude_code(global_claude_dir)
-    
+    # 3. Clean Claude Code Hooks (Workspace)
+    ws_claude_dir = os.path.join(workspace_root, ".claude")
+    if os.path.isdir(ws_claude_dir):
+        revert_claude_code(ws_claude_dir)
+
     norm_workspace = os.path.normpath(workspace_root).lower()
     norm_home = os.path.normpath(home).lower()
-    if norm_workspace != norm_home:
-        ws_claude_dir = os.path.join(workspace_root, ".claude")
-        revert_claude_code(ws_claude_dir)
+    norm_target = os.path.normpath(target_dir).lower()
+    default_dir = os.path.normpath(resolve_default_install_dir()).lower()
+    roaming_dir = os.path.normpath(resolve_default_install_dir(roaming=True)).lower()
+
+    # Clean Global Claude Code hooks if target_dir is default user bin or workspace is home
+    if norm_workspace == norm_home or norm_target in (default_dir, roaming_dir):
+        global_claude_dir = os.path.join(home, ".claude")
+        if os.path.normpath(global_claude_dir).lower() != os.path.normpath(ws_claude_dir).lower() and os.path.isdir(global_claude_dir):
+            revert_claude_code(global_claude_dir)
 
     # 4. Clean Antigravity (GEMINI.md)
     gemini_md = os.path.join(workspace_root, "GEMINI.md")
