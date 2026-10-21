@@ -65,19 +65,31 @@ func (s *Server) registerControlPlaneRoutes() {
 	}
 
 	s.mux.HandleFunc("/dashboard/v3", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/dashboard/v3/", http.StatusTemporaryRedirect)
+		target := "/dashboard/v3/"
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, target, http.StatusTemporaryRedirect)
 	})
 	s.mux.HandleFunc("/dashboard/v3/", func(w http.ResponseWriter, r *http.Request) {
 		serveV3(w, r)
 	})
 	s.mux.HandleFunc("/dashboard/v2", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/dashboard/v2/", http.StatusTemporaryRedirect)
+		target := "/dashboard/v2/"
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, target, http.StatusTemporaryRedirect)
 	})
 	s.mux.HandleFunc("/dashboard/v2/", func(w http.ResponseWriter, r *http.Request) {
 		serveV2(w, r)
 	})
 	s.mux.HandleFunc("/dashboard/v1", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/dashboard/v1/", http.StatusTemporaryRedirect)
+		target := "/dashboard/v1/"
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, target, http.StatusTemporaryRedirect)
 	})
 	s.mux.HandleFunc("/dashboard/v1/", func(w http.ResponseWriter, r *http.Request) {
 		serveV1(w, r)
@@ -92,20 +104,25 @@ func (s *Server) registerControlPlaneRoutes() {
 	s.mux.HandleFunc("/dashboard/", func(w http.ResponseWriter, r *http.Request) {
 		setAuthCookie(w, r)
 		if r.URL.Path == "/dashboard/" {
-			switch r.URL.Query().Get("v") {
-			case "legacy", "v1":
-				serveV1(w, r)
-			case "v2":
+			if r.URL.Query().Get("persona") != "" || r.URL.Query().Get("v") == "v2" {
 				serveV2(w, r)
-			default:
-				serveV3(w, r)
+				return
 			}
+			if r.URL.Query().Get("v") == "legacy" || r.URL.Query().Get("v") == "v1" {
+				serveV1(w, r)
+				return
+			}
+			serveV3(w, r)
 			return
 		}
 		files.ServeHTTP(w, r)
 	})
 	s.mux.HandleFunc("/dashboard", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/dashboard/", http.StatusFound)
+		target := "/dashboard/"
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, target, http.StatusFound)
 	})
 
 	s.mux.HandleFunc("/dashboard-config", func(w http.ResponseWriter, r *http.Request) {

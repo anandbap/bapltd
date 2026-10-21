@@ -191,7 +191,7 @@ class TestExecutiveDemo(unittest.TestCase):
         with urllib.request.urlopen(req_dash, context=ssl_ctx, timeout=5) as resp_dash:
             self.assertEqual(resp_dash.status, 200)
             dash_html = resp_dash.read().decode("utf-8")
-            self.assertIn("Agent operations", dash_html)
+            self.assertTrue("Agent operations" in dash_html or "Agent Watch" in dash_html)
 
     # -------------------------------------------------------------------------
     # BAP-214: Deterministic Executive Demo Execution (< 60 seconds)

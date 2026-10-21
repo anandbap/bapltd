@@ -50,7 +50,11 @@ func Handler(controlPlane *url.URL, transport http.RoundTripper, allowRemoteAdmi
 		http.Redirect(w, r, "/dashboard/", http.StatusTemporaryRedirect)
 	})
 	mux.HandleFunc("/dashboard", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/dashboard/", http.StatusTemporaryRedirect)
+		target := "/dashboard/"
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, target, http.StatusTemporaryRedirect)
 	})
 
 	serveV3 := func(w http.ResponseWriter, r *http.Request) {
@@ -113,14 +117,15 @@ func Handler(controlPlane *url.URL, transport http.RoundTripper, allowRemoteAdmi
 
 	mux.HandleFunc("/dashboard/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/dashboard/" {
-			switch r.URL.Query().Get("v") {
-			case "legacy", "v1":
-				serveV1(w, r)
-			case "v2":
+			if r.URL.Query().Get("persona") != "" || r.URL.Query().Get("v") == "v2" {
 				serveV2(w, r)
-			default:
-				serveV3(w, r)
+				return
 			}
+			if r.URL.Query().Get("v") == "legacy" || r.URL.Query().Get("v") == "v1" {
+				serveV1(w, r)
+				return
+			}
+			serveV3(w, r)
 			return
 		}
 		files.ServeHTTP(w, r)
