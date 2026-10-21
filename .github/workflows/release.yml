@@ -337,12 +337,27 @@ jobs:
           path: release-artifacts
           merge-multiple: true
 
-      - name: Build Python Distribution Packages (Wheel & sdist)
+      - name: Build & Stage Universal Python Packages (Wheel & sdist)
         shell: bash
         run: |
-          python scripts/build_wheel.py
+          mkdir -p pypi-dist
+          echo "Scanning for existing universal wheels and sdist archives..."
+          find . -type f -name "*py3-none-any.whl" -exec cp -v {} pypi-dist/ \;
+          find . -type f -name "*.tar.gz" -path "*/dist/*" -exec cp -v {} pypi-dist/ \;
+          
+          if ! ls pypi-dist/*py3-none-any.whl 1> /dev/null 2>&1; then
+            echo "[!] Building universal Python distributions from source..."
+            python scripts/build_wheel.py --universal
+            find dist -type f -name "*py3-none-any.whl" -exec cp -v {} pypi-dist/ \;
+            find dist -type f -name "*.tar.gz" -exec cp -v {} pypi-dist/ \;
+          fi
+          
           echo "=== Ready for PyPI Deployment ==="
-          ls -la dist/*.whl dist/*.tar.gz 2>/dev/null || true
+          ls -lh pypi-dist/
+          if ! ls pypi-dist/*py3-none-any.whl 1> /dev/null 2>&1; then
+            echo "ERROR: Universal multi-OS wheel (*-py3-none-any.whl) not found in pypi-dist!"
+            exit 1
+          fi
 
       - name: Publish Package to PyPI (OIDC Trusted Publishing)
         if: env.HAS_PYPI_SECRET != 'true'
@@ -350,7 +365,7 @@ jobs:
         env:
           HAS_PYPI_SECRET: ${{ secrets.PYPI_API_TOKEN != '' }}
         with:
-          packages-dir: dist/
+          packages-dir: pypi-dist/
           skip-existing: true
           verbose: true
 
@@ -361,6 +376,6 @@ jobs:
           HAS_PYPI_SECRET: ${{ secrets.PYPI_API_TOKEN != '' }}
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
-          packages-dir: dist/
+          packages-dir: pypi-dist/
           skip-existing: true
           verbose: true
