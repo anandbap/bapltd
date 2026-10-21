@@ -85,8 +85,11 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
 $candidateExecutables = @(
     (Join-Path $env:LOCALAPPDATA "Programs\antigravity\Antigravity.exe"),
     "Antigravity.exe",
+    "Antigravity.cmd",
+    "Antigravity.bat",
     "code.cmd",
-    "code.exe"
+    "code.exe",
+    "code"
 )
 
 Invoke-BapGovernedSession `

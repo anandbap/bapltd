@@ -95,17 +95,24 @@ function Resolve-BinaryPath {
             return (Resolve-Path -LiteralPath $p).Path
         }
     }
+    $isWin = ($env:OS -like "*Windows*") -or ($null -ne (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue) -and $IsWindows) -or ([System.Environment]::OSVersion.Platform -match "Win")
     foreach ($name in $Commands) {
         if ([string]::IsNullOrWhiteSpace($name)) { continue }
-        $cmd = Get-Command $name -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($null -ne $cmd) {
-            if ($cmd.PSObject.Properties.Name -contains 'Source' -and -not [string]::IsNullOrWhiteSpace([string]$cmd.Source)) {
-                return [string]$cmd.Source
+        $tryList = @($name)
+        if ($isWin -and -not [System.IO.Path]::HasExtension($name)) {
+            $tryList += @("$name.cmd", "$name.bat", "$name.exe")
+        }
+        foreach ($cand in $tryList) {
+            $cmd = Get-Command $cand -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($null -ne $cmd) {
+                if ($cmd.PSObject.Properties.Name -contains 'Source' -and -not [string]::IsNullOrWhiteSpace([string]$cmd.Source)) {
+                    return [string]$cmd.Source
+                }
+                if ($cmd.PSObject.Properties.Name -contains 'Path' -and -not [string]::IsNullOrWhiteSpace([string]$cmd.Path)) {
+                    return [string]$cmd.Path
+                }
+                return $cand
             }
-            if ($cmd.PSObject.Properties.Name -contains 'Path' -and -not [string]::IsNullOrWhiteSpace([string]$cmd.Path)) {
-                return [string]$cmd.Path
-            }
-            return $name
         }
     }
     return $null

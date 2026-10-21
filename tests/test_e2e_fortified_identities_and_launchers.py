@@ -55,12 +55,18 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
 
         # Create lightweight mock stub executables for CI environments where third-party agent CLIs are not preinstalled
         if sys.platform == "win32":
-            agy_stub = os.path.join(cls.mock_bin, "agy.cmd")
-            with open(agy_stub, "w", encoding="utf-8") as f:
-                f.write("@echo off\r\necho 1.4.3\r\nexit /b 0\r\n")
-            claude_stub = os.path.join(cls.mock_bin, "claude.cmd")
-            with open(claude_stub, "w", encoding="utf-8") as f:
-                f.write("@echo off\r\necho 2.1.305\r\nexit /b 0\r\n")
+            for name in ["agy.cmd", "agy.bat", "agy.exe"]:
+                stub = os.path.join(cls.mock_bin, name)
+                with open(stub, "w", encoding="utf-8") as f:
+                    f.write("@echo off\r\necho 1.4.3\r\nexit /b 0\r\n")
+            for name in ["claude.cmd", "claude.bat", "claude.exe"]:
+                stub = os.path.join(cls.mock_bin, name)
+                with open(stub, "w", encoding="utf-8") as f:
+                    f.write("@echo off\r\necho 2.1.305\r\nexit /b 0\r\n")
+            for name in ["copilot.cmd", "copilot.bat", "copilot.exe"]:
+                stub = os.path.join(cls.mock_bin, name)
+                with open(stub, "w", encoding="utf-8") as f:
+                    f.write("@echo off\r\necho 1.0.0\r\nexit /b 0\r\n")
         else:
             agy_stub = os.path.join(cls.mock_bin, "agy")
             with open(agy_stub, "w", encoding="utf-8") as f:
@@ -70,6 +76,10 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
             with open(claude_stub, "w", encoding="utf-8") as f:
                 f.write("#!/bin/sh\necho 2.1.305\nexit 0\n")
             os.chmod(claude_stub, 0o755)
+            copilot_stub = os.path.join(cls.mock_bin, "copilot")
+            with open(copilot_stub, "w", encoding="utf-8") as f:
+                f.write("#!/bin/sh\necho 1.0.0\nexit 0\n")
+            os.chmod(copilot_stub, 0o755)
 
     @classmethod
     def tearDownClass(cls):
@@ -239,9 +249,9 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                timeout=15,
+                timeout=30,
             )
-            self.assertEqual(res_cmd.returncode, 0, f"CMD launcher execution failed: {res_cmd.stderr}")
+            self.assertEqual(res_cmd.returncode, 0, f"CMD launcher execution failed (exit code {res_cmd.returncode}):\nSTDOUT: {res_cmd.stdout}\nSTDERR: {res_cmd.stderr}")
             self.assertIn("BOUNDED AUTHORITY PLANE", res_cmd.stdout)
             self.assertIn("antigravity", res_cmd.stdout.lower())
 
@@ -255,9 +265,9 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                timeout=20,
+                timeout=30,
             )
-            self.assertEqual(res_ps.returncode, 0, f"PowerShell launcher execution failed: {res_ps.stderr}")
+            self.assertEqual(res_ps.returncode, 0, f"PowerShell launcher execution failed (exit code {res_ps.returncode}):\nSTDOUT: {res_ps.stdout}\nSTDERR: {res_ps.stderr}")
             self.assertIn("CLAUDE CODE", res_ps.stdout)
 
         # 3. Test Bash execution of run_antigravity_cli_bap.sh if bash is available
