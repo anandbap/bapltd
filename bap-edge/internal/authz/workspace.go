@@ -51,9 +51,20 @@ func IsPathOutsideWorkspace(workspaceRoot, targetPath string) bool {
 		return false
 	}
 	cleanRoot := filepath.Clean(workspaceRoot)
+
+	// Explicit root reference (e.g. "/" or "/*" or "\*") targets the filesystem or drive root,
+	// which is strictly outside any project workspace boundary.
+	normTarget := strings.ReplaceAll(targetPath, "\\", "/")
+	if normTarget == "/" || normTarget == "/*" || normTarget == "/." {
+		return true
+	}
+
 	var absTarget string
 	if filepath.IsAbs(targetPath) {
 		absTarget = filepath.Clean(targetPath)
+	} else if strings.HasPrefix(normTarget, "/") {
+		vol := filepath.VolumeName(cleanRoot)
+		absTarget = filepath.Clean(vol + filepath.FromSlash(normTarget))
 	} else {
 		absTarget = filepath.Clean(filepath.Join(cleanRoot, targetPath))
 	}

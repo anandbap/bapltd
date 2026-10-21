@@ -63,17 +63,34 @@ class TestExecutiveDemo(unittest.TestCase):
         cls.server_url = get_control_plane_url()
         cls.admin_token = read_admin_token()
 
-        # Check server health
+        # Check server health and verify admin token authentication
         req = urllib.request.Request(f"{cls.server_url}/api/v1/health")
         healthy = False
         try:
             with urllib.request.urlopen(req, context=ssl_ctx, timeout=2) as resp:
                 if resp.status == 200:
-                    healthy = True
+                    # Probe admin endpoint to verify the active server accepts our admin token
+                    adm_probe = urllib.request.Request(f"{cls.server_url}/api/v1/admin/inspector/data")
+                    if cls.admin_token:
+                        adm_probe.add_header("Authorization", f"Bearer {cls.admin_token}")
+                        adm_probe.add_header("X-BAP-Admin-Token", cls.admin_token)
+                    with urllib.request.urlopen(adm_probe, context=ssl_ctx, timeout=2) as aresp:
+                        if aresp.status == 200:
+                            adata = json.loads(aresp.read().decode("utf-8"))
+                            sess_list = adata.get("sessions", [])
+                            if not sess_list or not any("[Protected:" in str(s.get("session_id", "")) for s in sess_list):
+                                healthy = True
         except Exception:
             pass
 
         if not healthy:
+            # Terminate any lingering/orphaned controlplane server on the port so we can bind with fresh credentials
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/F", "/IM", "bapcontrolplane.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                subprocess.run(["pkill", "-9", "-f", "bapcontrolplane"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(0.5)
+
             cp_candidates = [
                 os.path.join(WORKSPACE_ROOT, "bapcontrolplane.exe"),
                 os.path.join(WORKSPACE_ROOT, "dist", "windows-amd64", "bapcontrolplane.exe"),

@@ -53,9 +53,32 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
         bap_install.install_core_binaries(cls.mock_bin)
         bap_install.configure_agent_hooks(cls.mock_ws, cls.mock_bin)
 
+        # Create lightweight mock stub executables for CI environments where third-party agent CLIs are not preinstalled
+        if sys.platform == "win32":
+            agy_stub = os.path.join(cls.mock_bin, "agy.cmd")
+            with open(agy_stub, "w", encoding="utf-8") as f:
+                f.write("@echo off\r\necho 1.4.3\r\nexit /b 0\r\n")
+            claude_stub = os.path.join(cls.mock_bin, "claude.cmd")
+            with open(claude_stub, "w", encoding="utf-8") as f:
+                f.write("@echo off\r\necho 2.1.305\r\nexit /b 0\r\n")
+        else:
+            agy_stub = os.path.join(cls.mock_bin, "agy")
+            with open(agy_stub, "w", encoding="utf-8") as f:
+                f.write("#!/bin/sh\necho 1.4.3\nexit 0\n")
+            os.chmod(agy_stub, 0o755)
+            claude_stub = os.path.join(cls.mock_bin, "claude")
+            with open(claude_stub, "w", encoding="utf-8") as f:
+                f.write("#!/bin/sh\necho 2.1.305\nexit 0\n")
+            os.chmod(claude_stub, 0o755)
+
     @classmethod
     def tearDownClass(cls):
         bap_install.uninstall(cls.mock_bin, cls.mock_ws)
+        # Terminate any controlplane process spawned by launchers during tests
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/IM", "bapcontrolplane.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.run(["pkill", "-9", "-f", "bapcontrolplane"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         shutil.rmtree(cls.temp_dir, ignore_errors=True)
 
     def test_01_all_five_agent_identities_and_receipt_attestation(self):
@@ -203,12 +226,16 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
         if sys.platform != "win32":
             self.skipTest("Windows shell launchers tested on win32")
 
+        env = os.environ.copy()
+        env["PATH"] = self.mock_bin + os.pathsep + env.get("PATH", "")
+
         # 1. Test CMD execution of run_antigravity_cli_bap.bat --version
         bat_launcher = os.path.join(self.mock_bin, "run_antigravity_cli_bap.bat")
         if os.path.isfile(bat_launcher):
             res_cmd = subprocess.run(
                 ["cmd.exe", "/c", bat_launcher, "--version"],
                 cwd=self.mock_ws,
+                env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -224,6 +251,7 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
             res_ps = subprocess.run(
                 ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1_launcher, "--version"],
                 cwd=self.mock_ws,
+                env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -252,10 +280,14 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
         if not os.path.isfile(doctor_py):
             self.skipTest("bap_doctor.py not found")
 
+        env = os.environ.copy()
+        env["PATH"] = self.mock_bin + os.pathsep + env.get("PATH", "")
+
         # Run doctor from isolated workspace
         res = subprocess.run(
             [sys.executable, doctor_py],
             cwd=self.mock_ws,
+            env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -264,7 +296,10 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
         self.assertEqual(res.returncode, 0, f"bap doctor returned error: {res.stderr}\n{res.stdout}")
         self.assertIn("Cedar Policy (policy.cedar)", res.stdout)
         self.assertIn("PASS", res.stdout)
-        # Verify it loaded from bin/policy.cedar
+        # Verify it loaded from an installed binary/release directory (bin or dist) and NOT repo root
+        out_lower = res.stdout.lower()
+        self.assertTrue("policy.cedar" in out_lower)
+        self.assertTrue("bin" in out_lower or "dist" in out_lower)
         self.assertIn("bin\\policy.cedar", res.stdout.lower())
 
 
