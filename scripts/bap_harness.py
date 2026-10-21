@@ -182,16 +182,21 @@ def cmd_init(args):
             print(f"[-] Warning copying hook: {e}")
 
     settings_file = os.path.join(claude_dir, "settings.json")
+    hook_cmd = "interceptor.exe" if sys.platform == "win32" else "interceptor"
+    interceptor_hook = {
+        "type": "command",
+        "command": hook_cmd
+    }
     claude_settings = {
         "hooks": {
             "SessionStart": [
-                {"command": interceptor_dest}
+                {"hooks": [interceptor_hook]}
             ],
             "UserPromptSubmit": [
-                {"command": interceptor_dest}
+                {"hooks": [interceptor_hook]}
             ],
             "PreToolUse": [
-                {"matcher": "*", "command": interceptor_dest}
+                {"matcher": "*", "hooks": [interceptor_hook]}
             ]
         }
     }

@@ -361,9 +361,10 @@ def configure_claude_code(claude_dir: str, cchook_bin: str, mcp_bin: str, bapedg
     if "hooks" not in claude_settings or not isinstance(claude_settings["hooks"], dict):
         claude_settings["hooks"] = {}
 
+    hook_cmd = "interceptor.exe" if sys.platform == "win32" else "interceptor"
     interceptor_hook = {
         "type": "command",
-        "command": active_hook
+        "command": hook_cmd
     }
 
     claude_settings["hooks"]["SessionStart"] = [
@@ -667,16 +668,18 @@ def uninstall(target_dir: str, workspace_root: str):
         "copilot-wrap.bat", "copilot-wrap.sh"
     ]
 
+    default_dir = resolve_default_install_dir()
     candidate_dirs = [target_dir]
-    if sys.platform == "win32":
-        if os.environ.get("APPDATA"):
-            candidate_dirs.append(os.path.join(os.environ["APPDATA"], "BAP", "bin"))
-        if os.environ.get("LOCALAPPDATA"):
-            candidate_dirs.append(os.path.join(os.environ["LOCALAPPDATA"], "BAP", "bin"))
-        candidate_dirs.append(os.path.join(home, "bin"))
-    else:
-        candidate_dirs.append(os.path.join(home, "bin"))
-        candidate_dirs.append(os.path.expanduser("~/.local/bin"))
+    if os.path.abspath(target_dir).lower() == os.path.abspath(default_dir).lower():
+        if sys.platform == "win32":
+            if os.environ.get("APPDATA"):
+                candidate_dirs.append(os.path.join(os.environ["APPDATA"], "BAP", "bin"))
+            if os.environ.get("LOCALAPPDATA"):
+                candidate_dirs.append(os.path.join(os.environ["LOCALAPPDATA"], "BAP", "bin"))
+            candidate_dirs.append(os.path.join(home, "bin"))
+        else:
+            candidate_dirs.append(os.path.join(home, "bin"))
+            candidate_dirs.append(os.path.expanduser("~/.local/bin"))
 
     # Remove duplicates
     seen = set()

@@ -166,9 +166,10 @@ def stage_binaries(platforms: list):
     print(f"[*] Total binaries staged: {staged_count} across {len(platforms)} platform(s)")
 
 def copy_installer_script():
-    installer_src = os.path.join(REPO_ROOT, "scripts", "bap_install.py")
-    if os.path.isfile(installer_src):
-        shutil.copy2(installer_src, os.path.join(BAP_PKG_DIR, "bap_install.py"))
+    for sname in ["bap_install.py", "bap_doctor.py", "bap_launch.py", "bap_harness.py"]:
+        src = os.path.join(REPO_ROOT, "scripts", sname)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(BAP_PKG_DIR, sname))
 
 def clean_build_artifacts():
     shutil.rmtree(os.path.join(REPO_ROOT, "build"), ignore_errors=True)

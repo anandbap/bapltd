@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "C:\\Users\\User\\bin\\interceptor.exe"
+            "command": "interceptor.exe"
           }
         ]
       }
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "C:\\Users\\User\\bin\\interceptor.exe"
+            "command": "interceptor.exe"
           }
         ]
       }
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "C:\\Users\\User\\bin\\interceptor.exe"
+            "command": "interceptor.exe"
           }
         ]
       }
