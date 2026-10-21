@@ -71,16 +71,24 @@ class DoctorChecklist:
 def find_binary(name: str, repo_root: str):
     ext = ".exe" if sys.platform == "win32" else ""
     target = name + ext
+    home = os.path.expanduser("~")
     
     # Priority 1: User PATH
     which_path = shutil.which(target)
     if which_path and os.path.isfile(which_path):
         return which_path
 
-    # Priority 2: User local install
-    user_bin = os.path.join(os.environ.get("LOCALAPPDATA", ""), "BAP", "bin", target) if sys.platform == "win32" else os.path.expanduser(f"~/.local/bin/{target}")
-    if os.path.isfile(user_bin):
-        return user_bin
+    # Priority 2: Standard User bin & Application Directories
+    candidates = [
+        os.path.join(home, "bin", target),
+        os.path.join(os.environ.get("APPDATA", ""), "BAP", "bin", target) if sys.platform == "win32" else None,
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "BAP", "bin", target) if sys.platform == "win32" else None,
+        os.path.expanduser(f"~/.local/bin/{target}"),
+        os.path.expanduser(f"~/.bap/bin/{target}"),
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c
 
     # Priority 3: Current directory or repo root
     cwd_bin = os.path.abspath(target)

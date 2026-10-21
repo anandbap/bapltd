@@ -1,0 +1,14 @@
+{
+    "mcpServers":  {
+                       "bap-zero-trust":  {
+                                              "command":  "C:\\Users\\User\\pyprj\\bapltd\\bapmcp.exe",
+                                              "args":  [
+
+                                                       ],
+                                              "env":  {
+                                                          "LTD_SOURCE":  "antigravity",
+                                                          "BAP_SESSION_ID":  "sess-antigravity-cli-6e0fc81e"
+                                                      }
+                                          }
+                   }
+}

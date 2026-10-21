@@ -1,64 +1,55 @@
 {
-    "disableAllHooks":  false,
-    "hooks":  {
-                  "SessionStart":  [
-                                       {
-                                           "hooks":  [
-                                                         {
-                                                             "type":  "command",
-                                                             "command":  "C:\\Users\\User\\pyprj\\bapltd\\dist\\windows-amd64\\claude-client\\cchook\\interceptor.exe",
-                                                             "args":  [
-
-                                                                      ]
-                                                         }
-                                                     ]
-                                       }
-                                   ],
-                  "UserPromptSubmit":  [
-                                           {
-                                               "hooks":  [
-                                                             {
-                                                                 "type":  "command",
-                                                                 "command":  "C:\\Users\\User\\pyprj\\bapltd\\dist\\windows-amd64\\claude-client\\cchook\\interceptor.exe",
-                                                                 "args":  [
-
-                                                                          ]
-                                                             }
-                                                         ]
-                                           }
-                                       ],
-                  "PreToolUse":  [
-                                     {
-                                         "matcher":  "*",
-                                         "hooks":  [
-                                                       {
-                                                           "type":  "command",
-                                                           "command":  "C:\\Users\\User\\pyprj\\bapltd\\dist\\windows-amd64\\claude-client\\cchook\\interceptor.exe",
-                                                           "args":  [
-
-                                                                    ]
-                                                       }
-                                                   ]
-                                     }
-                                 ],
-                  "ConfigChange":  [
-                                       {
-                                           "matcher":  "project_settings|local_settings",
-                                           "hooks":  [
-                                                         {
-                                                             "type":  "command",
-                                                             "command":  "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-                                                             "args":  [
-                                                                          "-NoProfile",
-                                                                          "-ExecutionPolicy",
-                                                                          "Bypass",
-                                                                          "-File",
-                                                                          "C:\\Users\\User\\AppData\\Local\\Temp\\bap-claude-session-guard-9705-31714.ps1",
-                                                                          "--bap-config-guard"
-                                                                      ]
-                                                         }
-                                                     ]
-                                       }
-                                   ]
-              }
+  "disableAllHooks": false,
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\Users\\User\\bin\\interceptor.exe"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\Users\\User\\bin\\interceptor.exe"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\Users\\User\\bin\\interceptor.exe"
+          }
+        ]
+      }
+    ],
+    "ConfigChange": [
+      {
+        "matcher": "project_settings|local_settings",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "C:\\Users\\User\\AppData\\Local\\Temp\\bap-claude-session-guard-9705-31714.ps1",
+              "--bap-config-guard"
+            ]
+          }
+        ]
+      }
+    ]
+  }
 }

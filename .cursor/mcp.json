@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "bap-zero-trust": {
+      "command": "C:\\Users\\User\\bin\\bapmcp.exe",
+      "args": [],
+      "env": {
+        "LTD_SOURCE": "cursor-code",
+        "BAP_SESSION_ID": "sess-cursor-governed"
+      }
+    }
+  }
+}

@@ -20,6 +20,7 @@ Usage: bap <command> [options]
 
 Commands:
   install       Run single-click user-mode onboarding installer
+  uninstall     Cleanly remove BAP binaries, PATH entries, and agent hooks
   launch        Start developer cockpit, verify hooks & monitor agents
   doctor        Run comprehensive pre-flight diagnostic health check
   status        Check health of local edge daemon and central control plane
@@ -29,6 +30,7 @@ Commands:
 
 Examples:
   bap install
+  bap uninstall
   bap doctor
   bap launch
   bap status
@@ -39,9 +41,13 @@ Examples:
 def find_bapedge() -> str:
     ext = ".exe" if sys.platform == "win32" else ""
     binary_name = "bapedge" + ext
+    home = os.path.expanduser("~")
     candidates = [
+        os.path.join(home, "bin", binary_name),
+        os.path.join(os.environ.get("APPDATA", ""), "BAP", "bin", binary_name),
         os.path.join(os.environ.get("LOCALAPPDATA", ""), "BAP", "bin", binary_name),
         os.path.expanduser(f"~/.local/bin/{binary_name}"),
+        os.path.expanduser(f"~/.bap/bin/{binary_name}"),
         os.path.abspath(binary_name),
     ]
     for c in candidates:
@@ -66,8 +72,11 @@ def main():
     elif cmd in ["-v", "--version", "version"]:
         print(f"bap version {__version__}")
         sys.exit(0)
-    elif cmd == "install":
+    elif cmd in ["install", "setup"]:
         sys.argv = [sys.argv[0]] + rest
+        install_main()
+    elif cmd in ["uninstall", "remove"]:
+        sys.argv = [sys.argv[0], "--uninstall"] + rest
         install_main()
     elif cmd == "launch":
         sys.argv = [sys.argv[0]] + rest

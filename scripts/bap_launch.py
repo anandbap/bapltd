@@ -49,10 +49,14 @@ def find_bapedge() -> str:
     """Finds the bapedge binary in user directory, repo root, or PATH."""
     ext = ".exe" if sys.platform == "win32" else ""
     binary_name = "bapedge" + ext
+    home = os.path.expanduser("~")
     
     candidates = [
+        os.path.join(home, "bin", binary_name),
+        os.path.join(os.environ.get("APPDATA", ""), "BAP", "bin", binary_name),
         os.path.join(os.environ.get("LOCALAPPDATA", ""), "BAP", "bin", binary_name),
         os.path.expanduser(f"~/.local/bin/{binary_name}"),
+        os.path.expanduser(f"~/.bap/bin/{binary_name}"),
         os.path.join(REPO_ROOT, binary_name),
         os.path.join(REPO_ROOT, "dist", "windows-amd64", binary_name),
         os.path.join(REPO_ROOT, "bap-edge", binary_name),

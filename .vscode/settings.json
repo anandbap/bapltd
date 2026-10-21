@@ -1,11 +1,10 @@
 {
   "terminal.integrated.profiles.windows": {
-    "CopilotZeroTrust": {
-      "path": "copilot\\copilot-wrap.bat",
-      "args": [],
+    "CopilotSandbox": {
+      "path": "C:\\Users\\User\\bin\\copilot-wrap.bat",
       "overrideName": true
     }
   },
-  "terminal.integrated.defaultProfile.windows": "CopilotZeroTrust",
+  "terminal.integrated.defaultProfile.windows": "CopilotSandbox",
   "files.autoSave": "off"
 }
