@@ -115,6 +115,25 @@ class TestPackagingAndCICD(unittest.TestCase):
         build_deb_path = os.path.join(self.packaging_dir, "linux", "build_deb.sh")
         self.assertTrue(os.path.exists(build_deb_path), "build_deb.sh must exist")
 
+    def test_pypi_auto_publishing_configuration(self):
+        """Verify CI and Release workflows have automated PyPI publishing configured."""
+        ci_path = os.path.join(self.workflows_dir, "ci.yml")
+        with open(ci_path, "r", encoding="utf-8") as f:
+            ci_content = f.read()
+
+        self.assertIn("publish-pypi", ci_content, "ci.yml must include publish-pypi job")
+        self.assertIn("pypa/gh-action-pypi-publish", ci_content, "ci.yml must use gh-action-pypi-publish")
+        self.assertIn("id-token: write", ci_content, "ci.yml must specify id-token: write for PyPI OIDC")
+        self.assertIn("skip-existing: true", ci_content, "ci.yml must skip existing versions gracefully")
+
+        release_path = os.path.join(self.workflows_dir, "release.yml")
+        with open(release_path, "r", encoding="utf-8") as f:
+            release_content = f.read()
+
+        self.assertIn("publish-pypi", release_content, "release.yml must include publish-pypi job")
+        self.assertIn("pypa/gh-action-pypi-publish", release_content, "release.yml must use gh-action-pypi-publish")
+        self.assertIn("id-token: write", release_content, "release.yml must specify id-token: write for PyPI OIDC")
+
 
 if __name__ == "__main__":
     unittest.main()

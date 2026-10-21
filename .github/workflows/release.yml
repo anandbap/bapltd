@@ -302,3 +302,65 @@ jobs:
 
             ### 🔐 Cryptographic Integrity
             All binaries and packages are indexed in `SHA256SUMS.txt`.
+
+  # ---------------------------------------------------------------------------
+  # PyPI Automated Publishing
+  # ---------------------------------------------------------------------------
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [build-and-package, publish-release]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    environment:
+      name: pypi
+      url: https://pypi.org/p/bap-ltd
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Build Tools
+        run: |
+          python -m pip install --upgrade pip build setuptools wheel
+
+      - name: Download Built Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Build Python Distribution Packages (Wheel & sdist)
+        shell: bash
+        run: |
+          python scripts/build_wheel.py
+          echo "=== Ready for PyPI Deployment ==="
+          ls -la dist/*.whl dist/*.tar.gz 2>/dev/null || true
+
+      - name: Publish Package to PyPI (OIDC Trusted Publishing)
+        if: env.HAS_PYPI_SECRET != 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        env:
+          HAS_PYPI_SECRET: ${{ secrets.PYPI_API_TOKEN != '' }}
+        with:
+          packages-dir: dist/
+          skip-existing: true
+          verbose: true
+
+      - name: Publish Package to PyPI (API Token Secret)
+        if: env.HAS_PYPI_SECRET == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        env:
+          HAS_PYPI_SECRET: ${{ secrets.PYPI_API_TOKEN != '' }}
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          packages-dir: dist/
+          skip-existing: true
+          verbose: true

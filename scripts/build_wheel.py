@@ -141,11 +141,29 @@ def build_universal_wheel():
         return latest
     return None
 
+def build_sdist():
+    print("\n[*] Packaging Python source distribution (sdist .tar.gz)...")
+    cmd = [sys.executable, "setup.py", "sdist"]
+    res = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(f"[!] Error building sdist: {res.stderr}")
+        return None
+    dist_dir = os.path.join(REPO_ROOT, "dist")
+    sdists = [os.path.join(dist_dir, f) for f in os.listdir(dist_dir) if f.endswith(".tar.gz") and "bap" in f]
+    if sdists:
+        latest = max(sdists, key=os.path.getmtime)
+        sz_mb = os.path.getsize(latest) / (1024 * 1024)
+        print(f"  [+] Built sdist: {os.path.basename(latest)} ({sz_mb:.2f} MB)")
+        return latest
+    return None
+
 def main():
     parser = argparse.ArgumentParser(description="Build BAP Python Wheels")
     parser.add_argument("--universal", action="store_true", help="Build single fat universal wheel with all 5 platforms (py3-none-any)")
     parser.add_argument("--all", action="store_true", help="Alias for --universal")
     parser.add_argument("--platform-wheels", action="store_true", help="Build all separate lean platform-specific wheels")
+    parser.add_argument("--sdist", action="store_true", help="Build source distribution (.tar.gz)")
+    parser.add_argument("--no-sdist", action="store_true", help="Skip building source distribution")
     args = parser.parse_args()
 
     if args.universal or args.all:
@@ -159,6 +177,9 @@ def main():
         curr_plat = get_platform_id()
         curr_tag = PLATFORM_TAG_MAP.get(curr_plat, "any")
         build_single_wheel(curr_plat, curr_tag)
+
+    if not args.no_sdist:
+        build_sdist()
 
 if __name__ == "__main__":
     main()

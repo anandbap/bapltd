@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bap-ltd"
-version = "1.3.3"
+version = "1.3.4"
 description = "Bounded Authority Plane (BAP) - Zero-Trust Local Trusted Daemon & Governance for AI Developer Agents"
 readme = "README.md"
 requires-python = ">=3.8"

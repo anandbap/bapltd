@@ -70,7 +70,7 @@ jobs:
           Copy-Item -Force interceptor.exe ..\dist\windows-amd64\claude-client\interceptor.exe
           Pop-Location
 
-      - name: Build Python Wheel Package
+      - name: Build Python Distribution Packages (Wheel & sdist)
         run: |
           python scripts/build_wheel.py
 
@@ -78,7 +78,7 @@ jobs:
         run: |
           python -m unittest discover tests
 
-      - name: Upload Windows AMD64 Executables
+      - name: Upload Windows AMD64 Executables & Distributions
         uses: actions/upload-artifact@v4
         with:
           name: bap-windows-amd64-executables
@@ -90,4 +90,59 @@ jobs:
             bapmcp.exe
             dist/windows-amd64/*.exe
             dist/*.whl
+            dist/*.tar.gz
           retention-days: 14
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [test-go, test-python]
+    runs-on: ubuntu-latest
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    environment:
+      name: pypi
+      url: https://pypi.org/p/bap-ltd
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download Built Python Packages
+        uses: actions/download-artifact@v4
+        with:
+          name: bap-windows-amd64-executables
+          path: download-dist
+
+      - name: Stage Python Packages for PyPI
+        shell: bash
+        run: |
+          mkdir -p pypi-dist
+          # Only stage Python wheel and source archives, excluding Windows .exe binaries
+          cp download-dist/*.whl pypi-dist/ 2>/dev/null || true
+          cp download-dist/*.tar.gz pypi-dist/ 2>/dev/null || true
+          echo "=== Ready for PyPI Deployment ==="
+          ls -la pypi-dist/
+          if [ -z "$(ls -A pypi-dist)" ]; then
+            echo "ERROR: No .whl or .tar.gz distributions found!"
+            exit 1
+          fi
+
+      - name: Publish Package to PyPI (OIDC Trusted Publishing)
+        if: env.HAS_PYPI_SECRET != 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        env:
+          HAS_PYPI_SECRET: ${{ secrets.PYPI_API_TOKEN != '' }}
+        with:
+          packages-dir: pypi-dist/
+          skip-existing: true
+          verbose: true
+
+      - name: Publish Package to PyPI (API Token Secret)
+        if: env.HAS_PYPI_SECRET == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        env:
+          HAS_PYPI_SECRET: ${{ secrets.PYPI_API_TOKEN != '' }}
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          packages-dir: pypi-dist/
+          skip-existing: true
+          verbose: true
