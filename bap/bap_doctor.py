@@ -128,16 +128,33 @@ def run_doctor():
     else:
         checklist.report("interceptor (Hook)", "WARN", "interceptor not found in PATH or dist.")
 
-    launcher_names = ["run_claude_bap.bat", "run_claude_bap.ps1", "run_claude_bap.sh"]
-    launcher_found = False
-    for l_name in launcher_names:
-        lp = os.path.join(repo_root, l_name)
-        if os.path.isfile(lp):
-            checklist.report("run_claude_bap (Launcher)", "PASS", lp)
-            launcher_found = True
-            break
-    if not launcher_found:
-        checklist.report("run_claude_bap (Launcher)", "WARN", "Launcher scripts not found in workspace.")
+    launchers_to_check = [
+        ("Claude Code", ["run_claude_bap.bat", "run_claude_bap.ps1", "run_claude_bap.sh", "run_claude_cli_bap.bat", "run_claude_cli_bap.sh"]),
+        ("Google Antigravity", ["run_antigravity_cli_bap.bat", "run_antigravity_cli_bap.ps1", "run_antigravity_cli_bap.sh"]),
+        ("GitHub Copilot", ["run_copilot_cli_bap.bat", "run_copilot_cli_bap.ps1", "run_copilot_cli_bap.sh", "copilot-wrap.bat", "copilot-wrap.sh"]),
+    ]
+    home = os.path.expanduser("~")
+    user_bin = os.path.join(home, "bin")
+    appdata_bin = os.path.join(os.environ.get("APPDATA", ""), "BAP", "bin")
+    for agent_label, l_names in launchers_to_check:
+        found_path = None
+        for l_name in l_names:
+            candidates = [
+                os.path.join(repo_root, l_name),
+                os.path.join(user_bin, l_name),
+                os.path.join(appdata_bin, l_name),
+                shutil.which(l_name)
+            ]
+            for cand in candidates:
+                if cand and os.path.isfile(cand):
+                    found_path = cand
+                    break
+            if found_path:
+                break
+        if found_path:
+            checklist.report(f"{agent_label} Launcher", "PASS", found_path)
+        else:
+            checklist.report(f"{agent_label} Launcher", "WARN", f"Launcher scripts not found in workspace or PATH.")
 
     # Section 2: AI Agent Runtime Detection
     print(f"\n{CYAN}[2/5] AI Agent Runtime Detection...{RESET}")

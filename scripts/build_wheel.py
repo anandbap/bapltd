@@ -166,7 +166,7 @@ def stage_binaries(platforms: list):
     print(f"[*] Total binaries staged: {staged_count} across {len(platforms)} platform(s)")
 
 def copy_installer_script():
-    for sname in ["bap_install.py", "bap_doctor.py", "bap_launch.py", "bap_harness.py"]:
+    for sname in ["bap_install.py", "bap_doctor.py", "bap_launch.py", "bap_harness.py", "bap_launcher_engine.ps1"]:
         src = os.path.join(REPO_ROOT, "scripts", sname)
         if os.path.isfile(src):
             shutil.copy2(src, os.path.join(BAP_PKG_DIR, sname))

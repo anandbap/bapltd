@@ -6,9 +6,15 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$enginePath = Join-Path $PSScriptRoot "scripts\bap_launcher_engine.ps1"
+$enginePath = Join-Path $PSScriptRoot "bap_launcher_engine.ps1"
+if (-not (Test-Path -LiteralPath $enginePath)) {
+    $enginePath = Join-Path $PSScriptRoot "scripts\bap_launcher_engine.ps1"
+}
 if (-not (Test-Path -LiteralPath $enginePath)) {
     $enginePath = Join-Path (Join-Path $PSScriptRoot "..") "scripts\bap_launcher_engine.ps1"
+}
+if (-not (Test-Path -LiteralPath $enginePath)) {
+    $enginePath = "bap_launcher_engine.ps1"
 }
 . $enginePath
 

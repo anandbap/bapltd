@@ -299,33 +299,73 @@ def install_core_binaries(target_dir: str):
             shutil.copy2(src, dst)
             print(f"  {TermColor.GREEN}[+] Configuration: {asset:<16}{TermColor.RESET}")
 
-    # Deploy convenience wrapper scripts
+    # Deploy convenience wrapper scripts and transactional agent launchers
+    launcher_bases = [
+        "run_antigravity_cli_bap",
+        "run_antigravity_ide_bap",
+        "run_copilot_cli_bap",
+        "run_copilot_ide_bap",
+        "run_claude_cli_bap",
+        "run_claude_ide_bap",
+        "run_claude_bap",
+        "run_cursor_bap",
+        "run_gemini_cli_bap",
+    ]
+
+    wrappers = []
     if sys.platform == "win32":
-        wrappers = [
-            ("run_claude_bap.bat", os.path.join(REPO_ROOT, "dist", plat_id, "claude-client", "run_claude_bap.bat")),
-            ("run_claude_bap.ps1", os.path.join(REPO_ROOT, "dist", plat_id, "claude-client", "run_claude_bap.ps1")),
-            ("run_claude_bap.sh", os.path.join(REPO_ROOT, "dist", "linux-amd64", "claude-client", "run_claude_bap.sh")),
+        # Deploy bap_launcher_engine.ps1 first
+        engine_src = os.path.join(REPO_ROOT, "scripts", "bap_launcher_engine.ps1")
+        if not os.path.isfile(engine_src):
+            engine_src = os.path.join(pkg_dir, "bap_launcher_engine.ps1")
+        wrappers.append(("bap_launcher_engine.ps1", engine_src))
+
+        # Copilot wrap
+        wrappers.extend([
             ("copilot-wrap.bat", os.path.join(REPO_ROOT, "copilot", "copilot-wrap.bat")),
             ("copilot-wrap.ps1", os.path.join(REPO_ROOT, "copilot", "copilot-wrap.ps1")),
             ("copilot-wrap.sh", os.path.join(REPO_ROOT, "copilot", "copilot-wrap.sh")),
-        ]
+        ])
+
+        for base in launcher_bases:
+            # .bat
+            bat_src = os.path.join(REPO_ROOT, f"{base}.bat")
+            if not os.path.isfile(bat_src):
+                bat_src = os.path.join(REPO_ROOT, "dist", plat_id, "claude-client", f"{base}.bat")
+            wrappers.append((f"{base}.bat", bat_src))
+
+            # .ps1
+            ps1_src = os.path.join(REPO_ROOT, f"{base}.ps1")
+            if not os.path.isfile(ps1_src):
+                ps1_src = os.path.join(REPO_ROOT, "dist", plat_id, "claude-client", f"{base}.ps1")
+            wrappers.append((f"{base}.ps1", ps1_src))
+
+            # .sh
+            sh_src = os.path.join(REPO_ROOT, f"{base}.sh")
+            if not os.path.isfile(sh_src):
+                sh_src = os.path.join(REPO_ROOT, "dist", "linux-amd64", "claude-client", f"{base}.sh")
+            wrappers.append((f"{base}.sh", sh_src))
     else:
-        wrappers = [
-            ("run_claude_bap.sh", os.path.join(REPO_ROOT, "dist", plat_id, "claude-client", "run_claude_bap.sh")),
-            ("copilot-wrap.sh", os.path.join(REPO_ROOT, "copilot", "copilot-wrap.sh")),
-        ]
+        wrappers.append(("copilot-wrap.sh", os.path.join(REPO_ROOT, "copilot", "copilot-wrap.sh")))
+        for base in launcher_bases:
+            sh_src = os.path.join(REPO_ROOT, f"{base}.sh")
+            if not os.path.isfile(sh_src):
+                sh_src = os.path.join(REPO_ROOT, "dist", plat_id, "claude-client", f"{base}.sh")
+            wrappers.append((f"{base}.sh", sh_src))
+
     for name, src in wrappers:
         dst = os.path.join(target_dir, name)
-        if os.path.isfile(src):
+        if src and os.path.isfile(src):
             shutil.copy2(src, dst)
             if sys.platform != "win32":
                 os.chmod(dst, 0o755)
-            print(f"  {TermColor.GREEN}[+] Shell Wrapper: {name:<16}{TermColor.RESET}")
+            print(f"  {TermColor.GREEN}[+] Agent Launcher: {name:<26}{TermColor.RESET}")
         else:
             try:
+                base_no_ext = os.path.splitext(name)[0]
                 if name.endswith(".bat"):
                     with open(dst, "w", encoding="utf-8") as f:
-                        f.write(f"@echo off\r\n\"%~dp0bapedge.exe\" exec \"%*\"\r\n")
+                        f.write(f"@echo off\r\nsetlocal EnableExtensions\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0{base_no_ext}.ps1\" %*\r\nexit /b %ERRORLEVEL%\r\n")
                 elif name.endswith(".ps1"):
                     with open(dst, "w", encoding="utf-8") as f:
                         f.write(f"& \"$PSScriptRoot\\bapedge.exe\" exec $args\r\n")
@@ -333,7 +373,7 @@ def install_core_binaries(target_dir: str):
                     with open(dst, "w", encoding="utf-8") as f:
                         f.write(f"#!/bin/sh\n\"$(dirname \"$0\")/bapedge\" exec \"$@\"\n")
                     os.chmod(dst, 0o755)
-                print(f"  {TermColor.GREEN}[+] Shell Wrapper: {name:<16}{TermColor.RESET}")
+                print(f"  {TermColor.GREEN}[+] Agent Launcher: {name:<26}{TermColor.RESET}")
             except Exception:
                 pass
 
@@ -700,11 +740,19 @@ def uninstall(target_dir: str, workspace_root: str):
         "copilot-interceptor.exe", "copilot-interceptor",
         "bapmcp.exe", "bapmcp",
         "bapcontrolplane.exe", "bapcontrolplane",
+        "bap_launcher_engine.ps1",
         "policy.cedar", "schema.json", "bap-config.json",
         "policy-state.json", "ltd-audit.jsonl", ".bap-pin.json",
-        "run_claude_bap.bat", "run_claude_bap.sh", "run_claude_bap.ps1",
         "copilot-wrap.bat", "copilot-wrap.ps1", "copilot-wrap.sh"
     ]
+    for _base in [
+        "run_antigravity_cli_bap", "run_antigravity_ide_bap",
+        "run_copilot_cli_bap", "run_copilot_ide_bap",
+        "run_claude_cli_bap", "run_claude_ide_bap",
+        "run_claude_bap", "run_cursor_bap", "run_gemini_cli_bap"
+    ]:
+        for _ext in [".bat", ".ps1", ".sh", ""]:
+            bap_files.append(_base + _ext)
 
     default_dir = resolve_default_install_dir()
     candidate_dirs = [target_dir]

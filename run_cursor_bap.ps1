@@ -6,16 +6,27 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$enginePath = Join-Path $PSScriptRoot "scripts\bap_launcher_engine.ps1"
+$enginePath = Join-Path $PSScriptRoot "bap_launcher_engine.ps1"
+if (-not (Test-Path -LiteralPath $enginePath)) {
+    $enginePath = Join-Path $PSScriptRoot "scripts\bap_launcher_engine.ps1"
+}
 if (-not (Test-Path -LiteralPath $enginePath)) {
     $enginePath = Join-Path (Join-Path $PSScriptRoot "..") "scripts\bap_launcher_engine.ps1"
+}
+if (-not (Test-Path -LiteralPath $enginePath)) {
+    $enginePath = "bap_launcher_engine.ps1"
 }
 . $enginePath
 
 $configureFiles = {
     param($Workspace, $SessionId)
     $repoRoot = (Get-Item -Path $PSScriptRoot).FullName
-    $mcpBin = Join-Path $repoRoot "bapmcp.exe"
+    $mcpCandidates = @(
+        (Join-Path $PSScriptRoot "bapmcp.exe"),
+        (Join-Path $repoRoot "bapmcp.exe"),
+        (Join-Path $repoRoot "dist\windows-amd64\bapmcp.exe")
+    )
+    $mcpBin = Resolve-BinaryPath -Paths $mcpCandidates -Commands @('bapmcp.exe', 'bapmcp')
     if (-not (Test-Path -LiteralPath $mcpBin)) {
         $mcpBin = Join-Path $repoRoot "dist\windows-amd64\bapmcp.exe"
     }
