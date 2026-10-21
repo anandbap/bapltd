@@ -144,21 +144,8 @@ jobs:
             exit 1
           fi
 
-      - name: Publish Package to PyPI (OIDC Trusted Publishing)
-        if: env.HAS_PYPI_SECRET != 'true'
+      - name: Publish Package to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        env:
-          HAS_PYPI_SECRET: ${{ secrets.PYPI_API_TOKEN != '' }}
-        with:
-          packages-dir: pypi-dist/
-          skip-existing: true
-          verbose: true
-
-      - name: Publish Package to PyPI (API Token Secret)
-        if: env.HAS_PYPI_SECRET == 'true'
-        uses: pypa/gh-action-pypi-publish@release/v1
-        env:
-          HAS_PYPI_SECRET: ${{ secrets.PYPI_API_TOKEN != '' }}
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
           packages-dir: pypi-dist/
