@@ -1,4 +1,5 @@
 {
+  "files.autoSave": "off",
   "terminal.integrated.profiles.windows": {
     "CopilotSandbox": {
       "path": "C:\\Users\\User\\bin\\copilot-wrap.bat",
@@ -23,6 +24,5 @@
       "overrideName": true
     }
   },
-  "terminal.integrated.defaultProfile.windows": "CopilotSandbox",
-  "files.autoSave": "off"
+  "terminal.integrated.defaultProfile.windows": "CopilotSandbox"
 }

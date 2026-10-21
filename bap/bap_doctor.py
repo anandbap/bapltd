@@ -72,38 +72,45 @@ def find_binary(name: str, repo_root: str):
     ext = ".exe" if sys.platform == "win32" else ""
     target = name + ext
     home = os.path.expanduser("~")
-    
-    # Priority 1: User PATH
-    which_path = shutil.which(target)
-    if which_path and os.path.isfile(which_path):
-        return which_path
+    user_bin = os.path.join(home, "bin") if sys.platform == "win32" else os.path.expanduser("~/.local/bin")
+    if not os.path.isdir(user_bin) and not sys.platform == "win32":
+        user_bin = os.path.join(home, "bin")
 
-    # Priority 2: Standard User bin & Application Directories
-    candidates = [
-        os.path.join(home, "bin", target),
+    # Priority 1: User installed bin directory (canonical directory populated by 'bap install')
+    installed_target = os.path.join(user_bin, target)
+    if os.path.isfile(installed_target):
+        return os.path.abspath(installed_target)
+
+    # Priority 2: System / AppData Binaries
+    appdata_candidates = [
         os.path.join(os.environ.get("APPDATA", ""), "BAP", "bin", target) if sys.platform == "win32" else None,
         os.path.join(os.environ.get("LOCALAPPDATA", ""), "BAP", "bin", target) if sys.platform == "win32" else None,
-        os.path.expanduser(f"~/.local/bin/{target}"),
-        os.path.expanduser(f"~/.bap/bin/{target}"),
+        "/usr/local/bin/" + target,
+        "/usr/bin/" + target,
+        "/opt/bap/bin/" + target,
     ]
-    for c in candidates:
+    for c in appdata_candidates:
         if c and os.path.isfile(c):
-            return c
+            return os.path.abspath(c)
 
-    # Priority 3: Current directory or repo root
-    cwd_bin = os.path.abspath(target)
-    if os.path.isfile(cwd_bin):
-        return cwd_bin
+    # Priority 3: User PATH
+    which_path = shutil.which(target)
+    if which_path and os.path.isfile(which_path):
+        return os.path.abspath(which_path)
 
-    # Priority 4: Repo dist packaging
+    # Priority 4: Repo dist packaging or current directory fallback
     plat = "windows-amd64" if sys.platform == "win32" else ("darwin-arm64" if sys.platform == "darwin" else "linux-amd64")
     dist_bin = os.path.join(repo_root, "dist", plat, target)
     if os.path.isfile(dist_bin):
-        return dist_bin
+        return os.path.abspath(dist_bin)
 
     dist_client = os.path.join(repo_root, "dist", plat, "claude-client", target)
     if os.path.isfile(dist_client):
-        return dist_client
+        return os.path.abspath(dist_client)
+
+    cwd_bin = os.path.abspath(target)
+    if os.path.isfile(cwd_bin):
+        return cwd_bin
 
     return None
 
@@ -135,16 +142,21 @@ def run_doctor():
         ("GitHub Copilot", ["run_copilot_cli_bap.bat", "run_copilot_cli_bap.ps1", "run_copilot_cli_bap.sh", "copilot-wrap.bat", "copilot-wrap.sh"]),
     ]
     home = os.path.expanduser("~")
-    user_bin = os.path.join(home, "bin")
+    user_bin = os.path.join(home, "bin") if sys.platform == "win32" else os.path.expanduser("~/.local/bin")
+    if not os.path.isdir(user_bin) and not sys.platform == "win32":
+        user_bin = os.path.join(home, "bin")
     appdata_bin = os.path.join(os.environ.get("APPDATA", ""), "BAP", "bin")
+    bapedge_dir = os.path.dirname(bapedge) if bapedge else None
+
     for agent_label, l_names in launchers_to_check:
         found_path = None
         for l_name in l_names:
             candidates = [
-                os.path.join(repo_root, l_name),
                 os.path.join(user_bin, l_name),
+                os.path.join(bapedge_dir, l_name) if bapedge_dir else None,
                 os.path.join(appdata_bin, l_name),
-                shutil.which(l_name)
+                shutil.which(l_name),
+                os.path.join(repo_root, l_name),
             ]
             for cand in candidates:
                 if cand and os.path.isfile(cand):
@@ -183,12 +195,14 @@ def run_doctor():
     print(f"\n{CYAN}[3/5] Control Plane Connectivity & TLS...{RESET}")
     server_url = "https://localhost:8443"
     cfg_candidates = [
+        os.path.join(user_bin, "bap-config.json"),
+        os.path.join(bapedge_dir, "bap-config.json") if bapedge_dir else None,
+        os.path.join(appdata_bin, "bap-config.json") if appdata_bin else None,
+        os.path.expanduser("~/.bapstate/bap-config.json"),
+        os.path.join(pkg_dir, "bap-config.json"),
+        os.path.join(os.getcwd(), ".bap", "bap-config.json"),
         os.path.join(os.getcwd(), "bap-config.json"),
         os.path.join(repo_root, "bap-config.json"),
-        os.path.join(os.path.dirname(bapedge), "bap-config.json") if bapedge else None,
-        os.path.join(user_bin, "bap-config.json"),
-        os.path.join(appdata_bin, "bap-config.json"),
-        os.path.join(pkg_dir, "bap-config.json"),
     ]
     for cfg in cfg_candidates:
         if cfg and os.path.isfile(cfg):
@@ -218,12 +232,15 @@ def run_doctor():
     # Section 4: Cedar Policy Engine & Schema Invariants
     print(f"\n{CYAN}[4/5] Cedar Policy Engine & Schema Invariants...{RESET}")
     policy_candidates = [
+        os.path.join(user_bin, "policy.cedar"),
+        os.path.join(bapedge_dir, "policy.cedar") if bapedge_dir else None,
+        os.path.join(appdata_bin, "policy.cedar") if appdata_bin else None,
+        os.path.expanduser("~/.bapstate/policy/policy.cedar"),
+        os.path.expanduser("~/.bap/policy/policy.cedar"),
+        os.path.join(pkg_dir, "policy.cedar"),
+        os.path.join(os.getcwd(), ".bap", "policy.cedar"),
         os.path.join(os.getcwd(), "policy.cedar"),
         os.path.join(repo_root, "policy.cedar"),
-        os.path.join(os.path.dirname(bapedge), "policy.cedar") if bapedge else None,
-        os.path.join(user_bin, "policy.cedar"),
-        os.path.join(appdata_bin, "policy.cedar"),
-        os.path.join(pkg_dir, "policy.cedar"),
     ]
     policy_path = None
     for p in policy_candidates:

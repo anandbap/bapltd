@@ -1,6 +1,25 @@
 {
   "disableAllHooks": false,
   "hooks": {
+    "ConfigChange": [
+      {
+        "matcher": "project_settings|local_settings",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "C:\\Users\\User\\AppData\\Local\\Temp\\bap-claude-session-guard-9705-31714.ps1",
+              "--bap-config-guard"
+            ]
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [
@@ -28,25 +47,6 @@
           {
             "type": "command",
             "command": "interceptor.exe"
-          }
-        ]
-      }
-    ],
-    "ConfigChange": [
-      {
-        "matcher": "project_settings|local_settings",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-            "args": [
-              "-NoProfile",
-              "-ExecutionPolicy",
-              "Bypass",
-              "-File",
-              "C:\\Users\\User\\AppData\\Local\\Temp\\bap-claude-session-guard-9705-31714.ps1",
-              "--bap-config-guard"
-            ]
           }
         ]
       }

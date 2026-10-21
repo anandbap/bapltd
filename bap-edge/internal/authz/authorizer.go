@@ -372,31 +372,22 @@ func (a *Authorizer) evaluateAtomicNode(executable, fullCommand, args, workspace
 }
 
 // findFile resolves a file path by checking:
-// 1. Specified custom path (if non-empty and exists)
-// 2. Current working directory
-// 3. Executable's directory
-func findFile(customPath, defaultName string) (string, error) {
+// FindFile locates a configuration or policy asset across canonical release and runtime locations:
+// 1. Explicit custom path (if provided)
+// 2. Executable directory (where bapedge resides in bin/ alongside release policy.cedar)
+// 3. User standard bin directory (~/bin or ~/.local/bin)
+// 4. User cached policy directory (.bapstate/policy/ or ~/.bap/policy/)
+// 5. Workspace-specific sandbox (.bap/<defaultName>)
+// 6. Current working directory
+// 7. Parent directories (fallback for development / test suites)
+func FindFile(customPath, defaultName string) (string, error) {
 	if customPath != "" {
 		if _, err := os.Stat(customPath); err == nil {
 			return customPath, nil
 		}
 	}
 
-	// 1. Current directory
-	cwdFile := defaultName
-	if _, err := os.Stat(cwdFile); err == nil {
-		return cwdFile, nil
-	}
-
-	// 2. Parent directories (for subpackages, tests, or child directories)
-	for _, parent := range []string{"..", "../..", "../../..", "../../../.."} {
-		parentFile := filepath.Join(parent, defaultName)
-		if _, err := os.Stat(parentFile); err == nil {
-			return parentFile, nil
-		}
-	}
-
-	// 3. Executable directory
+	// 1. Executable directory (canonical location: release binaries & policy live together in bin/)
 	exe, err := os.Executable()
 	if err == nil {
 		exeDirFile := filepath.Join(filepath.Dir(exe), defaultName)
@@ -405,15 +396,19 @@ func findFile(customPath, defaultName string) (string, error) {
 		}
 	}
 
-	// 3. User cached policy directory (.bapstate/policy/ or legacy ~/.ltd/policy/)
-	stateCache := filepath.Join(state.PolicyDir(), defaultName)
-	if _, err := os.Stat(stateCache); err == nil {
-		return stateCache, nil
-	}
+	// 2. User standard bin and state directories
 	if home, err := os.UserHomeDir(); err == nil {
-		ltdCache := filepath.Join(home, ".ltd", "policy", defaultName)
-		if _, err := os.Stat(ltdCache); err == nil {
-			return ltdCache, nil
+		userBinFile := filepath.Join(home, "bin", defaultName)
+		if _, err := os.Stat(userBinFile); err == nil {
+			return userBinFile, nil
+		}
+		localBinFile := filepath.Join(home, ".local", "bin", defaultName)
+		if _, err := os.Stat(localBinFile); err == nil {
+			return localBinFile, nil
+		}
+		stateCache := filepath.Join(state.PolicyDir(), defaultName)
+		if _, err := os.Stat(stateCache); err == nil {
+			return stateCache, nil
 		}
 		bapCache := filepath.Join(home, ".bap", "policy", defaultName)
 		if _, err := os.Stat(bapCache); err == nil {
@@ -421,7 +416,35 @@ func findFile(customPath, defaultName string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("%s not found in custom path, current directory, executable directory, or .bapstate/policy/", defaultName)
+	// 3. Workspace-specific .bap directory
+	bapLocal := filepath.Join(".bap", defaultName)
+	if _, err := os.Stat(bapLocal); err == nil {
+		return bapLocal, nil
+	}
+
+	// 4. Current directory
+	cwdFile := defaultName
+	if _, err := os.Stat(cwdFile); err == nil {
+		return cwdFile, nil
+	}
+
+	// 5. Parent directories (development / test fallback)
+	for _, parent := range []string{"..", "../..", "../../..", "../../../.."} {
+		parentFile := filepath.Join(parent, defaultName)
+		if _, err := os.Stat(parentFile); err == nil {
+			return parentFile, nil
+		}
+	}
+
+	exeDir := ""
+	if err == nil {
+		exeDir = filepath.Dir(exe)
+	}
+	return "", fmt.Errorf("%s not found in executable directory (%s), user bin, policy cache, or workspace", defaultName, exeDir)
+}
+
+func findFile(customPath, defaultName string) (string, error) {
+	return FindFile(customPath, defaultName)
 }
 
 // CheckSessionRevocation checks if the given sessionID or system is blocked by local or cached policy state.

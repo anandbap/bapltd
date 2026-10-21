@@ -156,12 +156,22 @@ func (s *Store) Current() (string, string, PolicyState, error) {
 		}
 	}
 
-	// Fallback: search local candidate paths (policy.cedar in cwd, workspace root, or bap-edge)
-	candidates := []string{
+	// Fallback: search canonical release and candidate paths
+	var candidates []string
+	if exe, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "policy.cedar"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates,
+			filepath.Join(home, "bin", "policy.cedar"),
+			filepath.Join(home, ".local", "bin", "policy.cedar"),
+		)
+	}
+	candidates = append(candidates,
 		"policy.cedar",
 		filepath.Join("bap-edge", "policy.cedar"),
 		filepath.Join("..", "policy.cedar"),
-	}
+	)
 	if ws := authz.GetWorkspaceRoot(); ws != "" {
 		candidates = append(candidates,
 			filepath.Join(ws, "policy.cedar"),

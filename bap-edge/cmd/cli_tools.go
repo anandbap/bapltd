@@ -301,6 +301,11 @@ func RunStatus(args []string) error {
 		policyVersion = pState.Version
 		policyDigest = pState.Digest
 		killSwitch = pState.KillSwitch
+	} else if pPath, err := authz.FindFile("", "policy.cedar"); err == nil {
+		if pData, err := os.ReadFile(pPath); err == nil {
+			digest := sha256.Sum256(pData)
+			policyDigest = "sha256:" + hex.EncodeToString(digest[:])
+		}
 	} else if pData, err := os.ReadFile("policy.cedar"); err == nil {
 		digest := sha256.Sum256(pData)
 		policyDigest = "sha256:" + hex.EncodeToString(digest[:])

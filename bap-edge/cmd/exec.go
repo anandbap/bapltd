@@ -394,11 +394,18 @@ func generateExecutionReceipt(ec *execContext, result string, exitCode int) *typ
 		polPath = "policy.cedar"
 	}
 	var pBytes []byte
-	candidates := []string{polPath, filepath.Join("..", polPath), filepath.Join("..", "..", polPath)}
-	for _, cand := range candidates {
-		if data, err := os.ReadFile(cand); err == nil && len(data) > 0 {
+	if resolvedPath, err := authz.FindFile(ec.policyPath, "policy.cedar"); err == nil {
+		if data, err := os.ReadFile(resolvedPath); err == nil && len(data) > 0 {
 			pBytes = data
-			break
+		}
+	}
+	if len(pBytes) == 0 {
+		candidates := []string{polPath, filepath.Join("..", polPath), filepath.Join("..", "..", polPath)}
+		for _, cand := range candidates {
+			if data, err := os.ReadFile(cand); err == nil && len(data) > 0 {
+				pBytes = data
+				break
+			}
 		}
 	}
 	if len(pBytes) == 0 {
