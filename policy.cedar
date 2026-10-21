@@ -20,6 +20,7 @@ permit (
         "cd", "chdir", "pushd", "popd", "exit",
         "cmd", "powershell", "pwsh", "bash", "sh", "zsh",
         "grep", "findstr", "head", "tail", "wc", "sort", "uniq", "more",
+        "select-object", "where-object", "select-string", "sort-object", "measure-object", "get-content", "out-string",
         "taskkill", "kill", "pkill", "killall",
         "bapedge", "ltd-agent", "bapcontrolplane", "bapgateway", "bapmcp", "bap", "bapdashboard"
     ].contains(context.executable)

@@ -125,3 +125,29 @@ func TestParseAST_Redirections(t *testing.T) {
 		t.Errorf("redir 1 mismatch: %v", n.Redirections[1])
 	}
 }
+
+func TestParseAST_DescriptorRedirections(t *testing.T) {
+	cmd := "go test ./... 2>&1 | Select-Object -Last 15"
+	pipe, err := ParseAST(cmd)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pipe.Nodes) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(pipe.Nodes))
+	}
+	n0 := pipe.Nodes[0]
+	if n0.Executable != "go" {
+		t.Errorf("node 0 exec mismatch: got %q, want 'go'", n0.Executable)
+	}
+	if len(n0.Redirections) != 1 || n0.Redirections[0].Operator != "2>&1" {
+		t.Errorf("node 0 redir mismatch: %+v", n0.Redirections)
+	}
+	if n0.Operator != "|" {
+		t.Errorf("node 0 operator mismatch: got %q, want '|'", n0.Operator)
+	}
+
+	n1 := pipe.Nodes[1]
+	if n1.Executable != "Select-Object" {
+		t.Errorf("node 1 exec mismatch: got %q, want 'Select-Object'", n1.Executable)
+	}
+}

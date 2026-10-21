@@ -79,7 +79,11 @@ func ParseAST(fullCommand string) (*ASTPipeline, error) {
 		if len(currentRedirs) > 0 {
 			var redirParts []string
 			for _, r := range currentRedirs {
-				redirParts = append(redirParts, r.Operator+" "+r.Target)
+				if r.Target != "" {
+					redirParts = append(redirParts, r.Operator+" "+r.Target)
+				} else {
+					redirParts = append(redirParts, r.Operator)
+				}
 			}
 			if fullCmd != "" {
 				fullCmd += " " + strings.Join(redirParts, " ")
@@ -130,7 +134,8 @@ func ParseAST(fullCommand string) (*ASTPipeline, error) {
 			i++
 		case TokenRedirect:
 			target := ""
-			if i+1 < len(tokens) && tokens[i+1].typ == TokenWord {
+			// Redirection operators binding descriptors directly (e.g. 2>&1, 1>&2, >&1) do not consume the next token
+			if !strings.Contains(tok.value, "&") && i+1 < len(tokens) && tokens[i+1].typ == TokenWord {
 				target = tokens[i+1].value
 				i += 2
 			} else {
@@ -201,11 +206,21 @@ func tokenizeShell(cmd string) []token {
 			continue
 		}
 
-		// Redirections: >>, >, <, 1>, 2>, 2>&1
+		// Redirections: >>, >, <, 1>, 2>, 2>&1, 1>&2, >&1
 		if ch == '>' {
 			if i+1 < n && runes[i+1] == '>' {
 				tokens = append(tokens, token{typ: TokenRedirect, value: ">>"})
 				i += 2
+				continue
+			}
+			if i+1 < n && runes[i+1] == '&' {
+				op := ">&"
+				i += 2
+				if i < n && (runes[i] == '1' || runes[i] == '2') {
+					op += string(runes[i])
+					i++
+				}
+				tokens = append(tokens, token{typ: TokenRedirect, value: op})
 				continue
 			}
 			tokens = append(tokens, token{typ: TokenRedirect, value: ">"})
@@ -219,13 +234,21 @@ func tokenizeShell(cmd string) []token {
 			continue
 		}
 
-		// Check numeric descriptors before redirection: 1>, 2>, 2>&1
+		// Check numeric descriptors before redirection: 1>, 2>, 2>&1, 1>&2
 		if (ch == '1' || ch == '2') && i+1 < n && runes[i+1] == '>' {
 			op := string(runes[i : i+2])
 			i += 2
 			if i < n && runes[i] == '>' {
 				op += ">"
 				i++
+			}
+			if i < n && runes[i] == '&' {
+				op += "&"
+				i++
+				if i < n && (runes[i] == '1' || runes[i] == '2') {
+					op += string(runes[i])
+					i++
+				}
 			}
 			tokens = append(tokens, token{typ: TokenRedirect, value: op})
 			continue

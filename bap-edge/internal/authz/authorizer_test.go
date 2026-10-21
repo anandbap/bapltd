@@ -186,6 +186,7 @@ func TestRealPolicyCedarFile(t *testing.T) {
 		{"go", "go mod init mymodule"},
 		{"go", "go build ."},
 		{"go", "go test ./..."},
+		{"go", "go test ./... 2>&1 | Select-Object -Last 15"},
 		{"python", "python -m venv .venv"},
 		{"python3", "python3 -m pytest tests/"},
 		{"pip", "pip install -r requirements.txt"},
