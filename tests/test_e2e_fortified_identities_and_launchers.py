@@ -55,15 +55,15 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
 
         # Create lightweight mock stub executables for CI environments where third-party agent CLIs are not preinstalled
         if sys.platform == "win32":
-            for name in ["agy.cmd", "agy.bat", "agy.exe"]:
+            for name in ["agy.cmd", "agy.bat"]:
                 stub = os.path.join(cls.mock_bin, name)
                 with open(stub, "w", encoding="utf-8") as f:
                     f.write("@echo off\r\necho 1.4.3\r\nexit /b 0\r\n")
-            for name in ["claude.cmd", "claude.bat", "claude.exe"]:
+            for name in ["claude.cmd", "claude.bat"]:
                 stub = os.path.join(cls.mock_bin, name)
                 with open(stub, "w", encoding="utf-8") as f:
                     f.write("@echo off\r\necho 2.1.305\r\nexit /b 0\r\n")
-            for name in ["copilot.cmd", "copilot.bat", "copilot.exe"]:
+            for name in ["copilot.cmd", "copilot.bat"]:
                 stub = os.path.join(cls.mock_bin, name)
                 with open(stub, "w", encoding="utf-8") as f:
                     f.write("@echo off\r\necho 1.0.0\r\nexit /b 0\r\n")

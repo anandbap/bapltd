@@ -79,9 +79,9 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
 }
 
 $candidateExecutables = @(
-    "agy.exe",
     "agy.cmd",
     "agy.bat",
+    "agy.exe",
     (Join-Path $env:LOCALAPPDATA "agy\bin\agy.exe"),
     "agy"
 )
