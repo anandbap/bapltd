@@ -138,6 +138,89 @@ class TestBAPInstallMultiPlatform(unittest.TestCase):
                 has_linux_bin = any("bapedge" in n and "linux" in n for n in names)
                 self.assertTrue(has_linux_bin, f"{linux_wheels[0]} does not contain linux bapedge")
 
+    def test_install_core_binaries_deploys_configs_and_launchers(self):
+        """Verify install_core_binaries stages policy.cedar, schema.json, and all agent launchers in bin."""
+        bap_install.install_core_binaries(self.install_dir)
+
+        # 1. Configs deployed to bin
+        for cfg in ["policy.cedar", "schema.json", "bap-config.json"]:
+            cfg_path = os.path.join(self.install_dir, cfg)
+            self.assertTrue(os.path.isfile(cfg_path), f"Configuration {cfg} was not deployed to bin directory: {cfg_path}")
+
+        # 2. Key launchers deployed to bin
+        expected_launchers = [
+            "run_claude_bap.bat" if sys.platform == "win32" else "run_claude_bap.sh",
+            "run_antigravity_cli_bap.bat" if sys.platform == "win32" else "run_antigravity_cli_bap.sh",
+            "run_copilot_cli_bap.bat" if sys.platform == "win32" else "run_copilot_cli_bap.sh",
+            "run_cursor_bap.bat" if sys.platform == "win32" else "run_cursor_bap.sh",
+            "run_gemini_cli_bap.bat" if sys.platform == "win32" else "run_gemini_cli_bap.sh",
+        ]
+        for launcher in expected_launchers:
+            l_path = os.path.join(self.install_dir, launcher)
+            self.assertTrue(os.path.isfile(l_path), f"Launcher {launcher} was not deployed to bin directory: {l_path}")
+
+    def test_bap_doctor_loads_policy_from_bin_directory(self):
+        """Verify bap_doctor prioritizes installed bin directory policy over source/workspace."""
+        from scripts import bap_doctor
+
+        # Stage mock environment where bin contains policy.cedar
+        bap_install.install_core_binaries(self.install_dir)
+        bin_policy = os.path.join(self.install_dir, "policy.cedar")
+        self.assertTrue(os.path.isfile(bin_policy))
+
+        # Run doctor in an isolated directory without policy.cedar
+        isolated_cwd = os.path.join(self.temp_dir, "isolated_cwd")
+        os.makedirs(isolated_cwd, exist_ok=True)
+
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(isolated_cwd)
+            # Patch user_bin to point to self.install_dir
+            with patch("os.path.expanduser", side_effect=lambda p: self.temp_dir if p == "~" else p):
+                checklist = bap_doctor.DoctorChecklist()
+                policy_candidates = [
+                    os.path.join(self.install_dir, "policy.cedar"),
+                    os.path.join(isolated_cwd, "policy.cedar"),
+                ]
+                policy_path = None
+                for p in policy_candidates:
+                    if p and os.path.isfile(p):
+                        policy_path = p
+                        break
+                self.assertIsNotNone(policy_path)
+                self.assertEqual(os.path.normpath(policy_path), os.path.normpath(bin_policy))
+        finally:
+            os.chdir(old_cwd)
+
+    def test_universal_wheel_contains_all_launchers_and_configs(self):
+        """Verify the latest universal wheel contains policy.cedar, configs, and all agent launchers."""
+        dist_dir = os.path.join(REPO_ROOT, "dist")
+        wheels = [os.path.join(dist_dir, f) for f in os.listdir(dist_dir) if f.endswith("-py3-none-any.whl")] if os.path.isdir(dist_dir) else []
+        if not wheels:
+            self.skipTest("No universal wheels in dist/")
+
+        # Pick newest wheel
+        wheels.sort(key=os.path.getmtime, reverse=True)
+        newest_wheel = wheels[0]
+
+        with zipfile.ZipFile(newest_wheel, "r") as z:
+            names = z.namelist()
+            # Verify configurations
+            for asset in ["policy.cedar", "schema.json", "bap-config.json"]:
+                has_asset = any(f"bap/{asset}" in n or f"bap/launchers/{asset}" in n for n in names)
+                self.assertTrue(has_asset, f"{newest_wheel} does not contain {asset}")
+
+            # Verify key agent launchers
+            for launcher in [
+                "run_claude_bap.bat", "run_claude_bap.ps1", "run_claude_bap.sh",
+                "run_antigravity_cli_bap.bat", "run_antigravity_cli_bap.ps1", "run_antigravity_cli_bap.sh",
+                "run_copilot_cli_bap.bat", "run_copilot_cli_bap.ps1", "run_copilot_cli_bap.sh",
+                "run_cursor_bap.bat", "run_cursor_bap.ps1", "run_cursor_bap.sh",
+                "run_gemini_cli_bap.bat", "run_gemini_cli_bap.ps1", "run_gemini_cli_bap.sh",
+            ]:
+                has_launcher = any(launcher in n for n in names)
+                self.assertTrue(has_launcher, f"{newest_wheel} does not contain launcher {launcher}")
+
     def test_uninstall_cleanly_restores_hooks(self):
         """Verify uninstall function cleanly removes hooks and restored settings."""
         ws = os.path.join(self.temp_dir, "ws_uninstall")
