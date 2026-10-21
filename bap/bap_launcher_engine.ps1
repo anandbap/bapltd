@@ -27,7 +27,26 @@ function Write-AtomicText {
     $tmp = "$Path.tmp.$PID.$([Guid]::NewGuid().ToString('N'))"
     try {
         [System.IO.File]::WriteAllText($tmp, $Text, $Utf8NoBom)
-        Move-Item -LiteralPath $tmp -Destination $Path -Force
+        $retries = 10
+        while ($retries -gt 0) {
+            try {
+                if (Test-Path -LiteralPath $Path) {
+                    Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+                }
+                Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop
+                break
+            }
+            catch {
+                $retries--
+                if ($retries -le 0) {
+                    try {
+                        [System.IO.File]::WriteAllText($Path, $Text, $Utf8NoBom)
+                    } catch { }
+                    break
+                }
+                Start-Sleep -Milliseconds 100
+            }
+        }
     }
     finally {
         if (Test-Path -LiteralPath $tmp) {
@@ -48,7 +67,26 @@ function Write-AtomicBytes {
     $tmp = "$Path.tmp.$PID.$([Guid]::NewGuid().ToString('N'))"
     try {
         [System.IO.File]::WriteAllBytes($tmp, $Bytes)
-        Move-Item -LiteralPath $tmp -Destination $Path -Force
+        $retries = 10
+        while ($retries -gt 0) {
+            try {
+                if (Test-Path -LiteralPath $Path) {
+                    Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+                }
+                Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop
+                break
+            }
+            catch {
+                $retries--
+                if ($retries -le 0) {
+                    try {
+                        [System.IO.File]::WriteAllBytes($Path, $Bytes)
+                    } catch { }
+                    break
+                }
+                Start-Sleep -Milliseconds 100
+            }
+        }
     }
     finally {
         if (Test-Path -LiteralPath $tmp) {
@@ -254,14 +292,24 @@ function Restore-TrackedEntry {
             while ($retries -gt 0) {
                 try {
                     if (Test-Path -LiteralPath $path) {
-                        Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+                        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
                     }
                     Move-Item -LiteralPath $backup -Destination $path -Force -ErrorAction Stop
                     break
                 }
                 catch {
                     $retries--
-                    if ($retries -le 0) { throw }
+                    if ($retries -le 0) {
+                        try {
+                            Copy-Item -LiteralPath $backup -Destination $path -Force -ErrorAction Stop
+                            Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+                            break
+                        }
+                        catch {
+                            Write-Warning "Could not restore $backup to ${path}: $($_.Exception.Message)"
+                            return $false
+                        }
+                    }
                     Start-Sleep -Milliseconds 150
                 }
             }
@@ -1318,44 +1366,50 @@ function Invoke-BapGovernedSession {
             }
         }
 
-        $teardownMutex = Acquire-BapMutex -Name $MutexName -TimeoutMs 5000
         try {
-            if (Test-Path -LiteralPath $ManifestPath) {
-                $curRecord = Read-RecoveryRecord -ManifestPath $ManifestPath
-                if ($null -ne $curRecord) {
-                    $surviving = @()
-                    if ($curRecord.PSObject.Properties.Name -contains 'active_sessions' -and $null -ne $curRecord.active_sessions) {
-                        foreach ($s in $curRecord.active_sessions) {
-                            $spid = [int]($s.launcher_pid)
-                            if ($spid -ne $PID -and $spid -gt 0) {
-                                $pr = Get-Process -Id $spid -ErrorAction SilentlyContinue
-                                if ($null -ne $pr -and -not $pr.HasExited) { $surviving += $s }
+            $teardownMutex = Acquire-BapMutex -Name $MutexName -TimeoutMs 5000
+            try {
+                if (Test-Path -LiteralPath $ManifestPath) {
+                    $curRecord = Read-RecoveryRecord -ManifestPath $ManifestPath
+                    if ($null -ne $curRecord) {
+                        $surviving = @()
+                        if ($curRecord.PSObject.Properties.Name -contains 'active_sessions' -and $null -ne $curRecord.active_sessions) {
+                            foreach ($s in $curRecord.active_sessions) {
+                                $spid = [int]($s.launcher_pid)
+                                if ($spid -ne $PID -and $spid -gt 0) {
+                                    $pr = Get-Process -Id $spid -ErrorAction SilentlyContinue
+                                    if ($null -ne $pr -and -not $pr.HasExited) { $surviving += $s }
+                                }
                             }
                         }
-                    }
 
-                    if ($surviving.Count -eq 0) {
-                        # Last session: Kill watchdog and restore original files
-                        if ($curRecord.PSObject.Properties.Name -contains 'watchdog_pid' -and $curRecord.watchdog_pid -gt 0) {
-                            $wdPid = [int]($curRecord.watchdog_pid)
-                            $wdPr = Get-Process -Id $wdPid -ErrorAction SilentlyContinue
-                            if ($null -ne $wdPr -and -not $wdPr.HasExited) {
-                                Stop-Process -Id $wdPid -Force -ErrorAction SilentlyContinue
+                        if ($surviving.Count -eq 0) {
+                            # Last session: Kill watchdog and restore original files
+                            if ($curRecord.PSObject.Properties.Name -contains 'watchdog_pid' -and $curRecord.watchdog_pid -gt 0) {
+                                $wdPid = [int]($curRecord.watchdog_pid)
+                                $wdPr = Get-Process -Id $wdPid -ErrorAction SilentlyContinue
+                                if ($null -ne $wdPr -and -not $wdPr.HasExited) {
+                                    Stop-Process -Id $wdPid -Force -ErrorAction SilentlyContinue
+                                    try { $null = $wdPr.WaitForExit(3000) } catch { }
+                                }
                             }
+                            $curRecord.state = 'Cleaning'
+                            try { Write-RecoveryRecord -Record $curRecord -ManifestPath $ManifestPath } catch { }
+                            [void](Restore-BapSessionState -ManifestPath $ManifestPath -Reason 'last session teardown')
+                        } else {
+                            $curRecord.active_sessions = @($surviving)
+                            try { Write-RecoveryRecord -Record $curRecord -ManifestPath $ManifestPath } catch { }
+                            Write-Host "[*] Session '$SessionId' ended. $($surviving.Count) session(s) remain active in this workspace." -ForegroundColor Cyan
                         }
-                        $curRecord.state = 'Cleaning'
-                        Write-RecoveryRecord -Record $curRecord -ManifestPath $ManifestPath
-                        [void](Restore-BapSessionState -ManifestPath $ManifestPath -Reason 'last session teardown')
-                    } else {
-                        $curRecord.active_sessions = @($surviving)
-                        Write-RecoveryRecord -Record $curRecord -ManifestPath $ManifestPath
-                        Write-Host "[*] Session '$SessionId' ended. $($surviving.Count) session(s) remain active in this workspace." -ForegroundColor Cyan
                     }
                 }
             }
+            finally {
+                Release-BapMutex -Mutex $teardownMutex
+            }
         }
-        finally {
-            Release-BapMutex -Mutex $teardownMutex
+        catch {
+            Write-Warning "Teardown coordination notice: $($_.Exception.Message)"
         }
 
         # Restore environment
