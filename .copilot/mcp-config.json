@@ -1,0 +1,14 @@
+{
+    "mcpServers":  {
+                       "bap-zero-trust":  {
+                                              "command":  "C:\\Users\\User\\pyprj\\bapltd\\bapmcp.exe",
+                                              "args":  [
+
+                                                       ],
+                                              "env":  {
+                                                          "LTD_SOURCE":  "copilot",
+                                                          "BAP_SESSION_ID":  "sess-copilot-cli-ac935c60"
+                                                      }
+                                          }
+                   }
+}
