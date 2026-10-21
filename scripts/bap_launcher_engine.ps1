@@ -253,26 +253,26 @@ function Test-ProcessIdentity {
 
 function Invoke-BapSessionEnd {
     param([Parameter(Mandatory = $true)]$Record)
-    if (-not [bool]$Record.session_active) { return }
     try {
-        $edge = [string]$Record.bapedge_bin
-        if (-not [string]::IsNullOrWhiteSpace($edge) -and (Test-Path -LiteralPath $edge)) {
-            & $edge session-end --server ([string]$Record.server_url) --session-id ([string]$Record.session_id) *> $null
+        if ($Record.PSObject.Properties.Name -contains 'session_active' -and -not [bool]$Record.session_active) { return }
+        $edge = if ($Record.PSObject.Properties.Name -contains 'bapedge_bin') { [string]$Record.bapedge_bin } else { $null }
+        $sUrl = if ($Record.PSObject.Properties.Name -contains 'server_url') { [string]$Record.server_url } else { 'http://localhost:8080' }
+        $sId = if ($Record.PSObject.Properties.Name -contains 'session_id') { [string]$Record.session_id } else { $null }
+
+        if (-not [string]::IsNullOrWhiteSpace($edge) -and (Test-Path -LiteralPath $edge) -and -not [string]::IsNullOrWhiteSpace($sId)) {
+            & $edge session-end --server $sUrl --session-id $sId *> $null
             return
         }
-    }
-    catch { }
 
-    try {
         $curl = Resolve-BinaryPath -Paths @() -Commands @('curl.exe')
-        if (-not [string]::IsNullOrWhiteSpace($curl)) {
+        if (-not [string]::IsNullOrWhiteSpace($curl) -and -not [string]::IsNullOrWhiteSpace($sId)) {
             $payload = @{
-                session_id = [string]$Record.session_id
+                session_id = $sId
                 reason     = 'BAP session teardown'
             } | ConvertTo-Json -Compress
             $curlArgs = @('-s', '--max-time', '2', '--connect-timeout', '2')
-            if ([string]$Record.server_url -like 'https://*') { $curlArgs += '-k' }
-            $curlArgs += @('-X', 'POST', "$([string]$Record.server_url)/api/v1/sessions/end", '-H', 'Content-Type: application/json', '-d', $payload)
+            if ($sUrl -like 'https://*') { $curlArgs += '-k' }
+            $curlArgs += @('-X', 'POST', "$sUrl/api/v1/sessions/end", '-H', 'Content-Type: application/json', '-d', $payload)
             & $curl @curlArgs *> $null
         }
     }
@@ -281,52 +281,55 @@ function Invoke-BapSessionEnd {
 
 function Restore-TrackedEntry {
     param([Parameter(Mandatory = $true)]$Entry)
-    $path = [string]$Entry.path
-    $backup = [string]$Entry.backup
-    $existed = [bool]$Entry.existed
-    $origHash = [string]$Entry.original_sha256
+    try {
+        $path = [string]$Entry.path
+        $backup = [string]$Entry.backup
+        $existed = [bool]$Entry.existed
+        $origHash = [string]$Entry.original_sha256
 
-    if ($existed) {
-        if (Test-Path -LiteralPath $backup -PathType Leaf) {
-            $retries = 10
-            while ($retries -gt 0) {
-                try {
-                    if (Test-Path -LiteralPath $path) {
-                        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-                    }
-                    Move-Item -LiteralPath $backup -Destination $path -Force -ErrorAction Stop
-                    break
-                }
-                catch {
-                    $retries--
-                    if ($retries -le 0) {
-                        try {
-                            Copy-Item -LiteralPath $backup -Destination $path -Force -ErrorAction Stop
-                            Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
-                            break
+        if ($existed) {
+            if (Test-Path -LiteralPath $backup -PathType Leaf) {
+                $retries = 10
+                while ($retries -gt 0) {
+                    try {
+                        if (Test-Path -LiteralPath $path) {
+                            try { [System.IO.File]::SetAttributes($path, [System.IO.FileAttributes]::Normal) } catch { }
+                            try { [System.IO.File]::Delete($path) } catch { }
                         }
-                        catch {
+                        try { [System.IO.File]::SetAttributes($backup, [System.IO.FileAttributes]::Normal) } catch { }
+                        [System.IO.File]::Copy($backup, $path, $true)
+                        try { [System.IO.File]::Delete($backup) } catch { }
+                        break
+                    }
+                    catch {
+                        $retries--
+                        if ($retries -le 0) {
                             Write-Warning "Could not restore $backup to ${path}: $($_.Exception.Message)"
                             return $false
                         }
+                        Start-Sleep -Milliseconds 150
                     }
-                    Start-Sleep -Milliseconds 150
                 }
+                return $true
+            }
+            if (Test-Path -LiteralPath $path -PathType Leaf) {
+                $curHash = Get-FileSha256 -Path $path
+                if ($curHash -eq $origHash) { return $true }
+            }
+            Write-Warning "Could not prove restoration of original file: $path"
+            return $false
+        }
+        else {
+            if (Test-Path -LiteralPath $path) {
+                try { [System.IO.File]::SetAttributes($path, [System.IO.FileAttributes]::Normal) } catch { }
+                try { [System.IO.File]::Delete($path) } catch { }
             }
             return $true
         }
-        if (Test-Path -LiteralPath $path -PathType Leaf) {
-            $curHash = Get-FileSha256 -Path $path
-            if ($curHash -eq $origHash) { return $true }
-        }
-        Write-Warning "Could not prove restoration of original file: $path"
-        return $false
     }
-    else {
-        if (Test-Path -LiteralPath $path) {
-            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-        }
-        return $true
+    catch {
+        Write-Warning "Failed restoring entry: $($_.Exception.Message)"
+        return $false
     }
 }
 
@@ -335,33 +338,41 @@ function Restore-BapSessionState {
         [Parameter(Mandatory = $true)][string]$ManifestPath,
         [string]$Reason = 'cleanup'
     )
-    $record = Read-RecoveryRecord -ManifestPath $ManifestPath
-    if ($null -eq $record) { return $true }
+    try {
+        $record = Read-RecoveryRecord -ManifestPath $ManifestPath
+        if ($null -eq $record) { return $true }
 
-    Write-Host "[*] Restoring BAP session transaction ($Reason)..." -ForegroundColor Yellow
-    Invoke-BapSessionEnd -Record $record
+        Write-Host "[*] Restoring BAP session transaction ($Reason)..." -ForegroundColor Yellow
+        try {
+            Invoke-BapSessionEnd -Record $record
+        } catch { }
 
-    $allOk = $true
-    if ($record.PSObject.Properties.Name -contains 'tracked_files' -and $null -ne $record.tracked_files) {
-        foreach ($entry in $record.tracked_files) {
-            try {
-                $ok = Restore-TrackedEntry -Entry $entry
-                if (-not $ok) { $allOk = $false }
-            }
-            catch {
-                Write-Warning "Failed restoring file: $($entry.path): $($_.Exception.Message)"
-                $allOk = $false
+        $allOk = $true
+        if ($record.PSObject.Properties.Name -contains 'tracked_files' -and $null -ne $record.tracked_files) {
+            foreach ($entry in $record.tracked_files) {
+                try {
+                    $ok = Restore-TrackedEntry -Entry $entry
+                    if (-not $ok) { $allOk = $false }
+                }
+                catch {
+                    Write-Warning "Failed restoring file: $($entry.path): $($_.Exception.Message)"
+                    $allOk = $false
+                }
             }
         }
-    }
 
-    if ($allOk) {
-        $mirror = Get-RecoveryMirrorPath -ManifestPath $ManifestPath
-        Remove-Item -LiteralPath $ManifestPath -Force -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $mirror -Force -ErrorAction SilentlyContinue
-        Write-Host "[+] All developer configuration files cleanly restored." -ForegroundColor Green
+        if ($allOk) {
+            $mirror = Get-RecoveryMirrorPath -ManifestPath $ManifestPath
+            Remove-Item -LiteralPath $ManifestPath -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $mirror -Force -ErrorAction SilentlyContinue
+            Write-Host "[+] All developer configuration files cleanly restored." -ForegroundColor Green
+        }
+        return $allOk
     }
-    return $allOk
+    catch {
+        Write-Warning "Failed restoring session state: $($_.Exception.Message)"
+        return $false
+    }
 }
 
 function Repair-GuardedFiles {
@@ -1415,6 +1426,13 @@ function Invoke-BapGovernedSession {
         # Restore environment
         Remove-Item Env:\BAP_SESSION_ID -ErrorAction SilentlyContinue
         Remove-Item Env:\LTD_SOURCE -ErrorAction SilentlyContinue
+        $global:LASTEXITCODE = $ExitCode
+        try { [System.Environment]::ExitCode = $ExitCode } catch { }
+        try {
+            if ($null -ne $Host -and $null -ne $Host.SetShouldExit) {
+                $Host.SetShouldExit($ExitCode)
+            }
+        } catch { }
     }
 
     exit $ExitCode
