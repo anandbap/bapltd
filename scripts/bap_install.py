@@ -303,7 +303,11 @@ def install_core_binaries(target_dir: str):
     if sys.platform == "win32":
         wrappers = [
             ("run_claude_bap.bat", os.path.join(REPO_ROOT, "dist", plat_id, "claude-client", "run_claude_bap.bat")),
+            ("run_claude_bap.ps1", os.path.join(REPO_ROOT, "dist", plat_id, "claude-client", "run_claude_bap.ps1")),
+            ("run_claude_bap.sh", os.path.join(REPO_ROOT, "dist", "linux-amd64", "claude-client", "run_claude_bap.sh")),
             ("copilot-wrap.bat", os.path.join(REPO_ROOT, "copilot", "copilot-wrap.bat")),
+            ("copilot-wrap.ps1", os.path.join(REPO_ROOT, "copilot", "copilot-wrap.ps1")),
+            ("copilot-wrap.sh", os.path.join(REPO_ROOT, "copilot", "copilot-wrap.sh")),
         ]
     else:
         wrappers = [
@@ -322,11 +326,32 @@ def install_core_binaries(target_dir: str):
                 if name.endswith(".bat"):
                     with open(dst, "w", encoding="utf-8") as f:
                         f.write(f"@echo off\r\n\"%~dp0bapedge.exe\" exec \"%*\"\r\n")
+                elif name.endswith(".ps1"):
+                    with open(dst, "w", encoding="utf-8") as f:
+                        f.write(f"& \"$PSScriptRoot\\bapedge.exe\" exec $args\r\n")
                 elif name.endswith(".sh"):
                     with open(dst, "w", encoding="utf-8") as f:
                         f.write(f"#!/bin/sh\n\"$(dirname \"$0\")/bapedge\" exec \"$@\"\n")
                     os.chmod(dst, 0o755)
                 print(f"  {TermColor.GREEN}[+] Shell Wrapper: {name:<16}{TermColor.RESET}")
+            except Exception:
+                pass
+
+    # For Windows, also deploy extensionless POSIX shims so Git Bash and WSL can run bare commands (bap, bapedge, interceptor)
+    if sys.platform == "win32":
+        shims = [
+            ("bap", "#!/bin/sh\nSCRIPT_DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nif [ -f \"$SCRIPT_DIR/bapedge.exe\" ]; then\n    case \"$1\" in\n        version|--version|-v|doctor|launch|install)\n            exec bap.exe \"$@\" 2>/dev/null || python -m bap.cli \"$@\"\n            ;;\n        *)\n            exec \"$SCRIPT_DIR/bapedge.exe\" \"$@\"\n            ;;\n    esac\nelse\n    exec bap.exe \"$@\"\nfi\n"),
+            ("bapedge", "#!/bin/sh\nexec \"$(dirname \"$0\")/bapedge.exe\" \"$@\"\n"),
+            ("interceptor", "#!/bin/sh\nexec \"$(dirname \"$0\")/interceptor.exe\" \"$@\"\n"),
+            ("cchook-interceptor", "#!/bin/sh\nexec \"$(dirname \"$0\")/cchook-interceptor.exe\" \"$@\"\n"),
+            ("copilot-interceptor", "#!/bin/sh\nexec \"$(dirname \"$0\")/copilot-interceptor.exe\" \"$@\"\n"),
+            ("bapmcp", "#!/bin/sh\nexec \"$(dirname \"$0\")/bapmcp.exe\" \"$@\"\n"),
+        ]
+        for sname, scontent in shims:
+            sp = os.path.join(target_dir, sname)
+            try:
+                with open(sp, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(scontent)
             except Exception:
                 pass
 
@@ -503,8 +528,20 @@ All terminal and tool commands must be routed through the BAP broker:
 
     if sys.platform == "win32":
         wrap_bat = os.path.join(target_dir, "copilot-wrap.bat")
+        wrap_ps1 = os.path.join(target_dir, "copilot-wrap.ps1")
+        wrap_sh = os.path.join(target_dir, "copilot-wrap.sh")
         vscode_settings["terminal.integrated.profiles.windows"] = {
-            "CopilotSandbox": {"path": wrap_bat, "overrideName": True}
+            "CopilotSandbox": {"path": wrap_bat, "overrideName": True},
+            "CopilotSandbox (PowerShell)": {
+                "path": "powershell.exe",
+                "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", wrap_ps1],
+                "overrideName": True
+            },
+            "CopilotSandbox (Git Bash)": {
+                "path": "bash.exe",
+                "args": [wrap_sh],
+                "overrideName": True
+            }
         }
         vscode_settings["terminal.integrated.defaultProfile.windows"] = "CopilotSandbox"
     elif sys.platform == "darwin":
@@ -656,6 +693,7 @@ def uninstall(target_dir: str, workspace_root: str):
 
     home = os.path.expanduser("~")
     bap_files = [
+        "bap", "bap.exe",
         "bapedge.exe", "bapedge",
         "interceptor.exe", "interceptor",
         "cchook-interceptor.exe", "cchook-interceptor",
@@ -665,7 +703,7 @@ def uninstall(target_dir: str, workspace_root: str):
         "policy.cedar", "schema.json", "bap-config.json",
         "policy-state.json", "ltd-audit.jsonl", ".bap-pin.json",
         "run_claude_bap.bat", "run_claude_bap.sh", "run_claude_bap.ps1",
-        "copilot-wrap.bat", "copilot-wrap.sh"
+        "copilot-wrap.bat", "copilot-wrap.ps1", "copilot-wrap.sh"
     ]
 
     default_dir = resolve_default_install_dir()
