@@ -166,10 +166,47 @@ def stage_binaries(platforms: list):
     print(f"[*] Total binaries staged: {staged_count} across {len(platforms)} platform(s)")
 
 def copy_installer_script():
+    # 1. Scripts
     for sname in ["bap_install.py", "bap_doctor.py", "bap_launch.py", "bap_harness.py", "bap_launcher_engine.ps1"]:
         src = os.path.join(REPO_ROOT, "scripts", sname)
         if os.path.isfile(src):
             shutil.copy2(src, os.path.join(BAP_PKG_DIR, sname))
+
+    # 2. Configs
+    for cname in ["policy.cedar", "schema.json", "bap-config.json"]:
+        src = os.path.join(REPO_ROOT, cname)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(BAP_PKG_DIR, cname))
+
+    # 3. Launchers
+    launchers_dir = os.path.join(BAP_PKG_DIR, "launchers")
+    os.makedirs(launchers_dir, exist_ok=True)
+    all_launchers = [
+        "run_antigravity_cli_bap.bat", "run_antigravity_cli_bap.ps1", "run_antigravity_cli_bap.sh",
+        "run_antigravity_ide_bap.bat", "run_antigravity_ide_bap.ps1", "run_antigravity_ide_bap.sh",
+        "run_copilot_cli_bap.bat", "run_copilot_cli_bap.ps1", "run_copilot_cli_bap.sh",
+        "run_copilot_ide_bap.bat", "run_copilot_ide_bap.ps1", "run_copilot_ide_bap.sh",
+        "run_claude_cli_bap.bat", "run_claude_cli_bap.ps1", "run_claude_cli_bap.sh",
+        "run_claude_ide_bap.bat", "run_claude_ide_bap.ps1", "run_claude_ide_bap.sh",
+        "run_claude_bap.bat", "run_claude_bap.ps1", "run_claude_bap.sh",
+        "run_cursor_bap.bat", "run_cursor_bap.ps1", "run_cursor_bap.sh",
+        "run_gemini_cli_bap.bat", "run_gemini_cli_bap.ps1", "run_gemini_cli_bap.sh",
+        "copilot-wrap.bat", "copilot-wrap.ps1", "copilot-wrap.sh",
+        "bap_launcher_engine.ps1"
+    ]
+    for lf in all_launchers:
+        candidates = [
+            os.path.join(REPO_ROOT, lf),
+            os.path.join(REPO_ROOT, "copilot", lf),
+            os.path.join(REPO_ROOT, "scripts", lf),
+            os.path.join(REPO_ROOT, "dist", "windows-amd64", "claude-client", lf),
+            os.path.join(REPO_ROOT, "dist", "linux-amd64", "claude-client", lf),
+        ]
+        for cand in candidates:
+            if os.path.isfile(cand):
+                shutil.copy2(cand, os.path.join(launchers_dir, lf))
+                shutil.copy2(cand, os.path.join(BAP_PKG_DIR, lf))
+                break
 
 def clean_build_artifacts():
     shutil.rmtree(os.path.join(REPO_ROOT, "build"), ignore_errors=True)

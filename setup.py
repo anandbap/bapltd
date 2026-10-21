@@ -22,7 +22,7 @@ setup(
     url="https://bap-controlplane.onrender.com",
     packages=find_packages(include=["bap", "bap.*", "bap_sdk", "bap_sdk.*"]),
     package_data={
-        "bap": ["bin/*/*", "bin/*", "*.py"],
+        "bap": ["bin/*/*", "bin/*", "*.py", "*.cedar", "*.json", "*.ps1", "*.bat", "*.sh", "launchers/*"],
     },
     include_package_data=True,
     python_requires=">=3.8",

@@ -239,7 +239,18 @@ function Get-FileSha256 {
         return $null
     }
 
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        try {
+            $sha = [System.Security.Cryptography.SHA256]::Create()
+            $bytes = $sha.ComputeHash($stream)
+            return (-join ($bytes | ForEach-Object { $_.ToString('X2') }))
+        } finally {
+            $stream.Dispose()
+        }
+    } catch {
+        return $null
+    }
 }
 
 function Resolve-Binary {

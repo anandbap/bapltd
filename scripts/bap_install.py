@@ -164,9 +164,10 @@ def update_user_path(target_dir: str):
             except FileNotFoundError:
                 current_path = ""
 
-            paths = [os.path.normpath(p.strip()) for p in current_path.split(";") if p.strip()]
-            if clean_target.lower() not in [p.lower() for p in paths]:
-                new_path = current_path.rstrip(";") + (";" if current_path else "") + clean_target
+            clean_entries = [p.strip() for p in current_path.split(";") if p.strip()]
+            if clean_target.lower() not in [p.lower() for p in clean_entries]:
+                clean_entries.append(clean_target)
+                new_path = ";".join(clean_entries)
                 winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, new_path)
                 print(f"  {TermColor.GREEN}[+] Added to Windows User PATH (HKCU\\Environment\\Path){TermColor.RESET}")
                 
@@ -353,25 +354,55 @@ def install_core_binaries(target_dir: str):
                 sh_src = os.path.join(REPO_ROOT, "dist", plat_id, "claude-client", f"{base}.sh")
             wrappers.append((f"{base}.sh", sh_src))
 
-    for name, src in wrappers:
+    for name, initial_src in wrappers:
         dst = os.path.join(target_dir, name)
-        if src and os.path.isfile(src):
-            shutil.copy2(src, dst)
+        src_candidates = [
+            initial_src,
+            os.path.join(pkg_dir, "launchers", name),
+            os.path.join(pkg_dir, name),
+            os.path.join(REPO_ROOT, name),
+            os.path.join(REPO_ROOT, "dist", plat_id, "claude-client", name),
+            os.path.join(REPO_ROOT, "dist", "linux-amd64", "claude-client", name),
+            os.path.join(REPO_ROOT, "copilot", name),
+            os.path.join(REPO_ROOT, "scripts", name),
+        ]
+        resolved_src = None
+        for cand in src_candidates:
+            if cand and os.path.isfile(cand):
+                resolved_src = cand
+                break
+
+        if resolved_src and os.path.isfile(resolved_src):
+            shutil.copy2(resolved_src, dst)
             if sys.platform != "win32":
                 os.chmod(dst, 0o755)
             print(f"  {TermColor.GREEN}[+] Agent Launcher: {name:<26}{TermColor.RESET}")
         else:
             try:
                 base_no_ext = os.path.splitext(name)[0]
+                target_cmd = "claude"
+                if "antigravity_cli" in name:
+                    target_cmd = "agy"
+                elif "antigravity_ide" in name:
+                    target_cmd = "Antigravity"
+                elif "copilot_cli" in name:
+                    target_cmd = "copilot"
+                elif "copilot_ide" in name or "claude_ide" in name:
+                    target_cmd = "code"
+                elif "cursor" in name:
+                    target_cmd = "cursor"
+                elif "gemini" in name:
+                    target_cmd = "gemini"
+
                 if name.endswith(".bat"):
                     with open(dst, "w", encoding="utf-8") as f:
-                        f.write(f"@echo off\r\nsetlocal EnableExtensions\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0{base_no_ext}.ps1\" %*\r\nexit /b %ERRORLEVEL%\r\n")
+                        f.write(f"@echo off\r\nsetlocal EnableExtensions\r\nif exist \"%~dp0{base_no_ext}.ps1\" (\r\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0{base_no_ext}.ps1\" %*\r\n  exit /b %ERRORLEVEL%\r\n)\r\n{target_cmd} %*\r\n")
                 elif name.endswith(".ps1"):
                     with open(dst, "w", encoding="utf-8") as f:
-                        f.write(f"& \"$PSScriptRoot\\bapedge.exe\" exec $args\r\n")
+                        f.write(f"& {target_cmd} $args\r\n")
                 elif name.endswith(".sh"):
                     with open(dst, "w", encoding="utf-8") as f:
-                        f.write(f"#!/bin/sh\n\"$(dirname \"$0\")/bapedge\" exec \"$@\"\n")
+                        f.write(f"#!/bin/sh\nexec {target_cmd} \"$@\"\n")
                     os.chmod(dst, 0o755)
                 print(f"  {TermColor.GREEN}[+] Agent Launcher: {name:<26}{TermColor.RESET}")
             except Exception:

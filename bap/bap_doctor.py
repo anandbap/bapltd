@@ -111,6 +111,7 @@ def run_doctor():
     print_header()
     checklist = DoctorChecklist()
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    pkg_dir = os.path.abspath(os.path.join(repo_root, "bap"))
 
     # Section 1: Core BAP Binaries
     print(f"{CYAN}[1/5] Core BAP Binaries & Client Tools...{RESET}")
@@ -181,8 +182,16 @@ def run_doctor():
     # Section 3: Central Control Plane Connectivity & TLS
     print(f"\n{CYAN}[3/5] Control Plane Connectivity & TLS...{RESET}")
     server_url = "https://localhost:8443"
-    for cfg in [os.path.join(os.getcwd(), "bap-config.json"), os.path.join(repo_root, "bap-config.json")]:
-        if os.path.isfile(cfg):
+    cfg_candidates = [
+        os.path.join(os.getcwd(), "bap-config.json"),
+        os.path.join(repo_root, "bap-config.json"),
+        os.path.join(os.path.dirname(bapedge), "bap-config.json") if bapedge else None,
+        os.path.join(user_bin, "bap-config.json"),
+        os.path.join(appdata_bin, "bap-config.json"),
+        os.path.join(pkg_dir, "bap-config.json"),
+    ]
+    for cfg in cfg_candidates:
+        if cfg and os.path.isfile(cfg):
             try:
                 with open(cfg, "r", encoding="utf-8") as f:
                     cfg_data = json.load(f)
@@ -208,9 +217,17 @@ def run_doctor():
 
     # Section 4: Cedar Policy Engine & Schema Invariants
     print(f"\n{CYAN}[4/5] Cedar Policy Engine & Schema Invariants...{RESET}")
+    policy_candidates = [
+        os.path.join(os.getcwd(), "policy.cedar"),
+        os.path.join(repo_root, "policy.cedar"),
+        os.path.join(os.path.dirname(bapedge), "policy.cedar") if bapedge else None,
+        os.path.join(user_bin, "policy.cedar"),
+        os.path.join(appdata_bin, "policy.cedar"),
+        os.path.join(pkg_dir, "policy.cedar"),
+    ]
     policy_path = None
-    for p in [os.path.join(os.getcwd(), "policy.cedar"), os.path.join(repo_root, "policy.cedar")]:
-        if os.path.isfile(p):
+    for p in policy_candidates:
+        if p and os.path.isfile(p):
             policy_path = p
             break
 
