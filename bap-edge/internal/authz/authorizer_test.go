@@ -7,6 +7,21 @@ import (
 	"testing"
 )
 
+func TestWhyRmRfSlash(t *testing.T) {
+	authz, err := NewAuthorizer("../../policy.cedar")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	ws := t.TempDir()
+	allowed, reason, err := authz.EvaluateWithWorkspace("rm", "rm -rf /", "-rf /", ws)
+	if err != nil {
+		t.Fatalf("EvaluateWithWorkspace error: %v", err)
+	}
+	if allowed {
+		t.Errorf("rm -rf / was ALLOWED! reason=%s", reason)
+	}
+}
+
 func TestAuthorizer(t *testing.T) {
 	testPolicy := `
 permit (

@@ -91,6 +91,9 @@ if (Test-Path "dist\windows-amd64") {
     Safe-Copy "bap-controlplane\bapcontrolplane.exe" "dist\windows-amd64\bapcontrolplane.exe"
     Safe-Copy "bap-controlplane\bapdashboard.exe" "dist\windows-amd64\bapdashboard.exe"
     Safe-Copy "bap-gateway\bapgateway.exe" "dist\windows-amd64\bapgateway.exe"
+    Safe-Copy "policy.cedar" "dist\windows-amd64\policy.cedar"
+    Safe-Copy "schema.json" "dist\windows-amd64\schema.json"
+    Safe-Copy "bap-config.json" "dist\windows-amd64\bap-config.json"
     if (Test-Path "dist\windows-amd64\controlplane") {
         Safe-Copy "bap-controlplane\bapcontrolplane.exe" "dist\windows-amd64\controlplane\bapcontrolplane.exe"
     }
