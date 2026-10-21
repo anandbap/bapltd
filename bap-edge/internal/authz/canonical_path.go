@@ -37,8 +37,24 @@ func ResolveCanonicalPath(targetPath, workspaceRoot string) string {
 
 	// 2. Make absolute based on workspaceRoot or CWD
 	var absPath string
+	normTrimmed := strings.ReplaceAll(trimmed, "\\", "/")
 	if filepath.IsAbs(trimmed) || (len(trimmed) >= 3 && trimmed[1] == ':' && (trimmed[2] == '\\' || trimmed[2] == '/')) {
 		absPath = filepath.Clean(trimmed)
+	} else if strings.HasPrefix(normTrimmed, "/") {
+		base := workspaceRoot
+		if base == "" {
+			if cwd, err := os.Getwd(); err == nil {
+				base = cwd
+			} else {
+				base = "."
+			}
+		}
+		vol := filepath.VolumeName(base)
+		if vol != "" {
+			absPath = filepath.Clean(vol + filepath.FromSlash(normTrimmed))
+		} else {
+			absPath = filepath.Clean(normTrimmed)
+		}
 	} else {
 		base := workspaceRoot
 		if base == "" {
@@ -93,6 +109,13 @@ func IsPathOutsideWorkspaceCanonical(workspaceRoot, targetPath string) bool {
 		return false
 	}
 
+	// Explicit root reference (e.g. "/" or "/*" or "\*") targets the filesystem or drive root,
+	// which is strictly outside any project workspace boundary.
+	normTarget := strings.ReplaceAll(targetPath, "\\", "/")
+	if normTarget == "/" || normTarget == "/*" || normTarget == "/." {
+		return true
+	}
+
 	canonicalRoot := ResolveCanonicalPath(workspaceRoot, "")
 	canonicalTarget := ResolveCanonicalPath(targetPath, workspaceRoot)
 
@@ -141,7 +164,8 @@ func IsForbiddenSecretPath(canonicalPath string) (bool, string) {
 	}
 
 	// 4. POSIX sensitive credential files
-	if lower == "/etc/shadow" || lower == "/etc/master.passwd" || lower == "/etc/sudoers" {
+	if lower == "/etc/shadow" || lower == "/etc/master.passwd" || lower == "/etc/sudoers" ||
+		strings.HasSuffix(lower, "/etc/shadow") || strings.HasSuffix(lower, "/etc/master.passwd") || strings.HasSuffix(lower, "/etc/sudoers") {
 		return true, "Access to privileged system authentication database is blocked by security policy"
 	}
 

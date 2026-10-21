@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/cedar-policy/cedar-go"
@@ -212,7 +213,7 @@ func (a *Authorizer) EvaluateWithWorkspace(executable, fullCommand, args, worksp
 
 		var canonicalTarget string
 		for i, arg := range n.Args {
-			if i == 0 || strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "/") {
+			if i == 0 || isCommandFlag(arg) {
 				continue
 			}
 
@@ -369,6 +370,33 @@ func (a *Authorizer) evaluateAtomicNode(executable, fullCommand, args, workspace
 	}
 
 	return false, reason, nil
+}
+
+// isCommandFlag returns true if arg represents a command-line switch rather than a file path.
+func isCommandFlag(arg string) bool {
+	if strings.HasPrefix(arg, "-") {
+		return true
+	}
+	if strings.HasPrefix(arg, "/") {
+		if arg == "/" || strings.HasPrefix(arg, "//") || strings.Contains(arg[1:], "/") || strings.Contains(arg[1:], "\\") || strings.HasPrefix(arg, "/.") {
+			return false // Path, not a flag
+		}
+		// Known root-level directories
+		lower := strings.ToLower(arg[1:])
+		switch lower {
+		case "etc", "tmp", "var", "home", "root", "bin", "usr", "opt", "mnt", "proc", "dev", "sys", "lib", "lib64", "srv", "windows", "program files", "users":
+			return false // Path, not a flag
+		}
+		// Single-letter switch flags (e.g. /c, /d, /s, /b, /q, /y) on Windows are flags
+		if len(arg) == 2 {
+			return true
+		}
+		if runtime.GOOS != "windows" {
+			return false
+		}
+		return true
+	}
+	return false
 }
 
 // findFile resolves a file path by checking:

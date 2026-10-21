@@ -344,6 +344,8 @@ func TestWorkspaceContainment(t *testing.T) {
 	}{
 		{"echo", "echo secret > ../../secret.txt", "redirection write outside workspace"},
 		{"mkdir", "mkdir ../../outside_dir", "mkdir outside workspace"},
+		{"rm", "rm -rf /", "root wipe escape"},
+		{"cat", "cat /etc/shadow", "system credential inspection"},
 	}
 
 	for _, tc := range forbiddenEscapes {

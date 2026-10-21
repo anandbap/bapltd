@@ -3,6 +3,7 @@ package authz
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -200,9 +201,25 @@ func isExplicitAbsolutePath(p string) bool {
 	if strings.HasPrefix(p, "\\\\") || strings.HasPrefix(p, "//") {
 		return true // UNC path
 	}
-	if strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "/c") && !strings.HasPrefix(p, "/d") && !strings.HasPrefix(p, "/s") && !strings.HasPrefix(p, "/b") {
-		// POSIX absolute path
-		return true
+	if strings.HasPrefix(p, "/") {
+		// Bare root "/" or paths with subpaths "/dir/file" are absolute POSIX paths
+		if p == "/" || strings.Contains(p[1:], "/") || strings.Contains(p[1:], "\\") {
+			return true
+		}
+		// Single-letter switch flags (e.g. /c, /d, /s, /b, /q, /y) on Windows are flags, not paths
+		if len(p) == 2 {
+			return false
+		}
+		// Root-level dirs like /etc, /tmp, /var, /bin, /usr, /home, /opt, /dev
+		lower := strings.ToLower(p[1:])
+		switch lower {
+		case "etc", "tmp", "var", "home", "root", "bin", "usr", "opt", "mnt", "proc", "dev", "sys", "lib", "lib64", "srv", "windows", "program files", "users":
+			return true
+		}
+		// On non-Windows OS, anything starting with / is an absolute path
+		if runtime.GOOS != "windows" {
+			return true
+		}
 	}
 	return false
 }
