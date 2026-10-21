@@ -1,0 +1,9 @@
+{
+  "bap_managed": true,
+  "control_plane_url": "https://bap-controlplane.onrender.com",
+  "dangerouslySkipPermissions": false,
+  "lifecycle_hooks": {
+    "post_tool_use": "bapedge verify-log",
+    "pre_tool_use": "bapedge exec"
+  }
+}
