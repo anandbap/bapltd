@@ -13,7 +13,7 @@ with open(os.path.join(here, "README.md"), encoding="utf-8") as f:
 
 setup(
     name="bap-ltd",
-    version="1.4.8",
+    version="1.5.0",
     description="Bounded Authority Plane (BAP) - Zero-Trust Local Trusted Daemon & Governance for AI Developer Agents",
     long_description=long_description,
     long_description_content_type="text/markdown",

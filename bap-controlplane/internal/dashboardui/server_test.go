@@ -24,8 +24,20 @@ func TestDashboardServesAssetsAndProxiesAPI(t *testing.T) {
 
 	page := httptest.NewRecorder()
 	handler.ServeHTTP(page, httptest.NewRequest("GET", "/dashboard/", nil))
-	if page.Code != 200 || !strings.Contains(page.Body.String(), "Agent operations") {
-		t.Fatalf("dashboard asset response: %d", page.Code)
+	if page.Code != 200 || !strings.Contains(page.Body.String(), "Agent Watch V3") {
+		t.Fatalf("default dashboard should be V3: %d", page.Code)
+	}
+
+	v3Page := httptest.NewRecorder()
+	handler.ServeHTTP(v3Page, httptest.NewRequest("GET", "/dashboard/v3/", nil))
+	if v3Page.Code != 200 || !strings.Contains(v3Page.Body.String(), "Agent Watch V3") {
+		t.Fatalf("v3 dashboard asset response: %d", v3Page.Code)
+	}
+
+	v2Query := httptest.NewRecorder()
+	handler.ServeHTTP(v2Query, httptest.NewRequest("GET", "/dashboard/?v=v2", nil))
+	if v2Query.Code != 200 || !strings.Contains(v2Query.Body.String(), "Agent Watch V2") {
+		t.Fatalf("v2 must stay reachable via ?v=v2: %d", v2Query.Code)
 	}
 
 	api := httptest.NewRecorder()

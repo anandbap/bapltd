@@ -53,6 +53,17 @@ func Handler(controlPlane *url.URL, transport http.RoundTripper, allowRemoteAdmi
 		http.Redirect(w, r, "/dashboard/", http.StatusTemporaryRedirect)
 	})
 
+	serveV3 := func(w http.ResponseWriter, r *http.Request) {
+		v3Data, err := fs.ReadFile(web, "v3.html")
+		if err != nil {
+			http.Error(w, "v3 asset unavailable", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(v3Data)
+	}
+
 	serveV2 := func(w http.ResponseWriter, r *http.Request) {
 		v2Data, err := fs.ReadFile(web, "v2.html")
 		if err != nil {
@@ -75,6 +86,12 @@ func Handler(controlPlane *url.URL, transport http.RoundTripper, allowRemoteAdmi
 		_, _ = w.Write(v1Data)
 	}
 
+	mux.HandleFunc("/dashboard/v3", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/dashboard/v3/", http.StatusTemporaryRedirect)
+	})
+	mux.HandleFunc("/dashboard/v3/", func(w http.ResponseWriter, r *http.Request) {
+		serveV3(w, r)
+	})
 	mux.HandleFunc("/dashboard/v2", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard/v2/", http.StatusTemporaryRedirect)
 	})
@@ -96,10 +113,13 @@ func Handler(controlPlane *url.URL, transport http.RoundTripper, allowRemoteAdmi
 
 	mux.HandleFunc("/dashboard/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/dashboard/" {
-			if r.URL.Query().Get("v") == "legacy" || r.URL.Query().Get("v") == "v1" {
+			switch r.URL.Query().Get("v") {
+			case "legacy", "v1":
 				serveV1(w, r)
-			} else {
+			case "v2":
 				serveV2(w, r)
+			default:
+				serveV3(w, r)
 			}
 			return
 		}
