@@ -160,6 +160,10 @@ class TestVersionCompatibility(unittest.TestCase):
                 proc.wait(timeout=2)
             except Exception:
                 proc.kill()
+            if proc.stdout:
+                proc.stdout.close()
+            if proc.stderr:
+                proc.stderr.close()
 
     # =========================================================================
     # BAP-552: Dynamic Minimum Edge Version Gate (Anti-Skew)
@@ -258,6 +262,10 @@ class TestVersionCompatibility(unittest.TestCase):
                 proc.wait(timeout=2)
             except Exception:
                 proc.kill()
+            if proc.stdout:
+                proc.stdout.close()
+            if proc.stderr:
+                proc.stderr.close()
 
 
 if __name__ == "__main__":
