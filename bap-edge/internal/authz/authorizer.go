@@ -431,7 +431,18 @@ func FindFile(customPath, defaultName string) (string, error) {
 		}
 	}
 
-	// 1. Executable directory (canonical location: release binaries & policy live together in bin/)
+	// 1. Current workspace root or CWD (canonical repository policy)
+	if ws := GetWorkspaceRoot(); ws != "" {
+		wsFile := filepath.Join(ws, defaultName)
+		if fi, err := os.Stat(wsFile); err == nil && fi.Size() > 0 {
+			return wsFile, nil
+		}
+	}
+	if fi, err := os.Stat(defaultName); err == nil && fi.Size() > 0 {
+		return defaultName, nil
+	}
+
+	// 2. Executable directory (canonical location: release binaries & policy live together in bin/)
 	exe, err := os.Executable()
 	if err == nil {
 		exeDirFile := filepath.Join(filepath.Dir(exe), defaultName)
@@ -440,7 +451,7 @@ func FindFile(customPath, defaultName string) (string, error) {
 		}
 	}
 
-	// 2. User standard bin and state directories
+	// 3. User standard bin and state directories
 	if home, err := os.UserHomeDir(); err == nil {
 		userBinFile := filepath.Join(home, "bin", defaultName)
 		if _, err := os.Stat(userBinFile); err == nil {
@@ -460,16 +471,10 @@ func FindFile(customPath, defaultName string) (string, error) {
 		}
 	}
 
-	// 3. Workspace-specific .bap directory
+	// 4. Workspace-specific .bap directory
 	bapLocal := filepath.Join(".bap", defaultName)
 	if _, err := os.Stat(bapLocal); err == nil {
 		return bapLocal, nil
-	}
-
-	// 4. Current directory
-	cwdFile := defaultName
-	if _, err := os.Stat(cwdFile); err == nil {
-		return cwdFile, nil
 	}
 
 	// 5. Parent directories (development / test fallback)

@@ -124,6 +124,10 @@ func TestBootstrap_FailClosedWhenNoPolicyAndNoControlPlane(t *testing.T) {
 	defer os.Unsetenv("BAP_STATE_DIR")
 	os.Setenv("BAP_WORKSPACE_ROOT", emptyDir)
 	defer os.Unsetenv("BAP_WORKSPACE_ROOT")
+	os.Setenv("HOME", emptyDir)
+	defer os.Unsetenv("HOME")
+	os.Setenv("USERPROFILE", emptyDir)
+	defer os.Unsetenv("USERPROFILE")
 
 	origWd, _ := os.Getwd()
 	_ = os.Chdir(emptyDir)

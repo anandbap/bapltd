@@ -610,7 +610,11 @@ func RunExec(args []string) {
 	startTime := time.Now().UTC()
 
 	fs := flag.NewFlagSet("exec", flag.ContinueOnError)
-	policyPath := fs.String("policy", "", "Path to policy.cedar file (defaults to ./policy.cedar)")
+	defaultPolicy := os.Getenv("BAP_POLICY_PATH")
+	if defaultPolicy == "" {
+		defaultPolicy = os.Getenv("LTD_POLICY_PATH")
+	}
+	policyPath := fs.String("policy", defaultPolicy, "Path to policy.cedar file (defaults to ./policy.cedar)")
 	jsonFlag := fs.Bool("json", false, "Output in JSON format (default: auto-detect TTY)")
 	rawFlag := fs.Bool("raw", false, "Force output in raw text format")
 
@@ -702,7 +706,7 @@ func RunExec(args []string) {
 	if bootRes.ActiveURL != "" && (*serverFlag == "" || *serverFlag == epCfg.ControlPlaneURL) {
 		*serverFlag = bootRes.ActiveURL
 	}
-	if *policyPath == "" && bootRes.PolicyPath != "" {
+	if *policyPath == "" && !bootRes.DegradedMode && bootRes.PolicyPath != "" {
 		*policyPath = bootRes.PolicyPath
 	}
 

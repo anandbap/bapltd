@@ -28,6 +28,7 @@ class TestHitlAndSupplyChain(unittest.TestCase):
         self.env = os.environ.copy()
         self.env["LTD_SOURCE"] = "antigravity"
         self.env["BAP_SESSION_ID"] = self.session_id
+        self.env["BAP_POLICY_PATH"] = os.path.join(REPO_ROOT, "policy.cedar")
         # Clean any prior session approval state
         approvals_file = os.path.join(REPO_ROOT, ".bap", f"approvals_{self.session_id}.json")
         if os.path.exists(approvals_file):

@@ -140,6 +140,14 @@ class TestE2EFullMissionLifecycle(unittest.TestCase):
                 cls.cp_proc.kill()
         if cls.tmp_dir and os.path.exists(cls.tmp_dir):
             shutil.rmtree(cls.tmp_dir, ignore_errors=True)
+        # Clean cached policy and approval state from test run
+        for p in [
+            os.path.join(WORKSPACE_ROOT, ".bapstate", "policy"),
+            os.path.join(WORKSPACE_ROOT, ".bap"),
+            os.path.expanduser("~/.bapstate/policy"),
+        ]:
+            if os.path.exists(p):
+                shutil.rmtree(p, ignore_errors=True)
 
     def test_01_workload_identity_and_hardware_attestation(self):
         """Stage 1: Verify SPIFFE SVID issuance, SVID validation, and TPM 2.0 quote generation."""
@@ -303,7 +311,9 @@ permit (
     resource == Command::"CLI"
 )
 when {
-    context.executable == "git" || context.executable == "pytest" || context.executable == "reconcile"
+    [
+        "git", "pytest", "reconcile", "echo", "cmd", "powershell", "pwsh", "python", "python3", "pip"
+    ].contains(context.executable)
 };
 """
         status, val_body, _ = http_req(

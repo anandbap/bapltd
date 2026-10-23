@@ -100,7 +100,11 @@ class TestExecutiveDemo(unittest.TestCase):
             if not cp_bin:
                 raise unittest.SkipTest(f"bapcontrolplane.exe not found at {cp_candidates[0]}")
 
-            cmd = [cp_bin, "-port", "8443", "-https", "-allow-remote-admin", "-demo-mode"]
+            cmd = [
+                cp_bin, "-port", "8443", "-https", "-allow-remote-admin", "-demo-mode",
+                "-policy", os.path.join(WORKSPACE_ROOT, "policy.cedar"),
+                "-schema", os.path.join(WORKSPACE_ROOT, "schema.json"),
+            ]
             if cls.admin_token:
                 cmd.extend(["-admin-token", cls.admin_token])
             cls._spawned_server = subprocess.Popen(

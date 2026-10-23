@@ -29,14 +29,25 @@ class TestMultiLayerDefense(unittest.TestCase):
     def setUpClass(cls):
         cls.cp_port = 8089
         cls.server_url = f"http://localhost:{cls.cp_port}"
-        # Start isolated control plane with admin token
+        # Clean any stale cached policy state from prior test suites
+        for p in [
+            os.path.join(REPO_ROOT, ".bapstate", "policy"),
+            os.path.join(REPO_ROOT, ".bap"),
+            os.path.expanduser("~/.bapstate/policy"),
+        ]:
+            if os.path.exists(p):
+                shutil.rmtree(p, ignore_errors=True)
+
+        # Start isolated control plane with admin token and explicit baseline policy
         cls.cp_proc = subprocess.Popen(
             [
                 CONTROLPLANE_BIN,
                 "-port", str(cls.cp_port),
                 "-ttl", "30",
                 "-admin-token", TEST_ADMIN_TOKEN,
-                "-allow-remote-admin"
+                "-allow-remote-admin",
+                "-policy", os.path.join(REPO_ROOT, "policy.cedar"),
+                "-schema", os.path.join(REPO_ROOT, "schema.json"),
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -60,6 +71,13 @@ class TestMultiLayerDefense(unittest.TestCase):
         if cls.cp_proc:
             cls.cp_proc.terminate()
             cls.cp_proc.wait()
+        for p in [
+            os.path.join(REPO_ROOT, ".bapstate", "policy"),
+            os.path.join(REPO_ROOT, ".bap"),
+            os.path.expanduser("~/.bapstate/policy"),
+        ]:
+            if os.path.exists(p):
+                shutil.rmtree(p, ignore_errors=True)
 
     def test_01_layer2_mcp_defense(self):
         """Verify Layer 2 (MCP): bapmcp allows permitted tools and blocks forbidden resources."""
