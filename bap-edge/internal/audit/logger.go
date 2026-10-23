@@ -48,6 +48,9 @@ type AuditEntry struct {
 	ProcessTree   []string  `json:"process_tree,omitempty"`
 	ParentPID     int       `json:"parent_pid,omitempty"`
 	ProcessPID    int       `json:"process_pid,omitempty"`
+	// Caller Lineage & Workload Attestation
+	CallerBinary  string    `json:"caller_binary,omitempty"`
+	CallerHash    string    `json:"caller_hash,omitempty"`
 	PreviousHash  string    `json:"previous_hash,omitempty"`
 	EntryHash     string    `json:"entry_hash,omitempty"`
 }

@@ -45,7 +45,53 @@ Every BAP component (`bapedge`, `cchook`, `bap-sdk`, `bapgateway`, demo scripts)
 | **2** | **Project Root (`./bap-config.json`)** | Teams that check corporate endpoints into git repositories so every repo clone connects automatically. |
 | **3** | **User Profile (`~/.bap/config.json`)** | Developers working across multiple repositories on their corporate laptops. |
 | **4** | **System-Wide Managed (`%PROGRAMDATA%\BAP\config.json`)** | **Enterprise IT / MDM / InTune deployment** — pre-configured system-wide so developers don't have to configure anything. |
-| **5 (Fallback)**| **Default Fallback (`http://localhost:8080`)** | Local standalone testing on developer workstations. |
+| **2** | **Project Root (`./bap-config.json` or `.bap/config.json`)** | Teams that check corporate endpoints into git repositories so every repo clone connects automatically. |
+| **3** | **User Profile (`~/.bap/config.json` or `~/.bapstate/config.json`)** | Developers working across multiple repositories on their corporate laptops. |
+| **4** | **System-Wide Managed (`%PROGRAMDATA%\BAP\config.json` or `/etc/bap/config.json`)** | **Enterprise IT / MDM / InTune deployment** — pre-configured system-wide so developers don't have to configure anything. |
+| **5 (Cascade Discovery)**| **Cloud Render & Local Cascade** | Automatic fallback discovery with 30s cold-start budget when unconfigured. |
+
+---
+
+## 2.1 First-Time Startup: Cascading Discovery, 30s Cold-Start Budget & Fail-Closed Enforcement
+
+When `bapedge` boots on a fresh workstation without explicit configuration, it executes an automated zero-trust discovery cascade:
+
+1. **Primary Option: Cloud Control Plane (`https://bap-controlplane.onrender.com`)**
+   - Free-tier or cloud-hosted containers enter sleep when idle. To accommodate cold starts, `bapedge` allocates a **30-second budget**:
+     - **Attempt 1**: Initial probe against `/health` with a 12-second socket timeout.
+     - **Sleep (15s)**: If Attempt 1 fails, `bapedge` sleeps 15 seconds to allow the remote container to spin up.
+     - **Attempt 2**: Second probe with a 15-second socket timeout.
+2. **Secondary Option: Local Enterprise HTTPS (`https://localhost:8443` and `https://127.0.0.1:8443`)**
+   - If the remote cloud instance does not answer within 30 seconds, `bapedge` probes the local secure TLS control plane.
+3. **Tertiary Option: Local HTTP (`http://localhost:8080` and `http://127.0.0.1:8080`)**
+   - Standard local development control plane.
+
+### Fail-Closed Enforcement vs. Degraded Mode
+- **Policy Sync & Online Mode**:
+  As soon as any control plane in the cascade answers, `bapedge` downloads and cryptographically verifies the latest `policy.cedar` bundle and stores it in the authoritative state directory (`.bapstate/policy/policy.cedar`).
+- **Degraded Mode (Offline Enforcing)**:
+  If all control plane options in the cascade are unreachable after the 30-second budget, but a local `policy.cedar` exists in `.bapstate/policy/` or workspace search paths, `bapedge` enters **Degraded Mode**:
+  - Full Cedar security invariants remain strictly enforced offline.
+  - Audit records are spooled locally to `.bapstate/audit.jsonl` for automatic flush upon reconnect.
+- **Fail-Closed Guarantee**:
+  If all control planes in the cascade fail AND no local `policy.cedar` exists, `bapedge` **FAILS CLOSED** with error `ErrNoPolicyAvailable` (`policy.cedar not available`). `bapedge` **REFUSES TO START OR EXECUTE COMMANDS** without policy invariants.
+
+---
+
+## 2.2 Caller Lineage Attestation: Agent Process Originates State
+
+In the BAP zero-trust architecture, `bapedge` is a stateless execution broker. Commands and tool executions originate from agent binaries (`a.exe`, `claude.exe`, `antigravity.exe`, `copilot.exe`).
+
+- **Caller Lineage Inspection**:
+  When `cchook` or another tool hook intercepts an action, it queries the operating system kernel (`QueryFullProcessImageNameW` on Windows via `PROCESS_QUERY_LIMITED_INFORMATION`, `/proc/<pid>/exe` on Linux) to identify the parent process.
+- **Cryptographic Workload Fingerprint**:
+  The interceptor reads the calling executable binary directly from disk, computes its SHA-256 hash (`sha256:...`), derives the calling `AppID`, and forwards the caller context to `bapedge exec` via `--caller-binary`, `--caller-hash`, and `BAP_CALLER_*` environment variables.
+- **Execution Receipt Immutability**:
+  Every executed command produces an immutable cryptographic `ExecutionReceipt` containing:
+  - `caller_binary`: Full absolute path of the calling agent (e.g. `C:\Program Files\Claude\claude.exe`)
+  - `caller_hash`: Cryptographic SHA-256 of the binary image
+  - `parent_pid`: OS process ID of the calling agent
+  - `identity`: Derived SPIFFE workload identity (e.g. `spiffe://bap.local/agent/claude-code`)
 
 ### Locked mode (production): the managed config always wins
 

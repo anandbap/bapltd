@@ -186,7 +186,10 @@ func RunStatus(args []string) error {
 
 	// Fallback probe: if explicit -server was not provided and primary URL is unreachable, try local fallbacks
 	if !cpConnected && *serverFlag == "" {
-		fallbacks := []string{"http://localhost:8080", "http://127.0.0.1:8080"}
+		fallbacks := []string{
+			"https://localhost:8443", "https://127.0.0.1:8443",
+			"http://localhost:8080", "http://127.0.0.1:8080",
+		}
 		for _, fb := range fallbacks {
 			if strings.TrimRight(serverURL, "/") == fb {
 				continue
@@ -922,7 +925,10 @@ func RunSweep(args []string) error {
 			if resp != nil {
 				_ = resp.Body.Close()
 			}
-			fallbacks := []string{"http://localhost:8080", "http://127.0.0.1:8080"}
+			fallbacks := []string{
+			"https://localhost:8443", "https://127.0.0.1:8443",
+			"http://localhost:8080", "http://127.0.0.1:8080",
+		}
 			for _, fb := range fallbacks {
 				if strings.TrimRight(serverURL, "/") == fb {
 					continue

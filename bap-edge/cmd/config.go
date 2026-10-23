@@ -68,6 +68,34 @@ func RunConfig(args []string) error {
 			cfg.EnvoyURL = *envoy
 		}
 
+		// Support positional key-value pairs like `bapedge config set server <url>` or `bapedge config set mode audit`
+		remaining := fs.Args()
+		for i := 0; i < len(remaining); i++ {
+			key := strings.ToLower(strings.TrimPrefix(remaining[i], "--"))
+			key = strings.TrimPrefix(key, "-")
+			if i+1 < len(remaining) {
+				val := remaining[i+1]
+				switch key {
+				case "server", "controlplane", "control_plane", "controlplane_url", "cp":
+					cfg.ControlPlaneURL = val
+					i++
+				case "gateway", "pep", "gateway_url":
+					cfg.GatewayURL = val
+					i++
+				case "envoy", "envoy_url":
+					cfg.EnvoyURL = val
+					i++
+				case "mode", "enforcement_mode":
+					m := strings.ToLower(strings.TrimSpace(val))
+					if m != "audit" && m != "enforce" {
+						return fmt.Errorf("invalid mode %q: use 'audit' or 'enforce'", val)
+					}
+					cfg.EnforcementMode = m
+					i++
+				}
+			}
+		}
+
 		targetFile := "bap-config.json"
 		if *global {
 			home, err := os.UserHomeDir()
@@ -79,6 +107,13 @@ func RunConfig(args []string) error {
 
 		if err := config.SaveConfig(cfg, targetFile); err != nil {
 			return fmt.Errorf("failed to save configuration to %s: %w", targetFile, err)
+		}
+
+		if !*global {
+			dotBapCfg := filepath.Join(".bap", "config.json")
+			if _, err := os.Stat(dotBapCfg); err == nil {
+				_ = config.SaveConfig(cfg, dotBapCfg)
+			}
 		}
 
 		fmt.Printf("[+] Central BAP configuration successfully saved to %s\n", targetFile)

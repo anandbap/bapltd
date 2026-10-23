@@ -13,9 +13,15 @@ import (
 //go:embed certs
 var certsFS embed.FS
 
+// MockTransport allows in-memory test mocks to intercept requests without network sockets.
+var MockTransport http.RoundTripper
+
 // New shares the BAP_CA_CERT trust setting across every request in a process.
 // It loads optional embedded certificates, system certificates, environment PEM secrets, and runtime paths.
 func New(timeout time.Duration) *http.Client {
+	if MockTransport != nil {
+		return &http.Client{Timeout: timeout, Transport: MockTransport}
+	}
 	return &http.Client{Timeout: timeout, Transport: &caTransport{}}
 }
 

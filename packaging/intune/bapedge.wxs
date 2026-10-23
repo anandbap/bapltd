@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="BAP Edge Daemon" Language="1033" Version="1.5.3.0" Manufacturer="BAP Security Inc." UpgradeCode="E1F2A3B4-5C6D-7E8F-9A0B-1C2D3E4F5A6B">
+  <Product Id="*" Name="BAP Edge Daemon" Language="1033" Version="1.6.0.0" Manufacturer="BAP Security Inc." UpgradeCode="E1F2A3B4-5C6D-7E8F-9A0B-1C2D3E4F5A6B">
     <Package InstallerVersion="300" Compressed="yes" InstallScope="perMachine" />
     <MediaTemplate EmbedCab="yes" />
 

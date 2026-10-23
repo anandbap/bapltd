@@ -431,6 +431,16 @@ Recovers from sudden laptop shutoffs, terminal force-kills, or power loss by pur
   [✓] Workstation successfully rejoined fleet with clean state.
 ```
 
+#### 5. Bootstrap Discovery Cascade, Fail-Closed Guarantee & Caller Lineage Attestation
+- **First-Time Discovery Cascade**: When `bapedge` boots on a new machine without configuration, it cascades through:
+  1. `https://bap-controlplane.onrender.com` (with a 30s budget: attempt 1 -> 15s cold-start sleep -> attempt 2).
+  2. Local HTTPS `https://localhost:8443` and `https://127.0.0.1:8443`.
+  3. Local HTTP `http://localhost:8080` and `http://127.0.0.1:8080`.
+- **Fail-Closed Policy Enforcement**: If all control planes fail after the 30s cascade budget AND no `policy.cedar` exists locally, `bapedge` **FAILS CLOSED** with error `ErrNoPolicyAvailable` (`policy.cedar not available`) and refuses to start.
+- **Degraded Mode**: If all control planes fail but a local `policy.cedar` exists on disk, `bapedge` enters Degraded Mode (strictly enforcing Cedar policy locally and spooling audit records to `.bapstate/audit.jsonl`).
+- **Caller Process Lineage Attestation**: `bapedge` is stateless. The calling agent (`a.exe`, `claude.exe`, `antigravity.exe`, `copilot.exe`) originates state. Interceptors inspect parent PID via kernel APIs (`QueryFullProcessImageNameW`), calculate SHA-256 hashes of the executable binary, derive the `AppID`, and seal this lineage directly into the cryptographic `ExecutionReceipt`.
+```
+
 ---
 
 ### 10. Agent Watch Persona Control Plane & Canonical Activity Engine (Epic 28)

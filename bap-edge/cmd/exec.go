@@ -48,6 +48,8 @@ type execContext struct {
 	parentPID       int
 	processPID      int
 	processTree     []string
+	callerBinary    string
+	callerHash      string
 }
 
 type sessionRiskState struct {
@@ -483,6 +485,8 @@ func generateExecutionReceipt(ec *execContext, result string, exitCode int) *typ
 		ProcessTree:    ec.processTree,
 		ParentPID:      ec.parentPID,
 		ProcessPID:     ec.processPID,
+		CallerBinary:   ec.callerBinary,
+		CallerHash:     ec.callerHash,
 	}
 }
 
@@ -575,6 +579,8 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 		ProcessTree:       resp.Receipt.ProcessTree,
 		ParentPID:         resp.Receipt.ParentPID,
 		ProcessPID:        resp.Receipt.ProcessPID,
+		CallerBinary:      ec.callerBinary,
+		CallerHash:        ec.callerHash,
 	}
 	if ec.shadowDenied && entry.Reason == "" {
 		entry.Reason = fmt.Sprintf("[AUDIT MODE VIOLATION] %s", ec.shadowReason)
@@ -631,10 +637,33 @@ func RunExec(args []string) {
 	skillFlag := fs.String("skill", os.Getenv("BAP_SKILL_NAME"), "Identifier of declaring skill for AIR content pinning (e.g. 'sql-analyzer')")
 	verifyPinsFlag := fs.Bool("verify-pins", true, "Verify cryptographic content hashes against pinning manifest (AIR Model)")
 	stepUpFlag := fs.String("stepup-decision", "", "Human Step-Up approval decision ('approve', 'session', or 'deny')")
+	callerBinaryFlag := fs.String("caller-binary", os.Getenv("BAP_CALLER_BINARY"), "Path to calling agent binary")
+	callerHashFlag := fs.String("caller-hash", os.Getenv("BAP_CALLER_HASH"), "Cryptographic SHA256 hash of calling agent binary")
 
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing arguments: %v\n", err)
 		os.Exit(1)
+	}
+
+	callerBin := *callerBinaryFlag
+	callerHash := *callerHashFlag
+	if callerBin == "" {
+		callerBin = os.Getenv("LTD_CALLER_BINARY")
+	}
+	if callerHash == "" {
+		callerHash = os.Getenv("LTD_CALLER_HASH")
+	}
+
+	ppid := os.Getppid()
+	discoveredBin, discoveredHash, discoveredAppID := resolveCallerLineage(ppid)
+	if callerBin == "" {
+		callerBin = discoveredBin
+	}
+	if callerHash == "" {
+		callerHash = discoveredHash
+	}
+	if (*sourceFlag == "cli" || *sourceFlag == "") && discoveredAppID != "" {
+		*sourceFlag = discoveredAppID
 	}
 
 	if *sessionFlag == "" {
@@ -651,6 +680,34 @@ func RunExec(args []string) {
 		os.Setenv("BAP_STEPUP_DECISION", *stepUpFlag)
 	}
 
+	bootRes, bootErr := config.BootstrapControlPlane(*serverFlag)
+	if bootErr != nil {
+		resp := types.ExecResponse{
+			Allowed: false,
+			Reason:  fmt.Sprintf("FATAL: %v", bootErr),
+			Mode:    strings.ToLower(strings.TrimSpace(*modeFlag)),
+		}
+		tempEC := &execContext{
+			startTime:       startTime,
+			source:          *sourceFlag,
+			sessionID:       *sessionFlag,
+			enforcementMode: strings.ToLower(strings.TrimSpace(*modeFlag)),
+			forceJSON:       *jsonFlag,
+			forceRaw:        *rawFlag,
+			parentPID:       ppid,
+			callerBinary:    callerBin,
+			callerHash:      callerHash,
+		}
+		tempEC.exit(resp, 1)
+		return
+	}
+	if bootRes.ActiveURL != "" && (*serverFlag == "" || *serverFlag == epCfg.ControlPlaneURL) {
+		*serverFlag = bootRes.ActiveURL
+	}
+	if *policyPath == "" && bootRes.PolicyPath != "" {
+		*policyPath = bootRes.PolicyPath
+	}
+
 	ec := &execContext{
 		startTime:       startTime,
 		source:          *sourceFlag,
@@ -664,6 +721,9 @@ func RunExec(args []string) {
 		forceRaw:        *rawFlag,
 		userPrompt:      *promptFlag,
 		skillName:       *skillFlag,
+		parentPID:       ppid,
+		callerBinary:    callerBin,
+		callerHash:      callerHash,
 	}
 
 	cmdArgs := fs.Args()
@@ -1229,4 +1289,37 @@ func checkContentPinning(ec *execContext, skillName string) (string, error) {
 	}
 
 	return matchedHash, nil
+}
+
+// resolveCallerLineage inspects the parent process to discover the executable image,
+// its cryptographic hash, and the calling agent identity.
+func resolveCallerLineage(parentPID int) (binaryPath, binaryHash, appID string) {
+	if parentPID <= 0 {
+		return
+	}
+	exePath := getProcessExecutablePath(parentPID)
+	if exePath != "" {
+		binaryPath = exePath
+		if data, err := os.ReadFile(exePath); err == nil {
+			h := sha256.Sum256(data)
+			binaryHash = fmt.Sprintf("sha256:%x", h[:])
+		}
+		baseLower := strings.ToLower(filepath.Base(exePath))
+		switch {
+		case strings.Contains(baseLower, "claude"):
+			appID = "claude-code"
+		case strings.Contains(baseLower, "antigravity"):
+			appID = "antigravity"
+		case strings.Contains(baseLower, "copilot"):
+			appID = "copilot"
+		case strings.Contains(baseLower, "cursor"):
+			appID = "cursor"
+		default:
+			stem := strings.TrimSuffix(baseLower, filepath.Ext(baseLower))
+			if stem != "" {
+				appID = stem
+			}
+		}
+	}
+	return
 }

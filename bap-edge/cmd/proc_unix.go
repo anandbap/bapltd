@@ -54,3 +54,14 @@ func findOtherBapEdgePIDs() ([]int, error) {
 	}
 	return pids, nil
 }
+
+// getProcessExecutablePath inspects a PID and returns its full executable image path.
+func getProcessExecutablePath(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	if link, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "exe")); err == nil {
+		return link
+	}
+	return ""
+}

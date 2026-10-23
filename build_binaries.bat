@@ -4,6 +4,7 @@ setlocal EnableDelayedExpansion
 set "ROOT_DIR=%~dp0"
 cd /d "%ROOT_DIR%"
 set "GOTOOLCHAIN=auto"
+set "GOFLAGS=-buildvcs=false"
 
 set "BUILD_WHEEL=0"
 set "AUTO_FIX="
@@ -140,7 +141,7 @@ del /f /q "%ROOT_DIR%*.old" >nul 2>&1
 
 if "%BUILD_WHEEL%"=="1" (
     echo.
-    echo [*] Building Python Wheel (.whl) package with embedded Go binaries...
+    echo [*] Building Python Wheel [whl] package with embedded Go binaries...
     python "%ROOT_DIR%scripts\build_wheel.py"
     if !ERRORLEVEL! neq 0 (
         echo [ERROR] Failed to build Python wheel!

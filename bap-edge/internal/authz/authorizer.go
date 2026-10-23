@@ -54,8 +54,7 @@ func NewAuthorizer(policyPath string) (*Authorizer, error) {
 		policyData, _ = os.ReadFile(resolvedPolicyPath)
 	}
 	if len(policyData) == 0 {
-		resolvedPolicyPath = "embedded_default.cedar"
-		policyData = []byte(defaultBaselinePolicy)
+		return nil, fmt.Errorf("policy.cedar not available: zero-trust policy file missing; bapedge fail-closed")
 	}
 
 	// Check if kill-switch is active in policy-state.json

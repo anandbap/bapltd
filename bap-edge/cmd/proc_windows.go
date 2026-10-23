@@ -90,3 +90,25 @@ func findOtherBapEdgePIDs() ([]int, error) {
 	}
 	return pids, nil
 }
+
+// getProcessExecutablePath inspects a PID and returns its full executable image path.
+func getProcessExecutablePath(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	procQueryFullProcessImageNameW := kernel32.NewProc("QueryFullProcessImageNameW")
+	hProcess, _, _ := procOpenProcess.Call(uintptr(processQueryLimitedInformation), 0, uintptr(pid))
+	if hProcess == 0 {
+		hProcess, _, _ = procOpenProcess.Call(uintptr(processQueryInformation), 0, uintptr(pid))
+	}
+	if hProcess != 0 {
+		defer procCloseHandle.Call(hProcess)
+		var buf [1024]uint16
+		size := uint32(len(buf))
+		ret, _, _ := procQueryFullProcessImageNameW.Call(hProcess, 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)))
+		if ret != 0 {
+			return syscall.UTF16ToString(buf[:size])
+		}
+	}
+	return ""
+}

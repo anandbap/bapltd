@@ -15,6 +15,18 @@ param(
     [string[]]$TrackedFiles = @("inspector.html", "inspector_v2.html", "policy.cedar", "schema.json")
 )
 
+Import-Module Microsoft.PowerShell.Utility -ErrorAction SilentlyContinue
+
+function Get-SHA256Hash($path) {
+    if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) {
+        return (Get-FileHash $path -Algorithm SHA256).Hash
+    }
+    $bytes = [System.IO.File]::ReadAllBytes($path)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $hash = $sha256.ComputeHash($bytes)
+    return [System.BitConverter]::ToString($hash).Replace("-", "").ToUpper()
+}
+
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $rootDir = (Get-Item (Join-Path $scriptDir "..")).FullName
@@ -39,8 +51,7 @@ foreach ($filename in $TrackedFiles) {
     }
 
     $totalFilesChecked++
-    $sourceHashObj = Get-FileHash $rootSource -Algorithm SHA256
-    $sourceHash = $sourceHashObj.Hash
+    $sourceHash = Get-SHA256Hash $rootSource
     $sourceSize = (Get-Item $rootSource).Length
     $shortHash = $sourceHash.Substring(0, 12).ToLower()
 
@@ -64,7 +75,7 @@ foreach ($filename in $TrackedFiles) {
     $copiesInSync = 0
     foreach ($copy in $allCopies) {
         $copyPath = $copy.FullName
-        $copyHash = (Get-FileHash $copyPath -Algorithm SHA256).Hash
+        $copyHash = Get-SHA256Hash $copyPath
         $relPath = $copyPath.Replace($rootDir, "").TrimStart("\/")
 
         if ($copyHash -eq $sourceHash) {

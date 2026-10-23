@@ -179,4 +179,22 @@ Every execution (whether allowed, denied, or audit-evaluated) issues an immutabl
   - `EXECUTION_FAILED`: Action authorized, but underlying process returned non-zero exit code.
   - `DECISION_ONLY`: Policy evaluated without execution (audit/check mode).
   - `AUDIT_PERMITTED`: Violation detected but permitted under audit/shadow mode.
+- **`caller_binary`**: Absolute filesystem path of the calling agent binary image.
+- **`caller_hash`**: Cryptographic SHA-256 hash of the calling agent binary on disk.
+- **`parent_pid`**: Operating system Process ID of the caller agent process.
+
+---
+
+## 7. Caller Process Attestation & Process Identity Origination
+
+BAPEdge is a stateless execution broker. Commands and tool executions originate from agent binaries (`a.exe`, `claude.exe`, `antigravity.exe`, `copilot.exe`).
+
+1. **Kernel-Level Caller Inspection**:
+   When `cchook` or an execution adapter intercepts a tool call, it inspects the calling parent process (`ppid`) using OS kernel APIs:
+   - On Windows: `QueryFullProcessImageNameW` via `PROCESS_QUERY_LIMITED_INFORMATION`.
+   - On Linux: `/proc/<pid>/exe`.
+2. **Cryptographic Binary Fingerprinting**:
+   The interceptor reads the calling executable binary from disk, computes its SHA-256 hash (`sha256:...`), derives the calling `AppID`, and forwards the caller context to `bapedge exec` via `--caller-binary`, `--caller-hash`, and `BAP_CALLER_*` / `LTD_CALLER_*` environment variables.
+3. **Execution Receipt Binding**:
+   `bapedge exec` seals the calling binary path, binary hash, and parent PID directly into the cryptographic `ExecutionReceipt` and audit ledger (`.bapstate/audit.jsonl`), ensuring immutable attribution back to the specific binary image running in Program Files or the user environment.
 

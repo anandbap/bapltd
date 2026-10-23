@@ -216,6 +216,25 @@ func loadConfigFile(path string) (*EndpointsConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err == nil {
+		if cfg.ControlPlaneURL == "" || cfg.ControlPlaneURL == DefaultControlPlaneURL {
+			for _, k := range []string{"control_plane_url", "server_url", "server", "controlplane", "controlPlaneUrl"} {
+				if v, ok := raw[k].(string); ok && v != "" {
+					cfg.ControlPlaneURL = strings.TrimRight(v, "/")
+					break
+				}
+			}
+		}
+		if cfg.GatewayURL == "" || cfg.GatewayURL == DefaultGatewayURL {
+			for _, k := range []string{"gateway_url", "pep_url", "gatewayUrl", "gateway"} {
+				if v, ok := raw[k].(string); ok && v != "" {
+					cfg.GatewayURL = strings.TrimRight(v, "/")
+					break
+				}
+			}
+		}
+	}
 	return &cfg, nil
 }
 

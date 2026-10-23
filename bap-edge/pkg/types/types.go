@@ -34,6 +34,10 @@ type ExecutionReceipt struct {
 	ProcessTree []string `json:"process_tree,omitempty"`
 	ParentPID   int      `json:"parent_pid,omitempty"`
 	ProcessPID  int      `json:"process_pid,omitempty"`
+
+	// Caller Lineage & Workload Attestation
+	CallerBinary string `json:"caller_binary,omitempty"`
+	CallerHash   string `json:"caller_hash,omitempty"`
 }
 
 // ExecResponse is output by the exec command.

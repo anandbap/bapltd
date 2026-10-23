@@ -18,8 +18,84 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 )
+// CallerProcessInfo captures parent process attestation details.
+type CallerProcessInfo struct {
+	PID        int    `json:"pid"`
+	BinaryPath string `json:"binary_path"`
+	BinaryName string `json:"binary_name"`
+	BinaryHash string `json:"binary_hash"`
+	AppID      string `json:"app_id"`
+}
+
+func getProcessExecutablePath(pid int) string {
+	if runtime.GOOS == "windows" {
+		kernel32 := syscall.NewLazyDLL("kernel32.dll")
+		procOpenProcess := kernel32.NewProc("OpenProcess")
+		procCloseHandle := kernel32.NewProc("CloseHandle")
+		procQueryFullProcessImageNameW := kernel32.NewProc("QueryFullProcessImageNameW")
+
+		hProcess, _, _ := procOpenProcess.Call(0x1000, 0, uintptr(pid)) // PROCESS_QUERY_LIMITED_INFORMATION
+		if hProcess == 0 {
+			hProcess, _, _ = procOpenProcess.Call(0x0400, 0, uintptr(pid)) // PROCESS_QUERY_INFORMATION
+		}
+		if hProcess != 0 {
+			defer procCloseHandle.Call(hProcess)
+			var buf [1024]uint16
+			size := uint32(len(buf))
+			ret, _, _ := procQueryFullProcessImageNameW.Call(hProcess, 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)))
+			if ret != 0 {
+				return syscall.UTF16ToString(buf[:size])
+			}
+		}
+	} else if runtime.GOOS == "linux" {
+		if link, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid)); err == nil {
+			return link
+		}
+	}
+	return ""
+}
+
+func inspectCallerProcess(pid int) CallerProcessInfo {
+	info := CallerProcessInfo{
+		PID:   pid,
+		AppID: "claude-code",
+	}
+	if pid <= 0 {
+		return info
+	}
+
+	exePath := getProcessExecutablePath(pid)
+	if exePath != "" {
+		info.BinaryPath = exePath
+		info.BinaryName = filepath.Base(exePath)
+		if data, err := os.ReadFile(exePath); err == nil {
+			h := sha256.Sum256(data)
+			info.BinaryHash = fmt.Sprintf("sha256:%x", h[:])
+		}
+
+		baseLower := strings.ToLower(info.BinaryName)
+		switch {
+		case strings.Contains(baseLower, "claude"):
+			info.AppID = "claude-code"
+		case strings.Contains(baseLower, "antigravity"):
+			info.AppID = "antigravity"
+		case strings.Contains(baseLower, "copilot"):
+			info.AppID = "copilot"
+		case strings.Contains(baseLower, "cursor"):
+			info.AppID = "cursor"
+		default:
+			stem := strings.TrimSuffix(baseLower, filepath.Ext(baseLower))
+			if stem != "" {
+				info.AppID = stem
+			}
+		}
+	}
+	return info
+}
 
 const intentClassifierVersion = "bap-intent-rules-v1"
 
@@ -240,7 +316,7 @@ func getHTTPClient() *http.Client {
 		},
 	}
 	return &http.Client{
-		Timeout:   2 * time.Second,
+		Timeout:   10 * time.Second,
 		Transport: tr,
 	}
 }
@@ -337,25 +413,41 @@ func resolveServerURL() string {
 	if s := os.Getenv("BAP_SERVER_URL"); s != "" {
 		return strings.TrimRight(s, "/")
 	}
+	if s := os.Getenv("BAP_CONTROL_PLANE_URL"); s != "" {
+		return strings.TrimRight(s, "/")
+	}
+	if s := os.Getenv("LTD_SERVER_URL"); s != "" {
+		return strings.TrimRight(s, "/")
+	}
+
 	cfgCandidates := []string{
-		filepath.Join(".bap", "bap-config.json"),
-		filepath.Join(".bap", "config.json"),
 		"bap-config.json",
+		filepath.Join(".bap", "config.json"),
+		filepath.Join(".bap", "bap-config.json"),
 		"../bap-config.json",
+		"../../bap-config.json",
 	}
 	if exePath, err := os.Executable(); err == nil {
-		cfgCandidates = append(cfgCandidates, filepath.Join(filepath.Dir(exePath), "bap-config.json"))
+		exeDir := filepath.Dir(exePath)
+		cfgCandidates = append(cfgCandidates, filepath.Join(exeDir, "bap-config.json"))
+		cfgCandidates = append(cfgCandidates, filepath.Join(exeDir, "..", "bap-config.json"))
 	}
 	if home, err := os.UserHomeDir(); err == nil {
+		cfgCandidates = append(cfgCandidates, filepath.Join(home, ".bap", "config.json"))
 		cfgCandidates = append(cfgCandidates, filepath.Join(home, ".bap", "bap-config.json"))
+		cfgCandidates = append(cfgCandidates, filepath.Join(home, ".bapstate", "credentials.json"))
+		cfgCandidates = append(cfgCandidates, filepath.Join(home, ".bapstate", "config.json"))
 	}
+
 	for _, cfgPath := range cfgCandidates {
 		if cfgData, err := os.ReadFile(cfgPath); err == nil {
-			var cfg struct {
-				ControlPlaneURL string `json:"controlplane_url"`
-			}
-			if json.Unmarshal(cfgData, &cfg) == nil && cfg.ControlPlaneURL != "" {
-				return strings.TrimRight(cfg.ControlPlaneURL, "/")
+			var raw map[string]interface{}
+			if json.Unmarshal(cfgData, &raw) == nil {
+				for _, key := range []string{"controlplane_url", "control_plane_url", "server_url", "server"} {
+					if val, ok := raw[key].(string); ok && strings.TrimSpace(val) != "" {
+						return strings.TrimRight(strings.TrimSpace(val), "/")
+					}
+				}
 			}
 		}
 	}
@@ -863,6 +955,12 @@ func handleSessionStartHook(payload HookPayload) {
 	// A governed launcher owns the session ID and watcher lifecycle. Claude also
 	// supplies its own hook session ID; preferring that value created a second
 	// session and a second watcher for the same process.
+	caller := inspectCallerProcess(ppid)
+	appID := caller.AppID
+	if appID == "" {
+		appID = "claude-code"
+	}
+
 	sessionID := os.Getenv("BAP_SESSION_ID")
 	if sessionID == "" {
 		// Check PID-specific marker already written by launcher or bapedge session-start
@@ -875,7 +973,7 @@ func handleSessionStartHook(payload HookPayload) {
 		sessionID = payload.SessionID
 	}
 	if sessionID == "" {
-		sessionID = fmt.Sprintf("sess-claude-pid-%d", ppid)
+		sessionID = fmt.Sprintf("sess-%s-pid-%d", appID, ppid)
 	}
 
 	serverURL := resolveServerURL()
@@ -887,11 +985,13 @@ func handleSessionStartHook(payload HookPayload) {
 		username = os.Getenv("USER")
 	}
 	startPayload := map[string]any{
-		"session_id": sessionID,
-		"app_id":     "claude-code",
-		"user_id":    username,
-		"hostname":   hostname,
-		"client_pid": ppid,
+		"session_id":  sessionID,
+		"app_id":      appID,
+		"caller_path": caller.BinaryPath,
+		"caller_hash": caller.BinaryHash,
+		"user_id":     username,
+		"hostname":    hostname,
+		"client_pid":  ppid,
 	}
 	if !launcherOwnsWatcher {
 		if body, err := json.Marshal(startPayload); err == nil {
@@ -909,11 +1009,13 @@ func handleSessionStartHook(payload HookPayload) {
 	}
 
 	marker := map[string]any{
-		"session_id": sessionID,
-		"server_url": serverURL,
-		"pid":        ppid,
-		"app_id":     "claude-code",
-		"started_at": time.Now().UTC(),
+		"session_id":  sessionID,
+		"server_url":  serverURL,
+		"pid":         ppid,
+		"app_id":      appID,
+		"caller_path": caller.BinaryPath,
+		"caller_hash": caller.BinaryHash,
+		"started_at":  time.Now().UTC(),
 	}
 	if data, err := json.MarshalIndent(marker, "", "  "); err == nil {
 		pMarker := sessionMarkerPathForPID(ppid)
@@ -1042,8 +1144,10 @@ func handleUserPromptHook(payload HookPayload) {
 	promptHash := fmt.Sprintf("%x", promptDigest[:])
 	capturePrompt := shouldCaptureUserPrompt()
 
+
 	serverURL := resolveServerURL()
 	sessionID := resolveSessionID(payload)
+	ppid := os.Getppid()
 
 	// Zero-Trust Revocation Check: STOP taking user inputs if revoked
 	if revoked, reason := isSessionRevoked(serverURL, sessionID); revoked {
@@ -1070,6 +1174,7 @@ func handleUserPromptHook(payload HookPayload) {
 				"intent":                intent,
 				"prompt_hash":           promptHash,
 				"prompt_capture_enabled": capturePrompt,
+				"parent_pid":            ppid,
 			}
 			if capturePrompt {
 				request["user_prompt"] = prompt
@@ -1127,6 +1232,7 @@ func main() {
 	}
 
 	sessionID := resolveSessionID(payload)
+	ppid := os.Getppid()
 	if revoked, reason := isSessionRevoked(resolveServerURL(), sessionID); revoked {
 		outputDecision("deny", reason, "This session cannot perform further governed tool actions.")
 		return
@@ -1239,7 +1345,7 @@ func main() {
 		}
 	}
 	if sessionID == "" {
-		ppid := os.Getppid()
+		_ = ppid
 		sessionID = fmt.Sprintf("sess-claude-pid-%d", ppid)
 		serverURL := "http://localhost:8080"
 		cfgCandidates := []string{
@@ -1331,14 +1437,32 @@ func main() {
 	// 6. Execute bapedge check --source claude-code --session-id <sessionID> --json --cmd-b64 <b64>
 	// BAP-200: Interceptor uses Decision-Only check so the action executes exactly once natively.
 	cmdB64 := base64.StdEncoding.EncodeToString([]byte(command))
-	execArgs := []string{"check", "--source", "claude-code", "--json", "--cmd-b64", cmdB64}
+	caller := inspectCallerProcess(ppid)
+	callerSource := caller.AppID
+	if callerSource == "" {
+		callerSource = "claude-code"
+	}
+	execArgs := []string{"check", "--source", callerSource, "--json", "--cmd-b64", cmdB64}
 	if sessionID != "" {
-		execArgs = append([]string{"check", "--source", "claude-code", "--session-id", sessionID, "--json", "--cmd-b64", cmdB64})
+		execArgs = []string{"check", "--source", callerSource, "--session-id", sessionID, "--json", "--cmd-b64", cmdB64}
+	}
+	if caller.BinaryPath != "" {
+		execArgs = append(execArgs, "--caller-binary", caller.BinaryPath)
+	}
+	if caller.BinaryHash != "" {
+		execArgs = append(execArgs, "--caller-hash", caller.BinaryHash)
 	}
 
 	cmd := exec.Command(ltdBin, execArgs...)
 	cmd.Env = os.Environ()
 	cmd.Env = append(cmd.Env, "BAP_SESSION_ID="+sessionID)
+	cmd.Env = append(cmd.Env, "LTD_SOURCE="+callerSource)
+	if caller.BinaryPath != "" {
+		cmd.Env = append(cmd.Env, "BAP_CALLER_BINARY="+caller.BinaryPath, "LTD_CALLER_BINARY="+caller.BinaryPath)
+	}
+	if caller.BinaryHash != "" {
+		cmd.Env = append(cmd.Env, "BAP_CALLER_HASH="+caller.BinaryHash, "LTD_CALLER_HASH="+caller.BinaryHash)
+	}
 
 	// Inject only this session's active prompt. A workspace-global prompt file
 	// leaks prompts across concurrent Claude sessions.
@@ -1393,7 +1517,18 @@ func main() {
 			return
 		}
 		// Rewrite tool input command to route through bapedge exec using safe structured --cmd-b64
-		rewritten := fmt.Sprintf(`%s exec --source claude-code --session-id %s --cmd-b64 %s`, ltdBin, sessionID, cmdB64)
+				caller := inspectCallerProcess(ppid)
+		callerSource := caller.AppID
+		if callerSource == "" {
+			callerSource = "claude-code"
+		}
+		rewritten := fmt.Sprintf(`%s exec --source %s --session-id %s --cmd-b64 %s`, ltdBin, callerSource, sessionID, cmdB64)
+		if caller.BinaryPath != "" {
+			rewritten = fmt.Sprintf(`%s --caller-binary "%s"`, rewritten, caller.BinaryPath)
+		}
+		if caller.BinaryHash != "" {
+			rewritten = fmt.Sprintf(`%s --caller-hash "%s"`, rewritten, caller.BinaryHash)
+		}
 		outputDecisionWithUpdatedInput("allow", "", "Command authorized by BAP Cedar policy - routed to BAP broker sandbox", &ToolInput{Command: rewritten})
 	} else {
 		reason := execResp.Reason
