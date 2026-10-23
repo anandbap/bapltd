@@ -304,8 +304,8 @@ class TestHitlAndSupplyChain(unittest.TestCase):
 
     def test_13_cross_folder_write_session_scope(self):
         """Verify BAP_STEPUP_DECISION=session grants session-scoped permission for target directory."""
-        sibling_dir = r"C:\Users\User\pyprj\afbap"
-        sibling_file = r"C:\Users\User\pyprj\afbap\session_test.txt"
+        sibling_dir = os.path.abspath(os.path.join(REPO_ROOT, "..", "afbap"))
+        sibling_file = os.path.join(sibling_dir, "session_test.txt")
 
         # 1. Authorize via session step-up decision
         env_sess = self.env.copy()
@@ -325,8 +325,9 @@ class TestHitlAndSupplyChain(unittest.TestCase):
         env_clean.pop("BAP_STEPUP_DECISION", None)
         env_clean["BAP_NON_INTERACTIVE"] = "1"
 
+        sub2_file = os.path.join(sibling_dir, "sub2.txt")
         proc2 = subprocess.run(
-            [BAPEDGE_BIN, "check", "--session-id", self.session_id, "--json", f"echo sub-data > C:\\Users\\User\\pyprj\\afbap\\sub2.txt"],
+            [BAPEDGE_BIN, "check", "--session-id", self.session_id, "--json", f"echo sub-data > {sub2_file}"],
             capture_output=True, text=True, cwd=REPO_ROOT, env=env_clean
         )
         self.assertEqual(proc2.returncode, 0)
@@ -335,7 +336,7 @@ class TestHitlAndSupplyChain(unittest.TestCase):
 
     def test_14_cross_folder_permissions_list_and_untrust(self):
         """Verify bapedge permissions lists active authorizations and untrust properly revokes them."""
-        sibling_dir = r"C:\Users\User\pyprj\afbap"
+        sibling_dir = os.path.abspath(os.path.join(REPO_ROOT, "..", "afbap"))
 
         # 1. Grant project permission
         subprocess.run([BAPEDGE_BIN, "trust", sibling_dir, "--project"], capture_output=True, cwd=REPO_ROOT, env=self.env)
@@ -343,7 +344,7 @@ class TestHitlAndSupplyChain(unittest.TestCase):
         # 2. Query permissions list
         list_res = subprocess.run([BAPEDGE_BIN, "permissions"], capture_output=True, text=True, cwd=REPO_ROOT, env=self.env)
         self.assertEqual(list_res.returncode, 0)
-        self.assertIn("C:\\Users\\User\\pyprj\\afbap", list_res.stdout)
+        self.assertIn(sibling_dir, list_res.stdout)
         self.assertIn("PROJECT", list_res.stdout)
 
         # 3. Revoke permission
@@ -356,8 +357,9 @@ class TestHitlAndSupplyChain(unittest.TestCase):
         env_clean.pop("BAP_STEPUP_DECISION", None)
         env_clean["BAP_NON_INTERACTIVE"] = "1"
 
+        blocked_file = os.path.join(sibling_dir, "blocked.txt")
         proc = subprocess.run(
-            [BAPEDGE_BIN, "check", "--session-id", self.session_id, "--json", f"echo blocked > {sibling_dir}\\blocked.txt"],
+            [BAPEDGE_BIN, "check", "--session-id", self.session_id, "--json", f"echo blocked > {blocked_file}"],
             capture_output=True, text=True, cwd=REPO_ROOT, env=env_clean
         )
         self.assertNotEqual(proc.returncode, 0)
@@ -366,10 +368,11 @@ class TestHitlAndSupplyChain(unittest.TestCase):
 
     def test_15_cchook_cross_folder_file_tool_trusted(self):
         """Verify cchook PreToolUse hook respects project permissions for direct file mutation tools (Edit/Write)."""
-        sibling_file = r"C:\Users\User\pyprj\afbap\code.py"
+        sibling_dir = os.path.abspath(os.path.join(REPO_ROOT, "..", "afbap"))
+        sibling_file = os.path.join(sibling_dir, "code.py")
 
         # 1. Grant project permission for afbap
-        subprocess.run([BAPEDGE_BIN, "trust", r"C:\Users\User\pyprj\afbap", "--project"], capture_output=True, cwd=REPO_ROOT, env=self.env)
+        subprocess.run([BAPEDGE_BIN, "trust", sibling_dir, "--project"], capture_output=True, cwd=REPO_ROOT, env=self.env)
 
         # 2. Send Claude Code PreToolUse event for Write tool
         hook_payload = {

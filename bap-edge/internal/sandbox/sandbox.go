@@ -41,11 +41,6 @@ func CleanCommandString(s string) string {
 		}
 	}
 
-	// Unescape literal \" artifacts from subprocess/shell escaping
-	if strings.Contains(s, `\"`) {
-		s = strings.ReplaceAll(s, `\"`, `"`)
-	}
-
 	return s
 }
 

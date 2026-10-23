@@ -22,6 +22,16 @@ func setupTestServer() *Server {
 	return NewServer(reg, otcStore, minter, nil, nil)
 }
 
+func assertStatus(t *testing.T, resp *http.Response, err error, expected int, msg string) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("%s: request error %v", msg, err)
+	}
+	if resp.StatusCode != expected {
+		t.Fatalf("%s: expected status %d, got %d", msg, expected, resp.StatusCode)
+	}
+}
+
 func TestAPIFullLifecycle(t *testing.T) {
 	srv := setupTestServer()
 	srv.SetAdminSecurity("test-admin", true)
@@ -35,9 +45,7 @@ func TestAPIFullLifecycle(t *testing.T) {
 
 	// 1. Health check
 	resp, err := client.Get(ts.URL + "/api/v1/health")
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("health check failed: status %v, err %v", resp.StatusCode, err)
-	}
+	assertStatus(t, resp, err, http.StatusOK, "health check failed")
 
 	// 2. Pre-Register an Agent
 	preRegPayload := types.PreRegisterRequest{
@@ -50,9 +58,7 @@ func TestAPIFullLifecycle(t *testing.T) {
 	}
 	body, _ := json.Marshal(preRegPayload)
 	resp, err = client.Post(ts.URL+"/api/v1/agents/pre-register", "application/json", bytes.NewReader(body))
-	if err != nil || resp.StatusCode != http.StatusCreated {
-		t.Fatalf("pre-register failed: status %v", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusCreated, "pre-register failed")
 
 	var preRegResp types.PreRegisterResponse
 	_ = json.NewDecoder(resp.Body).Decode(&preRegResp)
@@ -70,9 +76,7 @@ func TestAPIFullLifecycle(t *testing.T) {
 	}
 	validBody, _ := json.Marshal(validReg)
 	resp, err = client.Post(ts.URL+"/api/v1/agents/register", "application/json", bytes.NewReader(validBody))
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 OK for valid registration, got: %d", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusOK, "valid registration failed")
 
 	var regResp types.RegisterEdgeResponse
 	_ = json.NewDecoder(resp.Body).Decode(&regResp)
@@ -82,9 +86,7 @@ func TestAPIFullLifecycle(t *testing.T) {
 
 	// 4. Replay Registration with already consumed code -> Expect 401 Unauthorized
 	resp, err = client.Post(ts.URL+"/api/v1/agents/register", "application/json", bytes.NewReader(validBody))
-	if err != nil || resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("expected 401 for replayed OTC, got: %d", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusUnauthorized, "replayed OTC")
 
 	// 5. Register with Wrong Hash in Prod -> Expect 403 Forbidden
 	// Pre-register another agent
@@ -97,9 +99,7 @@ func TestAPIFullLifecycle(t *testing.T) {
 	}
 	body2, _ := json.Marshal(preRegPayload2)
 	resp2, err := client.Post(ts.URL+"/api/v1/agents/pre-register", "application/json", bytes.NewReader(body2))
-	if err != nil || resp2.StatusCode != http.StatusCreated {
-		t.Fatalf("pre-register 2 failed: %v", resp2.StatusCode)
-	}
+	assertStatus(t, resp2, err, http.StatusCreated, "pre-register 2 failed")
 	var preRegResp2 types.PreRegisterResponse
 	_ = json.NewDecoder(resp2.Body).Decode(&preRegResp2)
 
@@ -112,9 +112,7 @@ func TestAPIFullLifecycle(t *testing.T) {
 	}
 	tamperedBody, _ := json.Marshal(tamperedReg)
 	resp, err = client.Post(ts.URL+"/api/v1/agents/register", "application/json", bytes.NewReader(tamperedBody))
-	if err != nil || resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403 Forbidden for bad hash, got: %d", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusForbidden, "bad hash registration")
 
 	// 6. Acquire Grant
 	grantReq := types.AcquireGrantRequest{
@@ -123,9 +121,7 @@ func TestAPIFullLifecycle(t *testing.T) {
 	}
 	grantBody, _ := json.Marshal(grantReq)
 	resp, err = client.Post(ts.URL+"/api/v1/grants/acquire", "application/json", bytes.NewReader(grantBody))
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 OK for grant acquisition, got: %d", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusOK, "grant acquisition")
 	var grantAcqResp types.AcquireGrantResponse
 	_ = json.NewDecoder(resp.Body).Decode(&grantAcqResp)
 
@@ -133,28 +129,20 @@ func TestAPIFullLifecycle(t *testing.T) {
 	consumeReq := map[string]string{"token": grantAcqResp.Token, "resource": "cli:exec"}
 	cBody, _ := json.Marshal(consumeReq)
 	resp, err = client.Post(ts.URL+"/api/v1/grants/consume", "application/json", bytes.NewReader(cBody))
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 OK for grant consumption, got: %d", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusOK, "grant consumption")
 
 	// 6c. Consume again (Replay attack on grant) -> Expect 403 Forbidden
 	resp, err = client.Post(ts.URL+"/api/v1/grants/consume", "application/json", bytes.NewReader(cBody))
-	if err != nil || resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403 Forbidden on grant replay, got: %d", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusForbidden, "grant replay")
 
 	// 7. Policy Bundle and Sync
 	resp, err = client.Get(ts.URL + "/api/v1/policy/bundle")
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 OK for policy bundle, got: %d", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusOK, "policy bundle")
 
 	syncReq := map[string]any{"agent_id": preRegResp.AgentID, "installed_version": 0}
 	syncBody, _ := json.Marshal(syncReq)
 	resp, err = client.Post(ts.URL+"/api/v1/policy/sync", "application/json", bytes.NewReader(syncBody))
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 OK for policy sync, got: %d", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusOK, "policy sync")
 
 	// 8. Audit Ingest and List
 	auditPayload := []map[string]any{
@@ -170,28 +158,20 @@ func TestAPIFullLifecycle(t *testing.T) {
 	}
 	auditBody, _ := json.Marshal(auditPayload)
 	resp, err = client.Post(ts.URL+"/api/v1/audit/ingest", "application/json", bytes.NewReader(auditBody))
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 OK for audit ingest, got: %d", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusOK, "audit ingest")
 
 	resp, err = client.Get(ts.URL + "/api/v1/audit/events")
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 OK for audit list, got: %d", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusOK, "audit list")
 
 	// 9. Revoke Agent (Kill switch)
 	revokeReq := map[string]string{"agent_id": preRegResp.AgentID}
 	revokeBody, _ := json.Marshal(revokeReq)
 	resp, err = client.Post(ts.URL+"/api/v1/agents/revoke", "application/json", bytes.NewReader(revokeBody))
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 OK for revocation, got: %d", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusOK, "revocation")
 
 	// 10. Attempt grant after revocation -> Expect 403 Forbidden
 	resp, err = client.Post(ts.URL+"/api/v1/grants/acquire", "application/json", bytes.NewReader(grantBody))
-	if err != nil || resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403 Forbidden for revoked agent grant request, got: %d", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusForbidden, "revoked agent grant request")
 
 	// 11. Multi-Instance Fleet Enrollment & SPIFFE IDs
 	fleetPreReg := types.PreRegisterRequest{
@@ -205,9 +185,7 @@ func TestAPIFullLifecycle(t *testing.T) {
 	}
 	fleetBody, _ := json.Marshal(fleetPreReg)
 	resp, err = client.Post(ts.URL+"/api/v1/agents/pre-register", "application/json", bytes.NewReader(fleetBody))
-	if err != nil || resp.StatusCode != http.StatusCreated {
-		t.Fatalf("fleet pre-register failed: %v", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusCreated, "fleet pre-register")
 	var fleetPreResp types.PreRegisterResponse
 	_ = json.NewDecoder(resp.Body).Decode(&fleetPreResp)
 	if !strings.HasPrefix(fleetPreResp.Code, "BAP-FLEET-") {
@@ -223,9 +201,7 @@ func TestAPIFullLifecycle(t *testing.T) {
 	}
 	bodyInst1, _ := json.Marshal(regInst1)
 	resp, err = client.Post(ts.URL+"/api/v1/agents/register", "application/json", bytes.NewReader(bodyInst1))
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("instance 1 registration failed: %v", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusOK, "instance 1 registration")
 	var respInst1 types.RegisterEdgeResponse
 	_ = json.NewDecoder(resp.Body).Decode(&respInst1)
 	if respInst1.SPIFFEID != "spiffe://bap.internal/app/fleet-service/instance/inst-001" {
@@ -241,9 +217,7 @@ func TestAPIFullLifecycle(t *testing.T) {
 	}
 	bodyInst2, _ := json.Marshal(regInst2)
 	resp, err = client.Post(ts.URL+"/api/v1/agents/register", "application/json", bytes.NewReader(bodyInst2))
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("instance 2 registration failed: %v", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusOK, "instance 2 registration")
 	var respInst2 types.RegisterEdgeResponse
 	_ = json.NewDecoder(resp.Body).Decode(&respInst2)
 	if respInst2.SPIFFEID != "spiffe://bap.internal/app/fleet-service/instance/inst-002" {
@@ -254,32 +228,24 @@ func TestAPIFullLifecycle(t *testing.T) {
 	hbReq := map[string]string{"agent_id": respInst1.AgentID}
 	hbBody, _ := json.Marshal(hbReq)
 	resp, err = client.Post(ts.URL+"/api/v1/instances/heartbeat", "application/json", bytes.NewReader(hbBody))
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("heartbeat failed: %v", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusOK, "heartbeat")
 
 	// 13. App-Level Fleet Revocation (Kill-Switch)
 	appRevokeReq := map[string]string{"app_id": "fleet-service"}
 	appRevokeBody, _ := json.Marshal(appRevokeReq)
 	resp, err = client.Post(ts.URL+"/api/v1/apps/revoke", "application/json", bytes.NewReader(appRevokeBody))
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("app revocation failed: %v", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusOK, "app revocation")
 
 	// Both instances should now be blocked
 	grantReq1 := types.AcquireGrantRequest{AgentID: respInst1.AgentID, BinaryHash: "fleet-binary-hash"}
 	gBody1, _ := json.Marshal(grantReq1)
 	resp, err = client.Post(ts.URL+"/api/v1/grants/acquire", "application/json", bytes.NewReader(gBody1))
-	if err != nil || resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403 Forbidden for fleet-revoked instance 1, got %d", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusForbidden, "fleet-revoked instance 1")
 
 	grantReq2 := types.AcquireGrantRequest{AgentID: respInst2.AgentID, BinaryHash: "fleet-binary-hash"}
 	gBody2, _ := json.Marshal(grantReq2)
 	resp, err = client.Post(ts.URL+"/api/v1/grants/acquire", "application/json", bytes.NewReader(gBody2))
-	if err != nil || resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403 Forbidden for fleet-revoked instance 2, got %d", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusForbidden, "fleet-revoked instance 2")
 
 	// 14. Session Lifecycle & Ingestion Linkage
 	sessStartReq := map[string]any{
@@ -290,9 +256,7 @@ func TestAPIFullLifecycle(t *testing.T) {
 	}
 	sessBody, _ := json.Marshal(sessStartReq)
 	resp, err = client.Post(ts.URL+"/api/v1/sessions/start", "application/json", bytes.NewReader(sessBody))
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 OK for session start, got: %d", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusOK, "session start")
 
 	// Ingest event tagged with this session
 	taggedAudit := []map[string]any{
@@ -319,15 +283,32 @@ func TestAPIFullLifecycle(t *testing.T) {
 	}
 	tBody, _ := json.Marshal(taggedAudit)
 	resp, err = client.Post(ts.URL+"/api/v1/audit/ingest", "application/json", bytes.NewReader(tBody))
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 OK for tagged audit ingest, got: %d", resp.StatusCode)
-	}
+	assertStatus(t, resp, err, http.StatusOK, "tagged audit ingest")
 
 	// Fetch session details
 	resp, err = client.Get(ts.URL + "/api/v1/sessions/sess-claude-api-test")
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 OK for get session, got: %d", resp.StatusCode)
+	assertStatus(t, resp, err, http.StatusOK, "get session")
+	var sessDetail map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&sessDetail)
+	if sessDetail["total_events"].(float64) != 2 {
+		t.Fatalf("expected 2 total events on session, got: %v", sessDetail["total_events"])
 	}
+	if sessDetail["allowed_count"].(float64) != 1 || sessDetail["denied_count"].(float64) != 1 {
+		t.Fatalf("expected 1 allow and 1 deny on session, got %v and %v", sessDetail["allowed_count"], sessDetail["denied_count"])
+	}
+
+	// End session
+	sessEndReq := map[string]string{
+		"session_id": "sess-claude-api-test",
+		"reason":     "session completed successfully",
+	}
+	endBody, _ := json.Marshal(sessEndReq)
+	resp, err = client.Post(ts.URL+"/api/v1/sessions/end", "application/json", bytes.NewReader(endBody))
+	assertStatus(t, resp, err, http.StatusOK, "session end")
+
+	// Verify inspector data contains sessions
+	resp, err = client.Get(ts.URL + "/api/v1/inspector/data")
+	assertStatus(t, resp, err, http.StatusOK, "inspector data")
 	var sessDetail map[string]any
 	_ = json.NewDecoder(resp.Body).Decode(&sessDetail)
 	if sessDetail["total_events"].(float64) != 2 {

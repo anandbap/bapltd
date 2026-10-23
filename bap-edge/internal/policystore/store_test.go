@@ -1,6 +1,7 @@
 package policystore
 
 import (
+	"bap-edge/internal/httptransport"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,12 @@ import (
 	"testing"
 	"time"
 )
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
 
 func TestPolicyStore_AcceptAndCurrent(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "policystore-test-*")
@@ -109,16 +116,18 @@ func TestPolicyStore_PersistentKillSwitch(t *testing.T) {
 
 	store := New(tempDir)
 
-	// Mock server that returns KILL_SWITCH
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(SyncResponse{
+	mockURL := "https://mock.controlplane.internal"
+	httptransport.MockTransport = roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		rec := httptest.NewRecorder()
+		rec.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(rec).Encode(SyncResponse{
 			Directive: "KILL_SWITCH",
 		})
-	}))
-	defer ts.Close()
+		return rec.Result(), nil
+	})
+	defer func() { httptransport.MockTransport = nil }()
 
-	_, _, err := store.SyncWithServer(ts.URL, "agent-1", time.Second)
+	_, _, err := store.SyncWithServer(mockURL, "agent-1", time.Second)
 	if err != ErrKillSwitchActive {
 		t.Fatalf("expected ErrKillSwitchActive, got %v", err)
 	}

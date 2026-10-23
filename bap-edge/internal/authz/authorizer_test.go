@@ -387,6 +387,23 @@ func TestWorkspaceContainment(t *testing.T) {
 	}
 }
 
+func TestPowerShellStartSleep(t *testing.T) {
+	authz, err := NewAuthorizer("../../policy.cedar")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	ws, _ := os.Getwd()
+	cmd := `powershell -Command "Start-Sleep -Seconds 10"`
+	allowed, reason, err := authz.EvaluateWithWorkspace("powershell", cmd, `-Command "Start-Sleep -Seconds 10"`, ws)
+	if err != nil {
+		t.Fatalf("EvaluateWithWorkspace error: %v", err)
+	}
+	t.Logf("allowed=%v, reason=%s", allowed, reason)
+	if !allowed {
+		t.Errorf("powershell -Command Start-Sleep was DENIED: %s", reason)
+	}
+}
+
 func BenchmarkCedarEvaluate_Allowed(b *testing.B) {
 	authz, err := NewAuthorizer("policy.cedar")
 	if err != nil {
