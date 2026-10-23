@@ -6,10 +6,15 @@ cd /d "%ROOT_DIR%"
 set "GOTOOLCHAIN=auto"
 
 set "BUILD_WHEEL=0"
-if "%1"=="--wheel" set "BUILD_WHEEL=1"
-if "%2"=="--wheel" set "BUILD_WHEEL=1"
-if "%1"=="-wheel" set "BUILD_WHEEL=1"
-if "%2"=="-wheel" set "BUILD_WHEEL=1"
+set "AUTO_FIX="
+if /i "%1"=="--wheel" set "BUILD_WHEEL=1"
+if /i "%2"=="--wheel" set "BUILD_WHEEL=1"
+if /i "%1"=="-wheel" set "BUILD_WHEEL=1"
+if /i "%2"=="-wheel" set "BUILD_WHEEL=1"
+if /i "%1"=="-fix" set "AUTO_FIX=-Fix"
+if /i "%2"=="-fix" set "AUTO_FIX=-Fix"
+if /i "%1"=="--fix" set "AUTO_FIX=-Fix"
+if /i "%2"=="--fix" set "AUTO_FIX=-Fix"
 
 if "%1"=="--all" goto :build_all
 if "%1"=="-all" goto :build_all
@@ -125,7 +130,7 @@ if exist "%ROOT_DIR%dist\windows-amd64\gateway" (
     copy /y "%ROOT_DIR%bapgateway.exe" "%ROOT_DIR%dist\windows-amd64\gateway\bapgateway.exe" >nul 2>&1
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT_DIR%scripts\check_stale_copies.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT_DIR%scripts\check_stale_copies.ps1" %AUTO_FIX%
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Stale asset audit detected mismatches!
     exit /b %ERRORLEVEL%

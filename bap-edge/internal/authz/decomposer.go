@@ -83,12 +83,23 @@ func Decompose(executable, fullCommand, args string) DecomposedAction {
 			ActionType:        "exec",
 			TargetEntity:      sub,
 		}
-	case "cat", "type", "head", "tail", "grep", "findstr", "more":
-		target := extractFirstFileTarget(tokens)
+	case "cat", "type", "head", "tail", "grep", "findstr", "more", "sed", "awk", "cut", "tr", "diff", "patch", "wc", "sort", "uniq", "less", "which", "where":
+		actionType := "read"
+		canonicalAction := "fs:file:read"
+		if exec == "sed" {
+			for _, t := range tokens {
+				if t == "-i" || strings.HasPrefix(t, "-i") || strings.HasPrefix(t, "--in-place") {
+					actionType = "write"
+					canonicalAction = "fs:file:write"
+					break
+				}
+			}
+		}
+		target := extractFirstFileTargetForTool(exec, tokens)
 		return DecomposedAction{
-			CanonicalAction:   "fs:file:read",
+			CanonicalAction:   canonicalAction,
 			CanonicalResource: "file://" + target,
-			ActionType:        "read",
+			ActionType:        actionType,
 			TargetEntity:      target,
 		}
 	case "ls", "dir", "find":
@@ -499,6 +510,53 @@ func decomposeHTTP(client string, tokens []string) DecomposedAction {
 		CanonicalResource: target,
 		ActionType:        actionType,
 		TargetEntity:      target,
+	}
+}
+
+func extractFirstFileTargetForTool(exec string, tokens []string) string {
+	switch exec {
+	case "sed":
+		hasExpr := false
+		for i := 1; i < len(tokens); i++ {
+			t := tokens[i]
+			if t == "-e" || t == "-f" {
+				hasExpr = true
+				i++
+				continue
+			}
+			if strings.HasPrefix(t, "-") {
+				continue
+			}
+			if !hasExpr {
+				hasExpr = true
+				continue
+			}
+			return filepath.ToSlash(filepath.Clean(t))
+		}
+		return "stdin"
+	case "awk":
+		hasExpr := false
+		for i := 1; i < len(tokens); i++ {
+			t := tokens[i]
+			if t == "-f" {
+				hasExpr = true
+				if i+1 < len(tokens) {
+					return filepath.ToSlash(filepath.Clean(tokens[i+1]))
+				}
+				break
+			}
+			if strings.HasPrefix(t, "-") {
+				continue
+			}
+			if !hasExpr {
+				hasExpr = true
+				continue
+			}
+			return filepath.ToSlash(filepath.Clean(t))
+		}
+		return "stdin"
+	default:
+		return extractFirstFileTarget(tokens)
 	}
 }
 

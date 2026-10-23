@@ -161,10 +161,10 @@ BAP can operate in two distinct modes configured in `bap-config.json` or via CLI
 To toggle modes:
 ```bash
 # Switch to audit mode
-bapedge config --mode audit
+bapedge config set --mode audit
 
 # Switch to enforce mode
-bapedge config --mode enforce
+bapedge config set --mode enforce
 ```
 
 ---
@@ -195,7 +195,7 @@ bapedge config --mode enforce
 ### To Temporarily Revert to Unmonitored Mode:
 Switch to audit mode:
 ```bash
-bapedge config --mode audit
+bapedge config set --mode audit
 ```
 
 ### Complete Clean Uninstallation (< 10 seconds):

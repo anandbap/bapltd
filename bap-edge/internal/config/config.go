@@ -31,6 +31,14 @@ type EndpointsConfig struct {
 	EnforcementMode string     `json:"enforcement_mode,omitempty"`
 	ConfigSource    string     `json:"config_source,omitempty"`
 	OIDC            OIDCConfig `json:"oidc,omitempty"`
+
+	// LockEndpoints, set in the managed (system-wide) config, makes that file
+	// authoritative: env vars, project and user files cannot override it, and
+	// there is no localhost fallback.
+	LockEndpoints bool `json:"lock_endpoints,omitempty"`
+	// Locked and Override are computed, never read from disk.
+	Locked   bool   `json:"-"`
+	Override string `json:"-"` // non-empty while a break-glass override is active
 }
 
 const (
@@ -40,13 +48,21 @@ const (
 	DefaultTrustDomain     = "bap.internal"
 )
 
-// ResolveEndpoints returns the active configuration by checking:
+// ResolveEndpoints returns the active configuration. If the system-wide managed
+// config is locked (lock_endpoints, or environment "production"), it is the only
+// source and an unexpired break-glass file may override the control plane URL.
+// Otherwise it checks:
 // 1. Environment variables (BAP_SERVER_URL, BAP_CONTROL_PLANE_URL, BAP_GATEWAY_URL, etc.)
 // 2. Local repository / directory bap-config.json (walking up to 4 levels)
 // 3. User home directory (~/.bap/config.json or ~/.ltd/credentials.json)
 // 4. System-wide corporate path (%PROGRAMDATA%\BAP\config.json or /etc/bap/config.json)
 // 5. Default local fallback (localhost:8080 / localhost:9090)
 func ResolveEndpoints() EndpointsConfig {
+	// 0. A locked managed config is authoritative and short-circuits everything below.
+	if m, path := loadManaged(); isLocked(m) {
+		return resolveLocked(m, path)
+	}
+
 	cfg := EndpointsConfig{
 		ControlPlaneURL: DefaultControlPlaneURL,
 		GatewayURL:      DefaultGatewayURL,

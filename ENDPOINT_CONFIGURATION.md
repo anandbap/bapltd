@@ -47,6 +47,46 @@ Every BAP component (`bapedge`, `cchook`, `bap-sdk`, `bapgateway`, demo scripts)
 | **4** | **System-Wide Managed (`%PROGRAMDATA%\BAP\config.json`)** | **Enterprise IT / MDM / InTune deployment** — pre-configured system-wide so developers don't have to configure anything. |
 | **5 (Fallback)**| **Default Fallback (`http://localhost:8080`)** | Local standalone testing on developer workstations. |
 
+### Locked mode (production): the managed config always wins
+
+The table above is the **development** order. In production the system-wide managed config can be made authoritative. Add `"lock_endpoints": true` (or set `"environment": "production"`) to the managed file:
+
+```json
+{
+  "controlplane_url": "https://bap-controlplane.corp.internal:8443",
+  "gateway_url": "https://bap-gateway.corp.internal:9090",
+  "environment": "production",
+  "lock_endpoints": true,
+  "enforcement_mode": "enforce"
+}
+```
+
+When a managed config is locked:
+
+- It is the **only** source. Environment variables, project `bap-config.json`, and user `~/.bap/config.json` are ignored for endpoints **and** for `enforcement_mode`, so a local setting cannot switch a laptop to non-blocking audit mode.
+- There is **no localhost fallback**. If the central server is unreachable, `bapedge` keeps enforcing its cached local policy and queues audit records for later sync; it never contacts a local stand-in server.
+- `bapedge config set` refuses to write, because the result would be ignored. `bapedge config show` reports `Endpoint Lock: LOCKED`.
+- **Deployment requirement:** the managed folder (`%PROGRAMDATA%\BAP` or `/etc/bap`) must be writable by administrators only. Create it with that ACL (via Intune, Group Policy or your configuration manager) before distributing the config; otherwise a standard user could create their own "managed" file.
+
+Machines with no managed config, or one that is not locked, keep the development behaviour described above.
+
+#### Break-glass override (administrators only, time-boxed)
+
+For an extreme situation (for example, a prolonged central outage), an administrator can place `breakglass.json` **in the managed folder** to point a machine at a different control plane temporarily:
+
+```json
+{
+  "controlplane_url": "http://localhost:8080",
+  "operator": "alice.admin",
+  "reason": "Central outage INC-1234",
+  "expires_at": "2026-10-24T09:00:00Z"
+}
+```
+
+- Only the managed folder is read. A `breakglass.json` in a project, home directory, or via an environment variable is never honoured.
+- `operator` and `reason` are required, and `expires_at` must be in the future and **no more than 24 hours ahead**; otherwise the file is ignored.
+- While active, `bapedge config show` prints `Override: BREAK-GLASS ACTIVE until ... by ...: ...`. Remove the file to end it early.
+
 ---
 
 ## 3. How to Configure Endpoints (Choose Your Method)

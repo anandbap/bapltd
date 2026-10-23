@@ -20,6 +20,11 @@ permit (
         "cd", "chdir", "pushd", "popd", "exit",
         "cmd", "powershell", "pwsh", "bash", "sh", "zsh",
         "grep", "findstr", "head", "tail", "wc", "sort", "uniq", "more",
+        "sed", "awk", "cut", "tr", "diff", "patch", "tee", "touch",
+        "cp", "mv", "copy", "move", "rm", "del", "rmdir", "erase",
+        "find", "which", "where", "less",
+        "clear", "cls", "true", "false", "test", "date", "uname", "hostname", "env",
+        "tar", "zip", "unzip", "gzip", "gunzip",
         "select-object", "where-object", "select-string", "sort-object", "measure-object", "get-content", "out-string",
         "taskkill", "kill", "pkill", "killall",
         "bapedge", "ltd-agent", "bapcontrolplane", "bapgateway", "bapmcp", "bap", "bapdashboard"

@@ -183,7 +183,7 @@ If a critical business workflow is impeded during the pilot, developers and admi
 ### Level 1: Instant Switch to Audit Mode (Zero Interruption)
 Set `enforcement_mode: "audit"` in `bap-config.json` or run:
 ```bash
-bapedge config --mode audit
+bapedge config set --mode audit
 ```
 All agent commands execute unblocked while continuing to emit security audit logs.
 

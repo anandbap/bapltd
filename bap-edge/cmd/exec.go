@@ -1081,7 +1081,7 @@ func GenerateSuggestion(fullCmd, execName, reason string) string {
 		return "Process memory dumping and credential harvesting techniques are blocked by zero-trust invariant."
 	}
 
-	return "Command executable is not in the approved developer whitelist. Permitted toolchains include: python, git, go, npm, maven, gradle, cargo, java, powershell, cmd, and standard inspection utilities."
+	return "Command executable is not in the approved developer whitelist. Permitted toolchains include: python, git, go, npm, maven, gradle, cargo, java, powershell, cmd, and standard inspection utilities (sed, awk, grep, diff, etc.)."
 }
 
 func printJSONAndExit(resp types.ExecResponse, code int) {

@@ -307,6 +307,12 @@ func (a *Authorizer) evaluateAtomicNode(executable, fullCommand, args, workspace
 	}
 
 	decomp := Decompose(executable, fullCommand, args)
+	if decomp.TargetEntity != "" && decomp.TargetEntity != "local" && decomp.TargetEntity != "stdin" && (decomp.ActionType == "read" || decomp.ActionType == "write" || decomp.ActionType == "delete") {
+		resolved := ResolveCanonicalPath(decomp.TargetEntity, workspaceRoot)
+		if resolved != "" {
+			canonicalTarget = resolved
+		}
+	}
 	if canonicalTarget != "" && (decomp.ActionType == "read" || decomp.ActionType == "write" || decomp.ActionType == "delete") {
 		decomp.TargetEntity = canonicalTarget
 		decomp.CanonicalResource = "file://" + filepath.ToSlash(canonicalTarget)
@@ -540,6 +546,11 @@ permit (
         "cd", "chdir", "pushd", "popd", "exit",
         "cmd", "powershell", "pwsh", "bash", "sh", "zsh",
         "grep", "findstr", "head", "tail", "wc", "sort", "uniq", "more",
+        "sed", "awk", "cut", "tr", "diff", "patch", "tee", "touch",
+        "cp", "mv", "copy", "move", "rm", "del", "rmdir", "erase",
+        "find", "which", "where", "less",
+        "clear", "cls", "true", "false", "test", "date", "uname", "hostname", "env",
+        "tar", "zip", "unzip", "gzip", "gunzip",
         "select-object", "where-object", "select-string", "sort-object", "measure-object", "get-content", "out-string",
         "taskkill", "kill", "pkill", "killall",
         "bapedge", "ltd-agent"

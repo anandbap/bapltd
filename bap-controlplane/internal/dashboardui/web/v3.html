@@ -98,6 +98,33 @@
   .checks li.ok { color: var(--ok); }
   .checks li::before { content: "\25CB"; } .checks li.ok::before { content: "\2713"; }
   .narrator.shift { left: 24px; transform: none; width: calc(100% - 540px); }
+  /* this-session proof card */
+  .sess { margin-top: 20px; }
+  .sess-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
+  .sess-head .big { font: 500 24px/1.2 var(--serif); }
+  .sess-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px 20px; margin-bottom: 16px; }
+  .sess-grid div { font-size: 15px; font-weight: 600; } .sess-grid small { display: block; font-size: 11.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3); font-weight: 700; margin-bottom: 2px; }
+  .gap { border: 1.5px solid var(--warn); background: var(--warn-bg); border-radius: 12px; padding: 12px 16px; font-size: 14px; color: var(--ink); }
+  .gap b { color: var(--warn); }
+  .sess-form { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; align-items: center; }
+  .sess-form label { font-size: 13px; color: var(--ink-2); font-weight: 600; }
+  .sess-form input { flex: 1; min-width: 240px; padding: 8px 12px; border: 1.5px solid var(--line); border-radius: 9px; font: 13px var(--mono); }
+  .sess-form .btn { padding: 8px 16px; }
+  .sess .mono { font: 12.5px var(--mono); color: var(--ink-3); word-break: break-all; }
+  /* connection pill + coverage */
+  .conn { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; color: var(--ok); background: var(--ok-bg); padding: 5px 12px; border-radius: 99px; }
+  .conn::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .conn.off { color: var(--warn); background: var(--warn-bg); }
+  .coverage { margin-top: 20px; }
+  .cov-note { color: var(--ink-2); font-size: 14px; margin: -4px 0 14px; max-width: 80ch; }
+  .cov { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  .cov th { text-align: left; font-size: 11.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3); padding: 0 12px 8px 0; }
+  .cov td { padding: 12px 12px 12px 0; border-top: 1px solid var(--line); vertical-align: top; }
+  .cov .surf { font-weight: 600; } .cov .surf small { display: block; font-weight: 400; color: var(--ink-3); font-size: 12.5px; }
+  .pill { display: inline-block; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 99px; white-space: nowrap; }
+  .pill.g { background: var(--ok-bg); color: var(--ok); } .pill.a { background: var(--warn-bg); color: var(--warn); } .pill.r { background: var(--bad-bg); color: var(--bad); }
+  .cov .fix { color: var(--accent); font-weight: 600; font-size: 13px; }
+  @media (max-width: 820px) { .cov th:nth-child(4), .cov td:nth-child(4) { display: none; } }
   .empty-hero { text-align: center; padding: 10px 0 4px; }
   .empty-hero .btn { padding: 12px 22px; font-size: 15.5px; background: var(--ink); border-color: var(--ink); color: #fff; }
   .verdict .tag { display: inline-flex; align-items: center; gap: 8px; color: var(--verdict); font-weight: 700; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; }
@@ -218,6 +245,7 @@
   <header class="top" aria-label="Agent operations">
     <div class="brand"><i></i> Agent Watch <span class="badge" style="display:none">Agent operations</span></div>
     <div class="top-right">
+      <span class="conn" id="conn" title="Connection to the central control plane">Control plane connected</span>
       <div class="seg" role="group" aria-label="Data source">
         <button id="modeLive" aria-pressed="true">Live</button>
         <button id="modeDemo" aria-pressed="false">Demo</button>
@@ -253,7 +281,7 @@
       <div class="stat"><div class="n" id="sAgents">-</div><div class="l">Agents working now</div><div class="h">Across 5 kinds of work</div></div>
       <div class="stat" id="sBlockedCard"><div class="n" id="sBlocked">-</div><div class="l">Risky actions stopped</div><div class="h">Each one has proof</div></div>
       <div class="stat" id="sWaitCard"><div class="n" id="sWait">-</div><div class="l">Waiting for you</div><div class="h">One click to decide</div></div>
-      <div class="stat"><div class="n sm" id="sRecord">-</div><div class="l">Tamper-proof record</div><div class="h">Cannot be edited later</div></div>
+      <div class="stat"><div class="n sm" id="sRecord">-</div><div class="l">Tamper-proof record</div><div class="h" id="sRecordHint">Cannot be edited later</div></div>
     </section>
 
     <div class="cols">
@@ -268,6 +296,25 @@
         <div class="queue" id="queue"></div>
       </section>
     </div>
+
+    <section class="panel sess" aria-labelledby="sessH">
+      <h2 id="sessH">This session</h2>
+      <div id="sessBody" aria-live="polite"></div>
+      <form class="sess-form" id="sessForm">
+        <label for="sessId">Session ID</label>
+        <input id="sessId" autocomplete="off" spellcheck="false" placeholder="Paste a session or trace ID, e.g. f0ac2cb6-1ab2-...">
+        <button class="btn ghost" type="submit">Check</button>
+      </form>
+    </section>
+
+    <section class="panel coverage" aria-labelledby="covH">
+      <h2 id="covH">Where agents are protected</h2>
+      <p class="cov-note" id="covNote"></p>
+      <table class="cov">
+        <thead><tr><th>Where the agent runs</th><th>Protection</th><th>Reporting to you</th><th>What it means</th></tr></thead>
+        <tbody id="covBody"></tbody>
+      </table>
+    </section>
 
     <footer>
       <span id="foot">Every action is recorded in a sealed, tamper-proof log.</span>
@@ -333,6 +380,7 @@
     state: 'ok',            // ok | watch | action | frozen
     agents: null, blocked: null, waiting: null, record: null,
     fleetTotal: 0, flag: '', lastState: '', incident: null,
+    conn: 'online', coverage: [], covNote: '', recordCount: null, simHidden: 0, raw: [], sessId: '',
     streams: [],            // [{name,count}]
     feed: [],               // [{who,ask,did,blocked,storyId}]
     queue: [],              // [{id,title,why,status}]
@@ -366,6 +414,7 @@
     var rec = $('sRecord');
     if (S.record == null) rec.innerHTML = '<span class="pending">Pending telemetry</span>';
     else { rec.textContent = S.record ? 'Verified' : 'Check failed'; rec.style.color = S.record ? 'var(--ok)' : 'var(--bad)'; }
+    $('sRecordHint').textContent = S.recordCount != null ? S.recordCount.toLocaleString() + ' records sealed, none altered' : 'Cannot be edited later';
     $('freezeBtn').disabled = S.frozen || !S.agents;
     $('freezeBtn').textContent = S.frozen ? 'Agents frozen' : 'Freeze all agents';
 
@@ -377,6 +426,18 @@
     fl.innerHTML = dots || '<span class="pending">No agents reporting</span>';
     fl.setAttribute('aria-label', total + ' agents' + (S.frozen ? ', all frozen' : ''));
     if (S.lastState !== S.state) { var v = $('verdict'); v.classList.remove('pulse'); void v.offsetWidth; if (S.lastState) v.classList.add('pulse'); S.lastState = S.state; }
+
+    renderSession();
+    var cn = $('conn');
+    cn.className = 'conn' + (S.conn === 'online' ? '' : ' off');
+    cn.textContent = S.conn === 'online' ? 'Control plane connected' : 'Control plane offline';
+    $('covNote').textContent = S.covNote;
+    $('covBody').innerHTML = S.coverage.length ? S.coverage.map(function (c) {
+      return '<tr><td class="surf">' + esc(c.surface) + '<small>' + esc(c.detail || '') + '</small></td>' +
+        '<td><span class="pill ' + c.pc + '">' + esc(c.protect) + '</span></td>' +
+        '<td><span class="pill ' + c.rc + '">' + esc(c.report) + '</span></td>' +
+        '<td>' + esc(c.means) + (c.fix ? ' <span class="fix">' + esc(c.fix) + '</span>' : '') + '</td></tr>';
+    }).join('') : '<tr><td colspan="4" class="pending">Pending telemetry</td></tr>';
 
     var inc = $('incident'), I = S.incident;
     if (I) {
@@ -438,6 +499,48 @@
     }
     render();
   }
+
+  /* ---------- this-session proof card ---------- */
+  function hhmm(t) { return t ? new Date(t).toISOString().slice(11, 16) + ' UTC' : '-'; }
+  function sessHtml(m) {
+    var gap = '<div class="gap"><b>Known gap:</b> BAP records this as <b>claude-code</b> whether it runs in the desktop app or the terminal, so it cannot tell you which one this is. ' +
+      'Closing it means capturing the client type at the hook. Until then, treat the surface as unverified.</div>';
+    return '<div class="sess-head"><span class="pill g">Protected and reporting</span><span class="big">' + esc(m.headline) + '</span></div>' +
+      '<div class="sess-grid">' +
+      '<div><small>Application</small>' + esc(m.app) + '</div>' +
+      '<div><small>Events recorded</small>' + esc(m.n) + '</div>' +
+      '<div><small>Latest decision</small>' + esc(m.decision) + '</div>' +
+      '<div><small>Blocked</small>' + esc(m.deny) + '</div>' +
+      '<div><small>Last seen</small>' + esc(m.last) + '</div>' +
+      '<div><small>Kind of work</small>' + esc(m.cat) + '</div>' +
+      '<div><small>Desktop app or terminal?</small><span class="pill a">Not recorded</span></div></div>' +
+      '<div class="mono">trace ' + esc(m.id) + '</div><div style="margin-top:12px">' + gap + '</div>';
+  }
+  function renderSession() {
+    var body = $('sessBody'), id = (S.sessId || '').toLowerCase().replace(/^tr-/, '').trim();
+    if (S.mode === 'demo') {
+      body.innerHTML = sessHtml({ headline: 'This conversation is on the record.', app: 'claude-code', n: 14, decision: 'ALLOW', deny: 1, last: '10:42 UTC', cat: 'Feature Development', id: 'tr-demo-0000 (demo data)' });
+      return;
+    }
+    if (S.conn === 'offline') { body.innerHTML = '<div class="gap"><b>Cannot check right now.</b> The control plane is unreachable, so this screen cannot confirm any session is reporting.</div>'; return; }
+    if (id.length < 8) {
+      body.innerHTML = '<div class="gap"><b>No session selected.</b> Enter a session ID to confirm that a specific Claude conversation is being governed. Without one this screen cannot say whether this conversation is protected.</div>';
+      return;
+    }
+    var hits = (S.raw || []).filter(function (e) { return String(e.trace_id || '').toLowerCase().indexOf(id) !== -1; });
+    if (!hits.length) {
+      body.innerHTML = '<div class="gap"><b>No events found for this ID</b> in the recent feed (' + (S.raw || []).length + ' events). It may not be governed, may be older than the feed, or the ID may be wrong. This is not proof either way.</div>';
+      return;
+    }
+    var last = hits.reduce(function (a, b) { return (Date.parse(b.timestamp) || 0) >= (Date.parse(a.timestamp) || 0) ? b : a; });
+    var deny = hits.filter(function (e) { return /deny|denied/i.test(e.policy_decision || ''); }).length;
+    body.innerHTML = sessHtml({ headline: 'This conversation is on the record.', app: last.application || 'unknown', n: hits.length, decision: last.policy_decision || '-', deny: deny, last: hhmm(Date.parse(last.timestamp)), cat: last.intent_category || last.intent || '-', id: last.trace_id });
+  }
+  $('sessForm').addEventListener('submit', function (e) {
+    e.preventDefault(); S.sessId = $('sessId').value.trim();
+    try { localStorage.setItem('aw3.session', S.sessId); } catch (_) {}
+    renderSession();
+  });
 
   /* ---------- drawer / modal ---------- */
   var stories = {};
@@ -534,7 +637,21 @@
           else if (Array.isArray(live.agents)) agents = live.agents;
           else if (Array.isArray(live.activities)) agents = live.activities;
         }
-        S.agents = sum && sum.total_active_agents != null ? sum.total_active_agents : (live ? agents.length : null);
+        S.raw = agents.slice();
+        // The live feed is a stream of events, not agents: keep the newest event per agent.
+        var latest = {};
+        agents.forEach(function (a, i) {
+          var k = a.agent_id || a.trace_id || a.session_id || ('evt-' + i);
+          var t = Date.parse(a.timestamp) || 0;
+          if (!latest[k] || t >= latest[k]._t) { latest[k] = Object.assign({}, a, { _t: t }); }
+        });
+        agents = Object.keys(latest).map(function (k) { return latest[k]; }).sort(function (x, y) { return y._t - x._t; });
+        // Seeded demo sessions must never be presented as real agents.
+        var isSim = function (a) { return /^sess-v3-/.test(a.agent_id || '') || /demo/i.test(a.action || ''); };
+        var simCount = agents.filter(isSim).length;
+        agents = agents.filter(function (a) { return !isSim(a); });
+        S.agents = live ? agents.filter(function (a) { return a.action_status === 'working'; }).length : (sum && sum.total_active_agents != null ? sum.total_active_agents : null);
+        S.simHidden = simCount;
         S.blocked = sum && sum.high_risk_prevented != null ? sum.high_risk_prevented : null;
         var reqs = esc_ ? (Array.isArray(esc_) ? esc_ : (esc_.requests || [])) : null;
         var pend = reqs ? reqs.filter(function (x) { return !x.status || x.status === 'pending'; }) : null;
@@ -543,7 +660,24 @@
           return { id: x.id, title: x.action || x.command || 'Approval requested', why: x.reason || x.justification || 'An agent needs permission to continue.' };
         });
         S.record = chain ? (chain.valid === true || chain.status === 'valid' || chain.ok === true) : null;
+        S.recordCount = chain && chain.total_events != null ? chain.total_events : null;
 
+        var down = r.every(function (x) { return x.status === 'rejected'; });
+        S.conn = down ? 'offline' : 'online';
+        var byApp = {};
+        agents.forEach(function (a) {
+          var k = a.application || a.app_id || a.app || 'Unknown agent';
+          var e = byApp[k] || (byApp[k] = { n: 0, t: 0 });
+          e.n++; e.t = Math.max(e.t, a._t || 0);
+        });
+        S.coverage = Object.keys(byApp).map(function (k) {
+          var last = byApp[k].t ? ' · last event ' + new Date(byApp[k].t).toISOString().slice(11, 16) + ' UTC' : '';
+          return { surface: k, detail: byApp[k].n + ' seen' + last, protect: 'Governed', pc: 'g', report: 'Live', rc: 'g', means: 'Every action is checked and recorded.' };
+        });
+        S.covNote = down
+          ? 'The control plane is not reachable, so this screen cannot list what is protected. Governed machines are designed to keep enforcing their last saved policy and to queue records locally, but that cannot be confirmed from here until the connection returns.'
+          : 'Only agents that have reported in are listed. An agent that never reported would not appear, so compare this list with what you expect to be running.' +
+            (S.simHidden ? ' ' + S.simHidden + ' simulated demo session' + (S.simHidden > 1 ? 's are' : ' is') + ' hidden from this view.' : '');
         var counts = {};
         agents.forEach(function (a) {
           var c = String(a.workstream || a.category || a.intent_category || a.intent || '').toLowerCase();
@@ -573,8 +707,9 @@
               tech: ['Enforced by: bapedge daemon (Layer 1-4)', 'Evaluator: Cedar policy engine', 'Status: Zero host side effects']
             };
           }
-          return { who: (a.operator || a.user || a.user_id || a.owner || 'Operator') + ' · ' + (a.agent_id || a.agent_name || a.agent_type || a.id || 'agent'),
-                   ask: a.prompt || a.mission || a.prompt_summary || a.intent || 'Task in progress',
+          var clean = function (v) { return v && String(v).indexOf('[Protected') !== 0 ? v : ''; };
+          return { who: clean(a.operator || a.user || a.user_id || a.owner) ? (clean(a.operator || a.user || a.user_id || a.owner) + ' · ' + (a.agent_type || a.agent_id || a.application || 'agent')) : (a.agent_type || clean(a.agent_id) || a.application || 'Agent'),
+                   ask: clean(a.prompt || a.mission || a.prompt_summary) || a.intent_category || a.intent || 'Task in progress',
                    did: a.last_action || a.action || a.tool || (a.action_status ? 'Status: ' + a.action_status : 'Working'),
                    blocked: isBlocked,
                    storyId: storyId };
@@ -587,7 +722,8 @@
         if (S.waiting > 0) { S.state = 'action'; S.tag = 'Needs you'; S.headline = S.waiting + ' decision' + (S.waiting > 1 ? 's' : '') + ' waiting for you.'; S.sub = 'Everything else is within policy.'; }
         else if (S.blocked > 0) { S.state = 'watch'; S.tag = 'In control'; S.headline = 'In control. ' + S.blocked + ' risky action' + (S.blocked > 1 ? 's were' : ' was') + ' stopped.'; S.sub = 'Each one is recorded with proof.'; }
         else if (S.agents != null) { S.state = 'ok'; S.tag = 'In control'; S.headline = S.agents ? 'Every agent is operating within policy.' : 'No agents are running.'; S.sub = S.agents ? 'Nothing has been blocked and nothing needs you.' : 'When agents start working they will appear here.'; }
-        else { S.state = 'watch'; S.tag = 'No data'; S.headline = 'Waiting for the control plane.'; S.sub = 'Live telemetry is not available yet. Nothing on this screen is estimated or invented.'; }
+        else if (S.conn === 'offline') { S.state = 'watch'; S.tag = 'Reporting offline'; S.headline = 'The control plane is offline. This screen cannot see the fleet.'; S.sub = 'Agents on governed machines keep enforcing their saved policy and queue records locally. Nothing here is estimated or invented, so numbers show as pending until it reconnects.'; }
+        else { S.state = 'watch'; S.tag = 'No data'; S.headline = 'Connected, but no data yet.'; S.sub = 'The control plane answered without activity data. Nothing on this screen is estimated or invented.'; }
         if (S.frozen) { S.state = 'frozen'; }
         render();
       });
@@ -597,6 +733,7 @@
     $('ribbon').hidden = true; $('narrator').hidden = true;
     S.frozen = false; S.queue = []; S.feed = []; S.streams = [];
     S.agents = S.blocked = S.waiting = S.record = null; S.fleetTotal = 0; S.flag = ''; S.incident = null;
+    S.conn = 'online'; S.coverage = []; S.covNote = '';
     S.state = 'watch'; S.tag = 'Loading'; S.headline = 'Checking the fleet...'; S.sub = ''; render();
     loadLive(); clearInterval(liveTimer); liveTimer = setInterval(loadLive, 8000);
   }
@@ -632,6 +769,14 @@
     var AGENTS = 47;
     var steps = [
       { t: 'Everything is calm', m: 'The first thing you see is one answer: are we in control? Right now, yes.', d: 5500, run: function () {
+          S.conn = 'online';
+          S.covNote = 'Every place an agent can run, and whether BAP can stop it there. Gaps are shown, not hidden.';
+          S.coverage = [
+            { surface: 'Claude Code - terminal', detail: '31 agents', protect: 'Governed', pc: 'g', report: 'Live', rc: 'g', means: 'Every action is checked before it runs.' },
+            { surface: 'Claude Code - desktop app', detail: '9 agents', protect: 'Governed', pc: 'g', report: 'Live', rc: 'g', means: 'Same checks as the terminal.' },
+            { surface: 'GitHub Copilot CLI', detail: '7 agents', protect: 'Governed', pc: 'g', report: 'Live', rc: 'g', means: 'Every command is checked and recorded.' },
+            { surface: 'Antigravity IDE', detail: '2 detected on laptops', protect: 'Not governed', pc: 'r', report: 'Detected only', rc: 'a', means: 'Seen on the network, but BAP cannot stop it.', fix: 'Install protection' }
+          ];
           S.incident = null; S.agents = AGENTS; S.fleetTotal = AGENTS; S.flag = ''; S.blocked = 0; S.waiting = 0; S.record = true; S.frozen = false;
           S.state = 'ok'; S.tag = 'In control'; S.headline = 'Every agent is operating within policy.';
           S.sub = AGENTS + ' AI agents are working across the company. Nothing has been blocked and nothing needs you.';
@@ -664,6 +809,16 @@
           S.sub = 'It tried three forbidden actions in four minutes. Its permissions were revoked without anyone lifting a finger.';
           S.feed.unshift({ who: 'Priya Nair · coder-12', ask: 'Fix the failing checkout tests', did: 'Isolated after repeated attempts.', blocked: true, storyId: 'eve2' });
           S.agents = AGENTS - 1; } },
+      { t: 'Still protected offline', m: 'Even if the central server goes down, each machine keeps enforcing its saved rules and saves its records to send later.', d: 8000, run: function () {
+          S.conn = 'offline'; S.state = 'watch'; S.tag = 'Reporting offline';
+          S.headline = 'Central reporting is down. Protection is not.';
+          S.sub = 'Each machine still enforces its saved policy. 112 records are queued locally and will be sealed into the tamper-proof log when the connection returns.';
+          S.coverage.forEach(function (c) { if (c.pc === 'g') { c.report = 'Queued locally'; c.rc = 'a'; } }); } },
+      { t: 'Back online', m: 'When the connection returns, the queued records are sealed in order. Nothing is lost.', d: 5500, run: function () {
+          S.conn = 'online'; S.state = S.waiting > 0 ? 'action' : 'watch'; S.tag = 'In control';
+          S.headline = 'Reconnected. 112 queued records were sealed.';
+          S.sub = 'The tamper-proof log is complete with no gaps.';
+          S.coverage.forEach(function (c) { if (c.pc === 'g') { c.report = 'Live'; c.rc = 'g'; } }); } },
       { t: 'The big red button', m: 'In a real incident you can stop everything. Press Freeze all agents and type FREEZE.', d: 0, wait: true, freeze: true, run: function () {
           S.waiting = S.queue.filter(function (x) { return !x.status; }).length; } },
       { t: 'Done', m: 'Control, proof, and your decisions, on one screen. The record behind it cannot be rewritten.', d: 0, end: true, run: function () {} }
@@ -738,6 +893,8 @@
   $('modeDemo').addEventListener('click', function () { setModeTo('demo'); });
   $('startDemoBtn').addEventListener('click', function () { setModeTo('demo'); });
 
+  try { S.sessId = new URLSearchParams(location.search).get('session') || localStorage.getItem('aw3.session') || ''; } catch (_) { S.sessId = ''; }
+  $('sessId').value = S.sessId;
   var q = new URLSearchParams(location.search);
   if (q.get('demo') === '1') setModeTo('demo'); else startLive();
 })();

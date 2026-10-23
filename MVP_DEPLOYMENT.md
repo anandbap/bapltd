@@ -302,7 +302,7 @@ To enable Audit Mode fleet-wide, update `bap-config.json`:
   "enforcement_mode": "audit"
 }
 ```
-*(Or set environment variable: `set BAP_ENFORCEMENT_MODE=audit`)*
+*(Or run `bapedge config set --mode audit`, or set the environment variable `set BAP_ENFORCEMENT_MODE=audit`. On a machine with a locked managed config these local settings are ignored; see `ENDPOINT_CONFIGURATION.md`.)*
 
 ---
 
