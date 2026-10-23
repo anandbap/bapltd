@@ -57,7 +57,7 @@ class TestPrivateCredentialsAndCerts(unittest.TestCase):
     def test_cchook_compiles_without_local_cert(self):
         """Verify cchook compiles successfully without embedded_ca.crt."""
         res = subprocess.run(
-            ["go", "build", "interceptor.go"],
+            ["go", "build", "."],
             cwd=self.cchook_dir,
             capture_output=True,
             text=True,

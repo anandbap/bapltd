@@ -75,7 +75,7 @@ $components = @(
     @{ Dir = "bap-controlplane"; Pkg = "./cmd/dashboard";         Name = "bapdashboard" },
     @{ Dir = "bap-edge";         Pkg = ".";                       Name = "bapedge" },
     @{ Dir = "bap-gateway";      Pkg = ".";                       Name = "bapgateway" },
-    @{ Dir = "cchook";           Pkg = "interceptor.go";          Name = "cchook-interceptor" },
+    @{ Dir = "cchook";           Pkg = ".";                       Name = "cchook-interceptor" },
     @{ Dir = "copilot";          Pkg = "copilot_interceptor.go";  Name = "copilot-interceptor" }
 )
 

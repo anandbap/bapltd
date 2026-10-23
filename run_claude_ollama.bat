@@ -40,7 +40,7 @@ if !ERRORLEVEL! equ 0 (
 :: 4. Resolve and build cchook interceptor
 if not exist "cchook\interceptor.exe" (
     echo [*] Building cchook\interceptor.exe...
-    cd cchook && go build -o interceptor.exe interceptor.go && cd ..
+    cd cchook && go build -o interceptor.exe . && cd ..
 )
 
 :: Ensure .claude/settings.json hooks are configured

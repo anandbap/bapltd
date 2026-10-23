@@ -85,7 +85,7 @@ del /f /q "%ROOT_DIR%bapgateway.old" >nul 2>&1
 
 echo [4/6] Building cchook (Claude Code interceptor)...
 cd /d "%ROOT_DIR%cchook"
-go build -trimpath -ldflags "-s -w" -o interceptor.exe interceptor.go
+go build -trimpath -ldflags "-s -w" -o interceptor.exe .
 if %ERRORLEVEL% neq 0 (
     echo Failed to build interceptor.exe
     exit /b 1

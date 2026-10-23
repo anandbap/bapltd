@@ -67,7 +67,7 @@ jobs:
           New-Item -ItemType Directory -Path "dist\windows-amd64\claude-client" -Force | Out-Null
           & .\update_binaries.ps1
           Push-Location cchook
-          go build -o interceptor.exe interceptor.go
+          go build -o interceptor.exe .
           Copy-Item -Force interceptor.exe ..\dist\windows-amd64\interceptor.exe
           Copy-Item -Force interceptor.exe ..\dist\windows-amd64\claude-client\interceptor.exe
           Pop-Location

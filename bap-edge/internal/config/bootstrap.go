@@ -97,9 +97,27 @@ func BootstrapControlPlane(serverOverride string) (BootstrapResult, error) {
 	var activeURL string
 	connected := false
 
+	// Check if local policy already exists on disk (enables immediate degraded mode if offline)
+	hasLocalPolicy := false
+	if cedarPath, _, _, err := policyStore.Current(); err == nil && cedarPath != "" {
+		hasLocalPolicy = true
+	}
+
+	isCI := os.Getenv("CI") != "" || os.Getenv("GITHUB_ACTIONS") != "" || os.Getenv("BAP_TEST_MODE") == "1" || os.Getenv("BAP_FAST_BOOT") == "1"
+
 	sleepDuration := 15 * time.Second
-	if os.Getenv("BAP_TEST_MODE") == "1" || os.Getenv("BAP_FAST_BOOT") == "1" {
+	probeTimeout := 12 * time.Second
+	retryTimeout := 15 * time.Second
+
+	if isCI {
+		sleepDuration = 50 * time.Millisecond
+		probeTimeout = 1 * time.Second
+		retryTimeout = 1 * time.Second
+	} else if hasLocalPolicy {
+		// When local policy is cached, operate fast: don't freeze user interaction on offline remote
 		sleepDuration = 100 * time.Millisecond
+		probeTimeout = 2 * time.Second
+		retryTimeout = 2 * time.Second
 	}
 
 	if isExplicit {
@@ -107,20 +125,24 @@ func BootstrapControlPlane(serverOverride string) (BootstrapResult, error) {
 		isRemote := strings.HasPrefix(serverURL, "https://") || (!strings.Contains(serverURL, "localhost") && !strings.Contains(serverURL, "127.0.0.1"))
 		
 		if isRemote {
-			// Remote explicit endpoint: allow 2 attempts with 15s sleep for cloud wake-up
-			if probeEndpoint(serverURL, 12*time.Second, false) {
+			// Remote explicit endpoint: allow 2 attempts with cold-start sleep for cloud wake-up
+			if probeEndpoint(serverURL, probeTimeout, false) {
 				activeURL = serverURL
 				connected = true
 			} else {
 				time.Sleep(sleepDuration)
-				if probeEndpoint(serverURL, 15*time.Second, false) {
+				if probeEndpoint(serverURL, retryTimeout, false) {
 					activeURL = serverURL
 					connected = true
 				}
 			}
 		} else {
 			// Local explicit endpoint
-			if probeEndpoint(serverURL, 3*time.Second, true) {
+			localTimeout := 3 * time.Second
+			if isCI {
+				localTimeout = 1 * time.Second
+			}
+			if probeEndpoint(serverURL, localTimeout, true) {
 				activeURL = serverURL
 				connected = true
 			}
@@ -129,13 +151,13 @@ func BootstrapControlPlane(serverOverride string) (BootstrapResult, error) {
 		// First-time start: run the full discovery cascade
 		// Step 1: Primary cloud target (https://bap-controlplane.onrender.com) with 30s budget
 		cloudURL := DefaultCloudControlPlaneURL
-		if probeEndpoint(cloudURL, 12*time.Second, false) {
+		if probeEndpoint(cloudURL, probeTimeout, false) {
 			activeURL = cloudURL
 			connected = true
 		} else {
 			// Render cold-start wait
 			time.Sleep(sleepDuration)
-			if probeEndpoint(cloudURL, 15*time.Second, false) {
+			if probeEndpoint(cloudURL, retryTimeout, false) {
 				activeURL = cloudURL
 				connected = true
 			}

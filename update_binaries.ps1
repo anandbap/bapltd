@@ -5,6 +5,7 @@ $ErrorActionPreference = "Stop"
 $rootDir = $PSScriptRoot
 if (-not $rootDir) { $rootDir = (Get-Location).Path }
 Set-Location $rootDir
+$env:GOFLAGS = "-buildvcs=false"
 
 if (-not $Version) {
     # Extract version from bap-edge/pkg/version/version.go

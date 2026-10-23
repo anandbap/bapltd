@@ -18,9 +18,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
+
 	"time"
-	"unsafe"
+
 )
 // CallerProcessInfo captures parent process attestation details.
 type CallerProcessInfo struct {
@@ -31,7 +31,7 @@ type CallerProcessInfo struct {
 	AppID      string `json:"app_id"`
 }
 
-func getProcessExecutablePath(pid int) string {
+/*
 	if runtime.GOOS == "windows" {
 		kernel32 := syscall.NewLazyDLL("kernel32.dll")
 		procOpenProcess := kernel32.NewProc("OpenProcess")
@@ -52,13 +52,15 @@ func getProcessExecutablePath(pid int) string {
 			}
 		}
 	} else if runtime.GOOS == "linux" {
-		if link, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid)); err == nil {
+*/
+/*
 			return link
 		}
 	}
 	return ""
 }
 
+*/
 func inspectCallerProcess(pid int) CallerProcessInfo {
 	info := CallerProcessInfo{
 		PID:   pid,

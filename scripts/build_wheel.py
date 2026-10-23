@@ -100,7 +100,7 @@ def ensure_binaries(platforms: list):
             if need_interceptor:
                 print(f"[*] Cross-compiling interceptor for {plat} (GOOS={env['GOOS']}, GOARCH={env['GOARCH']})...")
                 res = subprocess.run(
-                    [go_cmd, "build", "-trimpath", "-ldflags", "-s -w", "-o", interceptor_target, "interceptor.go"],
+                    [go_cmd, "build", "-trimpath", "-ldflags", "-s -w", "-o", interceptor_target, "."],
                     cwd=os.path.join(REPO_ROOT, "cchook"),
                     env=env,
                     capture_output=True,
