@@ -626,15 +626,65 @@ def main():
 
     # 1. Verify Control Plane connectivity
     import urllib.request
+    import subprocess
+    from urllib.parse import urlparse
+
+    online = False
     try:
         req = urllib.request.Request(f"{server_url}/api/v1/health")
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
             if resp.status == 200:
                 print(f"[+] Control Plane is ONLINE at {server_url}")
-    except Exception as e:
-        print(f"[-] WARNING: Could not connect to Control Plane at {server_url}: {e}")
-        print("    Ensure bapcontrolplane is running (e.g. `go run ./cmd/server` or `start_controlplane.bat`).")
-        print("    Attempting to continue with local agent execution...\n")
+                online = True
+    except Exception:
+        pass
+
+    if not online:
+        parsed = urlparse(server_url)
+        target_port = parsed.port or 8080
+        print(f"[*] Control Plane offline at {server_url}. Auto-launching local server on port {target_port}...")
+        candidates = [
+            os.path.join(WORKSPACE_ROOT, "bapcontrolplane.exe"),
+            os.path.join(WORKSPACE_ROOT, "dist", "windows-amd64", "bapcontrolplane.exe"),
+            os.path.join(WORKSPACE_ROOT, "dist", "windows-amd64", "controlplane", "bapcontrolplane.exe"),
+            os.path.join(WORKSPACE_ROOT, "bap-controlplane", "bapcontrolplane.exe"),
+        ]
+        cp_bin = next((p for p in candidates if os.path.isfile(p)), None)
+        cmd = []
+        if cp_bin:
+            cmd = [cp_bin, "start", "-port", str(target_port), "-mode", "dev"]
+        else:
+            cp_dir = os.path.join(WORKSPACE_ROOT, "bap-controlplane")
+            if os.path.isdir(cp_dir):
+                cmd = ["go", "run", "./cmd/server", "start", "-port", str(target_port), "-mode", "dev"]
+
+        if cmd:
+            creationflags = 0
+            if sys.platform == "win32":
+                creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000008
+            subprocess.Popen(
+                cmd,
+                cwd=WORKSPACE_ROOT,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
+
+        for _ in range(25):
+            time.sleep(0.4)
+            try:
+                req = urllib.request.Request(f"{server_url}/api/v1/health")
+                with urllib.request.urlopen(req, timeout=1.5) as resp:
+                    if resp.status == 200:
+                        print(f"[+] Control Plane verified online at {server_url}")
+                        online = True
+                        break
+            except Exception:
+                pass
+
+        if not online:
+            print(f"[-] WARNING: Could not connect to Control Plane at {server_url}. Continuing with local execution...\n")
 
     # 2. Select 2 random tasks from the 300 tasks catalog for each of the 15 teams
     # 15 teams * 2 tasks = 30 distinct tasks sampled uniformly without replacement from 300
@@ -695,17 +745,18 @@ def main():
     print_banner(f"RUNNING LIVE CIO DEMO ({demo_duration} SECONDS) - PRESS [ENTER] ANYTIME TO SHUT DOWN")
 
     # Background thread to listen for Enter key press without blocking the status ticker
-    user_pressed_enter = threading.Event()
-    def wait_for_enter():
-        try:
-            input()
-            user_pressed_enter.set()
-            stop_event.set()
-        except Exception:
-            pass
+    if not args.auto_close:
+        user_pressed_enter = threading.Event()
+        def wait_for_enter():
+            try:
+                input()
+                user_pressed_enter.set()
+                stop_event.set()
+            except Exception:
+                pass
 
-    input_thread = threading.Thread(target=wait_for_enter, daemon=True)
-    input_thread.start()
+        input_thread = threading.Thread(target=wait_for_enter, daemon=True)
+        input_thread.start()
 
     try:
         while not stop_event.is_set():

@@ -32,14 +32,16 @@ powershell -NoProfile -Command "try { $r = Invoke-WebRequest -Uri 'http://127.0.
 if errorlevel 1 (
     echo [*] Control Plane is not running. Launching local control plane server...
     if exist "bapcontrolplane.exe" (
-        start "BAP Control Plane" /min "bapcontrolplane.exe"
+        start "BAP Control Plane" /min bapcontrolplane.exe start -port 8080 -mode dev
     ) else if exist "bap-controlplane\bapcontrolplane.exe" (
-        start "BAP Control Plane" /min "bap-controlplane\bapcontrolplane.exe"
-    ) else if exist "bap-controlplane.exe" (
-        start "BAP Control Plane" /min "bap-controlplane.exe"
+        start "BAP Control Plane" /min bap-controlplane\bapcontrolplane.exe start -port 8080 -mode dev
+    ) else if exist "dist\windows-amd64\controlplane\bapcontrolplane.exe" (
+        start "BAP Control Plane" /min dist\windows-amd64\controlplane\bapcontrolplane.exe start -port 8080 -mode dev
+    ) else if exist "dist\windows-amd64\bapcontrolplane.exe" (
+        start "BAP Control Plane" /min dist\windows-amd64\bapcontrolplane.exe start -port 8080 -mode dev
     ) else (
         pushd bap-controlplane
-        start "BAP Control Plane" /min go run ./cmd/server
+        start "BAP Control Plane" /min go run ./cmd/server start -port 8080 -mode dev
         popd
     )
     echo [*] Waiting for Control Plane to initialize...

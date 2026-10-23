@@ -59,6 +59,17 @@ def read_admin_token() -> str:
 
 
 def resolve_server_url() -> str:
+    env_url = os.getenv("BAP_CONTROL_PLANE_URL") or os.getenv("BAP_SERVER_URL")
+    if env_url:
+        return env_url.rstrip("/")
+
+    # Check if a control plane is already healthy on common local ports
+    for probe_url in ["http://127.0.0.1:8080", "http://localhost:8080", "https://localhost:8443"]:
+        st, _ = http_get(probe_url, "/api/v1/health")
+        if st == 200:
+            return probe_url
+
+    # Check bap-config.json ONLY if reachable
     cfg_file = os.path.join(WORKSPACE_ROOT, "bap-config.json")
     if os.path.isfile(cfg_file):
         try:
@@ -66,10 +77,13 @@ def resolve_server_url() -> str:
                 cfg = json.load(f)
                 url = cfg.get("controlplane_url", "")
                 if url:
-                    return url.rstrip("/")
+                    st, _ = http_get(url.rstrip("/"), "/api/v1/health")
+                    if st == 200:
+                        return url.rstrip("/")
         except Exception:
             pass
-    return os.getenv("BAP_CONTROL_PLANE_URL", "http://localhost:8080").rstrip("/")
+
+    return "http://localhost:8080"
 
 
 def http_post(server_url: str, endpoint: str, payload: dict, admin_token: str = "") -> Tuple[int, dict]:
@@ -119,34 +133,60 @@ def http_get(server_url: str, endpoint: str, admin_token: str = "") -> Tuple[int
         return 500, {"error": str(e)}
 
 
-def ensure_control_plane(server_url: str) -> bool:
+def ensure_control_plane(server_url: str) -> Tuple[bool, str]:
     st, _ = http_get(server_url, "/api/v1/health")
     if st == 200:
-        return True
+        return True, server_url
 
-    print(f"[*] Control Plane offline at {server_url}. Auto-launching local server on port 8080...")
+    from urllib.parse import urlparse
+    parsed = urlparse(server_url)
+    target_port = parsed.port or (8443 if parsed.scheme == "https" else 8080)
+
+    # If configured as 8443 (e.g. from static bap-config.json) but not running, default to standard local port 8080
+    if target_port == 8443 and parsed.scheme == "https":
+        server_url = "http://localhost:8080"
+        target_port = 8080
+
+    print(f"[*] Control Plane offline. Auto-launching local server on port {target_port} ({server_url})...")
     candidates = [
         os.path.join(WORKSPACE_ROOT, "bapcontrolplane.exe"),
         os.path.join(WORKSPACE_ROOT, "dist", "windows-amd64", "bapcontrolplane.exe"),
+        os.path.join(WORKSPACE_ROOT, "dist", "windows-amd64", "controlplane", "bapcontrolplane.exe"),
         os.path.join(WORKSPACE_ROOT, "bap-controlplane", "bapcontrolplane.exe"),
     ]
     cp_bin = next((p for p in candidates if os.path.isfile(p)), None)
+
+    cmd = []
     if cp_bin:
-        subprocess.Popen([cp_bin, "start", "--port", "8080", "--mode", "dev"], cwd=WORKSPACE_ROOT)
+        cmd = [cp_bin, "start", "-port", str(target_port), "-mode", "dev"]
     else:
         # Fallback to go run
         cp_dir = os.path.join(WORKSPACE_ROOT, "bap-controlplane")
         if os.path.isdir(cp_dir):
-            subprocess.Popen(["go", "run", "./cmd/server", "-port", "8080"], cwd=cp_dir)
+            cmd = ["go", "run", "./cmd/server", "start", "-port", str(target_port), "-mode", "dev"]
 
-    for _ in range(15):
-        time.sleep(0.5)
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000008  # DETACHED_PROCESS
+
+    if cmd:
+        subprocess.Popen(
+            cmd,
+            cwd=WORKSPACE_ROOT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            creationflags=creationflags,
+        )
+
+    for _ in range(25):
+        time.sleep(0.4)
         st, _ = http_get(server_url, "/api/v1/health")
         if st == 200:
             print(f"[+] Control Plane verified online at {server_url}")
-            return True
+            return True, server_url
 
-    return False
+    return False, server_url
 
 
 def run_bapedge_exec(session_id: str, app_id: str, cmd: str) -> Tuple[int, dict]:
@@ -282,15 +322,19 @@ def print_header(server_url: str):
 def main():
     parser = argparse.ArgumentParser(description="BAP Agent Watch V3 CIO Fleet Demonstration")
     parser.add_argument("--no-browser", action="store_true", help="Do not open default web browser automatically")
+    parser.add_argument("--no-prompt", action="store_true", help="Non-interactive execution (run baseline tests and exit)")
+    parser.add_argument("--duration", type=int, default=0, help="Run live simulation for specified seconds, then cleanly exit")
     parser.add_argument("--url", type=str, default="", help="Custom Control Plane URL")
     args = parser.parse_args()
 
     server_url = args.url or resolve_server_url()
-    admin_token = read_admin_token()
 
-    if not ensure_control_plane(server_url):
+    ok, server_url = ensure_control_plane(server_url)
+    if not ok:
         print(f"[-] Could not connect to or start BAP Control Plane at {server_url}.")
         sys.exit(1)
+
+    admin_token = read_admin_token()
 
     print_header(server_url)
 
@@ -448,6 +492,18 @@ def main():
     print("   6. [Workstreams]     Build, Operate, Analyze, Document, Support telemetry distribution")
     print("   7. [Freeze Button]   Emergency kill-switch: freeze the entire fleet in < 100ms")
     print("=" * 92)
+
+    if args.no_prompt:
+        print("\n[+] Non-interactive mode requested (--no-prompt). Baseline checks complete.")
+        return
+
+    if args.duration > 0:
+        print(f"\n[*] Running live simulation for {args.duration}s (press Ctrl+C to terminate early)...")
+        try:
+            time.sleep(args.duration)
+        except KeyboardInterrupt:
+            pass
+        return
 
     # Interactive loop
     while True:

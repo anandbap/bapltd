@@ -15,6 +15,11 @@ import atexit
 import argparse
 import urllib.request
 import urllib.error
+import ssl
+
+ssl_ctx = ssl.create_default_context()
+ssl_ctx.check_hostname = False
+ssl_ctx.verify_mode = ssl.CERT_NONE
 
 def is_pid_alive(pid):
     if not pid or pid <= 0:
@@ -135,7 +140,7 @@ def post_json(url, data):
         headers={"Content-Type": "application/json"}
     )
     try:
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with urllib.request.urlopen(req, context=ssl_ctx, timeout=3) as resp:
             return resp.getcode(), json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8")

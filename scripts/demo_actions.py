@@ -12,6 +12,11 @@ import urllib.error
 
 import os
 import sys
+import ssl
+
+ssl_ctx = ssl.create_default_context()
+ssl_ctx.check_hostname = False
+ssl_ctx.verify_mode = ssl.CERT_NONE
 
 # Resolve central Control Plane URL from bap-config.json, environment, or default fallback
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -46,7 +51,7 @@ SERVER = resolve_server_url()
 
 def get_json(path):
     try:
-        with urllib.request.urlopen(f"{SERVER}{path}", timeout=3) as resp:
+        with urllib.request.urlopen(f"{SERVER}{path}", context=ssl_ctx, timeout=3) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except Exception as e:
         return {"error": str(e)}
@@ -59,7 +64,7 @@ def post_json(path, data=None):
         headers={"Content-Type": "application/json"}
     )
     try:
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with urllib.request.urlopen(req, context=ssl_ctx, timeout=3) as resp:
             return resp.getcode(), json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         try:

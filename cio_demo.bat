@@ -95,7 +95,7 @@ if "!CP_IS_LOCAL!"=="1" (
         echo  [+] Local BAP Control Plane active on !CP_URL!
     ) else (
         echo  [*] Starting BAP Control Plane daemon on port 8080...
-        start "BAP Control Plane (8080)" /min "!CP_BIN!" -port 8080 -ttl 30 -trust-domain bap.internal
+        start "BAP Control Plane (8080)" /min "!CP_BIN!" start -port 8080 -ttl 30 -trust-domain bap.internal -mode dev
         ping -n 3 127.0.0.1 >nul
         echo  [+] Control Plane started successfully.
     )
@@ -108,7 +108,7 @@ if "!GW_IS_LOCAL!"=="1" (
         echo  [+] Local BAP Gateway PEP active on !GW_URL!
     ) else (
         echo  [*] Starting BAP Gateway PEP daemon on port 9090...
-        start "BAP Gateway PEP (9090)" /min "!GW_BIN!" -port 9090 -controlplane !CP_URL!
+        start "BAP Gateway PEP (9090)" /min "!GW_BIN!" start -port 9090 -controlplane !CP_URL!
         ping -n 2 127.0.0.1 >nul
         echo  [+] Gateway PEP started successfully.
     )
