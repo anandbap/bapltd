@@ -74,5 +74,14 @@ func (t *caTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if t.err != nil {
 		return nil, t.err
 	}
+	hostname := r.URL.Hostname()
+	isLocal := hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1" || os.Getenv("BAP_INSECURE_SKIP_VERIFY") == "1"
+	if isLocal && (r.URL.Scheme == "https") {
+		localTransport := t.transport.Clone()
+		localTransport.TLSClientConfig = &tls.Config{
+			InsecureSkipVerify: true,
+		}
+		return localTransport.RoundTrip(r)
+	}
 	return t.transport.RoundTrip(r)
 }

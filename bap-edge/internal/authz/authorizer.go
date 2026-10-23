@@ -330,6 +330,17 @@ func (a *Authorizer) evaluateAtomicNode(executable, fullCommand, args, workspace
 			effectiveEscapesWorkspace = false
 		}
 	}
+	if effectiveEscapesWorkspace {
+		if parts := strings.Split(fullCommand, ">"); len(parts) > 1 {
+			redirTarget := strings.TrimSpace(strings.Trim(parts[len(parts)-1], "\"'`"))
+			if redirTarget != "" {
+				absRedir := ResolveCanonicalPath(redirTarget, workspaceRoot)
+				if auth, _ := IsTargetAuthorized(workspaceRoot, a.sessionID, absRedir, "write"); auth {
+					effectiveEscapesWorkspace = false
+				}
+			}
+		}
+	}
 
 	contextMap := cedar.RecordMap{
 		cedar.String("executable"):         cedar.String(normalizedExec),

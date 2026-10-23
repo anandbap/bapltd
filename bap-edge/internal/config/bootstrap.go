@@ -122,7 +122,8 @@ func BootstrapControlPlane(serverOverride string) (BootstrapResult, error) {
 
 	if isExplicit {
 		serverURL = strings.TrimRight(serverURL, "/")
-		isRemote := strings.HasPrefix(serverURL, "https://") || (!strings.Contains(serverURL, "localhost") && !strings.Contains(serverURL, "127.0.0.1"))
+		isLocal := strings.Contains(serverURL, "localhost") || strings.Contains(serverURL, "127.0.0.1") || strings.Contains(serverURL, "::1")
+		isRemote := !isLocal
 		
 		if isRemote {
 			// Remote explicit endpoint: allow 2 attempts with cold-start sleep for cloud wake-up
@@ -191,6 +192,11 @@ func BootstrapControlPlane(serverOverride string) (BootstrapResult, error) {
 		bundle, isFallback, syncErr := policyStore.SyncWithServer(activeURL, "", 5*time.Second)
 		if syncErr == nil && !isFallback {
 			cedarPath := filepath.Join(policyStore.Directory(), "policy.cedar")
+			if fi, err := os.Stat(cedarPath); err != nil || fi.Size() == 0 {
+				if curPath, _, _, err := policyStore.Current(); err == nil && curPath != "" {
+					cedarPath = curPath
+				}
+			}
 			return BootstrapResult{
 				ActiveURL:    activeURL,
 				Connected:    true,

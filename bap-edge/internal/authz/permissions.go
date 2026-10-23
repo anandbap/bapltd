@@ -27,11 +27,18 @@ type PermissionsStore struct {
 
 // GetGlobalPermissionsPath returns the path to the machine-wide permissions file (~/.bap/global_permissions.json).
 func GetGlobalPermissionsPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".bap", "global_permissions.json")
+	if env := os.Getenv("BAP_GLOBAL_PERMISSIONS"); env != "" {
+		return env
 	}
-	return filepath.Join(home, ".bap", "global_permissions.json")
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		p := filepath.Join(home, ".bap", "global_permissions.json")
+		dir := filepath.Dir(p)
+		if mkErr := os.MkdirAll(dir, 0700); mkErr == nil {
+			return p
+		}
+	}
+	return filepath.Join(".bap", "global_permissions.json")
 }
 
 // GetProjectPermissionsPath returns the path to the workspace-level permissions file (<workspace>/.bap/project_permissions.json).
@@ -59,7 +66,11 @@ func GetSessionPermissionsPath(workspaceRoot, sessionID string) string {
 func readPermissionsFile(filePath string) []PathPermission {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return nil
+		fallback := filepath.Join(".bap", filepath.Base(filePath))
+		data, err = os.ReadFile(fallback)
+		if err != nil {
+			return nil
+		}
 	}
 
 	var store PermissionsStore
@@ -81,14 +92,23 @@ func readPermissionsFile(filePath string) []PathPermission {
 func writePermissionsFile(filePath string, perms []PathPermission) error {
 	dir := filepath.Dir(filePath)
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
+		fallback := filepath.Join(".bap", filepath.Base(filePath))
+		_ = os.MkdirAll(".bap", 0700)
+		store := PermissionsStore{TrustedPaths: perms}
+		data, _ := json.MarshalIndent(store, "", "  ")
+		return os.WriteFile(fallback, data, 0600)
 	}
 	store := PermissionsStore{TrustedPaths: perms}
 	data, err := json.MarshalIndent(store, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filePath, data, 0600)
+	if err := os.WriteFile(filePath, data, 0600); err != nil {
+		fallback := filepath.Join(".bap", filepath.Base(filePath))
+		_ = os.MkdirAll(".bap", 0700)
+		return os.WriteFile(fallback, data, 0600)
+	}
+	return nil
 }
 
 // IsPathCovered checks if targetPath is covered by trustedPath (exact match or subdirectory).

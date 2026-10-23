@@ -133,7 +133,7 @@ def api_get(server_url: str, endpoint: str, admin_token: str = "") -> tuple[int,
         return 0, {"error": str(e)}
 
 
-def run_bapedge_exec(session_id: str, source: str, cmd_text: str) -> tuple[int, dict]:
+def run_bapedge_exec(session_id: str, source: str, cmd_text: str, server_url: str = "") -> tuple[int, dict]:
     """Executes an action via bapedge exec using safe base64 encoding."""
     b64_cmd = base64.b64encode(cmd_text.encode("utf-8")).decode("ascii")
     args = [
@@ -144,6 +144,8 @@ def run_bapedge_exec(session_id: str, source: str, cmd_text: str) -> tuple[int, 
         "--json",
         "--cmd-b64", b64_cmd
     ]
+    if server_url:
+        args.extend(["--server", server_url])
     test_env = os.environ.copy()
     test_env["BAP_WORKSPACE_ROOT"] = WORKSPACE_ROOT
 
@@ -353,14 +355,14 @@ def run_scenario(server_url: str, admin_token: str, delay: float = 0.8, interact
     # -------------------------------------------------------------------------
     print("\n[3/5] Executing permitted tasks for Carol Zhang (Financial Portfolio Analyst)...")
     cmd1 = 'echo Calculating portfolio Sharpe ratio: 1.84'
-    rc1, d1 = run_bapedge_exec(carol.session_id, carol.app_id, cmd1)
+    rc1, d1 = run_bapedge_exec(carol.session_id, carol.app_id, cmd1, carol.server_url)
     r1 = d1.get("receipt", {}).get("receipt_id", "")
     print_step(carol, 1, "Calculate Sharpe ratio (Allowed)", "ALLOWED" if d1.get("allowed") else "DENIED", "HEALTHY", r1)
     time.sleep(delay)
 
     carol.submit_prompt("Reconcile and verify ledger summary records")
     cmd2 = 'echo Fetching ledger summary: 450 records verified'
-    rc2, d2 = run_bapedge_exec(carol.session_id, carol.app_id, cmd2)
+    rc2, d2 = run_bapedge_exec(carol.session_id, carol.app_id, cmd2, carol.server_url)
     r2 = d2.get("receipt", {}).get("receipt_id", "")
     print_step(carol, 2, "Verify ledger records (Allowed)", "ALLOWED" if d2.get("allowed") else "DENIED", "HEALTHY", r2)
     time.sleep(delay)
@@ -370,14 +372,14 @@ def run_scenario(server_url: str, admin_token: str, delay: float = 0.8, interact
     # -------------------------------------------------------------------------
     print("\n[4/5] Executing DevOps canary & policy boundary test for Bob Miller (DevOps Deployer)...")
     cmd3 = 'echo Checking container health in us-east-1 canary'
-    rc3, d3 = run_bapedge_exec(bob.session_id, bob.app_id, cmd3)
+    rc3, d3 = run_bapedge_exec(bob.session_id, bob.app_id, cmd3, bob.server_url)
     r3 = d3.get("receipt", {}).get("receipt_id", "")
     print_step(bob, 1, "Container canary health (Allowed)", "ALLOWED" if d3.get("allowed") else "DENIED", "HEALTHY", r3)
     time.sleep(delay)
 
     bob.submit_prompt("Inspect credential configuration in .env")
     cmd4 = 'cat .env'
-    rc4, d4 = run_bapedge_exec(bob.session_id, bob.app_id, cmd4)
+    rc4, d4 = run_bapedge_exec(bob.session_id, bob.app_id, cmd4, bob.server_url)
     r4 = d4.get("receipt", {}).get("receipt_id", "")
     print_step(bob, 2, "Inspect .env credentials (Denied)", "ALLOWED" if d4.get("allowed") else "DENIED", "ELEVATED", r4)
     time.sleep(delay)
@@ -387,28 +389,28 @@ def run_scenario(server_url: str, admin_token: str, delay: float = 0.8, interact
     # -------------------------------------------------------------------------
     print("\n[5/5] Executing aggressive reconnaissance & evasion chain for Eve Mallory (Security Prober)...")
     cmd5 = 'echo Probing network gateway configuration'
-    rc5, d5 = run_bapedge_exec(eve.session_id, eve.app_id, cmd5)
+    rc5, d5 = run_bapedge_exec(eve.session_id, eve.app_id, cmd5, eve.server_url)
     r5 = d5.get("receipt", {}).get("receipt_id", "")
     print_step(eve, 1, "Network gateway probe (Allowed)", "ALLOWED" if d5.get("allowed") else "DENIED", "HEALTHY", r5)
     time.sleep(delay)
 
     eve.submit_prompt("Probe access to environment credentials")
     cmd6 = 'cat .env'
-    rc6, d6 = run_bapedge_exec(eve.session_id, eve.app_id, cmd6)
+    rc6, d6 = run_bapedge_exec(eve.session_id, eve.app_id, cmd6, eve.server_url)
     r6 = d6.get("receipt", {}).get("receipt_id", "")
     print_step(eve, 2, "Probe 1: Direct .env read", "ALLOWED" if d6.get("allowed") else "DENIED", "ELEVATED", r6)
     time.sleep(delay)
 
     eve.submit_prompt("Probe python file read boundary to bypass credential protection")
     cmd7 = 'python -c "open(\'.env\').read()"'
-    rc7, d7 = run_bapedge_exec(eve.session_id, eve.app_id, cmd7)
+    rc7, d7 = run_bapedge_exec(eve.session_id, eve.app_id, cmd7, eve.server_url)
     r7 = d7.get("receipt", {}).get("receipt_id", "")
     print_step(eve, 3, "Probe 2: Python file read bypass", "ALLOWED" if d7.get("allowed") else "DENIED", "CRITICAL", r7)
     time.sleep(delay)
 
     eve.submit_prompt("Probe PowerShell command line boundary to access secrets")
     cmd8 = 'powershell -Command "Get-Content .env"'
-    rc8, d8 = run_bapedge_exec(eve.session_id, eve.app_id, cmd8)
+    rc8, d8 = run_bapedge_exec(eve.session_id, eve.app_id, cmd8, eve.server_url)
     r8 = d8.get("receipt", {}).get("receipt_id", "")
     print_step(eve, 4, "Probe 3: PowerShell bypass", "ALLOWED" if d8.get("allowed") else "DENIED", "CRITICAL", r8)
 

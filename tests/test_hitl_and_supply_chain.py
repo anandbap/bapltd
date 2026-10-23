@@ -231,7 +231,8 @@ class TestHitlAndSupplyChain(unittest.TestCase):
 
     def test_10_cross_folder_write_denied_with_trust_suggestion(self):
         """Verify cross-folder write without authorization is blocked and suggests bapedge trust."""
-        sibling_file = r"C:\Users\User\pyprj\afbap\test_probe.txt"
+        sibling_dir = os.path.abspath(os.path.join(REPO_ROOT, "..", "afbap"))
+        sibling_file = os.path.join(sibling_dir, "test_probe.txt")
         env_no_override = self.env.copy()
         env_no_override.pop("BAP_STEPUP_DECISION", None)
         env_no_override["BAP_NON_INTERACTIVE"] = "1"
@@ -248,8 +249,8 @@ class TestHitlAndSupplyChain(unittest.TestCase):
 
     def test_11_cross_folder_write_allowed_via_bapedge_trust_project(self):
         """Verify bapedge trust <path> --project persistently authorizes cross-folder mutations for workspace."""
-        sibling_dir = r"C:\Users\User\pyprj\afbap"
-        sibling_file = r"C:\Users\User\pyprj\afbap\build_output.txt"
+        sibling_dir = os.path.abspath(os.path.join(REPO_ROOT, "..", "afbap"))
+        sibling_file = os.path.join(sibling_dir, "build_output.txt")
 
         # 1. Authorize sibling directory for project
         trust_res = subprocess.run(
@@ -274,8 +275,8 @@ class TestHitlAndSupplyChain(unittest.TestCase):
 
     def test_12_cross_folder_write_allowed_via_bapedge_trust_global(self):
         """Verify bapedge trust <path> --global authorizes cross-folder mutations machine-wide."""
-        sibling_dir = r"C:\Users\User\pyprj\afbap"
-        sibling_file = r"C:\Users\User\pyprj\afbap\global_shared.txt"
+        sibling_dir = os.path.abspath(os.path.join(REPO_ROOT, "..", "afbap"))
+        sibling_file = os.path.join(sibling_dir, "global_shared.txt")
 
         # 1. Authorize sibling directory globally
         trust_res = subprocess.run(

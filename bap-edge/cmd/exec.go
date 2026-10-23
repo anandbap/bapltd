@@ -662,18 +662,16 @@ func RunExec(args []string) {
 	if callerHash == "" {
 		callerHash = discoveredHash
 	}
-	if (*sourceFlag == "cli" || *sourceFlag == "") && discoveredAppID != "" {
+	if (*sourceFlag == "cli" || *sourceFlag == "") && (discoveredAppID == "claude-code" || discoveredAppID == "antigravity" || discoveredAppID == "copilot" || discoveredAppID == "cursor") {
 		*sourceFlag = discoveredAppID
 	}
 
 	if *sessionFlag == "" {
-		if *sourceFlag == "cli" || *sourceFlag == "" || *sourceFlag == "antigravity" {
-			prefix := *sourceFlag
-			if prefix == "" {
-				prefix = "cli"
-			}
-			*sessionFlag = fmt.Sprintf("sess-%s-%d", prefix, os.Getpid())
+		prefix := *sourceFlag
+		if prefix == "" {
+			prefix = "cli"
 		}
+		*sessionFlag = fmt.Sprintf("sess-%s-%d", prefix, os.Getpid())
 	}
 
 	if *stepUpFlag != "" {
@@ -1315,10 +1313,7 @@ func resolveCallerLineage(parentPID int) (binaryPath, binaryHash, appID string) 
 		case strings.Contains(baseLower, "cursor"):
 			appID = "cursor"
 		default:
-			stem := strings.TrimSuffix(baseLower, filepath.Ext(baseLower))
-			if stem != "" {
-				appID = stem
-			}
+			appID = ""
 		}
 	}
 	return
