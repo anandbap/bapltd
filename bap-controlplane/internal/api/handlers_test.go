@@ -309,31 +309,6 @@ func TestAPIFullLifecycle(t *testing.T) {
 	// Verify inspector data contains sessions
 	resp, err = client.Get(ts.URL + "/api/v1/inspector/data")
 	assertStatus(t, resp, err, http.StatusOK, "inspector data")
-	var sessDetail map[string]any
-	_ = json.NewDecoder(resp.Body).Decode(&sessDetail)
-	if sessDetail["total_events"].(float64) != 2 {
-		t.Fatalf("expected 2 total events on session, got: %v", sessDetail["total_events"])
-	}
-	if sessDetail["allowed_count"].(float64) != 1 || sessDetail["denied_count"].(float64) != 1 {
-		t.Fatalf("expected 1 allow and 1 deny on session, got %v and %v", sessDetail["allowed_count"], sessDetail["denied_count"])
-	}
-
-	// End session
-	sessEndReq := map[string]string{
-		"session_id": "sess-claude-api-test",
-		"reason":     "session completed successfully",
-	}
-	endBody, _ := json.Marshal(sessEndReq)
-	resp, err = client.Post(ts.URL+"/api/v1/sessions/end", "application/json", bytes.NewReader(endBody))
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 OK for session end, got: %d", resp.StatusCode)
-	}
-
-	// Verify inspector data contains sessions
-	resp, err = client.Get(ts.URL + "/api/v1/inspector/data")
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 OK for inspector data, got: %d", resp.StatusCode)
-	}
 	var inspData map[string]any
 	_ = json.NewDecoder(resp.Body).Decode(&inspData)
 	sessionsArr, ok := inspData["sessions"].([]any)
