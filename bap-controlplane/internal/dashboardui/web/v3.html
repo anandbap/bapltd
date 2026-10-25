@@ -67,6 +67,7 @@
   .legend .la::before { background: var(--bad); } .legend .lo::before { background: #c9c7bf; }
   .fleet-cap { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); font-weight: 700; margin-bottom: 12px; }
   .chip { display: inline-block; font-size: 11.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 2px 9px; border-radius: 99px; margin-left: 8px; vertical-align: 1px; }
+  .chip.wr { background: var(--warn-bg); color: var(--warn); }
   .chip.ok { background: var(--ok-bg); color: var(--ok); } .chip.no { background: var(--bad); color: #fff; }
   .row { display: flex; gap: 12px; }
   .av { flex: none; width: 34px; height: 34px; border-radius: 50%; background: #e9e7df; color: var(--ink-2); font-weight: 700; font-size: 12.5px; display: grid; place-items: center; }
@@ -98,6 +99,18 @@
   .checks li.ok { color: var(--ok); }
   .checks li::before { content: "\25CB"; } .checks li.ok::before { content: "\2713"; }
   .narrator.shift { left: 24px; transform: none; width: calc(100% - 540px); }
+  /* 24h activity strip */
+  .tlcap { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); font-weight: 700; margin: 0 0 8px; }
+  .tl { display: flex; align-items: flex-end; gap: 3px; height: 56px; margin-bottom: 20px; }
+  .tl i { flex: 1; position: relative; background: #cfd8f7; border-radius: 3px 3px 0 0; min-height: 3px; }
+  .tl i b { position: absolute; left: 0; right: 0; bottom: 0; background: var(--bad); border-radius: 0 0 0 0; }
+  .printbtn { background: none; cursor: pointer; }
+  @media print {
+    body { background: #fff; padding-bottom: 0; }
+    .narrator, .seg, .printbtn, .freeze, .sess-form, .scrim, .drawer, .modal, .start-demo, .more, .top-right a { display: none !important; }
+    .panel, .stat, .verdict { break-inside: avoid; box-shadow: none; }
+    .fleet i.alert { animation: none; }
+  }
   /* this-session proof card */
   .sess { margin-top: 20px; }
   .sess-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
@@ -231,7 +244,12 @@
   @media (max-width: 820px) {
     .stats { grid-template-columns: 1fr 1fr; }
     .cols { grid-template-columns: 1fr; }
+    .wrap { padding: 0 16px; }
+    .top, .top-right { flex-wrap: wrap; }
+    .top-right { gap: 8px 12px; }
     .verdict { grid-template-columns: 1fr; padding: 26px 22px; }
+    .sess-form input { min-width: 0; width: 100%; }
+    .cov td, .cov th { padding-right: 8px; }
     .stat .n { font-size: 40px; }
     .narrator { flex-direction: column; align-items: stretch; }
   }
@@ -246,6 +264,7 @@
     <div class="brand"><i></i> Agent Watch <span class="badge" style="display:none">Agent operations</span></div>
     <div class="top-right">
       <span class="conn" id="conn" title="Connection to the central control plane">Control plane connected</span>
+      <button class="link printbtn" id="printBtn" type="button">Print summary</button>
       <div class="seg" role="group" aria-label="Data source">
         <button id="modeLive" aria-pressed="true">Live</button>
         <button id="modeDemo" aria-pressed="false">Demo</button>
@@ -279,7 +298,7 @@
 
     <section class="stats" aria-label="Proof">
       <div class="stat"><div class="n" id="sAgents">-</div><div class="l">Agents working now</div><div class="h">Across 5 kinds of work</div></div>
-      <div class="stat" id="sBlockedCard"><div class="n" id="sBlocked">-</div><div class="l">Risky actions stopped</div><div class="h">Each one has proof</div></div>
+      <div class="stat" id="sBlockedCard"><div class="n" id="sBlocked">-</div><div class="l" id="sBlockedLabel">Risky actions stopped</div><div class="h" id="sBlockedHint">Each one has proof</div></div>
       <div class="stat" id="sWaitCard"><div class="n" id="sWait">-</div><div class="l">Waiting for you</div><div class="h">One click to decide</div></div>
       <div class="stat"><div class="n sm" id="sRecord">-</div><div class="l">Tamper-proof record</div><div class="h" id="sRecordHint">Cannot be edited later</div></div>
     </section>
@@ -287,9 +306,12 @@
     <div class="cols">
       <section class="panel" aria-labelledby="didH">
         <h2 id="didH">What agents did</h2>
+        <div class="tlcap" id="tlCap" hidden>Last 24 hours &middot; actions checked (red = risky)</div>
+        <div class="tl" id="timeline" role="img" aria-label="Activity over the last 24 hours"></div>
         <div id="incident"></div>
         <div class="bars" id="bars"></div>
         <ul class="feed" id="feed"></ul>
+        <button class="more" id="feedMore" hidden></button>
       </section>
       <section class="panel" aria-labelledby="needH">
         <h2 id="needH">Needs you</h2>
@@ -317,7 +339,7 @@
     </section>
 
     <footer>
-      <span id="foot">Every action is recorded in a sealed, tamper-proof log.</span>
+      <span><span id="foot">Every action is recorded in a sealed, tamper-proof log.</span> <span id="updated"></span></span>
       <span><a href="/dashboard/v2/">Operator console (v2)</a> &middot; <a href="/dashboard/?v=legacy">Classic (v1)</a></span>
     </footer>
   </main>
@@ -380,7 +402,7 @@
     state: 'ok',            // ok | watch | action | frozen
     agents: null, blocked: null, waiting: null, record: null,
     fleetTotal: 0, flag: '', lastState: '', incident: null,
-    conn: 'online', coverage: [], covNote: '', recordCount: null, simHidden: 0, raw: [], sessId: '',
+    conn: 'online', coverage: [], covNote: '', recordCount: null, simHidden: 0, raw: [], sessId: '', shadow: 0, timeline: [], updated: null, expanded: false,
     streams: [],            // [{name,count}]
     feed: [],               // [{who,ask,did,blocked,storyId}]
     queue: [],              // [{id,title,why,status}]
@@ -414,6 +436,19 @@
     var rec = $('sRecord');
     if (S.record == null) rec.innerHTML = '<span class="pending">Pending telemetry</span>';
     else { rec.textContent = S.record ? 'Verified' : 'Check failed'; rec.style.color = S.record ? 'var(--ok)' : 'var(--bad)'; }
+    var shadowMode = S.mode === 'live' && S.shadow > 0;
+    $('sBlockedLabel').textContent = shadowMode ? 'Flagged, not stopped' : 'Risky actions stopped';
+    $('sBlockedHint').textContent = shadowMode ? 'Audit mode: allowed but recorded' : 'Each one has proof';
+    $('updated').textContent = S.mode === 'live' && S.updated ? '· Updated ' + S.updated.toISOString().slice(11, 19) + ' UTC, refreshes every 8 s' : '';
+    var tlEl = $('timeline'), tl = S.timeline || [];
+    if (tl.length) {
+      var tmax = Math.max.apply(null, tl.map(function (x) { return x.total; })) || 1;
+      tlEl.innerHTML = tl.map(function (x, i) {
+        return '<i title="' + (24 - i) + 'h ago: ' + x.total + ' checked, ' + x.blocked + ' risky" style="height:' + Math.max(5, x.total / tmax * 100) + '%">' +
+          (x.blocked ? '<b style="height:' + Math.min(100, x.blocked / x.total * 100) + '%"></b>' : '') + '</i>';
+      }).join('');
+    } else { tlEl.innerHTML = ''; }
+    $('tlCap').hidden = !tl.length;
     $('sRecordHint').textContent = S.recordCount != null ? S.recordCount.toLocaleString() + ' records sealed, none altered' : 'Cannot be edited later';
     $('freezeBtn').disabled = S.frozen || !S.agents;
     $('freezeBtn').textContent = S.frozen ? 'Agents frozen' : 'Freeze all agents';
@@ -455,12 +490,12 @@
     }).join('') : '<div class="pending">Pending telemetry</div>';
 
     var list = $('feed'); list.innerHTML = '';
-    S.feed.slice(0, 5).forEach(function (f) {
+    S.feed.slice(0, S.expanded ? 15 : 5).forEach(function (f) {
       var li = document.createElement('li');
       if (f.blocked) { li.className = 'blocked-row'; li.tabIndex = 0; li.setAttribute('role', 'button'); }
       var ini = String(f.who).split(' · ')[0].split(/\s+/).map(function (w) { return w.charAt(0); }).join('').slice(0, 2).toUpperCase();
       li.innerHTML = '<div class="row"><div class="av" aria-hidden="true">' + esc(ini) + '</div><div><div class="who">' + esc(f.who) + '</div>' +
-        '<div class="ask">' + esc(f.ask) + (f.blocked ? '<span class="chip no">Blocked</span>' : '<span class="chip ok">Allowed</span>') + '</div>' +
+        '<div class="ask">' + esc(f.ask) + (f.blocked ? '<span class="chip no">Blocked</span>' : (f.shadow ? '<span class="chip wr">Flagged</span>' : '<span class="chip ok">Allowed</span>')) + '</div>' +
         '<div class="did">' + esc(f.did) + (f.blocked ? ' &mdash; <u>see the proof</u>' : '') + '</div></div></div>';
       if (f.blocked) {
         var open = function () { openStory(f.storyId); };
@@ -470,6 +505,9 @@
       list.appendChild(li);
     });
     if (!S.feed.length) list.innerHTML = '<li class="pending">No activity yet.</li>';
+    var mb = $('feedMore');
+    mb.hidden = S.feed.length <= 5;
+    mb.textContent = S.expanded ? 'Show fewer' : 'Show ' + (Math.min(S.feed.length, 15) - 5) + ' more';
 
     var q = $('queue'); q.innerHTML = '';
     if (!S.queue.length) {
@@ -650,9 +688,25 @@
         var isSim = function (a) { return /^sess-v3-/.test(a.agent_id || '') || /demo/i.test(a.action || ''); };
         var simCount = agents.filter(isSim).length;
         agents = agents.filter(function (a) { return !isSim(a); });
+        S.updated = new Date();
+        // Audit mode: violations are permitted but flagged. Never present those as "stopped".
+        var isShadow = function (e) { return /audit_permitted|shadow/i.test([e.policy_decision, e.outcome_category, e.action].join(' ')); };
+        var real = S.raw.filter(function (e) { return !isSim(e); });
+        S.shadow = real.filter(isShadow).length;
+        var nowMs = Date.now(), buckets = [];
+        for (var h = 0; h < 24; h++) buckets.push({ total: 0, blocked: 0 });
+        real.forEach(function (e) {
+          var t = Date.parse(e.timestamp); if (!t) return;
+          var idx = t > nowMs ? 23 : 23 - Math.floor((nowMs - t) / 3600000);
+          if (idx < 0 || idx > 23) return;
+          buckets[idx].total++;
+          if (isShadow(e) || /deny|denied/i.test(e.policy_decision || '')) buckets[idx].blocked++;
+        });
+        S.timeline = buckets.some(function (b) { return b.total; }) ? buckets : [];
         S.agents = live ? agents.filter(function (a) { return a.action_status === 'working'; }).length : (sum && sum.total_active_agents != null ? sum.total_active_agents : null);
         S.simHidden = simCount;
         S.blocked = sum && sum.high_risk_prevented != null ? sum.high_risk_prevented : null;
+        if (S.shadow > 0) S.blocked = S.shadow; // audit mode: show flagged count instead
         var reqs = esc_ ? (Array.isArray(esc_) ? esc_ : (esc_.requests || [])) : null;
         var pend = reqs ? reqs.filter(function (x) { return !x.status || x.status === 'pending'; }) : null;
         S.waiting = pend ? pend.length : null;
@@ -691,7 +745,7 @@
           }
         });
         S.streams = STREAMS.filter(function (n) { return counts[n]; }).map(function (n) { return { name: n, count: counts[n] }; });
-        S.feed = agents.slice(0, 5).map(function (a) {
+        S.feed = agents.slice(0, 15).map(function (a) {
           var isBlocked = a.action_status === 'denied' || a.policy_decision === 'DENY' || a.policy_decision === 'DENIED' || a.outcome_category === 'Blocked';
           var storyId = a.session_id || a.agent_id || 'live-story';
           if (isBlocked && !stories[storyId]) {
@@ -712,6 +766,7 @@
                    ask: clean(a.prompt || a.mission || a.prompt_summary) || a.intent_category || a.intent || 'Task in progress',
                    did: a.last_action || a.action || a.tool || (a.action_status ? 'Status: ' + a.action_status : 'Working'),
                    blocked: isBlocked,
+                   shadow: !isBlocked && isShadow(a),
                    storyId: storyId };
         });
 
@@ -720,6 +775,7 @@
         $('startDemo').hidden = !none;
         $('startDemoMsg').textContent = S.agents == null ? 'Not connected to live telemetry yet. See the product in action instead.' : 'No agents are running right now. See the product in action instead.';
         if (S.waiting > 0) { S.state = 'action'; S.tag = 'Needs you'; S.headline = S.waiting + ' decision' + (S.waiting > 1 ? 's' : '') + ' waiting for you.'; S.sub = 'Everything else is within policy.'; }
+        else if (S.shadow > 0) { S.state = 'watch'; S.tag = 'Audit mode'; S.headline = 'Audit mode: ' + S.shadow + ' risky action' + (S.shadow > 1 ? 's were' : ' was') + ' flagged, not stopped.'; S.sub = 'Nothing is being blocked right now. Each one is recorded; switch to enforce mode to stop them.'; }
         else if (S.blocked > 0) { S.state = 'watch'; S.tag = 'In control'; S.headline = 'In control. ' + S.blocked + ' risky action' + (S.blocked > 1 ? 's were' : ' was') + ' stopped.'; S.sub = 'Each one is recorded with proof.'; }
         else if (S.agents != null) { S.state = 'ok'; S.tag = 'In control'; S.headline = S.agents ? 'Every agent is operating within policy.' : 'No agents are running.'; S.sub = S.agents ? 'Nothing has been blocked and nothing needs you.' : 'When agents start working they will appear here.'; }
         else if (S.conn === 'offline') { S.state = 'watch'; S.tag = 'Reporting offline'; S.headline = 'The control plane is offline. This screen cannot see the fleet.'; S.sub = 'Agents on governed machines keep enforcing their saved policy and queue records locally. Nothing here is estimated or invented, so numbers show as pending until it reconnects.'; }
@@ -733,9 +789,9 @@
     $('ribbon').hidden = true; $('narrator').hidden = true;
     S.frozen = false; S.queue = []; S.feed = []; S.streams = [];
     S.agents = S.blocked = S.waiting = S.record = null; S.fleetTotal = 0; S.flag = ''; S.incident = null;
-    S.conn = 'online'; S.coverage = []; S.covNote = '';
+    S.conn = 'online'; S.coverage = []; S.covNote = ''; S.shadow = 0; S.timeline = []; S.updated = null;
     S.state = 'watch'; S.tag = 'Loading'; S.headline = 'Checking the fleet...'; S.sub = ''; render();
-    loadLive(); clearInterval(liveTimer); liveTimer = setInterval(loadLive, 8000);
+    loadLive(); clearInterval(liveTimer); liveTimer = setInterval(function () { if (!document.hidden) loadLive(); }, 8000);
   }
 
   /* ---------- DEMO walkthrough ---------- */
@@ -764,6 +820,12 @@
     tech: ['Risk escalation: LOW -> ELEVATED -> CRITICAL', 'Action: quarantine + revoke identity', '[Demo data]']
   };
 
+  // Illustrative 24h activity for the walkthrough; `risky` marks the latest hour.
+  function demoTL(risky) {
+    var base = [3, 2, 2, 1, 1, 2, 4, 6, 9, 12, 14, 13, 15, 16, 14, 12, 10, 9, 8, 7, 6, 8, 9, 10];
+    return base.map(function (n, i) { return { total: n + (i === 23 ? risky : 0), blocked: i === 23 ? risky : 0 }; });
+  }
+
   var Demo = (function () {
     var timer = null, idx = -1, paused = false, awaiting = false;
     var AGENTS = 47;
@@ -777,6 +839,7 @@
             { surface: 'GitHub Copilot CLI', detail: '7 agents', protect: 'Governed', pc: 'g', report: 'Live', rc: 'g', means: 'Every command is checked and recorded.' },
             { surface: 'Antigravity IDE', detail: '2 detected on laptops', protect: 'Not governed', pc: 'r', report: 'Detected only', rc: 'a', means: 'Seen on the network, but BAP cannot stop it.', fix: 'Install protection' }
           ];
+          S.timeline = demoTL(0); S.shadow = 0;
           S.incident = null; S.agents = AGENTS; S.fleetTotal = AGENTS; S.flag = ''; S.blocked = 0; S.waiting = 0; S.record = true; S.frozen = false;
           S.state = 'ok'; S.tag = 'In control'; S.headline = 'Every agent is operating within policy.';
           S.sub = AGENTS + ' AI agents are working across the company. Nothing has been blocked and nothing needs you.';
@@ -791,7 +854,7 @@
           S.feed.unshift({ who: 'Diego Ruiz · data-07', ask: 'Summarise last week\'s churn numbers', did: 'Report generated, 0 sensitive fields exposed' }); } },
       { t: 'An agent oversteps', m: 'An agent goes beyond its task and reaches for a password file. Watch the verdict change.', d: 4200, run: function () {
           S.incident = { asked: 'Priya: "Fix the failing checkout tests"', tried: 'Open the production password file', result: 'Blocked. Nothing was read.', storyId: 'eve' };
-          S.blocked = 1; S.flag = 'alert'; S.state = 'watch'; S.tag = 'In control';
+          S.timeline = demoTL(1); S.blocked = 1; S.flag = 'alert'; S.state = 'watch'; S.tag = 'In control';
           S.headline = 'In control. One risky action was just stopped.';
           S.sub = 'Nothing was exposed. The agent is still being watched.';
           S.feed.unshift({ who: 'Priya Nair · coder-12', ask: 'Fix the failing checkout tests', did: 'Tried to read a password file. Blocked.', blocked: true, storyId: 'eve' }); } },
@@ -804,7 +867,7 @@
           S.queue = [{ id: 'd1', title: 'Deploy checkout fix to production', why: 'Marcus Webb\'s agent finished the fix and tests pass. Production changes always need a human.' }]; } },
       { t: 'It will not give up', m: 'The first agent keeps probing. After three blocked attempts it is isolated automatically.', d: 7500, run: function () {
           S.incident = { asked: 'Same task, same agent', tried: '3 forbidden actions in 4 minutes', result: 'Agent isolated automatically.', storyId: 'eve2' };
-          S.blocked = 3; S.flag = 'out'; S.state = 'action'; S.tag = 'Contained';
+          S.timeline = demoTL(3); S.blocked = 3; S.flag = 'out'; S.state = 'action'; S.tag = 'Contained';
           S.headline = 'One agent was contained. 46 are unaffected.';
           S.sub = 'It tried three forbidden actions in four minutes. Its permissions were revoked without anyone lifting a finger.';
           S.feed.unshift({ who: 'Priya Nair · coder-12', ask: 'Fix the failing checkout tests', did: 'Isolated after repeated attempts.', blocked: true, storyId: 'eve2' });
@@ -889,6 +952,8 @@
     closeAll();
     if (m === 'demo') Demo.start(); else { S.mode = 'live'; setMode(); startLive(); }
   }
+  $('printBtn').addEventListener('click', function () { window.print(); });
+  $('feedMore').addEventListener('click', function () { S.expanded = !S.expanded; render(); });
   $('modeLive').addEventListener('click', function () { setModeTo('live'); });
   $('modeDemo').addEventListener('click', function () { setModeTo('demo'); });
   $('startDemoBtn').addEventListener('click', function () { setModeTo('demo'); });
