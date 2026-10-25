@@ -131,6 +131,29 @@ if exist "%ROOT_DIR%dist\windows-amd64\gateway" (
     copy /y "%ROOT_DIR%bapgateway.exe" "%ROOT_DIR%dist\windows-amd64\gateway\bapgateway.exe" >nul 2>&1
 )
 
+if exist "%USERPROFILE%\bin" (
+    copy /y "%ROOT_DIR%bapedge.exe" "%USERPROFILE%\bin\bapedge.exe" >nul 2>&1
+    copy /y "%ROOT_DIR%bapedge.exe" "%USERPROFILE%\bin\bapmcp.exe" >nul 2>&1
+    copy /y "%ROOT_DIR%bapcontrolplane.exe" "%USERPROFILE%\bin\bapcontrolplane.exe" >nul 2>&1
+    copy /y "%ROOT_DIR%bapdashboard.exe" "%USERPROFILE%\bin\bapdashboard.exe" >nul 2>&1
+    copy /y "%ROOT_DIR%bapgateway.exe" "%USERPROFILE%\bin\bapgateway.exe" >nul 2>&1
+    copy /y "%ROOT_DIR%cchook\interceptor.exe" "%USERPROFILE%\bin\interceptor.exe" >nul 2>&1
+    copy /y "%ROOT_DIR%policy.cedar" "%USERPROFILE%\bin\policy.cedar" >nul 2>&1
+    copy /y "%ROOT_DIR%schema.json" "%USERPROFILE%\bin\schema.json" >nul 2>&1
+    copy /y "%ROOT_DIR%bap-config.json" "%USERPROFILE%\bin\bap-config.json" >nul 2>&1
+)
+
+if exist "%ROOT_DIR%bap\bin\windows-amd64" (
+    copy /y "%ROOT_DIR%bapedge.exe" "%ROOT_DIR%bap\bin\windows-amd64\bapedge.exe" >nul 2>&1
+    copy /y "%ROOT_DIR%bapedge.exe" "%ROOT_DIR%bap\bin\windows-amd64\bapmcp.exe" >nul 2>&1
+    copy /y "%ROOT_DIR%bapcontrolplane.exe" "%ROOT_DIR%bap\bin\windows-amd64\bapcontrolplane.exe" >nul 2>&1
+    copy /y "%ROOT_DIR%bapgateway.exe" "%ROOT_DIR%bap\bin\windows-amd64\bapgateway.exe" >nul 2>&1
+    copy /y "%ROOT_DIR%cchook\interceptor.exe" "%ROOT_DIR%bap\bin\windows-amd64\interceptor.exe" >nul 2>&1
+    copy /y "%ROOT_DIR%policy.cedar" "%ROOT_DIR%bap\bin\windows-amd64\policy.cedar" >nul 2>&1
+    copy /y "%ROOT_DIR%schema.json" "%ROOT_DIR%bap\bin\windows-amd64\schema.json" >nul 2>&1
+    copy /y "%ROOT_DIR%bap-config.json" "%ROOT_DIR%bap\bin\windows-amd64\bap-config.json" >nul 2>&1
+)
+
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT_DIR%scripts\check_stale_copies.ps1" %AUTO_FIX%
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Stale asset audit detected mismatches!

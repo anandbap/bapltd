@@ -27,6 +27,7 @@ Write-Host ">>> Compiling Windows AMD64 Binaries ($Version, Commit: $gitCommit).
 Push-Location "bap-edge"
 try {
     $ldflags = "-s -w -X bap-edge/pkg/version.Version=$Version -X bap-edge/pkg/version.GitCommit=$gitCommit -X bap-edge/pkg/version.BuildDate=$buildDate"
+    Remove-Item -Force "bapedge.exe" -ErrorAction SilentlyContinue
     go build -ldflags $ldflags -o bapedge.exe .
 } finally {
     Pop-Location
@@ -111,6 +112,36 @@ if (Test-Path "dist\windows-amd64") {
         Safe-Copy "cchook\interceptor.exe" "dist\windows-amd64\interceptor.exe"
         Safe-Copy "cchook\interceptor.exe" "dist\windows-amd64\cchook-interceptor.exe"
     }
+}
+
+# 7. Update user PATH bin directory (%USERPROFILE%\bin) if present
+$userBin = Join-Path $env:USERPROFILE "bin"
+if (Test-Path $userBin) {
+    Safe-Copy "bap-edge\bapedge.exe" (Join-Path $userBin "bapedge.exe")
+    Safe-Copy "bap-edge\bapedge.exe" (Join-Path $userBin "bapmcp.exe")
+    Safe-Copy "bap-controlplane\bapcontrolplane.exe" (Join-Path $userBin "bapcontrolplane.exe")
+    Safe-Copy "bap-controlplane\bapdashboard.exe" (Join-Path $userBin "bapdashboard.exe")
+    Safe-Copy "bap-gateway\bapgateway.exe" (Join-Path $userBin "bapgateway.exe")
+    if (Test-Path "cchook\interceptor.exe") {
+        Safe-Copy "cchook\interceptor.exe" (Join-Path $userBin "interceptor.exe")
+    }
+    Safe-Copy "policy.cedar" (Join-Path $userBin "policy.cedar")
+    Safe-Copy "schema.json" (Join-Path $userBin "schema.json")
+    Safe-Copy "bap-config.json" (Join-Path $userBin "bap-config.json")
+}
+
+# 8. Update Python wheel package staging directory if present
+if (Test-Path "bap\bin\windows-amd64") {
+    Safe-Copy "bap-edge\bapedge.exe" "bap\bin\windows-amd64\bapedge.exe"
+    Safe-Copy "bap-edge\bapedge.exe" "bap\bin\windows-amd64\bapmcp.exe"
+    Safe-Copy "bap-controlplane\bapcontrolplane.exe" "bap\bin\windows-amd64\bapcontrolplane.exe"
+    Safe-Copy "bap-gateway\bapgateway.exe" "bap\bin\windows-amd64\bapgateway.exe"
+    if (Test-Path "cchook\interceptor.exe") {
+        Safe-Copy "cchook\interceptor.exe" "bap\bin\windows-amd64\interceptor.exe"
+    }
+    Safe-Copy "policy.cedar" "bap\bin\windows-amd64\policy.cedar"
+    Safe-Copy "schema.json" "bap\bin\windows-amd64\schema.json"
+    Safe-Copy "bap-config.json" "bap\bin\windows-amd64\bap-config.json"
 }
 
 # Purge any stale temporary backup files from root
