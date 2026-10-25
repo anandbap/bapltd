@@ -1435,6 +1435,7 @@ function Invoke-BapGovernedSession {
         } catch { }
     }
 
+    try { [System.Environment]::Exit($ExitCode) } catch { }
     exit $ExitCode
 }
 
