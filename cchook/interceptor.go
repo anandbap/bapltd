@@ -457,14 +457,29 @@ func resolveServerURL() string {
 }
 
 func resolveEnforcementMode() string {
+	if m := os.Getenv("BAP_ENFORCEMENT_MODE"); m != "" {
+		return strings.ToLower(strings.TrimSpace(m))
+	}
 	if m := os.Getenv("BAP_MODE"); m != "" {
 		return strings.ToLower(strings.TrimSpace(m))
 	}
-	cfgCandidates := []string{
+	var cfgCandidates []string
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		cfgCandidates = append(cfgCandidates, filepath.Join(home, ".bapstate", "config.json"))
+	}
+	cfgCandidates = append(cfgCandidates,
 		filepath.Join(".bap", "bap-config.json"),
 		filepath.Join(".bap", "config.json"),
 		"bap-config.json",
 		"../bap-config.json",
+	)
+	if home != "" {
+		cfgCandidates = append(cfgCandidates,
+			filepath.Join(home, "bin", "bap-config.json"),
+			filepath.Join(home, ".bap", "config.json"),
+			filepath.Join(home, ".bap", "bap-config.json"),
+		)
 	}
 	for _, cfgPath := range cfgCandidates {
 		if cfgData, err := os.ReadFile(cfgPath); err == nil {
