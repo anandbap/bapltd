@@ -140,9 +140,15 @@ This document represents the complete functional and non-functional requirements
 | `BAP-EPIC-26` | Cross-Platform Packaging & CI/CD Release Pipeline (BAP-500–BAP-504) | MVP Enterprise Pack | **DONE** |
 | `BAP-EPIC-27` | Fleet Telemetry Consistency, Dynamic Liveness Coupling & Unified State Architecture (BAP-510–BAP-513) | MVP Core & Telemetry | **DONE** |
 | `BAP-EPIC-28` | Agent Watch Persona Architecture, Canonical Activity Event & Live Enterprise Topology (BAP-520–BAP-525) | MVP Post-Pilot / v2.1 | **DONE** |
-| `BAP-EPIC-29` | Beyond-Hook Enforcement & Enterprise Defense Hardening (BAP-530–BAP-539) | Enterprise Hardening v2.2 | **BACKLOG** |
-| `BAP-EPIC-30` | Multi-Agent Tool Governance & 5-Layer Defense-in-Depth (BAP-540–BAP-548) | Enterprise Pack v2.3 | **DONE** |
+| `BAP-EPIC-29` | Beyond-Hook Enforcement & Enterprise Defense Hardening (BAP-530–BAP-539) | Enterprise Hardening v2.2 | **DONE** |
+| `BAP-EPIC-30` | Multi-Agent Tool Governance & 5-Layer Defense-in-Depth (BAP-540-BAP-548) | Enterprise Pack v2.3 | **DONE** |
 | `BAP-EPIC-31` | Enterprise Launch Readiness, Client–Server Versioning Scheme & Protocol Compatibility Governance (BAP-550–BAP-554) | Enterprise Launch v1.0 | **DONE** |
+| `BAP-EPIC-32` | Runtime Agent Auth, Anti-Bypass Architecture & Task-Scoped Authority (BAP-560–BAP-565) | Enterprise Hardening v2.4 | **DONE** |
+| `BAP-EPIC-33` | Enterprise Agent Trust & Identity Readiness (BAP-701–BAP-704) | Security Assurance v3.0 | **DONE** |
+| `BAP-EPIC-34` | Agent Containment & Bypass Prevention (BAP-711–BAP-714) | Security Assurance v3.0 | **DONE** |
+| `BAP-EPIC-35` | Evidence, Detection & Incident Response (BAP-721–BAP-724) | Security Assurance v3.0 | **DONE** |
+| `BAP-EPIC-36` | Risk-Based Agent Acceleration (BAP-731–BAP-733) | Security Assurance v3.0 | **DONE** |
+| `BAP-EPIC-37` | Vendor Integration & Coverage Validation (BAP-741–BAP-743) | Security Assurance v3.0 | **DONE** |
 
 ---
 
