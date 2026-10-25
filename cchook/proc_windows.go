@@ -31,3 +31,29 @@ func getProcessExecutablePath(pid int) string {
 	}
 	return ""
 }
+
+func getParentPID(pid int) int {
+	if pid <= 0 {
+		return 0
+	}
+	snapshot, err := syscall.CreateToolhelp32Snapshot(syscall.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return 0
+	}
+	defer syscall.CloseHandle(snapshot)
+
+	var entry syscall.ProcessEntry32
+	entry.Size = uint32(unsafe.Sizeof(entry))
+	if err := syscall.Process32First(snapshot, &entry); err != nil {
+		return 0
+	}
+	for {
+		if int(entry.ProcessID) == pid {
+			return int(entry.ParentProcessID)
+		}
+		if err := syscall.Process32Next(snapshot, &entry); err != nil {
+			break
+		}
+	}
+	return 0
+}

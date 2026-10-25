@@ -23,6 +23,7 @@ import (
 )
 
 var isLocalScanRunning atomic.Bool
+var isSpoolFlushRunning atomic.Bool
 
 func sanitizeInstanceID(s string) string {
 	var sb strings.Builder
@@ -328,6 +329,96 @@ func RunWatch(args []string) error {
 	return nil
 }
 
+// bapUserDir is the per-user state directory shared with the Claude hook (cchook), so
+// hook and watcher agree on paths regardless of the workspace cwd.
+func bapUserDir() string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".bap")
+	}
+	return ".bap"
+}
+
+// watcherLivenessPath is touched on every heartbeat tick; the hook treats a fresh mtime as
+// "a watcher is alive for this session". Must match cchook/interceptor.go.
+func watcherLivenessPath(sessionID string) string {
+	return filepath.Join(bapUserDir(), "watchers", sanitizeInstanceID(sessionID)+".watcher")
+}
+
+// promptSpoolDir holds prompt telemetry the hook could not deliver. Must match cchook.
+func promptSpoolDir() string {
+	return filepath.Join(bapUserDir(), "spool", "prompts")
+}
+
+func touchWatcherLiveness(path string, watchPID int) {
+	if _, err := os.Stat(path); err != nil {
+		_ = os.MkdirAll(filepath.Dir(path), 0700)
+		data, _ := json.Marshal(map[string]any{"pid": os.Getpid(), "watch_pid": watchPID, "started_at": time.Now().UTC()})
+		_ = os.WriteFile(path, data, 0600)
+		return
+	}
+	now := time.Now()
+	_ = os.Chtimes(path, now, now)
+}
+
+// flushPromptSpool replays spooled prompt events for this session. 2xx and permanent 4xx
+// (other than 404) drop the entry; 404 (session not enrolled yet) is retried for 10 minutes;
+// network errors and 5xx stop the pass and keep everything for the next one.
+func flushPromptSpool(serverURL, sessionID string) {
+	if !isSpoolFlushRunning.CompareAndSwap(false, true) {
+		return
+	}
+	defer isSpoolFlushRunning.Store(false)
+	dir := promptSpoolDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	client := httptransport.New(3 * time.Second)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var env struct {
+			SessionID string          `json:"session_id"`
+			Body      json.RawMessage `json:"body"`
+		}
+		if json.Unmarshal(data, &env) != nil || len(env.Body) == 0 {
+			_ = os.Remove(p)
+			continue
+		}
+		if env.SessionID != sessionID {
+			// Belongs to another session's watcher; reap only if clearly abandoned.
+			if fi, err := e.Info(); err == nil && time.Since(fi.ModTime()) > 24*time.Hour {
+				_ = os.Remove(p)
+			}
+			continue
+		}
+		resp, err := client.Post(serverURL+"/api/v1/sessions/prompt", "application/json", bytes.NewReader(env.Body))
+		if err != nil {
+			return
+		}
+		status := resp.StatusCode
+		resp.Body.Close()
+		switch {
+		case status >= 200 && status < 300:
+			_ = os.Remove(p)
+		case status == http.StatusNotFound:
+			if fi, err := e.Info(); err == nil && time.Since(fi.ModTime()) > 10*time.Minute {
+				_ = os.Remove(p)
+			}
+		case status >= 500:
+			return
+		default:
+			_ = os.Remove(p)
+		}
+	}
+}
+
 func sessionMarkerPath(sessionID string) string {
 	sum := sha256.Sum256([]byte(sessionID))
 	return filepath.Join(state.SessionsDir(), fmt.Sprintf("%x.json", sum[:]))
@@ -375,9 +466,15 @@ func writeSessionMarker(sessionID, serverURL, appID, username, hostname, initial
 func cleanupSessionMarker(sessionID string, watchPID int) {
 	if sessionID != "" {
 		_ = os.Remove(sessionMarkerPath(sessionID))
+		sum := sha256.Sum256([]byte(sessionID))
+		hashName := fmt.Sprintf("%x.json", sum[:])
+		_ = os.Remove(filepath.Join(".bap", "sessions", hashName))
+		_ = os.Remove(filepath.Join(bapUserDir(), "watchers", sanitizeInstanceID(sessionID)+".watcher"))
+		_ = os.Remove(watcherLivenessPath(sessionID))
 	}
 	if watchPID > 0 {
 		_ = os.Remove(sessionPIDMarkerPath(watchPID))
+		_ = os.Remove(filepath.Join(".bap", "sessions", fmt.Sprintf("pid-%d.json", watchPID)))
 	}
 	_ = os.Remove(state.WorkspaceSessionPath())
 	_ = os.Remove(filepath.Join(".bap", "session.json"))
@@ -426,8 +523,13 @@ func cleanupStaleSessionMarkers() {
 					_ = os.Remove(path)
 					if marker.SessionID != "" {
 						_ = os.Remove(sessionMarkerPath(marker.SessionID))
+						sum := sha256.Sum256([]byte(marker.SessionID))
+						_ = os.Remove(filepath.Join(".bap", "sessions", fmt.Sprintf("%x.json", sum[:])))
+						_ = os.Remove(filepath.Join(bapUserDir(), "watchers", sanitizeInstanceID(marker.SessionID)+".watcher"))
+						_ = os.Remove(watcherLivenessPath(marker.SessionID))
 					}
 					_ = os.Remove(sessionPIDMarkerPath(marker.PID))
+					_ = os.Remove(filepath.Join(".bap", "sessions", fmt.Sprintf("pid-%d.json", marker.PID)))
 				}
 			}
 		}
@@ -466,6 +568,11 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string, instanceIDOp
 	}
 	_ = postJSONQuick(serverURL+"/api/v1/sessions/start", startPayload)
 
+	// Advertise liveness so hooks can tell a watcher exists for this session.
+	livenessPath := watcherLivenessPath(sessionID)
+	touchWatcherLiveness(livenessPath, watchPID)
+	defer os.Remove(livenessPath)
+
 	// 3. Continuous Heartbeat and Liveness Monitor
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -476,6 +583,8 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string, instanceIDOp
 	heartbeatCounter := 0
 
 	for range ticker.C {
+		touchWatcherLiveness(livenessPath, watchPID)
+
 		// If watchPID was not specified at launch, look for it in local session marker
 		if watchPID <= 0 {
 			if data, err := os.ReadFile(sessionFile); err == nil {
@@ -530,6 +639,11 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string, instanceIDOp
 		// Keep alive & pulse heartbeat continuously
 		statusHB, reasonHB, scanEpoch := pulseHeartbeat(serverURL, sessionID)
 		if statusHB == "ok" {
+			// Replay prompts the hook could not deliver (first on a fresh session, then
+			// every few ticks) in the background so the heartbeat loop never stalls.
+			if heartbeatCounter == 0 || heartbeatCounter%3 == 0 {
+				go flushPromptSpool(serverURL, sessionID)
+			}
 			heartbeatCounter++
 			if heartbeatCounter%5 == 0 {
 				go func() {

@@ -1306,6 +1306,12 @@ try {
                     }
                 )
 
+                SessionEnd = @(
+                    [ordered]@{
+                        hooks = @($InterceptorHook)
+                    }
+                )
+
                 ConfigChange = @(
                     [ordered]@{
                         matcher = 'project_settings|local_settings'

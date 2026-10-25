@@ -563,6 +563,52 @@ class TestBAP200SoleExecutor(unittest.TestCase):
         # Standard non-admin traverse privilege is present
         self.assertIn("SeChangeNotifyPrivilege", out)
 
+    # -------------------------------------------------------------------------
+    # AC16: Claude Code Direct Launch Lifecycle & Graceful SessionEnd Teardown
+    # -------------------------------------------------------------------------
+    def test_ac16_claude_session_start_and_end_lifecycle(self):
+        test_sess_id = "sess-lifecycle-ac16-test"
+        start_payload = {
+            "hook_event_name": "SessionStart",
+            "session_id": test_sess_id,
+        }
+        resp_start = run_interceptor(start_payload)
+        self.assertEqual(resp_start.get("status"), "ok")
+
+        # Session marker should have been generated
+        session_marker = os.path.join(WORKSPACE_ROOT, ".bap", "session.json")
+        self.assertTrue(os.path.exists(session_marker), "SessionStart must generate local session marker")
+
+        # SessionEnd hook fires on Claude shutdown
+        end_payload = {
+            "hook_event_name": "SessionEnd",
+            "session_id": test_sess_id,
+        }
+        resp_end = run_interceptor(end_payload)
+        self.assertEqual(resp_end.get("status"), "ok")
+
+        # Session marker should be removed
+        self.assertFalse(os.path.exists(session_marker), "SessionEnd must clean up local session marker")
+
+    # -------------------------------------------------------------------------
+    # AC17: Claude Code SessionStop Teardown Compatibility
+    # -------------------------------------------------------------------------
+    def test_ac17_claude_session_stop_alias_teardown(self):
+        test_sess_id = "sess-lifecycle-ac17-test"
+        start_payload = {
+            "hook_event_name": "SessionStart",
+            "session_id": test_sess_id,
+        }
+        resp_start = run_interceptor(start_payload)
+        self.assertEqual(resp_start.get("status"), "ok")
+
+        end_payload = {
+            "hook_event_name": "SessionStop",
+            "session_id": test_sess_id,
+        }
+        resp_end = run_interceptor(end_payload)
+        self.assertEqual(resp_end.get("status"), "ok")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

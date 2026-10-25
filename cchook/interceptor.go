@@ -81,7 +81,7 @@ func inspectCallerProcess(pid int) CallerProcessInfo {
 
 		baseLower := strings.ToLower(info.BinaryName)
 		switch {
-		case strings.Contains(baseLower, "claude"):
+		case strings.Contains(baseLower, "claude") || strings.Contains(baseLower, "node"):
 			info.AppID = "claude-code"
 		case strings.Contains(baseLower, "antigravity"):
 			info.AppID = "antigravity"
@@ -97,6 +97,57 @@ func inspectCallerProcess(pid int) CallerProcessInfo {
 		}
 	}
 	return info
+}
+
+func isTransientShell(exeName string) bool {
+	lower := strings.ToLower(exeName)
+	switch lower {
+	case "cmd.exe", "powershell.exe", "pwsh.exe", "cmd", "powershell", "pwsh", "sh", "bash", "zsh", "conhost.exe", "conhost":
+		return true
+	default:
+		return false
+	}
+}
+
+// resolveAgentProcess inspects caller process ancestry to pierce through transient shells
+// (e.g. cmd.exe spawned by Node's child_process.exec) and find the true long-running agent runner.
+func resolveAgentProcess(initialPID int) (int, CallerProcessInfo) {
+	currPID := initialPID
+	currInfo := inspectCallerProcess(currPID)
+
+	for i := 0; i < 5; i++ {
+		if !isTransientShell(currInfo.BinaryName) && currInfo.BinaryName != "" {
+			break
+		}
+		parentPID := getParentPID(currPID)
+		if parentPID <= 0 || parentPID == currPID {
+			break
+		}
+		parentInfo := inspectCallerProcess(parentPID)
+		if parentInfo.BinaryName == "" {
+			break
+		}
+		currPID = parentPID
+		currInfo = parentInfo
+	}
+
+	baseLower := strings.ToLower(currInfo.BinaryName)
+	switch {
+	case strings.Contains(baseLower, "claude") || strings.Contains(baseLower, "node"):
+		currInfo.AppID = "claude-code"
+	case strings.Contains(baseLower, "antigravity"):
+		currInfo.AppID = "antigravity"
+	case strings.Contains(baseLower, "copilot"):
+		currInfo.AppID = "copilot"
+	case strings.Contains(baseLower, "cursor"):
+		currInfo.AppID = "cursor"
+	default:
+		if currInfo.AppID == "" || isTransientShell(currInfo.BinaryName) {
+			currInfo.AppID = "claude-code"
+		}
+	}
+
+	return currPID, currInfo
 }
 
 const intentClassifierVersion = "bap-intent-rules-v1"
@@ -961,7 +1012,8 @@ func isStartupBlocked() (bool, string) {
 }
 
 func handleSessionStartHook(payload HookPayload) {
-	ppid := os.Getppid()
+	rawPPID := os.Getppid()
+	targetPID, caller := resolveAgentProcess(rawPPID)
 
 	// 1. Check if local kill-switch or freeze blocks startup
 	if blocked, reason := isStartupBlocked(); blocked {
@@ -969,10 +1021,6 @@ func handleSessionStartHook(payload HookPayload) {
 		os.Exit(2)
 	}
 
-	// A governed launcher owns the session ID and watcher lifecycle. Claude also
-	// supplies its own hook session ID; preferring that value created a second
-	// session and a second watcher for the same process.
-	caller := inspectCallerProcess(ppid)
 	appID := caller.AppID
 	if appID == "" {
 		appID = "claude-code"
@@ -985,12 +1033,14 @@ func handleSessionStartHook(payload HookPayload) {
 			sessionID = existingID
 		}
 	}
-	launcherOwnsWatcher := sessionID != ""
+	// A pre-existing session id only means a launcher owns the watcher if that watcher is
+	// actually alive; stale markers (PID reuse, crashed watcher) must not suppress startup.
+	launcherOwnsWatcher := sessionID != "" && watcherAlive(sessionID)
 	if sessionID == "" {
 		sessionID = payload.SessionID
 	}
 	if sessionID == "" {
-		sessionID = fmt.Sprintf("sess-%s-pid-%d", appID, ppid)
+		sessionID = fmt.Sprintf("sess-%s-pid-%d", appID, targetPID)
 	}
 
 	serverURL := resolveServerURL()
@@ -1008,7 +1058,7 @@ func handleSessionStartHook(payload HookPayload) {
 		"caller_hash": caller.BinaryHash,
 		"user_id":     username,
 		"hostname":    hostname,
-		"client_pid":  ppid,
+		"client_pid":  targetPID,
 	}
 	if !launcherOwnsWatcher {
 		if body, err := json.Marshal(startPayload); err == nil {
@@ -1028,16 +1078,19 @@ func handleSessionStartHook(payload HookPayload) {
 	marker := map[string]any{
 		"session_id":  sessionID,
 		"server_url":  serverURL,
-		"pid":         ppid,
+		"pid":         targetPID,
 		"app_id":      appID,
 		"caller_path": caller.BinaryPath,
 		"caller_hash": caller.BinaryHash,
 		"started_at":  time.Now().UTC(),
 	}
 	if data, err := json.MarshalIndent(marker, "", "  "); err == nil {
-		pMarker := sessionMarkerPathForPID(ppid)
+		pMarker := sessionMarkerPathForPID(targetPID)
 		_ = os.MkdirAll(filepath.Dir(pMarker), 0700)
 		_ = os.WriteFile(pMarker, data, 0600)
+		if targetPID != rawPPID {
+			_ = os.WriteFile(sessionMarkerPathForPID(rawPPID), data, 0600)
+		}
 		_ = os.WriteFile(filepath.Join(".bap", "session.json"), data, 0600)
 		_ = os.Remove(".bap-session.json")
 	}
@@ -1048,12 +1101,84 @@ func handleSessionStartHook(payload HookPayload) {
 		ltdBin = findBinary("bapedge")
 	}
 	if ltdBin != "" && !launcherOwnsWatcher {
-		wCmd := exec.Command(ltdBin, "watch", fmt.Sprintf("--pid=%d", ppid), fmt.Sprintf("--server=%s", serverURL), fmt.Sprintf("--session-id=%s", sessionID), "--detach")
+		wCmd := exec.Command(ltdBin, "watch", fmt.Sprintf("--pid=%d", targetPID), fmt.Sprintf("--server=%s", serverURL), fmt.Sprintf("--session-id=%s", sessionID), fmt.Sprintf("--app-id=%s", appID), "--detach")
 		_ = wCmd.Start()
 	}
 
 	os.Stdout.WriteString("{\"status\":\"ok\"}\n")
 	os.Exit(0)
+}
+
+func handleSessionEndHook(payload HookPayload) {
+	rawPPID := os.Getppid()
+	targetPID, _ := resolveAgentProcess(rawPPID)
+	sessionID := resolveSessionID(payload)
+	serverURL := resolveServerURL()
+
+	hookLog("handleSessionEndHook: session end hook triggered for session %s (agent pid %d)", sessionID, targetPID)
+
+	// 1. Notify control plane that the session has ended
+	if sessionID != "" && serverURL != "" {
+		endPayload := map[string]any{
+			"session_id": sessionID,
+			"reason":     "Claude Code session closed gracefully",
+		}
+		if body, err := json.Marshal(endPayload); err == nil {
+			client := getHTTPClient()
+			client.Timeout = 1500 * time.Millisecond
+			resp, err := client.Post(serverURL+"/api/v1/sessions/end", "application/json", bytes.NewReader(body))
+			if err == nil && resp != nil {
+				_ = resp.Body.Close()
+			}
+		}
+	}
+
+	// 2. Run bapedge session-end to invoke local state and backend teardown
+	ltdBin := findBinary("bapedge.exe")
+	if ltdBin == "" {
+		ltdBin = findBinary("bapedge")
+	}
+	if ltdBin != "" && sessionID != "" {
+		endCmd := exec.Command(ltdBin, "session-end", fmt.Sprintf("--server=%s", serverURL), fmt.Sprintf("--session-id=%s", sessionID))
+		_ = endCmd.Run()
+	}
+
+	// 3. Purge all local session markers and watchers
+	cleanupSessionMarkers(sessionID, targetPID)
+	if targetPID != rawPPID {
+		cleanupSessionMarkers(sessionID, rawPPID)
+	}
+
+	os.Stdout.WriteString("{\"status\":\"ok\"}\n")
+	os.Exit(0)
+}
+
+func cleanupSessionMarkers(sessionID string, pid int) {
+	if sessionID != "" {
+		sum := sha256.Sum256([]byte(sessionID))
+		hashName := fmt.Sprintf("%x.json", sum[:])
+		_ = os.Remove(filepath.Join(".bap", "sessions", hashName))
+		_ = os.Remove(filepath.Join(".bapstate", "sessions", hashName))
+		_ = os.Remove(filepath.Join(".bap", "prompts", fmt.Sprintf("%x.txt", sum[:])))
+		_ = os.Remove(promptPathForSession(sessionID))
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			_ = os.Remove(filepath.Join(home, ".bapstate", "sessions", hashName))
+			_ = os.Remove(filepath.Join(home, ".bap", "watchers", sanitizeSessionFileID(sessionID)+".watcher"))
+		}
+		_ = os.Remove(watcherLivenessPath(sessionID))
+	}
+	if pid > 0 {
+		pidName := fmt.Sprintf("pid-%d.json", pid)
+		_ = os.Remove(filepath.Join(".bap", "sessions", pidName))
+		_ = os.Remove(filepath.Join(".bapstate", "sessions", pidName))
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			_ = os.Remove(filepath.Join(home, ".bapstate", "sessions", pidName))
+		}
+	}
+	_ = os.Remove(filepath.Join(".bap", "session.json"))
+	_ = os.Remove(filepath.Join(".bapstate", "session.json"))
+	_ = os.Remove(".bap-session.json")
+	_ = os.Remove("../.bap-session.json")
 }
 
 func isSessionRevoked(serverURL, sessionID string) (bool, string) {
@@ -1151,6 +1276,114 @@ func outputPromptBlocked(sessionID, reason string) {
 	os.Exit(2)
 }
 
+// bapUserDir returns the per-user BAP state directory shared by hooks and watchers
+// (independent of the workspace cwd).
+func bapUserDir() string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".bap")
+	}
+	return ".bap"
+}
+
+func sanitizeSessionFileID(s string) string {
+	var sb strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			sb.WriteRune(r)
+		} else {
+			sb.WriteRune('-')
+		}
+	}
+	return strings.Trim(sb.String(), "-") // identical to bap-edge sanitizeInstanceID for non-empty ids
+}
+
+// watcherLivenessPath is touched by `bapedge watch` on every heartbeat tick. It must match
+// the path used by bap-edge/cmd/watch.go.
+func watcherLivenessPath(sessionID string) string {
+	return filepath.Join(bapUserDir(), "watchers", sanitizeSessionFileID(sessionID)+".watcher")
+}
+
+// promptSpoolDir holds prompt telemetry that has not yet been acknowledged by the control
+// plane; the watcher drains it. Must match bap-edge/cmd/watch.go.
+func promptSpoolDir() string {
+	return filepath.Join(bapUserDir(), "spool", "prompts")
+}
+
+const watcherFreshness = 15 * time.Second
+
+func watcherAlive(sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	fi, err := os.Stat(watcherLivenessPath(sessionID))
+	return err == nil && time.Since(fi.ModTime()) < watcherFreshness
+}
+
+// hookLog appends a diagnostic line so silent hook-side failures can be diagnosed later.
+func hookLog(format string, args ...any) {
+	dir := bapUserDir()
+	_ = os.MkdirAll(dir, 0700)
+	p := filepath.Join(dir, "hook.log")
+	if fi, err := os.Stat(p); err == nil && fi.Size() > 1<<20 {
+		_ = os.Rename(p, p+".1")
+	}
+	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s [%d] %s\n", time.Now().UTC().Format(time.RFC3339), os.Getpid(), fmt.Sprintf(format, args...))
+}
+
+// ensureSessionAndWatcher makes sure a live `bapedge watch` exists for this session, no
+// matter how Claude Code was launched. The watcher enrolls the session with the control
+// plane and sends the heartbeats that mark the agent online. Fast path is a single stat.
+func ensureSessionAndWatcher(sessionID, serverURL string) {
+	if sessionID == "" || watcherAlive(sessionID) {
+		return
+	}
+	targetPID, caller := resolveAgentProcess(os.Getppid())
+	ltdBin := findBinary("bapedge.exe")
+	if _, err := os.Stat(ltdBin); err != nil {
+		if alt := findBinary("bapedge"); alt != "" {
+			ltdBin = alt
+		}
+	}
+	if _, err := os.Stat(ltdBin); err != nil {
+		if p, lerr := exec.LookPath("bapedge"); lerr == nil {
+			ltdBin = p
+		} else {
+			hookLog("ensureSessionAndWatcher: bapedge binary not found; session %s will not report liveness", sessionID)
+			return
+		}
+	}
+	wCmd := exec.Command(ltdBin, "watch", fmt.Sprintf("--pid=%d", targetPID), fmt.Sprintf("--server=%s", serverURL), fmt.Sprintf("--session-id=%s", sessionID), fmt.Sprintf("--app-id=%s", caller.AppID), "--detach")
+	if err := wCmd.Start(); err != nil {
+		hookLog("ensureSessionAndWatcher: failed to spawn watcher for %s: %v", sessionID, err)
+		return
+	}
+	_ = wCmd.Process.Release()
+	hookLog("ensureSessionAndWatcher: spawned watcher for session %s (agent pid %d [%s], server %s)", sessionID, targetPID, caller.AppID, serverURL)
+}
+
+// spoolPrompt durably records a prompt event before delivery so a timeout or an
+// unregistered session cannot lose it. Returns the spool file path ("" on failure).
+func spoolPrompt(sessionID string, body []byte) string {
+	dir := promptSpoolDir()
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		hookLog("spoolPrompt: %v", err)
+		return ""
+	}
+	name := fmt.Sprintf("%020d-%d.json", time.Now().UnixNano(), os.Getpid())
+	p := filepath.Join(dir, name)
+	env, _ := json.Marshal(map[string]any{"session_id": sessionID, "body": json.RawMessage(body)})
+	if err := os.WriteFile(p, env, 0600); err != nil {
+		hookLog("spoolPrompt: %v", err)
+		return ""
+	}
+	return p
+}
+
 func handleUserPromptHook(payload HookPayload) {
 	prompt := strings.TrimSpace(payload.UserPrompt)
 	if prompt == "" {
@@ -1171,6 +1404,10 @@ func handleUserPromptHook(payload HookPayload) {
 		outputPromptBlocked(sessionID, reason)
 		return
 	}
+
+	// Self-heal: governed launcher or not, make sure this session has a live watcher
+	// (registration + heartbeats) before telemetry is sent.
+	ensureSessionAndWatcher(sessionID, serverURL)
 
 	if prompt != "" {
 		// Classification is mandatory, but raw prompt retention is an independent
@@ -1197,18 +1434,35 @@ func handleUserPromptHook(payload HookPayload) {
 				request["user_prompt"] = prompt
 			}
 			reqBody, _ := json.Marshal(request)
+			// Spool first: delivery below is best-effort and bounded, and the watcher
+			// drains anything the control plane has not acknowledged.
+			spoolPath := spoolPrompt(sessionID, reqBody)
 			client := getHTTPClient()
-			// Prompt submission is on the interactive path. Bound telemetry delivery
-			// tightly; classification has already completed locally and enforcement
-			// does not depend on this network call.
-			client.Timeout = 150 * time.Millisecond
+			// Prompt submission is on the interactive path. Bound telemetry delivery;
+			// classification has already completed locally and enforcement does not
+			// depend on this network call. A remote TLS handshake needs more than the
+			// old 150ms, and a miss is now recovered from the spool.
+			client.Timeout = 600 * time.Millisecond
 			resp, err := client.Post(serverURL+"/api/v1/sessions/prompt", "application/json", bytes.NewReader(reqBody))
-			if err == nil && resp != nil {
+			if err != nil || resp == nil {
+				hookLog("prompt delivery deferred to spool (session %s): %v", sessionID, err)
+			} else {
 				defer resp.Body.Close()
 				if resp.StatusCode == http.StatusForbidden {
+					if spoolPath != "" {
+						_ = os.Remove(spoolPath)
+					}
 					// Control plane rejected prompt due to revocation
 					outputPromptBlocked(sessionID, "Session authority revoked by administrator on control plane")
 					return
+				}
+				if resp.StatusCode == http.StatusOK {
+					if spoolPath != "" {
+						_ = os.Remove(spoolPath)
+					}
+				} else {
+					// e.g. 404 while the session is not enrolled yet: keep spooled for replay
+					hookLog("prompt POST returned HTTP %d (session %s); kept in spool", resp.StatusCode, sessionID)
 				}
 			}
 		}
@@ -1242,7 +1496,13 @@ func main() {
 		return
 	}
 
-	// 3. Lifecycle Hook Handling: UserPromptSubmit / UserPrompt
+	// 3. Lifecycle Hook Handling: SessionEnd / SessionStop
+	if strings.EqualFold(payload.HookEventName, "SessionEnd") || strings.EqualFold(payload.HookEventName, "SessionStop") {
+		handleSessionEndHook(payload)
+		return
+	}
+
+	// 4. Lifecycle Hook Handling: UserPromptSubmit / UserPrompt
 	if strings.EqualFold(payload.HookEventName, "UserPromptSubmit") || strings.EqualFold(payload.HookEventName, "UserPrompt") {
 		handleUserPromptHook(payload)
 		return
@@ -1254,6 +1514,7 @@ func main() {
 		outputDecision("deny", reason, "This session cannot perform further governed tool actions.")
 		return
 	}
+	ensureSessionAndWatcher(sessionID, resolveServerURL())
 
 	workspaceRoot := resolveWorkspaceRoot()
 
@@ -1388,10 +1649,14 @@ func main() {
 				}
 			}
 		}
-		sessionBytes := []byte(fmt.Sprintf(`{"session_id":"%s","server_url":"%s","pid":%d}`, sessionID, serverURL, ppid))
-		pMarker := sessionMarkerPathForPID(ppid)
+		targetPID, caller := resolveAgentProcess(ppid)
+		sessionBytes := []byte(fmt.Sprintf(`{"session_id":"%s","server_url":"%s","pid":%d,"app_id":"%s"}`, sessionID, serverURL, targetPID, caller.AppID))
+		pMarker := sessionMarkerPathForPID(targetPID)
 		_ = os.MkdirAll(filepath.Dir(pMarker), 0700)
 		_ = os.WriteFile(pMarker, sessionBytes, 0600)
+		if targetPID != ppid {
+			_ = os.WriteFile(sessionMarkerPathForPID(ppid), sessionBytes, 0600)
+		}
 		_ = os.WriteFile(filepath.Join(".bap", "session.json"), sessionBytes, 0600)
 		_ = os.Remove(".bap-session.json")
 		ltdBin := findBinary("bapedge.exe")
@@ -1399,7 +1664,7 @@ func main() {
 			ltdBin = findBinary("bapedge")
 		}
 		if ltdBin != "" {
-			wCmd := exec.Command(ltdBin, "watch", fmt.Sprintf("--pid=%d", ppid), fmt.Sprintf("--server=%s", serverURL), fmt.Sprintf("--session-id=%s", sessionID), "--detach")
+			wCmd := exec.Command(ltdBin, "watch", fmt.Sprintf("--pid=%d", targetPID), fmt.Sprintf("--server=%s", serverURL), fmt.Sprintf("--session-id=%s", sessionID), fmt.Sprintf("--app-id=%s", caller.AppID), "--detach")
 			_ = wCmd.Start()
 		}
 	}

@@ -472,6 +472,9 @@ def configure_claude_code(claude_dir: str, cchook_bin: str, mcp_bin: str, bapedg
     claude_settings["hooks"]["PreToolUse"] = [
         {"matcher": "*", "hooks": [interceptor_hook]}
     ]
+    claude_settings["hooks"]["SessionEnd"] = [
+        {"hooks": [interceptor_hook]}
+    ]
 
     with open(claude_settings_path, "w", encoding="utf-8") as f:
         json.dump(claude_settings, f, indent=2)

@@ -811,16 +811,23 @@ func RunExec(args []string) {
 	if *verifyPinsFlag {
 		matchedHash, pinErr := checkContentPinning(ec, *skillFlag)
 		if pinErr != nil {
-			resp := types.ExecResponse{
-				Allowed: false,
-				Reason:  fmt.Sprintf("HashMismatchError: %v", pinErr),
-				Mode:    ec.enforcementMode,
-			}
 			ec.contentHash = matchedHash
-			ec.exit(resp, 1)
-			return
+			if strings.EqualFold(ec.enforcementMode, "audit") || strings.EqualFold(ec.enforcementMode, "shadow") {
+				ec.shadowDenied = true
+				ec.shadowReason = fmt.Sprintf("HashMismatchError: %v", pinErr)
+				fmt.Fprintf(os.Stderr, "[BAP AUDIT MODE] Policy violation detected: %s. Execution permitted in audit mode.\n", ec.shadowReason)
+			} else {
+				resp := types.ExecResponse{
+					Allowed: false,
+					Reason:  fmt.Sprintf("HashMismatchError: %v", pinErr),
+					Mode:    ec.enforcementMode,
+				}
+				ec.exit(resp, 1)
+				return
+			}
+		} else {
+			ec.contentHash = matchedHash
 		}
-		ec.contentHash = matchedHash
 	}
 
 	workspaceRoot, _ := os.Getwd()
