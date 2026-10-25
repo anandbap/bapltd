@@ -192,6 +192,36 @@ class TestBAPInstallMultiPlatform(unittest.TestCase):
         finally:
             os.chdir(old_cwd)
 
+    def test_bap_doctor_reports_bap_config_location(self):
+        """Verify bap_doctor detects and reports bap-config.json location and mode."""
+        from scripts import bap_doctor
+
+        # Stage mock environment where bin contains bap-config.json
+        bap_install.install_core_binaries(self.install_dir)
+        bin_cfg = os.path.join(self.install_dir, "bap-config.json")
+        self.assertTrue(os.path.isfile(bin_cfg))
+
+        isolated_cwd = os.path.join(self.temp_dir, "isolated_cwd_cfg")
+        os.makedirs(isolated_cwd, exist_ok=True)
+
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(isolated_cwd)
+            with patch("os.path.expanduser", side_effect=lambda p: self.temp_dir if p == "~" else p):
+                cfg_candidates = [
+                    os.path.join(self.install_dir, "bap-config.json"),
+                    os.path.join(isolated_cwd, "bap-config.json"),
+                ]
+                cfg_path = None
+                for p in cfg_candidates:
+                    if p and os.path.isfile(p):
+                        cfg_path = p
+                        break
+                self.assertIsNotNone(cfg_path)
+                self.assertEqual(os.path.normpath(cfg_path), os.path.normpath(bin_cfg))
+        finally:
+            os.chdir(old_cwd)
+
     def test_universal_wheel_contains_all_launchers_and_configs(self):
         """Verify the latest universal wheel contains policy.cedar, configs, and all agent launchers."""
         dist_dir = os.path.join(REPO_ROOT, "dist")

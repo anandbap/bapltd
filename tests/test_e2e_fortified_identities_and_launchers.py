@@ -305,10 +305,12 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
         )
         self.assertEqual(res.returncode, 0, f"bap doctor returned error: {res.stderr}\n{res.stdout}")
         self.assertIn("Cedar Policy (policy.cedar)", res.stdout)
+        self.assertIn("BAP Config (bap-config.json)", res.stdout)
         self.assertIn("PASS", res.stdout)
         # Verify it loaded from an installed binary/release directory (bin or dist) and NOT repo root
         out_lower = res.stdout.lower()
         self.assertTrue("policy.cedar" in out_lower)
+        self.assertTrue("bap-config.json" in out_lower)
         self.assertTrue("bin" in out_lower or "dist" in out_lower)
         self.assertIn("bin\\policy.cedar", res.stdout.lower())
 

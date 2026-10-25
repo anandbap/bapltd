@@ -108,17 +108,41 @@ if ($null -ne $claudeCmd) {
 # -----------------------------------------------------------------------------
 Write-Host "`n[3/5] Control Plane Connectivity & TLS..." -ForegroundColor Cyan
 
-if ([string]::IsNullOrWhiteSpace($ServerUrl)) {
-    # Check config candidates
-    foreach ($cfg in @("bap-config.json", "$repoRoot\bap-config.json", "$env:USERPROFILE\bin\bap-config.json")) {
-        if (Test-Path $cfg) {
-            try {
-                $j = Get-Content $cfg -Raw | ConvertFrom-Json
-                if ($j.controlplane_url) { $ServerUrl = $j.controlplane_url; break }
-            } catch {}
-        }
+$cfgPath = $null
+$mode = "enforce"
+$cfgCandidates = @(
+    (Join-Path $env:USERPROFILE "bin\bap-config.json"),
+    (Join-Path $env:USERPROFILE ".bapstate\config.json"),
+    (Join-Path $env:USERPROFILE ".bapstate\bap-config.json"),
+    (Join-Path $env:USERPROFILE ".bap\config.json"),
+    (Join-Path $env:USERPROFILE ".bap\bap-config.json"),
+    (Join-Path (Get-Location).Path ".bap\bap-config.json"),
+    (Join-Path (Get-Location).Path ".bap\config.json"),
+    (Join-Path (Get-Location).Path "bap-config.json"),
+    (Join-Path $repoRoot "bap-config.json")
+)
+foreach ($cfg in $cfgCandidates) {
+    if ($cfg -and (Test-Path $cfg)) {
+        try {
+            $j = Get-Content $cfg -Raw | ConvertFrom-Json
+            $cfgPath = (Get-Item $cfg).FullName
+            if ($j.controlplane_url -and [string]::IsNullOrWhiteSpace($ServerUrl)) {
+                $ServerUrl = $j.controlplane_url
+            }
+            if ($j.enforcement_mode) {
+                $mode = $j.enforcement_mode
+            }
+            break
+        } catch {}
     }
 }
+
+if ($null -ne $cfgPath) {
+    Report-Check -Name "BAP Config (bap-config.json)" -Status "PASS" -Details "$cfgPath (Mode: $mode)"
+} else {
+    Report-Check -Name "BAP Config (bap-config.json)" -Status "WARN" -Details "Not found; using defaults"
+}
+
 if ([string]::IsNullOrWhiteSpace($ServerUrl)) {
     $ServerUrl = "https://localhost:8443"
 }

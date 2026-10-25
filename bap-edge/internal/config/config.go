@@ -187,9 +187,11 @@ func getCandidateConfigFilePaths() []string {
 		candidates = append(candidates, filepath.Join(exeDir, "..", "bap-config.json"))
 	}
 
-	// User home directory: ~/.bap/config.json and ~/.ltd/config.json
+	// User home directory: ~/bin/bap-config.json, ~/.bap/config.json, ~/.bap/bap-config.json, and ~/.ltd/config.json
 	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, "bin", "bap-config.json"))
 		candidates = append(candidates, filepath.Join(home, ".bap", "config.json"))
+		candidates = append(candidates, filepath.Join(home, ".bap", "bap-config.json"))
 		candidates = append(candidates, filepath.Join(home, ".ltd", "config.json"))
 	}
 

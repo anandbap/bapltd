@@ -194,26 +194,40 @@ def run_doctor():
     # Section 3: Central Control Plane Connectivity & TLS
     print(f"\n{CYAN}[3/5] Control Plane Connectivity & TLS...{RESET}")
     server_url = "https://localhost:8443"
+    enforcement_mode = "enforce"
     cfg_candidates = [
         os.path.join(user_bin, "bap-config.json"),
         os.path.join(bapedge_dir, "bap-config.json") if bapedge_dir else None,
-        os.path.join(appdata_bin, "bap-config.json") if appdata_bin else None,
+        os.path.expanduser("~/.bapstate/config.json"),
         os.path.expanduser("~/.bapstate/bap-config.json"),
-        os.path.join(pkg_dir, "bap-config.json"),
+        os.path.expanduser("~/.bap/config.json"),
+        os.path.expanduser("~/.bap/bap-config.json"),
         os.path.join(os.getcwd(), ".bap", "bap-config.json"),
+        os.path.join(os.getcwd(), ".bap", "config.json"),
         os.path.join(os.getcwd(), "bap-config.json"),
+        os.path.join(appdata_bin, "bap-config.json") if appdata_bin else None,
+        os.path.join(pkg_dir, "bap-config.json"),
         os.path.join(repo_root, "bap-config.json"),
     ]
+    active_cfg = None
     for cfg in cfg_candidates:
         if cfg and os.path.isfile(cfg):
             try:
                 with open(cfg, "r", encoding="utf-8") as f:
                     cfg_data = json.load(f)
+                    active_cfg = os.path.abspath(cfg)
                     if cfg_data.get("controlplane_url"):
                         server_url = cfg_data["controlplane_url"]
-                        break
+                    if cfg_data.get("enforcement_mode"):
+                        enforcement_mode = cfg_data["enforcement_mode"]
+                    break
             except Exception:
                 pass
+
+    if active_cfg:
+        checklist.report("BAP Config (bap-config.json)", "PASS", f"{active_cfg} (Mode: {enforcement_mode})")
+    else:
+        checklist.report("BAP Config (bap-config.json)", "WARN", f"Not found; using defaults (Control Plane: {server_url})")
 
     try:
         from urllib.parse import urlparse
