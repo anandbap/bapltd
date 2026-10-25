@@ -29,7 +29,7 @@ type EndpointsConfig struct {
 	TrustDomain     string     `json:"trust_domain"`
 	Environment     string     `json:"environment,omitempty"`
 	EnforcementMode string     `json:"enforcement_mode,omitempty"`
-	ConfigSource    string     `json:"config_source,omitempty"`
+	ConfigSource    string     `json:"-"`
 	OIDC            OIDCConfig `json:"oidc,omitempty"`
 
 	// LockEndpoints, set in the managed (system-wide) config, makes that file
