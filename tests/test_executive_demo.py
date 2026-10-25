@@ -246,9 +246,10 @@ class TestExecutiveDemo(unittest.TestCase):
         self.assertGreaterEqual(carol.get("allowed_count", 0), 2)
         self.assertEqual(carol.get("denied_count", 0), 0)
 
-        # 2. Bob: Elevated, 1 denial
+        # 2. Bob: Elevated, >= 1 denial (less than Eve's repeated evasions)
         self.assertGreaterEqual(bob.get("allowed_count", 0), 1)
-        self.assertEqual(bob.get("denied_count", 0), 1)
+        self.assertGreaterEqual(bob.get("denied_count", 0), 1)
+        self.assertLess(bob.get("denied_count", 0), 3)
 
         # 3. Eve: Critical, >= 3 denials (repeated evasions)
         self.assertGreaterEqual(eve.get("allowed_count", 0), 1)

@@ -388,18 +388,18 @@ def resolve_endpoints() -> dict:
         "trust_domain": "bap.internal"
     }
 
-    # 1. Search candidate config files
-    candidate_paths = [
-        os.path.join(get_bapstate_dir(), "config.json"),
-    ]
+    # 1. Search candidate config files (Local workspace takes precedence over user home)
+    candidate_paths = []
     curr = os.getcwd()
     for _ in range(4):
+        candidate_paths.append(os.path.join(curr, ".bapstate", "config.json"))
         candidate_paths.append(os.path.join(curr, "bap-config.json"))
         parent = os.path.dirname(curr)
         if parent == curr:
             break
         curr = parent
 
+    candidate_paths.append(os.path.join(get_bapstate_dir(), "config.json"))
     home = os.path.expanduser("~")
     candidate_paths.append(os.path.join(home, ".bap", "config.json"))
     candidate_paths.append(os.path.join(home, ".ltd", "config.json"))
