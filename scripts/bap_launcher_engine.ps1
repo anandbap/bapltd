@@ -439,9 +439,14 @@ function Ensure-ControlPlaneRunning {
         $portOpen = Test-TcpPortOpen -HostName $uri.Host -Port $uri.Port
         if (-not $portOpen) {
             $cpCandidates = @(
+                (Join-Path $env:ProgramFiles 'BAP\bin\bapcontrolplane.exe'),
+                (Join-Path $env:ProgramFiles 'BAP\bapcontrolplane.exe'),
+                (Join-Path $env:USERPROFILE '.bap\bin\bapcontrolplane.exe'),
+                (Join-Path $env:USERPROFILE '.bap\bapcontrolplane.exe'),
                 (Join-Path $RepoRoot 'dist\windows-amd64\bapcontrolplane.exe'),
                 (Join-Path $RepoRoot 'dist\windows-amd64\controlplane\bapcontrolplane.exe'),
-                (Join-Path $RepoRoot 'bap-controlplane\bapcontrolplane.exe')
+                (Join-Path $RepoRoot 'bap-controlplane\bapcontrolplane.exe'),
+                (Join-Path $RepoRoot 'bapcontrolplane.exe')
             )
             $cpBin = Resolve-BinaryPath -Paths $cpCandidates -Commands @('bapcontrolplane.exe')
             if (-not [string]::IsNullOrWhiteSpace($cpBin)) {
@@ -835,6 +840,10 @@ function Invoke-BapGovernedSession {
 
         # 5. Resolve Edge Daemon and Interceptor
         $edgeCandidates = @(
+            (Join-Path $env:ProgramFiles 'BAP\bin\bapedge.exe'),
+            (Join-Path $env:ProgramFiles 'BAP\bapedge.exe'),
+            (Join-Path $env:USERPROFILE '.bap\bin\bapedge.exe'),
+            (Join-Path $env:USERPROFILE '.bap\bapedge.exe'),
             (Join-Path $RepoRoot 'dist\windows-amd64\bapedge.exe'),
             (Join-Path $RepoRoot 'bap-edge\bapedge.exe'),
             (Join-Path $RepoRoot 'bapedge.exe')

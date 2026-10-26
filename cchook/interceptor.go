@@ -469,6 +469,153 @@ func lastAssistantText(transcriptPath string) string {
 	return strings.TrimSpace(strings.Join(parts, "\n\n"))
 }
 
+// allUserPrompts extracts all unique user prompts from an Antigravity or Claude JSONL transcript in chronological order.
+func allUserPrompts(transcriptPath, conversationID string) []string {
+	if transcriptPath == "" && conversationID != "" {
+		homeDir, _ := os.UserHomeDir()
+		cand := filepath.Join(homeDir, ".gemini", "antigravity", "brain", conversationID, ".system_generated", "logs", "transcript.jsonl")
+		if _, err := os.Stat(cand); err == nil {
+			transcriptPath = cand
+		}
+	}
+	if transcriptPath == "" {
+		return nil
+	}
+	data, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(string(data), "\n")
+	var prompts []string
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+		var entry struct {
+			Type    string          `json:"type"`
+			Source  string          `json:"source"`
+			Content string          `json:"content"`
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &entry) != nil {
+			continue
+		}
+		var text string
+		// Antigravity format
+		if entry.Type == "USER_INPUT" || entry.Source == "USER_EXPLICIT" {
+			text = entry.Content
+			if start := strings.Index(text, "<USER_REQUEST>"); start != -1 {
+				start += len("<USER_REQUEST>")
+				if end := strings.Index(text[start:], "</USER_REQUEST>"); end != -1 {
+					text = text[start : start+end]
+				} else {
+					text = text[start:]
+				}
+			}
+			text = strings.TrimSpace(text)
+		} else if entry.Type == "user" {
+			// Claude Code format
+			var asString string
+			if json.Unmarshal(entry.Message.Content, &asString) == nil && asString != "" {
+				text = strings.TrimSpace(asString)
+			} else {
+				var blocks []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				}
+				if json.Unmarshal(entry.Message.Content, &blocks) == nil {
+					for _, b := range blocks {
+						if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+							text = strings.TrimSpace(b.Text)
+							break
+						}
+					}
+				}
+			}
+		}
+		if text != "" {
+			if len(prompts) == 0 || prompts[len(prompts)-1] != text {
+				prompts = append(prompts, text)
+			}
+		}
+	}
+	return prompts
+}
+
+// lastUserPromptText extracts the most recent user prompt from an Antigravity or Claude JSONL transcript.
+func lastUserPromptText(transcriptPath, conversationID string) string {
+	if transcriptPath == "" && conversationID != "" {
+		homeDir, _ := os.UserHomeDir()
+		cand := filepath.Join(homeDir, ".gemini", "antigravity", "brain", conversationID, ".system_generated", "logs", "transcript.jsonl")
+		if _, err := os.Stat(cand); err == nil {
+			transcriptPath = cand
+		}
+	}
+	if transcriptPath == "" {
+		return ""
+	}
+	data, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(data), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		var entry struct {
+			Type    string          `json:"type"`
+			Source  string          `json:"source"`
+			Content string          `json:"content"`
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &entry) != nil {
+			continue
+		}
+		// Antigravity format
+		if entry.Type == "USER_INPUT" || entry.Source == "USER_EXPLICIT" {
+			text := entry.Content
+			if start := strings.Index(text, "<USER_REQUEST>"); start != -1 {
+				start += len("<USER_REQUEST>")
+				if end := strings.Index(text[start:], "</USER_REQUEST>"); end != -1 {
+					text = text[start : start+end]
+				} else {
+					text = text[start:]
+				}
+			}
+			text = strings.TrimSpace(text)
+			if text != "" {
+				return text
+			}
+		}
+		// Claude Code format
+		if entry.Type == "user" {
+			var asString string
+			if json.Unmarshal(entry.Message.Content, &asString) == nil && asString != "" {
+				return strings.TrimSpace(asString)
+			}
+			var blocks []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(entry.Message.Content, &blocks) == nil {
+				for _, b := range blocks {
+					if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+						return strings.TrimSpace(b.Text)
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // handleStopHook reports the agent's finished reply so the dashboard can show it next to the
 // prompt. It is telemetry only: it never blocks the agent from stopping.
 func handleStopHook(payload HookPayload) {
@@ -579,17 +726,29 @@ type ToolInput struct {
 	Path     string `json:"path,omitempty"`
 }
 
-// HookPayload represents the Claude Code lifecycle event payload (SessionStart, UserPromptSubmit, PreToolUse).
+// AntigravityToolCall represents toolCall structure in Antigravity hook payloads.
+type AntigravityToolCall struct {
+	Name string                 `json:"name"`
+	Args map[string]interface{} `json:"args,omitempty"`
+}
+
+// HookPayload represents the Claude Code and Antigravity lifecycle event payload.
 type HookPayload struct {
-	HookEventName string    `json:"hook_event_name"`
-	ToolName      string    `json:"tool_name,omitempty"`
-	ToolInput     ToolInput `json:"tool_input,omitempty"`
-	UserPrompt    string    `json:"user_prompt,omitempty"`
-	Prompt        string    `json:"prompt,omitempty"`
-	SessionID     string    `json:"session_id,omitempty"`
+	HookEventName   string    `json:"hook_event_name"`
+	ToolName        string    `json:"tool_name,omitempty"`
+	ToolInput       ToolInput `json:"tool_input,omitempty"`
+	UserPrompt      string    `json:"user_prompt,omitempty"`
+	UserPromptCamel string    `json:"userPrompt,omitempty"`
+	Prompt          string    `json:"prompt,omitempty"`
+	SessionID       string    `json:"session_id,omitempty"`
+
+	// Antigravity lifecycle fields (supports both camelCase and snake_case)
+	ConversationID      string               `json:"conversationId,omitempty"`
+	TranscriptPath      string               `json:"transcriptPath,omitempty"`
+	TranscriptPathSnake string               `json:"transcript_path,omitempty"`
+	ToolCall            *AntigravityToolCall `json:"toolCall,omitempty"`
 
 	// Stop hook fields.
-	TranscriptPath       string `json:"transcript_path,omitempty"`
 	LastAssistantMessage string `json:"last_assistant_message,omitempty"`
 }
 
@@ -2031,12 +2190,18 @@ func spoolPrompt(sessionID string, body []byte) string {
 func handleUserPromptHook(payload HookPayload) {
 	prompt := strings.TrimSpace(payload.UserPrompt)
 	if prompt == "" {
+		prompt = strings.TrimSpace(payload.UserPromptCamel)
+	}
+	if prompt == "" {
 		prompt = strings.TrimSpace(payload.Prompt)
 	}
-	intent := classifyIntent(prompt)
-	promptDigest := sha256.Sum256([]byte(prompt))
-	promptHash := fmt.Sprintf("%x", promptDigest[:])
-	capturePrompt := shouldCaptureUserPrompt()
+	tPath := payload.TranscriptPath
+	if tPath == "" {
+		tPath = payload.TranscriptPathSnake
+	}
+	if prompt == "" {
+		prompt = lastUserPromptText(tPath, payload.ConversationID)
+	}
 
 	serverURL := resolveServerURL()
 	sessionID := resolveSessionID(payload)
@@ -2056,40 +2221,52 @@ func handleUserPromptHook(payload HookPayload) {
 	// (registration + heartbeats) before telemetry is sent.
 	ensureSessionAndWatcher(sessionID, serverURL)
 
-	if prompt != "" {
-		// Classification is mandatory, but raw prompt retention is an independent
-		// enterprise privacy choice. When disabled, the prompt is used only in
-		// memory for classification and is not written locally or transmitted.
+	producer := "claude-lifecycle-hook"
+	if payload.ConversationID != "" || caller.AppID == "antigravity" {
+		producer = "antigravity-hook"
+	}
+	capturePrompt := shouldCaptureUserPrompt()
+
+	// Gather all prompts if transcript is available so historical backlog is synced
+	var promptsToSend []string
+	if tPath != "" || payload.ConversationID != "" {
+		promptsToSend = allUserPrompts(tPath, payload.ConversationID)
+	}
+	if len(promptsToSend) == 0 && prompt != "" {
+		promptsToSend = []string{prompt}
+	}
+
+	for _, p := range promptsToSend {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		intent := classifyIntent(p)
+		promptDigest := sha256.Sum256([]byte(p))
+		promptHash := fmt.Sprintf("%x", promptDigest[:])
+
 		if capturePrompt {
-			writeSessionPrompt(sessionID, prompt)
+			writeSessionPrompt(sessionID, p)
 		} else if sessionID != "" {
 			_ = os.Remove(promptPathForSession(sessionID))
 		}
 
-		// The hook is the sole prompt telemetry producer. Watchers only maintain
-		// liveness and revocation state, so one submission creates one event.
 		if sessionID != "" && serverURL != "" {
 			request := map[string]any{
-				"session_id":            sessionID,
-				"producer":              "claude-lifecycle-hook",
-				"intent":                intent,
-				"prompt_hash":           promptHash,
+				"session_id":             sessionID,
+				"producer":               producer,
+				"intent":                 intent,
+				"prompt_hash":            promptHash,
 				"prompt_capture_enabled": capturePrompt,
-				"parent_pid":            ppid,
+				"parent_pid":             ppid,
 			}
 			if capturePrompt {
-				request["user_prompt"] = prompt
+				request["user_prompt"] = p
 			}
 			reqBody, _ := json.Marshal(request)
-			// Spool first: delivery below is best-effort and bounded, and the watcher
-			// drains anything the control plane has not acknowledged.
 			spoolPath := spoolPrompt(sessionID, reqBody)
 			client := getHTTPClient()
-			// Prompt submission is on the interactive path. Bound telemetry delivery;
-			// classification has already completed locally and enforcement does not
-			// depend on this network call. A remote TLS handshake needs more than the
-			// old 150ms, and a miss is now recovered from the spool.
-			client.Timeout = 600 * time.Millisecond
+			client.Timeout = 3500 * time.Millisecond
 			resp, err := client.Post(serverURL+"/api/v1/sessions/prompt", "application/json", bytes.NewReader(reqBody))
 			if err != nil || resp == nil {
 				hookLog("prompt delivery deferred to spool (session %s): %v", sessionID, err)
@@ -2135,6 +2312,34 @@ func main() {
 	if err := json.Unmarshal(inputBytes, &payload); err != nil {
 		outputDecision("deny", "Failed to parse hook payload JSON: "+err.Error(), "Invalid JSON payload")
 		return
+	}
+
+	// CLI argument flag overrides (e.g. interceptor.exe --event SessionStart / PreToolUse)
+	for i, arg := range os.Args {
+		if (arg == "--event" || arg == "-event") && i+1 < len(os.Args) {
+			payload.HookEventName = os.Args[i+1]
+		}
+	}
+
+	// Normalize Antigravity fields if present
+	if payload.ConversationID != "" && payload.SessionID == "" {
+		payload.SessionID = payload.ConversationID
+	}
+	if payload.ToolCall != nil {
+		if payload.ToolName == "" {
+			payload.ToolName = payload.ToolCall.Name
+		}
+		if payload.ToolInput.Command == "" && payload.ToolCall.Args != nil {
+			if cmd, ok := payload.ToolCall.Args["CommandLine"].(string); ok {
+				payload.ToolInput.Command = cmd
+			}
+		}
+		if payload.HookEventName == "" {
+			payload.HookEventName = "PreToolUse"
+		}
+	}
+	if strings.EqualFold(payload.HookEventName, "PreInvocation") {
+		payload.HookEventName = "UserPromptSubmit"
 	}
 
 	// 2. Lifecycle Hook Handling: SessionStart
@@ -2520,6 +2725,30 @@ func findBinary(name string) string {
 	if _, err := os.Stat(filepath.Join("..", name)); err == nil {
 		return filepath.Join("..", name)
 	}
+	// 2b. Check permanent user home and Program Files directories
+	if homeDir, err := os.UserHomeDir(); err == nil && homeDir != "" {
+		for _, cand := range []string{
+			filepath.Join(homeDir, ".bap", "bin", name),
+			filepath.Join(homeDir, ".bap", name),
+			filepath.Join(homeDir, ".claude", "hooks", name),
+		} {
+			if _, err := os.Stat(cand); err == nil {
+				return cand
+			}
+		}
+	}
+	for _, progDir := range []string{
+		filepath.Join(os.Getenv("ProgramFiles"), "BAP", "bin", name),
+		filepath.Join(os.Getenv("ProgramFiles"), "BAP", name),
+		"C:\\Program Files\\BAP\\bin\\" + name,
+		"C:\\Program Files\\BAP\\" + name,
+	} {
+		if progDir != "" {
+			if _, err := os.Stat(progDir); err == nil {
+				return progDir
+			}
+		}
+	}
 	// 3. Check dist directories
 	for _, cand := range []string{
 		filepath.Join("dist", "windows-amd64", name),
@@ -2577,7 +2806,7 @@ func outputDecisionWithUpdatedInput(decision, reason, context string, updatedInp
 		resp.Continue = &cont
 		resp.StopReason = "Security Invariant Violation: Access to restricted credential or network resource is permanently blocked. Further attempts or workarounds are prohibited."
 		resp.SystemMessage = "[SECURITY ALERT] Access permanently blocked by ltd-agent zero-trust policy. Further attempts will be rejected."
-		resp.Decision = "block"
+		resp.Decision = "deny"
 		resp.Reason = reason
 		resp.HookSpecificOutput.AdditionalContext = "CRITICAL SECURITY INVARIANT: Access to this file, command, or network destination is permanently prohibited by enterprise zero-trust policy. You are FORBIDDEN from pursuing alternative approaches, workarounds, scripts, or evasion techniques to access this resource. Cease all execution attempts immediately and inform the user that this action is blocked by corporate policy."
 		fmt.Fprintln(os.Stderr, "[CLAUDE HOOK BLOCKED] "+reason)

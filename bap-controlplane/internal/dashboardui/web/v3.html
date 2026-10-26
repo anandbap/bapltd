@@ -44,6 +44,27 @@
   .link { color: var(--ink-2); font-size: 13px; text-decoration: none; border-bottom: 1px solid var(--line); }
   .link:hover { color: var(--ink); border-color: var(--ink); }
 
+  /* admin toggle & popover */
+  .admin-ctl { position: relative; display: inline-flex; align-items: center; }
+  .admin-toggle { display: inline-flex; align-items: center; gap: 7px; background: #ebe9e2; border: 1.5px solid transparent; border-radius: 999px; padding: 5px 12px; font-size: 12.5px; font-weight: 600; color: var(--ink-2); cursor: pointer; transition: all .2s ease; }
+  .admin-toggle:hover { background: #e0ded6; color: var(--ink); }
+  .admin-dot { width: 8px; height: 8px; border-radius: 50%; background: #9aa0aa; transition: background .2s ease, box-shadow .2s ease; }
+  .admin-toggle[aria-pressed="true"] { background: var(--ok-bg); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+  .admin-toggle[aria-pressed="true"] .admin-dot { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
+  .admin-popover { position: absolute; top: calc(100% + 8px); right: 0; z-index: 100; background: var(--surface); border: 1.5px solid var(--line); border-radius: 12px; padding: 14px 16px; box-shadow: 0 10px 25px -5px rgba(0,0,0,.15), 0 4px 6px -2px rgba(0,0,0,.05); width: 280px; text-align: left; }
+  .admin-popover[hidden] { display: none; }
+  .admin-pop-head { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-3); margin-bottom: 8px; }
+  .admin-input-group { display: flex; gap: 6px; }
+  .admin-input-group input { flex: 1; min-width: 0; padding: 6px 10px; font-size: 13px; font-family: var(--mono); border: 1.5px solid var(--line); border-radius: 7px; outline: none; background: #faf9f6; }
+  .admin-input-group input:focus { border-color: var(--accent); background: #fff; }
+  .admin-submit { padding: 6px 12px; font-size: 12.5px; font-weight: 600; border-radius: 7px; background: var(--ink); color: #fff; border: 0; cursor: pointer; }
+  .admin-submit:hover { filter: brightness(1.15); }
+  .admin-submit:disabled { opacity: .6; cursor: default; }
+  .admin-error { color: var(--bad); font-size: 12px; font-weight: 600; margin-top: 6px; }
+  .admin-error[hidden] { display: none; }
+  .admin-hint { color: var(--ink-3); font-size: 11.5px; margin-top: 6px; }
+  .convo-unlock-link { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); font-weight: 600; text-decoration: underline; cursor: pointer; margin-left: 6px; }
+
   .ribbon { background: var(--warn-bg); color: var(--warn); font-size: 12.5px; font-weight: 600; text-align: center; padding: 6px 12px; letter-spacing: .02em; }
   .ribbon[hidden] { display: none; }
 
@@ -282,6 +303,23 @@
     <div class="brand"><i></i> Agent Watch <span class="badge" style="display:none">Agent operations</span></div>
     <div class="top-right">
       <span class="conn" id="conn" title="Connection to the central control plane">Control plane connected</span>
+      <div class="admin-ctl" id="adminCtl">
+        <button class="admin-toggle" id="adminToggle" type="button" aria-pressed="false" title="Toggle Admin Mode to view raw prompts and execute actions">
+          <span class="admin-dot"></span>
+          <span id="adminLabel">Admin: Off</span>
+        </button>
+        <div class="admin-popover" id="adminPopover" hidden>
+          <div class="admin-pop-head">Admin Access</div>
+          <form id="adminForm" onsubmit="return false;">
+            <div class="admin-input-group">
+              <input type="password" id="adminTokenInput" placeholder="Enter BAP admin token..." autocomplete="current-password" spellcheck="false">
+              <button type="submit" class="admin-submit" id="adminSubmitBtn">Verify</button>
+            </div>
+            <div class="admin-error" id="adminError" hidden>Incorrect admin token</div>
+            <div class="admin-hint">Unlocks unmasked prompt &amp; reply telemetry.</div>
+          </form>
+        </div>
+      </div>
       <button class="link printbtn" id="printBtn" type="button">Print summary</button>
       <div class="seg" role="group" aria-label="Data source">
         <button id="modeLive" aria-pressed="true">Live</button>
@@ -419,6 +457,9 @@
   var S = {
     mode: 'live',
     frozen: false,
+    adminToken: '',
+    adminActive: false,
+    activeSessionId: null,
     state: 'ok',            // ok | watch | action | frozen
     agents: null, blocked: null, waiting: null, record: null,
     fleetTotal: 0, flag: '', lastState: '', incident: null,
@@ -428,6 +469,114 @@
     queue: [],              // [{id,title,why,status}]
     headline: '', sub: '', tag: ''
   };
+
+  /* ---------- transport & admin auth ---------- */
+  function getAdminToken() { return S.adminToken || ''; }
+  function authHeaders(extra) {
+    var h = Object.assign({}, extra || {});
+    var tok = getAdminToken();
+    if (tok) {
+      h['Authorization'] = 'Bearer ' + tok;
+      h['X-BAP-Admin-Token'] = tok;
+    }
+    return h;
+  }
+  function apiFetch(url, options) {
+    options = options || {};
+    var tok = getAdminToken();
+    if (tok && url.indexOf('token=') === -1 && url.indexOf('admin_token=') === -1) {
+      var sep = url.indexOf('?') === -1 ? '?' : '&';
+      url = url + sep + 'token=' + encodeURIComponent(tok);
+    }
+    options.headers = authHeaders(options.headers);
+    options.credentials = 'same-origin';
+    return fetch(url, options);
+  }
+  function getJSON(u) {
+    return apiFetch(u).then(function (r) {
+      if (!r.ok) throw new Error(r.status);
+      return r.json();
+    });
+  }
+  function verifyAdminToken(candidateToken) {
+    if (!candidateToken) return Promise.resolve(false);
+    return fetch('/api/v1/admin/inspector/data', {
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': 'Bearer ' + candidateToken,
+        'X-BAP-Admin-Token': candidateToken
+      }
+    }).then(function (r) {
+      return r.ok;
+    }).catch(function () {
+      return false;
+    });
+  }
+
+  function updateAdminUI(active) {
+    S.adminActive = !!active;
+    var btn = $('adminToggle'), lbl = $('adminLabel');
+    if (btn) btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    if (lbl) lbl.textContent = active ? 'Admin: Active' : 'Admin: Off';
+    if (!active) {
+      var inp = $('adminTokenInput');
+      if (inp) inp.value = '';
+    }
+  }
+
+  function openAdminPopover() {
+    var pop = $('adminPopover');
+    if (!pop) return;
+    pop.hidden = false;
+    var err = $('adminError');
+    if (err) err.hidden = true;
+    var inp = $('adminTokenInput');
+    if (inp) {
+      inp.value = S.adminToken || '';
+      inp.focus();
+    }
+  }
+
+  function closeAdminPopover() {
+    var pop = $('adminPopover');
+    if (pop) pop.hidden = true;
+    var err = $('adminError');
+    if (err) err.hidden = true;
+  }
+
+  function activateAdmin(token) {
+    S.adminToken = token;
+    try {
+      localStorage.setItem('bap_admin_token', token);
+      sessionStorage.setItem('bap_admin_token', token);
+      document.cookie = 'bap_admin_token=' + encodeURIComponent(token) + '; path=/; SameSite=Lax';
+    } catch (_) {}
+    updateAdminUI(true);
+    closeAdminPopover();
+    if (S.activeSessionId) {
+      loadConvo(S.activeSessionId);
+    }
+    if (S.mode === 'live') {
+      loadLive();
+    }
+  }
+
+  function deactivateAdmin() {
+    S.adminToken = '';
+    try {
+      localStorage.removeItem('bap_admin_token');
+      sessionStorage.removeItem('bap_admin_token');
+      document.cookie = 'bap_admin_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax';
+    } catch (_) {}
+    updateAdminUI(false);
+    closeAdminPopover();
+    if (S.activeSessionId) {
+      loadConvo(S.activeSessionId);
+    }
+    if (S.mode === 'live') {
+      loadLive();
+    }
+  }
 
   /* ---------- rendering ---------- */
   function setNum(el, v) {
@@ -551,7 +700,7 @@
     S.waiting = S.queue.filter(function (x) { return !x.status; }).length;
     if (S.mode === 'demo') { Demo.onDecision(yes); }
     else {
-      fetch('/api/v1/escalation/resolve', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      apiFetch('/api/v1/escalation/resolve', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: item.id, approved: yes, reason: 'Decided in V3 executive view' }) }).catch(function () {});
     }
     render();
@@ -623,7 +772,13 @@
         return '<li class="turn ' + cls + '"><div class="tk"><span>' + esc(label) + '</span><span>' + esc(fmtTime(i.timestamp)) + '</span></div>' +
           '<div class="tt">' + esc(text) + '</div>' + (meta ? '<div class="tm">' + esc(meta) + '</div>' : '') + '</li>';
       }).join('');
-      if (!r.unlocked) { box.insertAdjacentHTML('afterbegin', '<li class="convo-note">Prompt and reply text is hidden. Open this view with administrator access to read it.</li>'); }
+      if (!r.unlocked) {
+        box.insertAdjacentHTML('afterbegin', '<li class="convo-note">Prompt and reply text is hidden. <button class="convo-unlock-link" id="convoUnlockBtn" type="button">Unlock with Admin Token</button></li>');
+        var uBtn = $('convoUnlockBtn');
+        if (uBtn) uBtn.addEventListener('click', function () { openAdminPopover(); });
+      } else {
+        box.insertAdjacentHTML('afterbegin', '<li class="convo-note" style="color:var(--ok)">&#x2713; Administrator view active &mdash; unmasked prompt and reply text.</li>');
+      }
     }).catch(function () {
       box.innerHTML = '<li class="convo-note">Could not load the session record. Nothing here is estimated.</li>';
     });
@@ -631,6 +786,7 @@
   // Opens the drawer for any feed row, blocked or not.
   function openConvo(f) {
     lastFocus = document.activeElement;
+    S.activeSessionId = f.sessionId;
     $('drawer').classList.remove('list'); $('drawer').classList.add('convo');
     $('dTitle').textContent = f.ask || 'Session activity';
     $('dSteps').innerHTML = [['Who', f.who], ['Latest action', f.did], ['Result', f.blocked ? 'Blocked' : (f.shadow ? 'Flagged, not stopped' : 'Allowed')]].map(function (p) {
@@ -666,6 +822,7 @@
   function openStory(id, sessionId) {
     var s = stories[id]; if (!s) return;
     lastFocus = document.activeElement;
+    S.activeSessionId = sessionId;
     $('drawer').classList.remove('convo', 'list');
     loadConvo(sessionId);
     $('dTitle').textContent = s.title;
@@ -695,6 +852,7 @@
   }
   $('dVerify').addEventListener('click', verifySeal);
   function closeAll() {
+    S.activeSessionId = null;
     verifyTimers.forEach(clearTimeout); $('narrator').classList.remove('shift');
     $('drawer').classList.remove('on'); $('modal').classList.remove('on'); $('scrim').classList.remove('on');
     if (lastFocus && lastFocus.focus) lastFocus.focus();
@@ -718,7 +876,7 @@
     closeAll();
     if (S.mode === 'demo') { Demo.onFreeze(); return; }
     var t0 = performance.now();
-    fetch('/api/v1/control/kill-switch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    apiFetch('/api/v1/control/kill-switch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: true, reason: 'Fleet freeze from V3 executive view' }) })
       .then(function (r) {
         if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -739,7 +897,6 @@
 
   /* ---------- LIVE mode ---------- */
   var liveTimer = null;
-  function getJSON(u) { return fetch(u).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); }); }
   var STREAMS = ['Build', 'Operate', 'Analyze', 'Document', 'Support'];
 
   function loadLive() {
@@ -1052,6 +1209,81 @@
   $('modeLive').addEventListener('click', function () { setModeTo('live'); });
   $('modeDemo').addEventListener('click', function () { setModeTo('demo'); });
   $('startDemoBtn').addEventListener('click', function () { setModeTo('demo'); });
+
+  $('adminToggle').addEventListener('click', function (e) {
+    e.stopPropagation();
+    if (S.adminActive) {
+      deactivateAdmin();
+    } else {
+      if ($('adminPopover').hidden) {
+        openAdminPopover();
+      } else {
+        closeAdminPopover();
+      }
+    }
+  });
+
+  $('adminForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var val = ($('adminTokenInput').value || '').trim();
+    if (!val) {
+      deactivateAdmin();
+      return;
+    }
+    var subBtn = $('adminSubmitBtn');
+    subBtn.disabled = true;
+    subBtn.textContent = '...';
+    $('adminError').hidden = true;
+    verifyAdminToken(val).then(function (ok) {
+      subBtn.disabled = false;
+      subBtn.textContent = 'Verify';
+      if (ok) {
+        activateAdmin(val);
+      } else {
+        $('adminError').hidden = false;
+        $('adminError').textContent = 'Incorrect admin token';
+        updateAdminUI(false);
+      }
+    }).catch(function () {
+      subBtn.disabled = false;
+      subBtn.textContent = 'Verify';
+      $('adminError').hidden = false;
+      $('adminError').textContent = 'Connection error. Try again.';
+    });
+  });
+
+  document.addEventListener('click', function (e) {
+    var ctl = $('adminCtl');
+    if (ctl && !ctl.contains(e.target)) {
+      closeAdminPopover();
+    }
+  });
+
+  // Check URL query, localStorage, sessionStorage, or cookies for admin token on startup
+  (function initAdminAuth() {
+    var q = new URLSearchParams(location.search);
+    var qToken = q.get('token') || q.get('admin_token');
+    var cookieMatch = document.cookie.match(/(?:^|;\s*)bap_admin_token=([^;]+)/);
+    var cookieToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+    var saved = qToken || localStorage.getItem('bap_admin_token') || sessionStorage.getItem('bap_admin_token') || cookieToken || '';
+    if (saved) {
+      verifyAdminToken(saved).then(function (ok) {
+        if (ok) {
+          activateAdmin(saved);
+        } else {
+          deactivateAdmin();
+        }
+      });
+      if (qToken) {
+        q.delete('token');
+        q.delete('admin_token');
+        var newSearch = q.toString() ? ('?' + q.toString()) : '';
+        history.replaceState(null, '', location.pathname + newSearch + location.hash);
+      }
+    } else {
+      updateAdminUI(false);
+    }
+  })();
 
   try { S.sessId = new URLSearchParams(location.search).get('session') || localStorage.getItem('aw3.session') || ''; } catch (_) { S.sessId = ''; }
   $('sessId').value = S.sessId;
