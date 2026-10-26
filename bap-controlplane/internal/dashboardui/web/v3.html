@@ -1291,7 +1291,7 @@
 
   fetch('/dashboard-version').then(function (r) { return r.json(); }).then(function (v) {
     var el = $('buildVer');
-    if (el && v) el.textContent = (v.version || '') + (v.git_commit ? ' (' + String(v.git_commit).slice(0, 7) + ')' : '');
+    if (el && v) el.textContent = (v.version || '') + (v.git_commit ? ' (' + String(v.git_commit).slice(0, 7) + ')' : '') + (v.environment ? ' · ' + String(v.environment).toUpperCase() : '');
   }).catch(function () {});
 
   try { S.sessId = new URLSearchParams(location.search).get('session') || localStorage.getItem('aw3.session') || ''; } catch (_) { S.sessId = ''; }

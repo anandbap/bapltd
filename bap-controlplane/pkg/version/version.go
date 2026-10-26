@@ -16,6 +16,9 @@ var (
 	// GitCommit is the git SHA hash.
 	GitCommit = "dev"
 
+	// Environment is "prod" for CI/release builds (injected via -ldflags) and "dev" for local builds.
+	Environment = "dev"
+
 	// BuildDate is the UTC build timestamp in RFC3339.
 	BuildDate = "unknown"
 )

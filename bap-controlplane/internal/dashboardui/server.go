@@ -26,8 +26,9 @@ func AssetsFS() fs.FS {
 func VersionHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{
-		"version":    version.Version,
-		"git_commit": version.GitCommit,
+		"version":     version.Version,
+		"git_commit":  version.GitCommit,
+		"environment": version.Environment,
 	})
 }
 
@@ -141,7 +142,6 @@ func Handler(controlPlane *url.URL, transport http.RoundTripper, allowRemoteAdmi
 		}
 		files.ServeHTTP(w, r)
 	})
-
 
 	// BAP-210: Consolidate the CIO Cockpit - redirect legacy inspector routes
 	redirectCockpit := func(w http.ResponseWriter, r *http.Request) {

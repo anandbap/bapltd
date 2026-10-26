@@ -18,7 +18,7 @@ WORKDIR /app/bap-controlplane
 ARG VERSION=v1.0.0
 ARG GIT_COMMIT=release
 ARG BUILD_DATE=unknown
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X 'bap-controlplane/pkg/version.Version=${VERSION}' -X 'bap-controlplane/pkg/version.GitCommit=${GIT_COMMIT}' -X 'bap-controlplane/pkg/version.BuildDate=${BUILD_DATE}'" -o /app/bapcontrolplane ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X 'bap-controlplane/pkg/version.Version=${VERSION}' -X 'bap-controlplane/pkg/version.GitCommit=${GIT_COMMIT}' -X 'bap-controlplane/pkg/version.BuildDate=${BUILD_DATE}' -X 'bap-controlplane/pkg/version.Environment=prod'" -o /app/bapcontrolplane ./cmd/server
 
 # Minimal production runtime image
 FROM alpine:3.20
