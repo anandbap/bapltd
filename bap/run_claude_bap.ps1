@@ -1306,6 +1306,17 @@ try {
                     }
                 )
 
+                Stop = @(
+
+                    [ordered]@{
+
+                        hooks = @($InterceptorHook)
+
+                    }
+
+                )
+
+
                 SessionEnd = @(
                     [ordered]@{
                         hooks = @($InterceptorHook)

@@ -2365,7 +2365,9 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 		}
 		items = append(items, it)
 	}
-	isAdmin := s.isAdminCaller(r) || (s.adminToken == "" && isLoopbackAddress(r.RemoteAddr))
+	// The dashboard authenticates with the bap_admin_token cookie, so accept the same viewer
+	// credentials as other telemetry reads, not only the Authorization header.
+	isAdmin := s.isAdminViewer(r) || (s.adminToken == "" && isLoopbackAddress(r.RemoteAddr))
 	if !isAdmin {
 		for i := range items {
 			if items[i].Text != "" {

@@ -93,7 +93,7 @@ func RunMCP(args []string) error {
 	cfg := mcp.ServerConfig{
 		PolicyPath:       *policyPath,
 		ServerURL:        *serverFlag,
-		SessionID:        *sessionFlag,
+		SessionID:        ensureMCPSession(*sessionFlag, strings.TrimRight(*serverFlag, "/")),
 		AuditLogPath:     *auditLogFlag,
 		EnforcementMode:  strings.ToLower(strings.TrimSpace(*modeFlag)),
 		IdentityResolver: resolveLocalIdentity,

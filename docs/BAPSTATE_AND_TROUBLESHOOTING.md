@@ -237,6 +237,30 @@ bapedge pin update --all
 
 ---
 
+### 2.10 `bapedge dev-override` (Developer Self-Development Override)
+Allows developers working on BAP itself to temporarily suspend anti-tampering invariants on BAP internal binaries (`interceptor.exe`, `bapedge.exe`, `policy.cedar`) during build and compilation cycles:
+
+```bash
+# Check current override status
+bapedge dev-override status
+
+# Enable developer override (default 4 hours, capped at 12 hours)
+bapedge dev-override on
+
+# Enable developer override with custom duration and reason
+bapedge dev-override on --duration 2h --reason "Rebuilding interceptor binary"
+
+# Immediately disable developer override and restore full enforcement
+bapedge dev-override off
+```
+
+**Security Guardrails:**
+- **Developer Feature Flag**: Only permitted when `"environment": "development"` in `bap-config.json` or `BAP_ENVIRONMENT=development`. Completely disabled in production/staging environments.
+- **Autonomous Agent Immunity**: AI agents cannot enable this command; it requires human developer authorization.
+- **Secret Protection Retained**: Credential files (`.env`, AWS, SSH keys) and revocation lists remain strictly enforced.
+
+---
+
 ## 3. Comprehensive Troubleshooting Playbooks
 
 ### Playbook 1: Spool Backlog Not Flushing (`bapedge sweep` reports 0 flushed or errors)
@@ -497,4 +521,39 @@ Denial on redirection target '.env': Access to environment secret file (.env) is
 3. To inspect symlink destination directly on the host:
    - **Windows**: `Get-Item path\to\file | Select-Object -ExpandProperty Target`
    - **Linux/macOS**: `readlink -f path/to/file`
+
+---
+
+### Playbook 11: Developing BAP & Managing Local Configurations
+
+**Symptom**:
+When recompiling BAP binaries or running custom test scripts that reference `interceptor.exe`, commands fail with:
+```text
+PreToolUse:Bash hook error: Security Invariant Violation: Direct modification, deletion, or tampering with BAP protected asset "interceptor.exe" is strictly forbidden.
+```
+
+**Root Causes**:
+BAP includes built-in anti-tampering heuristics to prevent compromised AI agents from modifying the security broker or its hooks. When a human developer is actively modifying BAP source code or compiling new binaries, these protections must be temporarily suspended.
+
+**Resolution Steps**:
+1. Verify the workspace is set to development mode:
+   ```powershell
+   bapedge dev-override status
+   ```
+2. Enable developer override for your working session:
+   ```powershell
+   bapedge dev-override on --duration 4h
+   ```
+3. If developing in audit mode to prevent denials during test cycles, set audit mode:
+   ```powershell
+   bapedge config set --mode audit
+   ```
+4. Prevent local configuration drift from being committed to Git or breaking CI:
+   ```bash
+   git update-index --skip-worktree bap-config.json
+   ```
+5. When finished, re-enable full protection:
+   ```powershell
+   bapedge dev-override off
+   ```
 

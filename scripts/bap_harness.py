@@ -198,6 +198,9 @@ def cmd_init(args):
             "PreToolUse": [
                 {"matcher": "*", "hooks": [interceptor_hook]}
             ],
+            "Stop": [
+                {"hooks": [interceptor_hook]}
+            ],
             "SessionEnd": [
                 {"hooks": [interceptor_hook]}
             ]

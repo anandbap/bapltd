@@ -167,6 +167,43 @@ bapedge config set --mode audit
 bapedge config set --mode enforce
 ```
 
+### 5.1 Developer Override (`bapedge dev-override`) for BAP Self-Development
+
+When developing or modifying BAP itself (recompiling `bapedge.exe`, `interceptor.exe`, editing policies, or running test harnesses), BAP's built-in anti-tampering engine will normally detect modifications to its own binaries and block them.
+
+Developers can activate a time-boxed override window:
+
+```bash
+# Check override status
+bapedge dev-override status
+
+# Activate developer override (default 4 hours, max 12 hours)
+bapedge dev-override on
+
+# Activate with custom window and reason
+bapedge dev-override on --duration 2h --reason "Recompiling interceptor"
+
+# Disable override immediately
+bapedge dev-override off
+```
+
+**Guardrails:**
+- **Development Only**: Requires `"environment": "development"` in `bap-config.json` or `BAP_ENVIRONMENT=development`. Permanently locked out of production and staging.
+- **Agent Immunity**: AI coding agents are strictly prohibited from activating this command. It requires human developer authorization.
+- **Credential Protection Preserved**: Anti-tampering on BAP binaries is suspended, but secret protection (`.env`, AWS, SSH keys) and revocation checks remain 100% active.
+
+### 5.2 Local Configuration Isolation (`git update-index --skip-worktree`)
+
+If you need to change `bap-config.json` locally during development (e.g. switching to `"enforcement_mode": "audit"` or using a local control plane `http://localhost:8080`) without committing changes or breaking CI:
+
+```bash
+# Ignore local changes to bap-config.json in git
+git update-index --skip-worktree bap-config.json
+
+# Resume tracking when updating upstream repository defaults
+git update-index --no-skip-worktree bap-config.json
+```
+
 ---
 
 ## 6. Daily Verification & Diagnostic Commands
@@ -178,6 +215,7 @@ bapedge config set --mode enforce
 | `bap status` | Check status of the local edge daemon and central control plane |
 | `bapedge why "<cmd>"` | Direct terminal explanation of Cedar policy decisions ("Why Was It Blocked?") |
 | `bapedge permissions` | View active cross-folder permissions across Session, Project, and Global scopes |
+| `bapedge dev-override` | Inspect or manage time-boxed developer override for BAP self-development |
 | `bap pin verify` | Verify cryptographic hashes of workspace prompts, rules, and skills |
 | `bap exec "<cmd>"` | Manually execute a shell command inside the BAP Zero-Trust broker |
 

@@ -211,6 +211,24 @@
   .steps li.seal::before { background: var(--ok); border-color: var(--ok); }
   .steps .k { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-3); font-weight: 700; }
   .steps .v { font-size: 15.5px; }
+  .feed li.clickable { cursor: pointer; margin: 0 -12px; padding: 12px; border-radius: 10px; }
+  .feed li.clickable:hover, .feed li.clickable:focus-visible { background: #f4f1ea; outline: 1.5px solid var(--line); }
+  .feed .open-hint { color: var(--ink-3); font-size: 12.5px; }
+  .drawer.convo .stamp, .drawer.convo .receipt, .drawer.convo .chain, .drawer.convo .verify, .drawer.convo .checks { display: none; }
+  .drawer.list details { display: none; }
+  .convo-list { list-style: none; margin: 18px 0; padding: 0; display: grid; gap: 14px; }
+  .turn { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+  .turn .tk { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-3); font-weight: 700; display: flex; justify-content: space-between; gap: 8px; }
+  .turn .tt { white-space: pre-wrap; word-break: break-word; font-size: 15px; margin-top: 6px; max-height: 320px; overflow-y: auto; }
+  .turn.prompt { background: #f4f1ea; }
+  .turn.action .tt { font: 13px/1.5 var(--mono); }
+  .turn.action.deny { border-color: var(--bad); }
+  .turn .tm { color: var(--ink-3); font-size: 12px; margin-top: 6px; }
+  .clickable-stat { cursor: pointer; }
+  .clickable-stat:hover, .clickable-stat:focus-visible { outline: 1.5px solid var(--line); background: #f4f1ea; }
+  .turn.pick { cursor: pointer; }
+  .turn.pick:hover, .turn.pick:focus-visible { outline: 1.5px solid var(--ink-3); }
+  .convo-note { color: var(--ink-3); font-size: 13.5px; }
   details { border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; background: #fbfaf7; }
   summary { cursor: pointer; font-weight: 600; font-size: 14px; }
   .tech { font: 12.5px/1.7 var(--mono); color: var(--ink-2); margin-top: 8px; word-break: break-all; }
@@ -352,6 +370,8 @@
   <div class="stamp">BLOCKED</div>
   <h2 id="dTitle" style="margin-top:14px">What happened</h2>
   <ol class="steps" id="dSteps"></ol>
+  <h3 id="dConvoH" style="font:600 15px var(--sans, inherit);margin:18px 0 0" hidden>Everything in this session</h3>
+  <ol class="convo-list" id="dConvo" aria-live="polite"></ol>
   <div class="receipt" id="dReceipt"></div>
   <div class="chain" id="dChain" aria-label="Record chain"><div class="blk" id="cPrev"></div><span>&rarr;</span><div class="blk" id="cThis"></div></div>
   <button class="verify" id="dVerify">Verify the seal</button>
@@ -492,16 +512,15 @@
     var list = $('feed'); list.innerHTML = '';
     S.feed.slice(0, S.expanded ? 15 : 5).forEach(function (f) {
       var li = document.createElement('li');
-      if (f.blocked) { li.className = 'blocked-row'; li.tabIndex = 0; li.setAttribute('role', 'button'); }
+      li.tabIndex = 0; li.setAttribute('role', 'button');
+      li.className = f.blocked ? 'blocked-row' : 'clickable';
       var ini = String(f.who).split(' · ')[0].split(/\s+/).map(function (w) { return w.charAt(0); }).join('').slice(0, 2).toUpperCase();
       li.innerHTML = '<div class="row"><div class="av" aria-hidden="true">' + esc(ini) + '</div><div><div class="who">' + esc(f.who) + '</div>' +
         '<div class="ask">' + esc(f.ask) + (f.blocked ? '<span class="chip no">Blocked</span>' : (f.shadow ? '<span class="chip wr">Flagged</span>' : '<span class="chip ok">Allowed</span>')) + '</div>' +
-        '<div class="did">' + esc(f.did) + (f.blocked ? ' &mdash; <u>see the proof</u>' : '') + '</div></div></div>';
-      if (f.blocked) {
-        var open = function () { openStory(f.storyId); };
-        li.addEventListener('click', open);
-        li.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
-      }
+        '<div class="did">' + esc(f.did) + (f.blocked ? ' &mdash; <u>see the proof</u>' : ' <span class="open-hint">&mdash; click for every prompt and reply</span>') + '</div></div></div>';
+      var open = function () { if (f.blocked && stories[f.storyId]) { openStory(f.storyId, f.sessionId); } else { openConvo(f); } };
+      li.addEventListener('click', open);
+      li.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
       list.appendChild(li);
     });
     if (!S.feed.length) list.innerHTML = '<li class="pending">No activity yet.</li>';
@@ -583,9 +602,72 @@
   /* ---------- drawer / modal ---------- */
   var stories = {};
   var lastFocus = null;
-  function openStory(id) {
+  function fmtTime(ts) { var d = new Date(ts); return isNaN(d) ? '' : d.toISOString().replace('T', ' ').slice(0, 19) + ' UTC'; }
+  // Loads every prompt, reply and governed action for a session, oldest first.
+  function loadConvo(sessionId) {
+    var box = $('dConvo'), head = $('dConvoH');
+    box.innerHTML = ''; head.hidden = true;
+    if (!sessionId || S.mode === 'demo') { return; }
+    head.hidden = false;
+    box.innerHTML = '<li class="convo-note">Loading the full session...</li>';
+    getJSON('/api/v1/sessions/transcript?session_id=' + encodeURIComponent(sessionId)).then(function (r) {
+      var items = r.items || [], nPrompt = 0, total = items.filter(function (i) { return i.kind === 'prompt'; }).length;
+      if (!items.length) { box.innerHTML = '<li class="convo-note">No prompts or replies have been recorded for this session yet.</li>'; return; }
+      head.textContent = 'Everything in this session (' + total + ' prompt' + (total === 1 ? '' : 's') + ', ' + items.length + ' records)';
+      box.innerHTML = items.map(function (i) {
+        var label, cls = i.kind, text = i.text || '';
+        if (i.kind === 'prompt') { nPrompt++; label = 'Prompt ' + nPrompt + ' of ' + total; if (!i.captured) text = 'Prompt text was not retained (capture is off). Intent: ' + (i.intent || 'unknown'); }
+        else if (i.kind === 'response') { label = 'Agent reply'; if (!i.captured) text = 'Reply text was not retained.'; }
+        else { label = 'Agent action'; text = i.action || ''; if (/deny|block/i.test(i.decision || '')) cls += ' deny'; }
+        var meta = (i.kind === 'action' ? (i.decision || '') + (i.reason ? ' - ' + i.reason : '') : (i.intent ? 'Kind of work: ' + i.intent : ''));
+        return '<li class="turn ' + cls + '"><div class="tk"><span>' + esc(label) + '</span><span>' + esc(fmtTime(i.timestamp)) + '</span></div>' +
+          '<div class="tt">' + esc(text) + '</div>' + (meta ? '<div class="tm">' + esc(meta) + '</div>' : '') + '</li>';
+      }).join('');
+      if (!r.unlocked) { box.insertAdjacentHTML('afterbegin', '<li class="convo-note">Prompt and reply text is hidden. Open this view with administrator access to read it.</li>'); }
+    }).catch(function () {
+      box.innerHTML = '<li class="convo-note">Could not load the session record. Nothing here is estimated.</li>';
+    });
+  }
+  // Opens the drawer for any feed row, blocked or not.
+  function openConvo(f) {
+    lastFocus = document.activeElement;
+    $('drawer').classList.remove('list'); $('drawer').classList.add('convo');
+    $('dTitle').textContent = f.ask || 'Session activity';
+    $('dSteps').innerHTML = [['Who', f.who], ['Latest action', f.did], ['Result', f.blocked ? 'Blocked' : (f.shadow ? 'Flagged, not stopped' : 'Allowed')]].map(function (p) {
+      return '<li><div class="k">' + esc(p[0]) + '</div><div class="v">' + esc(p[1] || '-') + '</div></li>'; }).join('');
+    $('dTech').innerHTML = esc('Session: ' + (f.sessionId || 'not available')) + (f.t ? '<br>' + esc('Last event: ' + fmtTime(f.t)) : '');
+    loadConvo(f.sessionId);
+    $('narrator').classList.add('shift');
+    $('scrim').classList.add('on'); $('drawer').classList.add('on'); $('drawer').focus();
+  }
+  // Opens a drawer that lists rows (all agents, or all risky actions); each row opens its detail.
+  function openList(title, rows, emptyMsg) {
+    lastFocus = document.activeElement;
+    $('drawer').classList.add('convo', 'list');
+    $('dTitle').textContent = title;
+    $('dSteps').innerHTML = '';
+    $('dConvoH').hidden = true;
+    var box = $('dConvo'); box.innerHTML = '';
+    if (!rows.length) { box.innerHTML = '<li class="convo-note">' + esc(emptyMsg) + '</li>'; }
+    rows.forEach(function (f) {
+      var li = document.createElement('li');
+      li.className = 'turn pick' + (f.blocked ? ' action deny' : '');
+      li.tabIndex = 0; li.setAttribute('role', 'button');
+      li.innerHTML = '<div class="tk"><span>' + esc(f.who) + '</span><span>' + esc(f.blocked ? 'Blocked' : (f.shadow ? 'Flagged' : (f.status || 'Allowed'))) + '</span></div>' +
+        '<div class="tt">' + esc(f.ask) + '</div><div class="tm">' + esc(f.did) + (f.t ? ' · ' + esc(fmtTime(f.t)) : '') + '</div>';
+      var go = function () { if (f.blocked && stories[f.storyId]) { openStory(f.storyId, f.sessionId); } else { openConvo(f); } };
+      li.addEventListener('click', go);
+      li.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
+      box.appendChild(li);
+    });
+    $('narrator').classList.add('shift');
+    $('scrim').classList.add('on'); $('drawer').classList.add('on'); $('drawer').focus();
+  }
+  function openStory(id, sessionId) {
     var s = stories[id]; if (!s) return;
     lastFocus = document.activeElement;
+    $('drawer').classList.remove('convo', 'list');
+    loadConvo(sessionId);
     $('dTitle').textContent = s.title;
     $('dSteps').innerHTML = s.steps.map(function (st) {
       return '<li class="' + (st.cls || '') + '"><div class="k">' + esc(st.k) + '</div><div class="v">' + esc(st.v) + '</div></li>';
@@ -745,7 +827,7 @@
           }
         });
         S.streams = STREAMS.filter(function (n) { return counts[n]; }).map(function (n) { return { name: n, count: counts[n] }; });
-        S.feed = agents.slice(0, 15).map(function (a) {
+        S.rows = agents.map(function (a) {
           var isBlocked = a.action_status === 'denied' || a.policy_decision === 'DENY' || a.policy_decision === 'DENIED' || a.outcome_category === 'Blocked';
           var storyId = a.session_id || a.agent_id || 'live-story';
           if (isBlocked && !stories[storyId]) {
@@ -767,8 +849,9 @@
                    did: a.last_action || a.action || a.tool || (a.action_status ? 'Status: ' + a.action_status : 'Working'),
                    blocked: isBlocked,
                    shadow: !isBlocked && isShadow(a),
-                   storyId: storyId };
+                   storyId: storyId, sessionId: a.session_id || '', t: a._t || 0, status: a.action_status || '' };
         });
+        S.feed = S.rows.slice(0, 15);
 
         S.fleetTotal = S.agents || 0; S.flag = '';
         var none = !S.agents;
@@ -953,6 +1036,18 @@
     if (m === 'demo') Demo.start(); else { S.mode = 'live'; setMode(); startLive(); }
   }
   $('printBtn').addEventListener('click', function () { window.print(); });
+  // Live mode lists every agent that reported; the demo walkthrough only has its feed.
+  function allRows() { return S.mode === 'demo' || !S.rows ? S.feed : S.rows; }
+  [['sAgents', function () {
+      var rows = allRows();
+      return openList('Agents working now', rows.filter(function (r) { return r.status === 'working'; }).concat(rows.filter(function (r) { return r.status !== 'working'; })), 'No agents have reported in yet.'); }],
+   ['sBlocked', function () { return openList('Risky actions', allRows().filter(function (r) { return r.blocked || r.shadow; }), 'No risky actions have been recorded.'); }]
+  ].forEach(function (p) {
+    var card = $(p[0]).parentNode;
+    card.classList.add('clickable-stat'); card.tabIndex = 0; card.setAttribute('role', 'button');
+    card.addEventListener('click', p[1]);
+    card.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); p[1](); } });
+  });
   $('feedMore').addEventListener('click', function () { S.expanded = !S.expanded; render(); });
   $('modeLive').addEventListener('click', function () { setModeTo('live'); });
   $('modeDemo').addEventListener('click', function () { setModeTo('demo'); });

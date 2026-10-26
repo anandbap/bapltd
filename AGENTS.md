@@ -21,3 +21,6 @@ c, raw sockets) are strictly prohibited; external API access must route through 
 6. **Identity & Audit Logging**:
    - LTD_SOURCE=copilot
    - BAP_SESSION_ID=$SessionId
+7. **Developer Override & Agent Immunity**:
+   - Autonomous agents are **STRICTLY FORBIDDEN** from activating `bapedge dev-override on`. The command requires interactive human authorization.
+   - In audit mode, violations are logged without blocking execution; observe audit warnings.

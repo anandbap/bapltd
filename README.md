@@ -599,6 +599,7 @@ BAP provides an identical, cohesive command-line interface across all four produ
 | `rollback` | ✅ | — | — | — | Forensically revert file mutations to pre-execution checkpoints |
 | `pin` | ✅ | — | — | — | Cryptographically pin, verify, and re-attest skills, prompts & tools |
 | `why` | ✅ | — | — | — | Instant terminal explanation of Cedar policy decisions |
+| `dev-override` | ✅ | — | — | — | Time-boxed developer override for BAP self-development (developers-only) |
 | `exec` / `check` | ✅ | — | — | — | Governed execution / dry-run evaluation under kernel isolation |
 | `mcp` | ✅ | — | — | ✅ | Model Context Protocol JSON-RPC stdio server |
 
@@ -717,6 +718,11 @@ powershell -ExecutionPolicy Bypass -File update_binaries.ps1
 # Governed Execution
 .\bapedge.exe exec "<command>"       # Execute under kernel isolation
 .\bapedge.exe check "<command>"      # Policy evaluation only (zero side-effects)
+
+# Developer Self-Development Override (Developers-Only Feature)
+.\bapedge.exe dev-override status             # Inspect dev-override status & environment gating
+.\bapedge.exe dev-override on [--duration 4h] # Suspend BAP asset anti-tampering (max 12h)
+.\bapedge.exe dev-override off                # Immediately restore full anti-tampering
 ```
 
 ##### D. `bapmcp` (Model Context Protocol Server)
@@ -735,6 +741,60 @@ powershell -ExecutionPolicy Bypass -File update_binaries.ps1
 - `bap_execute`: Governed shell execution within sandboxed kernel isolation.
 - `bap_explain_policy`: Zero-trust Cedar decision query and explanation.
 - `bap_status`: Real-time inspection of local sessions, daemon health, and policy cache.
+
+---
+
+### 13. Developer Workflows, Override Modes & Local Configuration
+
+When developing, testing, or compiling BAP itself, developers frequently modify protected assets (e.g. recompiling `interceptor.exe`, `bapedge.exe`, editing policies, or running test harnesses). BAP provides fine-grained mechanisms to support local development workflows without weakening production security.
+
+#### 1. Developer Override (`bapedge dev-override`)
+The `dev-override` command grants a time-boxed operational window that suspends anti-tampering invariants on BAP's internal binaries and files:
+
+```powershell
+# Check current override status
+.\bapedge.exe dev-override status
+
+# Enable developer override for 4 hours (default)
+.\bapedge.exe dev-override on
+
+# Enable developer override with custom duration and audit reason
+.\bapedge.exe dev-override on --duration 2h --reason "Compiling new interceptor build"
+
+# Immediately disable developer override and restore full enforcement
+.\bapedge.exe dev-override off
+```
+
+**Security Invariants & Gating Guarantees:**
+- **Production Lockdown (Fail-Closed)**: Developer override is strictly prohibited in production and staging environments. It activates **ONLY** if the workspace is explicitly configured in development mode (`"environment": "development"` in `bap-config.json` or `BAP_ENVIRONMENT=development`) and developer features are enabled (`"developer_features": true` or `BAP_DEVELOPER_FEATURES=1`). In unconfigured or production environments, `dev-override on` fails closed with `Feature Locked`.
+- **Autonomous Agent Immunity**: AI coding agents (`LTD_SOURCE=claude-code`, `copilot`, `antigravity`, or sessions with `agent`) are structurally blocked from invoking `bapedge dev-override on`. Only interactive human developers can activate the override.
+- **Time-Boxed Window**: Automatically expires after the requested duration (capped at a maximum of 12 hours) to prevent indefinite exposure.
+- **Narrow Exemption Scope**: Dev override suspends anti-tampering checks *only* on BAP internal files and binaries (`interceptor.exe`, `bapedge.exe`, `policy.cedar`). Enterprise credential files (`.env`, `~/.aws`, `~/.ssh`, private keys) and revocation lists remain **100% strictly enforced**.
+
+#### 2. Audit Mode vs Enforce Mode
+BAP supports two operational enforcement modes:
+- **`enforce` (Default / Production)**: Commands violating Cedar policies or file invariants are strictly denied (`permissionDecision: "deny"`, exit code 1), and commands are sandboxed with restricted OS tokens.
+- **`audit` (Development / Baselining)**: Policy violations and invariant alerts are recorded to the audit log (`[BAP AUDIT MODE] Policy violation detected: ... Execution permitted in audit mode.`), but commands execute without hard termination.
+
+```powershell
+# Set enforcement mode locally
+.\bapedge.exe config set --mode audit
+.\bapedge.exe config set --mode enforce
+
+# Or override via environment variable
+$env:BAP_ENFORCEMENT_MODE = "audit"
+```
+
+#### 3. Local Configuration Isolation (`git update-index --skip-worktree`)
+To customize local developer configurations (such as setting `"enforcement_mode": "audit"` or targeting a local development control plane `http://localhost:8080`) without dirtying git working trees or breaking CI/CD pipelines:
+
+```bash
+# Tell Git to ignore local changes to bap-config.json
+git update-index --skip-worktree bap-config.json
+
+# To resume tracking changes in Git (e.g. when updating repository defaults)
+git update-index --no-skip-worktree bap-config.json
+```
 
 ---
 

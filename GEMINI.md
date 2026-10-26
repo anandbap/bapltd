@@ -13,3 +13,6 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
 3. **Identity & Audit Logging**:
    - LTD_SOURCE=antigravity
    - BAP_SESSION_ID=sess-antigravity-cli-46ced79e
+4. **Developer Override & Agent Immunity**:
+   - Autonomous agents are **STRICTLY FORBIDDEN** from activating `bapedge dev-override on`. That command requires interactive human developer authorization.
+   - In audit mode, violations are logged without blocking execution; observe audit warnings.

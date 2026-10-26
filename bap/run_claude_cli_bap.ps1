@@ -37,6 +37,7 @@ $configureFiles = {
             SessionStart     = @( [ordered]@{ hooks = @( [ordered]@{ type = 'command'; command = 'interceptor.exe'; args = @() } ) } )
             UserPromptSubmit = @( [ordered]@{ hooks = @( [ordered]@{ type = 'command'; command = 'interceptor.exe'; args = @() } ) } )
             PreToolUse       = @( [ordered]@{ matcher = '*'; hooks = @( [ordered]@{ type = 'command'; command = 'interceptor.exe'; args = @() } ) } )
+            Stop          = @( [ordered]@{ hooks = @( [ordered]@{ type = 'command'; command = 'interceptor.exe'; args = @() } ) } )
             SessionEnd       = @( [ordered]@{ hooks = @( [ordered]@{ type = 'command'; command = 'interceptor.exe'; args = @() } ) } )
         }
     }
