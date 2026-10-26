@@ -15,10 +15,14 @@ COPY . .
 
 # Compile bapcontrolplane statically with CGO disabled (pure Go SQLite)
 WORKDIR /app/bap-controlplane
-ARG VERSION=v1.0.0
-ARG GIT_COMMIT=release
+# VERSION defaults to the one in source; GIT_COMMIT falls back to Render's RENDER_GIT_COMMIT.
+ARG VERSION=
+ARG GIT_COMMIT=
+ARG RENDER_GIT_COMMIT=
 ARG BUILD_DATE=unknown
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X 'bap-controlplane/pkg/version.Version=${VERSION}' -X 'bap-controlplane/pkg/version.GitCommit=${GIT_COMMIT}' -X 'bap-controlplane/pkg/version.BuildDate=${BUILD_DATE}' -X 'bap-controlplane/pkg/version.Environment=prod'" -o /app/bapcontrolplane ./cmd/server
+RUN V="${VERSION:-$(sed -n 's/.*Version = "\(.*\)".*/\1/p' pkg/version/version.go | head -1)}" && \
+    C="${GIT_COMMIT:-${RENDER_GIT_COMMIT:-unknown}}" && C="$(echo "$C" | cut -c1-7)" && \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X 'bap-controlplane/pkg/version.Version=${V}' -X 'bap-controlplane/pkg/version.GitCommit=${C}' -X 'bap-controlplane/pkg/version.BuildDate=${BUILD_DATE}' -X 'bap-controlplane/pkg/version.Environment=prod'" -o /app/bapcontrolplane ./cmd/server
 
 # Minimal production runtime image
 FROM alpine:3.20
