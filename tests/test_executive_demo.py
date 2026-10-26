@@ -39,6 +39,9 @@ def read_admin_token() -> str:
 
 
 def get_control_plane_url() -> str:
+    # In automated integration tests, bind to the local demo-mode control plane
+    if os.getenv("BAP_TEST_REMOTE_CP") != "1":
+        return "https://localhost:8443"
     try:
         from bap_sdk import resolve_endpoints
         ep = resolve_endpoints()
