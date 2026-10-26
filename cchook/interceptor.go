@@ -1872,7 +1872,8 @@ func handleSessionStartHook(payload HookPayload) {
 		_ = wCmd.Start()
 	}
 
-	os.Stdout.WriteString("{\"continue\":true}\n")
+	// Valid for both Claude-compatible hooks and Codex lifecycle hooks.
+	os.Stdout.WriteString("{\"status\":\"ok\",\"continue\":true}\n")
 	os.Exit(0)
 }
 
@@ -1916,7 +1917,7 @@ func handleSessionEndHook(payload HookPayload) {
 		cleanupSessionMarkers(sessionID, rawPPID)
 	}
 
-	os.Stdout.WriteString("{\"status\":\"ok\"}\n")
+	os.Stdout.WriteString("{\"status\":\"ok\",\"continue\":true}\n")
 	os.Exit(0)
 }
 
@@ -2307,7 +2308,7 @@ func handleUserPromptHook(payload HookPayload) {
 	}
 
 	// Valid for both Claude-compatible hooks and Codex lifecycle hooks.
-	os.Stdout.WriteString("{\"continue\":true}\n")
+	os.Stdout.WriteString("{\"status\":\"ok\",\"continue\":true}\n")
 	os.Exit(0)
 }
 
