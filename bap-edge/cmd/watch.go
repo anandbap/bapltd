@@ -614,7 +614,7 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string, instanceIDOp
 		if watchPID > 0 {
 			if !isProcessAlive(watchPID) {
 				deadCheckCount++
-				if deadCheckCount >= 2 {
+				if deadCheckCount >= 3 {
 					// Workload confirmed terminated (exit, Ctrl+C, or window close)
 					endPayload := map[string]any{
 						"session_id": sessionID,
@@ -661,10 +661,6 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string, instanceIDOp
 			}
 		}
 		if statusHB == "closed" {
-			if watchPID > 0 {
-				fmt.Fprintf(os.Stderr, "[bapedge watch] 🛑 Session %s STOPPED: Terminating workload (PID: %d)...\n", sessionID, watchPID)
-				killProcessPID(watchPID)
-			}
 			cleanupSessionMarker(sessionID, watchPID)
 			return
 		}

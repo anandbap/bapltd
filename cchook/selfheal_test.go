@@ -90,3 +90,16 @@ func TestTransientShellDetection(t *testing.T) {
 		}
 	}
 }
+
+func TestGetParentPIDAndInspectCaller(t *testing.T) {
+	myPID := os.Getpid()
+	parentPID := getParentPID(myPID)
+	if parentPID <= 0 {
+		t.Fatalf("expected valid parent PID for current process, got %d", parentPID)
+	}
+	info := inspectCallerProcess(myPID)
+	if info.PID != myPID {
+		t.Fatalf("expected info PID %d, got %d", myPID, info.PID)
+	}
+	t.Logf("myPID=%d, parentPID=%d, exe=%s, app_id=%s", myPID, parentPID, info.BinaryName, info.AppID)
+}

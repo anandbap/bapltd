@@ -161,9 +161,6 @@ func getFirstEnv(keys ...string) string {
 func getCandidateConfigFilePaths() []string {
 	var candidates []string
 
-	// 1. Authoritative .bapstate config path
-	candidates = append(candidates, state.ConfigPath())
-
 	// Current working directory and parent search (up to 4 levels)
 	cwd, err := os.Getwd()
 	if err == nil {
@@ -179,6 +176,9 @@ func getCandidateConfigFilePaths() []string {
 			curr = parent
 		}
 	}
+
+	// Authoritative .bapstate config path
+	candidates = append(candidates, state.ConfigPath())
 
 	// Executable directory
 	if exe, err := os.Executable(); err == nil {

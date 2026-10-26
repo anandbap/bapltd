@@ -109,16 +109,34 @@ func isTransientShell(exeName string) bool {
 	}
 }
 
-// resolveAgentProcess inspects caller process ancestry to pierce through transient shells
-// (e.g. cmd.exe spawned by Node's child_process.exec) and find the true long-running agent runner.
+func isAgentBinary(exeName string) bool {
+	lower := strings.ToLower(exeName)
+	return strings.Contains(lower, "claude") ||
+		strings.Contains(lower, "node") ||
+		strings.Contains(lower, "bun") ||
+		strings.Contains(lower, "antigravity") ||
+		strings.Contains(lower, "copilot") ||
+		strings.Contains(lower, "cursor") ||
+		strings.Contains(lower, "code.exe") ||
+		lower == "code"
+}
+
+// resolveAgentProcess inspects caller process ancestry to pierce through transient shells,
+// npm shims, and ephemeral child workers (e.g. Bun/Node helper processes spawned for hooks)
+// to find the true, long-running root agent process.
 func resolveAgentProcess(initialPID int) (int, CallerProcessInfo) {
 	currPID := initialPID
 	currInfo := inspectCallerProcess(currPID)
 
-	for i := 0; i < 5; i++ {
-		if !isTransientShell(currInfo.BinaryName) && currInfo.BinaryName != "" {
-			break
-		}
+	bestPID := currPID
+	bestInfo := currInfo
+
+	if isAgentBinary(currInfo.BinaryName) {
+		bestPID = currPID
+		bestInfo = currInfo
+	}
+
+	for i := 0; i < 12; i++ {
 		parentPID := getParentPID(currPID)
 		if parentPID <= 0 || parentPID == currPID {
 			break
@@ -127,27 +145,54 @@ func resolveAgentProcess(initialPID int) (int, CallerProcessInfo) {
 		if parentInfo.BinaryName == "" {
 			break
 		}
-		currPID = parentPID
-		currInfo = parentInfo
+
+		if isAgentBinary(parentInfo.BinaryName) {
+			bestPID = parentPID
+			bestInfo = parentInfo
+			currPID = parentPID
+			currInfo = parentInfo
+			continue
+		}
+
+		if isTransientShell(parentInfo.BinaryName) {
+			grandPID := getParentPID(parentPID)
+			if grandPID > 0 && grandPID != parentPID {
+				grandInfo := inspectCallerProcess(grandPID)
+				if isAgentBinary(grandInfo.BinaryName) {
+					bestPID = grandPID
+					bestInfo = grandInfo
+					currPID = grandPID
+					currInfo = grandInfo
+					continue
+				}
+			}
+			break
+		}
+
+		break
 	}
 
-	baseLower := strings.ToLower(currInfo.BinaryName)
+	baseLower := strings.ToLower(bestInfo.BinaryName)
 	switch {
-	case strings.Contains(baseLower, "claude") || strings.Contains(baseLower, "node"):
-		currInfo.AppID = "claude-code"
+	case strings.Contains(baseLower, "claude"):
+		bestInfo.AppID = "claude-code"
+	case strings.Contains(baseLower, "node") || strings.Contains(baseLower, "bun"):
+		if bestInfo.AppID == "" || bestInfo.AppID == "node" || bestInfo.AppID == "bun" {
+			bestInfo.AppID = "claude-code"
+		}
 	case strings.Contains(baseLower, "antigravity"):
-		currInfo.AppID = "antigravity"
+		bestInfo.AppID = "antigravity"
 	case strings.Contains(baseLower, "copilot"):
-		currInfo.AppID = "copilot"
+		bestInfo.AppID = "copilot"
 	case strings.Contains(baseLower, "cursor"):
-		currInfo.AppID = "cursor"
+		bestInfo.AppID = "cursor"
 	default:
-		if currInfo.AppID == "" || isTransientShell(currInfo.BinaryName) {
-			currInfo.AppID = "claude-code"
+		if bestInfo.AppID == "" || isTransientShell(bestInfo.BinaryName) {
+			bestInfo.AppID = "claude-code"
 		}
 	}
 
-	return currPID, currInfo
+	return bestPID, bestInfo
 }
 
 const intentClassifierVersion = "bap-intent-rules-v1"
@@ -515,18 +560,16 @@ func resolveEnforcementMode() string {
 		return strings.ToLower(strings.TrimSpace(m))
 	}
 	var cfgCandidates []string
-	home, _ := os.UserHomeDir()
-	if home != "" {
-		cfgCandidates = append(cfgCandidates, filepath.Join(home, ".bapstate", "config.json"))
-	}
 	cfgCandidates = append(cfgCandidates,
 		filepath.Join(".bap", "bap-config.json"),
 		filepath.Join(".bap", "config.json"),
 		"bap-config.json",
 		"../bap-config.json",
 	)
+	home, _ := os.UserHomeDir()
 	if home != "" {
 		cfgCandidates = append(cfgCandidates,
+			filepath.Join(home, ".bapstate", "config.json"),
 			filepath.Join(home, "bin", "bap-config.json"),
 			filepath.Join(home, ".bap", "config.json"),
 			filepath.Join(home, ".bap", "bap-config.json"),
@@ -897,13 +940,37 @@ func resolveSessionID(payload HookPayload) string {
 
 	// 1. Check PID-specific session marker for concurrent Claude session isolation
 	ppid := os.Getppid()
-	for _, cand := range []string{sessionMarkerPathForPID(ppid), filepath.Join("..", sessionMarkerPathForPID(ppid))} {
-		if data, err := os.ReadFile(cand); err == nil {
-			var info struct {
-				SessionID string `json:"session_id"`
+	targetPID, _ := resolveAgentProcess(ppid)
+	for _, p := range []int{targetPID, ppid} {
+		if p <= 0 {
+			continue
+		}
+		for _, cand := range []string{
+			sessionMarkerPathForPID(p),
+			filepath.Join("..", sessionMarkerPathForPID(p)),
+		} {
+			if data, err := os.ReadFile(cand); err == nil {
+				var info struct {
+					SessionID string `json:"session_id"`
+				}
+				if json.Unmarshal(data, &info) == nil && info.SessionID != "" {
+					return info.SessionID
+				}
 			}
-			if json.Unmarshal(data, &info) == nil && info.SessionID != "" {
-				return info.SessionID
+		}
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			for _, cand := range []string{
+				filepath.Join(home, ".bapstate", "sessions", fmt.Sprintf("pid-%d.json", p)),
+				filepath.Join(home, ".bap", "sessions", fmt.Sprintf("pid-%d.json", p)),
+			} {
+				if data, err := os.ReadFile(cand); err == nil {
+					var info struct {
+						SessionID string `json:"session_id"`
+					}
+					if json.Unmarshal(data, &info) == nil && info.SessionID != "" {
+						return info.SessionID
+					}
+				}
 			}
 		}
 	}
@@ -1342,7 +1409,8 @@ func ensureSessionAndWatcher(sessionID, serverURL string) {
 	if sessionID == "" || watcherAlive(sessionID) {
 		return
 	}
-	targetPID, caller := resolveAgentProcess(os.Getppid())
+	rawPPID := os.Getppid()
+	targetPID, caller := resolveAgentProcess(rawPPID)
 	ltdBin := findBinary("bapedge.exe")
 	if _, err := os.Stat(ltdBin); err != nil {
 		if alt := findBinary("bapedge"); alt != "" {
@@ -1357,6 +1425,53 @@ func ensureSessionAndWatcher(sessionID, serverURL string) {
 			return
 		}
 	}
+
+	hostname, _ := os.Hostname()
+	username := os.Getenv("USERNAME")
+	if username == "" {
+		username = os.Getenv("USER")
+	}
+
+	// 1. Write PID markers immediately so all concurrent/child hooks share this session
+	marker := map[string]any{
+		"session_id":  sessionID,
+		"server_url":  serverURL,
+		"pid":         targetPID,
+		"app_id":      caller.AppID,
+		"caller_path": caller.BinaryPath,
+		"caller_hash": caller.BinaryHash,
+		"started_at":  time.Now().UTC(),
+	}
+	if data, err := json.MarshalIndent(marker, "", "  "); err == nil {
+		_ = os.MkdirAll(filepath.Join(".bap", "sessions"), 0700)
+		_ = os.WriteFile(sessionMarkerPathForPID(targetPID), data, 0600)
+		if targetPID != rawPPID && rawPPID > 0 {
+			_ = os.WriteFile(sessionMarkerPathForPID(rawPPID), data, 0600)
+		}
+		_ = os.WriteFile(filepath.Join(".bap", "session.json"), data, 0600)
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			_ = os.MkdirAll(filepath.Join(home, ".bapstate", "sessions"), 0700)
+			_ = os.WriteFile(filepath.Join(home, ".bapstate", "sessions", fmt.Sprintf("pid-%d.json", targetPID)), data, 0600)
+		}
+	}
+
+	// 2. Register session immediately with control plane
+	startPayload := map[string]any{
+		"session_id":  sessionID,
+		"app_id":      caller.AppID,
+		"caller_path": caller.BinaryPath,
+		"caller_hash": caller.BinaryHash,
+		"user_id":     username,
+		"hostname":    hostname,
+		"client_pid":  targetPID,
+	}
+	if body, err := json.Marshal(startPayload); err == nil {
+		client := getHTTPClient()
+		client.Timeout = 1200 * time.Millisecond
+		_, _ = client.Post(serverURL+"/api/v1/sessions/start", "application/json", bytes.NewReader(body))
+	}
+
+	// 3. Spawn detached watcher monitoring the true root agent PID
 	wCmd := exec.Command(ltdBin, "watch", fmt.Sprintf("--pid=%d", targetPID), fmt.Sprintf("--server=%s", serverURL), fmt.Sprintf("--session-id=%s", sessionID), fmt.Sprintf("--app-id=%s", caller.AppID), "--detach")
 	if err := wCmd.Start(); err != nil {
 		hookLog("ensureSessionAndWatcher: failed to spawn watcher for %s: %v", sessionID, err)
@@ -1394,10 +1509,13 @@ func handleUserPromptHook(payload HookPayload) {
 	promptHash := fmt.Sprintf("%x", promptDigest[:])
 	capturePrompt := shouldCaptureUserPrompt()
 
-
 	serverURL := resolveServerURL()
 	sessionID := resolveSessionID(payload)
 	ppid := os.Getppid()
+	targetPID, caller := resolveAgentProcess(ppid)
+	if sessionID == "" {
+		sessionID = fmt.Sprintf("sess-%s-pid-%d", caller.AppID, targetPID)
+	}
 
 	// Zero-Trust Revocation Check: STOP taking user inputs if revoked
 	if revoked, reason := isSessionRevoked(serverURL, sessionID); revoked {
@@ -1510,6 +1628,10 @@ func main() {
 
 	sessionID := resolveSessionID(payload)
 	ppid := os.Getppid()
+	targetPID, caller := resolveAgentProcess(ppid)
+	if sessionID == "" {
+		sessionID = fmt.Sprintf("sess-%s-pid-%d", caller.AppID, targetPID)
+	}
 	if revoked, reason := isSessionRevoked(resolveServerURL(), sessionID); revoked {
 		outputDecision("deny", reason, "This session cannot perform further governed tool actions.")
 		return
@@ -1719,7 +1841,7 @@ func main() {
 	// 6. Execute bapedge check --source claude-code --session-id <sessionID> --json --cmd-b64 <b64>
 	// BAP-200: Interceptor uses Decision-Only check so the action executes exactly once natively.
 	cmdB64 := base64.StdEncoding.EncodeToString([]byte(command))
-	caller := inspectCallerProcess(ppid)
+	caller = inspectCallerProcess(ppid)
 	callerSource := caller.AppID
 	if callerSource == "" {
 		callerSource = "claude-code"

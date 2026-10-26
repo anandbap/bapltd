@@ -609,6 +609,111 @@ class TestBAP200SoleExecutor(unittest.TestCase):
         resp_end = run_interceptor(end_payload)
         self.assertEqual(resp_end.get("status"), "ok")
 
+    # -------------------------------------------------------------------------
+    # AC18: Claude Code Direct Launch Liveness & Clean Session Exit
+    # -------------------------------------------------------------------------
+    def test_ac18_claude_direct_launch_watcher_supervision_and_teardown(self):
+        # 1. Spawn a persistent agent mock process representing direct Claude launch
+        agent_proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            cwd=WORKSPACE_ROOT,
+        )
+        try:
+            test_sess_id = f"sess-direct-claude-{agent_proc.pid}"
+            prompt_payload = {
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": test_sess_id,
+                "user_prompt": "Fix failing auth bug",
+            }
+
+            interceptor_script = f"""
+import subprocess, json
+p = subprocess.Popen(
+    [r'{INTERCEPTOR_BIN}'],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    cwd=r'{WORKSPACE_ROOT}'
+)
+stdout, stderr = p.communicate({json.dumps(json.dumps(prompt_payload))})
+print(stdout.strip())
+"""
+            sub_proc = subprocess.run(
+                [sys.executable, "-c", interceptor_script],
+                cwd=WORKSPACE_ROOT,
+                capture_output=True,
+                text=True,
+            )
+            self.assertIn('"status":"ok"', sub_proc.stdout)
+
+            # 2. Verify agent process is still alive and not prematurely killed
+            time.sleep(3)
+            self.assertTrue(agent_proc.poll() is None, "Agent process should still be running after prompt")
+
+            # Send a second prompt - must not disrupt session or kill watcher
+            prompt2_payload = {
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": test_sess_id,
+                "user_prompt": "Run unit tests",
+            }
+            interceptor2_script = f"""
+import subprocess, json
+p = subprocess.Popen(
+    [r'{INTERCEPTOR_BIN}'],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    cwd=r'{WORKSPACE_ROOT}'
+)
+stdout, stderr = p.communicate({json.dumps(json.dumps(prompt2_payload))})
+print(stdout.strip())
+"""
+            sub2_proc = subprocess.run(
+                [sys.executable, "-c", interceptor2_script],
+                cwd=WORKSPACE_ROOT,
+                capture_output=True,
+                text=True,
+            )
+            self.assertIn('"status":"ok"', sub2_proc.stdout)
+            time.sleep(2)
+            self.assertTrue(agent_proc.poll() is None, "Agent process should stay running across multiple prompts")
+
+            # 3. Simulate Claude session exit: SessionEnd hook fires
+            end_payload = {
+                "hook_event_name": "SessionEnd",
+                "session_id": test_sess_id,
+            }
+            end_script = f"""
+import subprocess, json
+p = subprocess.Popen(
+    [r'{INTERCEPTOR_BIN}'],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    cwd=r'{WORKSPACE_ROOT}'
+)
+stdout, stderr = p.communicate({json.dumps(json.dumps(end_payload))})
+print(stdout.strip())
+"""
+            end_sub_proc = subprocess.run(
+                [sys.executable, "-c", end_script],
+                cwd=WORKSPACE_ROOT,
+                capture_output=True,
+                text=True,
+            )
+            self.assertIn('"status":"ok"', end_sub_proc.stdout)
+
+        finally:
+            if agent_proc.poll() is None:
+                agent_proc.terminate()
+                try:
+                    agent_proc.wait(timeout=3)
+                except Exception:
+                    agent_proc.kill()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
