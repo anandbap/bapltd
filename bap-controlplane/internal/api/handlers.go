@@ -2365,9 +2365,9 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 		}
 		items = append(items, it)
 	}
-	// The dashboard authenticates with the bap_admin_token cookie, so accept the same viewer
-	// credentials as other telemetry reads, not only the Authorization header.
-	isAdmin := s.isAdminViewer(r) || (s.adminToken == "" && isLoopbackAddress(r.RemoteAddr))
+	// Unmasking requires a valid admin token supplied by the viewer (header, query or the
+	// dashboard cookie). Being on loopback, or having no token configured, is not admin.
+	isAdmin := s.isAdminViewer(r)
 	if !isAdmin {
 		for i := range items {
 			if items[i].Text != "" {

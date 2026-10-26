@@ -772,7 +772,8 @@
         return '<li class="turn ' + cls + '"><div class="tk"><span>' + esc(label) + '</span><span>' + esc(fmtTime(i.timestamp)) + '</span></div>' +
           '<div class="tt">' + esc(text) + '</div>' + (meta ? '<div class="tm">' + esc(meta) + '</div>' : '') + '</li>';
       }).join('');
-      if (!r.unlocked) {
+      // Admin view needs both a token entered here and the server confirming it.
+      if (!(S.adminActive && r.unlocked)) {
         box.insertAdjacentHTML('afterbegin', '<li class="convo-note">Prompt and reply text is hidden. <button class="convo-unlock-link" id="convoUnlockBtn" type="button">Unlock with Admin Token</button></li>');
         var uBtn = $('convoUnlockBtn');
         if (uBtn) uBtn.addEventListener('click', function () { openAdminPopover(); });
