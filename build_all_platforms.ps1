@@ -7,7 +7,8 @@ param(
     [switch]$Archive = $true,
     [switch]$ForceRegenCerts = $false,
     [string]$Domain = "a.b.com",
-    [string]$Version = ""
+    [string]$Version = "",
+    [string]$AllowDevOverrides = "true"
 )
 
 $ErrorActionPreference = "Stop"
@@ -122,7 +123,7 @@ foreach ($p in $platforms) {
             }
             $ldflags = "-s -w"
             if ($versionPkg) {
-                $ldflags = "-s -w -X '$versionPkg.Version=$Version' -X '$versionPkg.GitCommit=$gitCommit' -X '$versionPkg.BuildDate=$buildDate'"
+                $extraFlags = if ($c.Dir -eq 'bap-edge') { " -X '$versionPkg.AllowDevOverrides=$AllowDevOverrides'" } else { "" }; $ldflags = "-s -w -X '$versionPkg.Version=$Version' -X '$versionPkg.GitCommit=$gitCommit' -X '$versionPkg.BuildDate=$buildDate'$extraFlags"
             }
             go build -trimpath -ldflags $ldflags -o $outFile $c.Pkg
             if ($LASTEXITCODE -ne 0) {

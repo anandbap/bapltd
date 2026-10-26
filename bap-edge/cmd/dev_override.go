@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"bap-edge/pkg/version"
 )
 
 const maxDevOverrideWindow = 12 * time.Hour
@@ -59,6 +61,10 @@ func resolveEnvironment() string {
 // 2. Developer feature flag is enabled ("developer_features": true, "developer_mode": true, or BAP_DEVELOPER_FEATURES=1).
 // In "production", "staging", or unconfigured environments, it ALWAYS returns false (fail-closed).
 func isDeveloperModeAllowed() (bool, string) {
+	if !version.DevOverridesAllowed() {
+		return false, "developer override feature is compiled out of this release distribution"
+	}
+
 	env := resolveEnvironment()
 	switch env {
 	case "development", "dev", "local":
@@ -124,6 +130,10 @@ func parseDevOverrideExpiry(raw string) (time.Time, bool) {
 }
 
 func devOverrideActive() (bool, string) {
+	if !version.DevOverridesAllowed() {
+		return false, ""
+	}
+
 	// GATING INVARIANT: Developer features must be allowed (strictly prohibited in production)
 	if allowed, _ := isDeveloperModeAllowed(); !allowed {
 		return false, ""
@@ -184,6 +194,10 @@ func devOverrideActive() (bool, string) {
 
 // RunDevOverride manages the developer override window for BAP self-development.
 func RunDevOverride(args []string) error {
+	if !version.DevOverridesAllowed() {
+		return fmt.Errorf("command 'dev-override' is permanently disabled in this release distribution")
+	}
+
 	fs := flag.NewFlagSet("dev-override", flag.ContinueOnError)
 	durFlag := fs.Duration("duration", defaultDevOverrideWindow, "Duration of the dev override window (default 4h, max 12h)")
 	reasonFlag := fs.String("reason", "BAP local development override", "Reason for developer override")

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"bap-edge/internal/httptransport"
+	"bap-edge/pkg/version"
 )
 
 const maxMCPDevOverrideWindow = 12 * time.Hour
@@ -26,6 +27,9 @@ const maxMCPDevOverrideWindow = 12 * time.Hour
 // Unlike the hook, it is read only from the environment of the process that launched the agent,
 // never from workspace files, so skipping enrollment cannot be switched on by editing config.
 func mcpDevOverrideActive() bool {
+	if !version.DevOverridesAllowed() {
+		return false
+	}
 	raw := strings.TrimSpace(os.Getenv("BAP_DEV_OVERRIDE"))
 	if raw == "" {
 		raw = strings.TrimSpace(os.Getenv("BAP_DEV_MODE"))

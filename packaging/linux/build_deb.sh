@@ -3,7 +3,7 @@
 set -e
 
 ARCH="${1:-amd64}"
-VERSION="${2:-1.6.9}"
+VERSION="${2:-1.7.0}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BUILD_DIR="$ROOT_DIR/dist/linux-$ARCH"

@@ -112,7 +112,7 @@ jobs:
           SEMVER="v${RELEASE_VERSION#v}"
 
           echo "Compiling bapedge (Version: ${SEMVER}, Commit: ${GIT_COMMIT})..."
-          (cd bap-edge && go build -trimpath -ldflags "-s -w -X bap-edge/pkg/version.Version=${SEMVER} -X bap-edge/pkg/version.GitCommit=${GIT_COMMIT} -X bap-edge/pkg/version.BuildDate=${BUILD_DATE}" -o "../$DIST_DIR/bapedge${{ matrix.target.ext }}" .)
+          (cd bap-edge && go build -trimpath -ldflags "-s -w -X bap-edge/pkg/version.Version=${SEMVER} -X bap-edge/pkg/version.GitCommit=${GIT_COMMIT} -X bap-edge/pkg/version.BuildDate=${BUILD_DATE} -X bap-edge/pkg/version.AllowDevOverrides=false" -o "../$DIST_DIR/bapedge${{ matrix.target.ext }}" .)
 
           echo "Compiling bapcontrolplane..."
           (cd bap-controlplane && go build -trimpath -ldflags "-s -w -X bap-controlplane/pkg/version.Version=${SEMVER} -X bap-controlplane/pkg/version.GitCommit=${GIT_COMMIT} -X bap-controlplane/pkg/version.BuildDate=${BUILD_DATE}" -o "../$DIST_DIR/bapcontrolplane${{ matrix.target.ext }}" ./cmd/server)

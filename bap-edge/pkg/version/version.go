@@ -11,40 +11,52 @@ import (
 var (
 	// Version is the semantic release version (e.g. "v1.0.0").
 	// Injected at compile-time via -ldflags "-X 'bap-edge/pkg/version.Version=...'"
-	Version = "v1.6.9"
+	Version = "v1.7.0"
 
 	// GitCommit is the git SHA hash.
 	GitCommit = "dev"
 
 	// BuildDate is the UTC build timestamp in RFC3339.
 	BuildDate = "unknown"
+
+	// AllowDevOverrides controls whether developer override features (e.g., 'bapedge dev-override')
+	// are permitted. Defaults to "true" for local developer builds.
+	// CI and official release builds inject: -X 'bap-edge/pkg/version.AllowDevOverrides=false'
+	AllowDevOverrides = "true"
 )
 
+// DevOverridesAllowed reports whether developer override features are permitted in this binary.
+func DevOverridesAllowed() bool {
+	return strings.EqualFold(strings.TrimSpace(AllowDevOverrides), "true")
+}
+
 type Info struct {
-	Component string `json:"component"`
-	Version   string `json:"version"`
-	GitCommit string `json:"git_commit"`
-	BuildDate string `json:"build_date"`
-	GoVersion string `json:"go_version"`
-	OS        string `json:"os"`
-	Arch      string `json:"arch"`
+	Component         string `json:"component"`
+	Version           string `json:"version"`
+	GitCommit         string `json:"git_commit"`
+	BuildDate         string `json:"build_date"`
+	GoVersion         string `json:"go_version"`
+	OS                string `json:"os"`
+	Arch              string `json:"arch"`
+	AllowDevOverrides bool   `json:"allow_dev_overrides"`
 }
 
 func Get(component string) Info {
 	return Info{
-		Component: component,
-		Version:   Version,
-		GitCommit: GitCommit,
-		BuildDate: BuildDate,
-		GoVersion: runtime.Version(),
-		OS:        runtime.GOOS,
-		Arch:      runtime.GOARCH,
+		Component:         component,
+		Version:           Version,
+		GitCommit:         GitCommit,
+		BuildDate:         BuildDate,
+		GoVersion:         runtime.Version(),
+		OS:                runtime.GOOS,
+		Arch:              runtime.GOARCH,
+		AllowDevOverrides: DevOverridesAllowed(),
 	}
 }
 
 func (i Info) String() string {
-	return fmt.Sprintf("%s %s (commit: %s, built: %s, %s/%s, %s)",
-		i.Component, i.Version, i.GitCommit, i.BuildDate, i.OS, i.Arch, i.GoVersion)
+	return fmt.Sprintf("%s %s (commit: %s, built: %s, %s/%s, %s, dev-overrides: %v)",
+		i.Component, i.Version, i.GitCommit, i.BuildDate, i.OS, i.Arch, i.GoVersion, i.AllowDevOverrides)
 }
 
 func (i Info) JSON() string {

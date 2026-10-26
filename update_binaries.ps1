@@ -1,5 +1,6 @@
 param(
-    [string]$Version = ""
+    [string]$Version = "",
+    [string]$AllowDevOverrides = "true"
 )
 $ErrorActionPreference = "Stop"
 $rootDir = $PSScriptRoot
@@ -26,7 +27,7 @@ Write-Host ">>> Compiling Windows AMD64 Binaries ($Version, Commit: $gitCommit).
 # 1. Compile bapedge
 Push-Location "bap-edge"
 try {
-    $ldflags = "-s -w -X bap-edge/pkg/version.Version=$Version -X bap-edge/pkg/version.GitCommit=$gitCommit -X bap-edge/pkg/version.BuildDate=$buildDate"
+    $ldflags = "-s -w -X bap-edge/pkg/version.Version=$Version -X bap-edge/pkg/version.GitCommit=$gitCommit -X bap-edge/pkg/version.BuildDate=$buildDate -X bap-edge/pkg/version.AllowDevOverrides=$AllowDevOverrides"
     Remove-Item -Force "bapedge.exe" -ErrorAction SilentlyContinue
     go build -ldflags $ldflags -o bapedge.exe .
 } finally {

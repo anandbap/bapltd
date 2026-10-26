@@ -3,6 +3,8 @@ package cmd
 import (
 	"os"
 	"testing"
+
+	"bap-edge/pkg/version"
 )
 
 func TestDevOverride_AgentInvocationBlocked(t *testing.T) {
@@ -78,5 +80,30 @@ func TestDevOverride_DevelopmentModeAllowedWithoutAdminToken(t *testing.T) {
 	active, _ = devOverrideActive()
 	if active {
 		t.Fatal("expected devOverrideActive to be false after off")
+	}
+}
+
+func TestDevOverride_CompiledOutWhenAllowDevOverridesFalse(t *testing.T) {
+	orig := version.AllowDevOverrides
+	version.AllowDevOverrides = "false"
+	defer func() { version.AllowDevOverrides = orig }()
+
+	t.Setenv("BAP_ENVIRONMENT", "development")
+	t.Setenv("BAP_DEV_OVERRIDE", "1")
+	t.Setenv("LTD_SOURCE", "human")
+
+	active, _ := devOverrideActive()
+	if active {
+		t.Fatal("expected devOverrideActive to be false when AllowDevOverrides is false")
+	}
+
+	err := RunDevOverride([]string{"on"})
+	if err == nil {
+		t.Fatal("expected RunDevOverride on to fail when AllowDevOverrides is false")
+	}
+
+	err = RunDevOverride([]string{"status"})
+	if err == nil {
+		t.Fatal("expected RunDevOverride status to fail when AllowDevOverrides is false")
 	}
 }

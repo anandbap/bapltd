@@ -1296,10 +1296,17 @@ func parseDevOverrideExpiry(raw string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// AllowDevOverrides controls whether developer override features are permitted.
+// Injected at compile-time via -ldflags "-X 'main.AllowDevOverrides=false'".
+var AllowDevOverrides = "true"
+
 // devOverrideActive reports whether the human operator has opened a time-boxed development
 // window. It relaxes only the anti-tampering rules on BAP's own files and binaries so BAP itself
 // can be developed under BAP. Credential protection, revocation and Cedar policy stay in force.
 func devOverrideActive() (bool, string) {
+	if !strings.EqualFold(strings.TrimSpace(AllowDevOverrides), "true") {
+		return false, ""
+	}
 	configuredAdmin := resolveConfiguredAdminToken()
 
 	// 1. Check environment variable BAP_DEV_OVERRIDE or BAP_DEV_MODE
