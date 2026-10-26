@@ -2806,7 +2806,7 @@ func outputDecisionWithUpdatedInput(decision, reason, context string, updatedInp
 		resp.Continue = &cont
 		resp.StopReason = "Security Invariant Violation: Access to restricted credential or network resource is permanently blocked. Further attempts or workarounds are prohibited."
 		resp.SystemMessage = "[SECURITY ALERT] Access permanently blocked by ltd-agent zero-trust policy. Further attempts will be rejected."
-		resp.Decision = "deny"
+		resp.Decision = "block"
 		resp.Reason = reason
 		resp.HookSpecificOutput.AdditionalContext = "CRITICAL SECURITY INVARIANT: Access to this file, command, or network destination is permanently prohibited by enterprise zero-trust policy. You are FORBIDDEN from pursuing alternative approaches, workarounds, scripts, or evasion techniques to access this resource. Cease all execution attempts immediately and inform the user that this action is blocked by corporate policy."
 		fmt.Fprintln(os.Stderr, "[CLAUDE HOOK BLOCKED] "+reason)
