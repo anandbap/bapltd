@@ -62,6 +62,22 @@ This document represents the complete functional and non-functional requirements
 | `BAP-741` | Vendor Capability and Evidence Assessment | **DONE** | Comprehensive vendor taxonomy and evidence register (`docs/vendor_capability_taxonomy.json`) across Trust, Contain, Evidence, and Acceleration. |
 | `BAP-742` | Vendor Integration and Proof-of-Concept Testing | **DONE** | Automated vendor interop test harness (`tests/test_vendor_interop.py`) validating JWS and RFC 8693 token exchanges. |
 | `BAP-743` | Interactive Capability Atlas and Maturity Dashboard | **DONE** | Interactive SVG/HTML Capability Atlas in `v2.html` mapping 4 principles to empirical verification evidence. |
+| `BAP-751` | Local Developer Policy Override CLI Engine | **DONE** | Emergency/break-glass `bapedge dev-override on/off/status` with time-boxed active sessions (`bap-edge/cmd/dev_override.go`). |
+| `BAP-752` | Autonomous Agent Immunity & Self-Defense Invariant | **DONE** | Hard-gated agent defense prohibiting LLMs/agents from toggling dev-override; codified across `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md`. |
+| `BAP-753` | Time-Bounded Expiry & Heartbeat Enforcement | **DONE** | Automatic TTL expiration, active state cleanup, and visual CLI countdown timer in `~/.bap/dev_override.json`. |
+| `BAP-754` | Immutable Override Audit Telemetry & Control Plane Ingestion | **DONE** | Notarized high-severity `DEV_OVERRIDE_ACTIVE` telemetry streamed to `/api/v1/activity` with operator identity and TTL. |
+| `BAP-761` | Session-Level Prompt Ingestion & REST Telemetry API | **DONE** | Real-time agent conversational prompt ingestion via `POST /api/v1/sessions/prompt` in `bap-controlplane/internal/api/sessions.go`. |
+| `BAP-762` | Real-Time Conversation Modal & Interactive Message Thread View | **DONE** | Dynamic conversation thread cockpit modal in `v3.html` rendering stylized user requests, agent responses, tool calls, and receipts. |
+| `BAP-763` | Sensitive Data Redaction & Regex DLP Sanitization | **DONE** | In-flight secret and token masking (`sanitizePromptText`) before telemetry persistence in the control plane database. |
+| `BAP-764` | Prompt History Correlation with Cedar Enforcement & Audit Lineage | **DONE** | Unified event correlation linking prompt IDs to Cedar PEP execution decisions and cryptographic audit hashes in `v3.html`. |
+| `BAP-771` | Composite Session Deduplication & Concurrency Collision Elimination | **DONE** | Multi-agent dashboard deduplication key (`session_id || agent_id || trace_id`) preventing concurrent agent starvation in `v3.html`. |
+| `BAP-772` | Antigravity MCP Session Binding & Launcher Context Inheritance | **DONE** | Auto-binding `bapmcp` processes to active launcher session contexts via `os.Getenv("BAP_SESSION_ID")` in `bap-edge/cmd/mcp_enroll.go`. |
+| `BAP-773` | Autonomous Background Prompt Tail Engine for Google Antigravity | **DONE** | Background tail loop ingesting Antigravity IDE `transcript.jsonl` `<USER_REQUEST>` blocks into control plane prompts asynchronously. |
+| `BAP-774` | Canonical Persona & User Attribution Normalization | **DONE** | Fallback attribution hierarchy (`sess.UserEmail` -> `sess.UserID` -> `"Developer"`) and canonical agent labels eliminating "NA" badges. |
+| `BAP-781` | Compile-Time Variable Injection for Developer Overrides | **DONE** | Go linker flag injection (`-X bap-edge/pkg/version.AllowDevOverrides=false`) decoupling enterprise production from dev builds. |
+| `BAP-782` | Edge Daemon & Hook Enforcement Hard-Gating | **DONE** | Strict rejection of `dev-override` CLI commands and override bypass logic when built in enterprise production mode. |
+| `BAP-783` | Enterprise CI/CD Pipeline & Cross-Platform Release Hardening | **DONE** | GitHub Actions CI/release workflows enforcing stripped enterprise binaries while retaining dev overrides for local workstation use. |
+| `BAP-784` | Windows CI Process Decoupling & Test Concurrency Isolation | **DONE** | `isTestEnv()` execution guards in `watch.go` and `mcp_enroll.go` preventing detached daemon spawning and Windows file locks during tests. |
 
 ### MVP exit sequence
 
@@ -105,6 +121,11 @@ This document represents the complete functional and non-functional requirements
    - [Epic 29: Beyond-Hook Enforcement & Enterprise Defense Hardening (BAP-EPIC-29)](#epic-29-beyond-hook-enforcement--enterprise-defense-hardening-bap-epic-29)
    - [Epic 30: Multi-Agent Tool Governance & 5-Layer Defense-in-Depth (BAP-EPIC-30)](#epic-30-multi-agent-tool-governance--5-layer-defense-in-depth-bap-epic-30)
    - [Epic 31: Enterprise Launch Readiness, Client–Server Versioning Scheme & Protocol Compatibility Governance (BAP-EPIC-31)](#epic-31-enterprise-launch-readiness-client-server-versioning-scheme--protocol-compatibility-governance-bap-epic-31)
+5. [Advanced Multi-Agent Governance, Developer Experience & Supply-Chain Hardening](#advanced-multi-agent-governance-developer-experience--supply-chain-hardening)
+   - [Epic 38: Time-Boxed Developer Override, Anti-Tamper Suspension & Agent Self-Defense Invariants (BAP-EPIC-38)](#epic-38-time-boxed-developer-override-anti-tamper-suspension--agent-self-defense-invariants-bap-epic-38--bap-750)
+   - [Epic 39: Interactive Session Conversation Cockpit & Privacy-Preserving Prompt Telemetry (BAP-EPIC-39)](#epic-39-interactive-session-conversation-cockpit--privacy-preserving-prompt-telemetry-bap-epic-39--bap-760)
+   - [Epic 40: Concurrent Multi-Workload Telemetry & Autonomous IDE Prompt Ingestion (BAP-EPIC-40)](#epic-40-concurrent-multi-workload-telemetry--autonomous-ide-prompt-ingestion-bap-epic-40--bap-770)
+   - [Epic 41: Enterprise Compile-Time Developer Feature Stripping & Pipeline Hardening (BAP-EPIC-41)](#epic-41-enterprise-compile-time-developer-feature-stripping--pipeline-hardening-bap-epic-41--bap-780)
    - [Core Architectural Invariants & Adversarial Test Matrix](#core-architectural-invariants--adversarial-test-matrix)
 
 ---
@@ -149,6 +170,10 @@ This document represents the complete functional and non-functional requirements
 | `BAP-EPIC-35` | Evidence, Detection & Incident Response (BAP-721–BAP-724) | Security Assurance v3.0 | **DONE** |
 | `BAP-EPIC-36` | Risk-Based Agent Acceleration (BAP-731–BAP-733) | Security Assurance v3.0 | **DONE** |
 | `BAP-EPIC-37` | Vendor Integration & Coverage Validation (BAP-741–BAP-743) | Security Assurance v3.0 | **DONE** |
+| `BAP-EPIC-38` | Time-Boxed Developer Override & Agent Self-Defense (BAP-751–BAP-754) | Enterprise Hardening v2.5 | **DONE** |
+| `BAP-EPIC-39` | Interactive Session Conversation Cockpit & Telemetry (BAP-761–BAP-764) | Enterprise Observability v2.5 | **DONE** |
+| `BAP-EPIC-40` | Concurrent Multi-Workload & Autonomous IDE Ingestion (BAP-771–BAP-774) | Enterprise Multi-Agent v2.6 | **DONE** |
+| `BAP-EPIC-41` | Enterprise Compile-Time Feature Stripping & Hardening (BAP-781–BAP-784) | Enterprise Release v2.6 | **DONE** |
 
 ---
 
@@ -3407,3 +3432,201 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 * **Priority**: `P1 - High`
 * **Implementation Evidence**:
   - Live interactive Capability Atlas in `bap-controlplane/internal/dashboardui/web/v2.html` at `/dashboard/#capability-atlas`.
+
+---
+
+## Advanced Multi-Agent Governance, Developer Experience & Supply-Chain Hardening
+
+### Epic 38: Time-Boxed Developer Override, Anti-Tamper Suspension & Agent Self-Defense Invariants (BAP-EPIC-38 / BAP-750)
+**Summary**: Provide a resilient, time-bounded developer override workflow (`bapedge dev-override on/off/status`) for emergency developer operations while enforcing agent self-defense invariants that unconditionally prevent autonomous AI agents from disabling or weakening their own governance controls.
+
+#### Story BAP-751: Local Developer Policy Override CLI Engine
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**: Implement developer CLI commands `bapedge dev-override on [--duration <d>] [--reason <r>]`, `off`, and `status`. State is maintained locally in `~/.bap/dev_override.json`.
+- **Security Rationale**: Developers facing unclassified legacy scripts or break-glass incidents require temporary bypass capability without needing to uninstall security hooks or deploy cluster-wide policy modifications. A local, auditable override allows emergency operations while maintaining cryptographic accounting.
+- **Acceptance Criteria**:
+  - `Given` a developer workstation with `bapedge`,
+  - `When` the developer invokes `bapedge dev-override on --duration 15m --reason "emergency test"`,
+  - `Then` an override record is created with active state, activation timestamp, expiration timestamp, operator identity, and reason.
+- **Implementation Evidence**:
+  - Implemented in `bap-edge/cmd/dev_override.go` and integrated into root command in `bap-edge/cmd/root.go`.
+
+#### Story BAP-752: Autonomous Agent Immunity & Self-Defense Invariant
+- **Type**: Story | **Points**: 8 | **Priority**: Highest | **Status**: `DONE`
+- **Description**: Hard-gate `bapedge dev-override` activation against AI agent execution by inspecting caller environment (`LTD_SOURCE`, `AGENT_NAME`) and ancestor process trees.
+- **Security Rationale**: Autonomous agents (Claude Code, Google Antigravity, GitHub Copilot) must never possess the authority to disable their own security guardrails. Allowing agents to toggle dev-override would render Zero-Trust enforcement vulnerable to prompt injection and autonomous containment evasion.
+- **Acceptance Criteria**:
+  - `Given` a execution context where `LTD_SOURCE` is populated or parent process is an AI agent,
+  - `When` an agent attempts to execute `bapedge dev-override on`,
+  - `Then` the command is unconditionally rejected with exit code 1 and error `developer override cannot be toggled by an autonomous agent process`.
+- **Implementation Evidence**:
+  - Hard-gated in `bap-edge/cmd/dev_override.go` line 67; enterprise boundary invariants enforced across `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md`.
+
+#### Story BAP-753: Time-Bounded Expiry & Heartbeat Enforcement Engine
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**: Implement automatic expiration and cleanup of developer overrides, enforcing a maximum duration ceiling and real-time expiration checks.
+- **Security Rationale**: Permanent bypasses lead to security posture drift and forgotten exposures. Time-bounding guarantees that workstations return to full Zero-Trust enforcement automatically.
+- **Acceptance Criteria**:
+  - `Given` an active override session with expiration timestamp $T_{exp}$,
+  - `When` $T_{now} > T_{exp}$,
+  - `Then` `IsDevOverrideActive()` evaluates to `false`, `bapedge dev-override status` reports `EXPIRED`, and PEP interceptors immediately resume strict Cedar policy evaluation.
+- **Implementation Evidence**:
+  - Dynamic expiry validation in `bap-edge/cmd/dev_override.go` (`IsDevOverrideActive`) and `cchook/interceptor.go`.
+
+#### Story BAP-754: Immutable Override Audit Telemetry & Control Plane Ingestion
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**: Notarize all developer override state transitions (activation, deactivation, expiration, and bypassed commands) as high-severity audit telemetry streamed to the control plane.
+- **Security Rationale**: Break-glass actions must provide total non-repudiation and immediate visibility to enterprise SOC/SIEM analysts.
+- **Acceptance Criteria**:
+  - `Given` an override state change or command execution during active override,
+  - `When` the event occurs,
+  - `Then` an audit event with `action=DEV_OVERRIDE_ACTIVE`, operator identity, duration, and cryptographic receipt hash is posted to `/api/v1/activity`.
+- **Implementation Evidence**:
+  - Telemetry dispatch verified in `bap-edge/cmd/dev_override.go` and `bap-controlplane/internal/api/activity.go`.
+
+---
+
+### Epic 39: Interactive Session Conversation Cockpit & Privacy-Preserving Prompt Telemetry (BAP-EPIC-39 / BAP-760)
+**Summary**: Establish an end-to-end conversation cockpit and telemetry pipeline capturing, sanitizing, and visualizing multi-agent conversational prompts and tool execution receipts in real time.
+
+#### Story BAP-761: Session-Level Prompt Ingestion & REST Telemetry API
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**: Implement REST endpoint `POST /api/v1/sessions/prompt` on the control plane to ingest user requests, agent thinking tokens, and prompt metadata.
+- **Security Rationale**: Effective agent governance requires visibility into user intent. Correlating raw tool calls with the initiating user prompt allows security teams to distinguish legitimate operator instructions from autonomous prompt injection.
+- **Acceptance Criteria**:
+  - `Given` an active agent session,
+  - `When` a prompt payload is posted to `/api/v1/sessions/prompt` with `session_id`, `prompt_text`, `agent_type`, and timestamp,
+  - `Then` the control plane stores the prompt thread linked to the session and broadcasts updates across active dashboard SSE connections.
+- **Implementation Evidence**:
+  - Implemented in `bap-controlplane/internal/api/sessions.go` (`RecordPromptHandler`) and `bap-controlplane/internal/store/memory.go` (`AddPrompt`).
+
+#### Story BAP-762: Real-Time Conversation Modal & Interactive Message Thread View
+- **Type**: Story | **Points**: 8 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**: Develop an interactive Conversation Modal within `v3.html` web dashboard rendering chronological user prompts, assistant thoughts, tool calls, and Cedar PEP authorization receipts.
+- **Security Rationale**: Security analysts and lead engineers need an intuitive, unified visual cockpit to inspect full conversational trajectories without manually parsing disjointed log files.
+- **Acceptance Criteria**:
+  - `Given` the live dashboard at `v3.html`,
+  - `When` an analyst clicks on a session's conversation trigger or prompt chip,
+  - `Then` a modal opens displaying the chronological thread of `<USER_REQUEST>` messages, agent responses, tool invocation badges, and decision receipts.
+- **Implementation Evidence**:
+  - Implemented in `bap-controlplane/internal/dashboardui/web/v3.html` (`openConversationModal`, `loadConversationThread`, `#conv-modal`).
+
+#### Story BAP-763: Sensitive Data Redaction & Regex DLP Sanitization
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**: Apply regex DLP masking and high-entropy secret redaction to prompt text prior to persistence and control plane broadcast.
+- **Security Rationale**: Prompts frequently contain passwords, API tokens, authorization headers, or private keys. Sanitizing at ingestion protects against secret proliferation in audit logs.
+- **Acceptance Criteria**:
+  - `Given` a user prompt containing bearer tokens, private keys, or API tokens,
+  - `When` ingested by the control plane,
+  - `Then` sensitive substrings are masked (e.g. `[REDACTED_API_KEY]`) before storage and broadcast.
+- **Implementation Evidence**:
+  - Implemented via `sanitizePromptText` in `bap-controlplane/internal/api/sessions.go` and edge broker telemetry sanitization.
+
+#### Story BAP-764: Prompt History Correlation with Cedar Enforcement & Audit Lineage
+- **Type**: Story | **Points**: 5 | **Priority**: P2 - Medium | **Status**: `DONE`
+- **Description**: Correlate prompt IDs directly with downstream tool execution receipts, Cedar PEP evaluation results, and SHA-256 audit hashes.
+- **Security Rationale**: Guarantees end-to-end cryptographic and causality lineage linking user intent directly to executed shell commands and network requests.
+- **Acceptance Criteria**:
+  - `Given` an execution activity event,
+  - `When` viewed in the dashboard timeline or exported to SIEM,
+  - `Then` the event includes correlated `prompt_id` and `session_id` references linking the action to the originating prompt.
+- **Implementation Evidence**:
+  - Correlation lineage integrated into `bap-controlplane/internal/api/activity.go` and rendered in `v3.html`.
+
+---
+
+### Epic 40: Concurrent Multi-Workload Telemetry & Autonomous IDE Prompt Ingestion (BAP-EPIC-40 / BAP-770)
+**Summary**: Harden multi-agent telemetry deduplication across concurrent AI agent workloads (Claude Code, Google Antigravity, GitHub Copilot), auto-bind IDE MCP child processes to active launcher sessions, and ingest IDE prompt transcripts asynchronously.
+
+#### Story BAP-771: Composite Session Deduplication & Concurrency Collision Elimination
+- **Type**: Story | **Points**: 5 | **Priority**: Highest | **Status**: `DONE`
+- **Description**: Re-architect dashboard live feed deduplication using composite keys (`session_id || agent_id || trace_id`), preventing concurrent agent workloads on the same machine from overwriting or starving each other.
+- **Security Rationale**: Developers routinely execute multiple agents concurrently (e.g. Claude Code in CLI and Antigravity in IDE). Keying solely by `agent_id` or machine caused feed starvation, delayed telemetry, and session collisions.
+- **Acceptance Criteria**:
+  - `Given` Claude Code and Google Antigravity running simultaneously on the same host,
+  - `When` both emit telemetry events,
+  - `Then` both sessions remain distinct in the live dashboard without overwriting or disappearing.
+- **Implementation Evidence**:
+  - Implemented in `bap-controlplane/internal/dashboardui/web/v3.html` line 921 (`var k = a.session_id || a.agent_id || a.trace_id || ('evt-' + i);`).
+
+#### Story BAP-772: Antigravity MCP Session Binding & Launcher Context Inheritance
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**: Propagate ambient `BAP_SESSION_ID` into `bapmcp` enroll processes, ensuring MCP servers invoked by IDE plugins bind to the active launcher session.
+- **Security Rationale**: Unbound MCP processes create detached anonymous sessions that fragment telemetry and prevent end-to-end session correlation.
+- **Acceptance Criteria**:
+  - `Given` `BAP_SESSION_ID` exported by an active launcher shell,
+  - `When` `bapmcp` or `mcp-enroll` is invoked,
+  - `Then` the process tree inherits and uses the active `BAP_SESSION_ID` for all downstream tool executions and prompt posts.
+- **Implementation Evidence**:
+  - Implemented in `bap-edge/cmd/mcp_enroll.go` lines 42-50.
+
+#### Story BAP-773: Autonomous Background Prompt Tail Engine for Google Antigravity
+- **Type**: Story | **Points**: 8 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**: Implement asynchronous file-tailing engine (`startAntigravityPromptTail`) in `bap-edge` to ingest `<USER_REQUEST>` prompts from Antigravity IDE `transcript.jsonl` files.
+- **Security Rationale**: Google Antigravity writes conversation transcripts to disk rather than providing CLI hook points. Background tailing provides continuous prompt visibility without modifying IDE core binaries.
+- **Acceptance Criteria**:
+  - `Given` Google Antigravity writing prompts to `.gemini/antigravity/brain/*/transcript.jsonl`,
+  - `When` a new `<USER_REQUEST>` prompt is written,
+  - `Then` `startAntigravityPromptTail` reads the block, cleans prompt delimiters, and posts the prompt to `/api/v1/sessions/prompt`.
+- **Implementation Evidence**:
+  - Implemented in `bap-edge/cmd/mcp_enroll.go` lines 145-230 with incremental offset tracking.
+
+#### Story BAP-774: Canonical Persona & User Attribution Normalization
+- **Type**: Story | **Points**: 5 | **Priority**: P2 - Medium | **Status**: `DONE`
+- **Description**: Standardize agent persona branding (`"Google Antigravity"`, `"Claude Code"`, `"GitHub Copilot"`) and implement user attribution hierarchy (`UserEmail` -> `UserID` -> `"Developer"`).
+- **Security Rationale**: Prevents uninformative `"NA"` badges on enterprise activity feeds, ensuring SOC analysts immediately recognize the human user and agent runtime.
+- **Acceptance Criteria**:
+  - `Given` incoming activity events with varying user attributes,
+  - `When` processed by the control plane API,
+  - `Then` user identity resolves via the fallback hierarchy and agent types are displayed with canonical enterprise labels.
+- **Implementation Evidence**:
+  - Implemented in `bap-controlplane/internal/api/activity.go` lines 194-205.
+
+---
+
+### Epic 41: Enterprise Compile-Time Developer Feature Stripping & Pipeline Hardening (BAP-EPIC-41 / BAP-780)
+**Summary**: Enforce compile-time stripping of developer override features for enterprise production builds and automated CI pipelines via Go linker flags, while decoupling test environments from detached background daemons to ensure robust cross-platform builds.
+
+#### Story BAP-781: Compile-Time Variable Injection for Developer Overrides
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**: Add package variable `AllowDevOverrides = "true"` in `bap-edge/pkg/version/version.go` and expose `DevOverridesAllowed()` evaluation gate.
+- **Security Rationale**: Enterprise production binaries must never include dormant break-glass capabilities that could be activated by attackers compromising host configuration files or environment variables. Compile-time stripping physically removes the code path.
+- **Acceptance Criteria**:
+  - `Given` a binary built with `-ldflags "-X bap-edge/pkg/version.AllowDevOverrides=false"`,
+  - `When` `version.DevOverridesAllowed()` is called,
+  - `Then` it returns `false`, and all dev-override functionality is completely disabled.
+- **Implementation Evidence**:
+  - Implemented in `bap-edge/pkg/version/version.go` and verified in `bap-edge/cmd/dev_override_test.go`.
+
+#### Story BAP-782: Edge Daemon & Hook Enforcement Hard-Gating
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**: Hard-gate `bapedge dev-override` CLI commands and `cchook-interceptor` override checks behind `version.DevOverridesAllowed()`.
+- **Security Rationale**: Production edge daemons and interceptors must strictly reject override commands and ignore any local override files if built in enterprise mode.
+- **Acceptance Criteria**:
+  - `Given` an enterprise production binary (`DevOverridesAllowed() == false`),
+  - `When` a user or agent invokes `bapedge dev-override on` or executes commands while `dev_override.json` exists,
+  - `Then` the command fails with `developer override features are disabled in this enterprise production build` and the interceptor enforces Cedar policies unconditionally.
+- **Implementation Evidence**:
+  - Gated in `bap-edge/cmd/dev_override.go` lines 38, 79, 102 and `cchook/interceptor.go` lines 118-124.
+
+#### Story BAP-783: Enterprise CI/CD Pipeline & Cross-Platform Release Hardening
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**: Configure GitHub Actions CI and Release pipelines to inject `-X bap-edge/pkg/version.AllowDevOverrides=false` for all automated builds and release artifacts, while preserving `AllowDevOverrides=true` for local development builds.
+- **Security Rationale**: Automates supply chain security by ensuring no production artifact released to GitHub or enterprise registries retains developer override capability.
+- **Acceptance Criteria**:
+  - `Given` a build executed by `.github/workflows/ci.yml`, `.github/workflows/release.yml`, or `build_all_platforms.ps1`,
+  - `When` binaries are compiled,
+  - `Then` `-X bap-edge/pkg/version.AllowDevOverrides=false` is passed in `-ldflags`.
+- **Implementation Evidence**:
+  - Updated in `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `update_binaries.ps1`, and `build_all_platforms.ps1`.
+
+#### Story BAP-784: Windows CI Process Decoupling & Test Concurrency Isolation
+- **Type**: Story | **Points**: 8 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**: Implement `isTestEnv()` execution guards in `watch.go` and `mcp_enroll.go` to prevent unit tests from spawning detached background processes (`cmd.test.exe`) that cause Windows file-lock deletion errors in CI.
+- **Security Rationale**: Reliable CI pipelines require deterministic test teardown without orphan daemon processes locking binary test artifacts on Windows runners.
+- **Acceptance Criteria**:
+  - `Given` `go test ./...` running under Windows CI,
+  - `When` tests execute `RunSessionStart` or `startAntigravityPromptTail`,
+  - `Then` `isTestEnv()` detects active test runners via `flag.Lookup("test.v")` and disables detached background respawning, allowing clean binary cleanup.
+- **Implementation Evidence**:
+  - Implemented in `bap-edge/cmd/watch.go` lines 182-187 and `bap-edge/cmd/mcp_enroll.go`. Unit test suite passing cleanly in CI.
