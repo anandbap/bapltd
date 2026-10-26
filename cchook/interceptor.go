@@ -35,6 +35,23 @@ type CallerProcessInfo struct {
 	AppID      string `json:"app_id"`
 }
 
+// UniversalHookResponse enforces the canonical contract across Claude, Codex, Copilot, etc.
+type UniversalHookResponse struct {
+	Status   string `json:"status"`
+	Continue bool   `json:"continue"`
+	Message  string `json:"message,omitempty"`
+}
+
+func emitUniversalSuccess() {
+	resp := UniversalHookResponse{
+		Status:   "ok",
+		Continue: true,
+	}
+	data, _ := json.Marshal(resp)
+	os.Stdout.Write(append(data, '\n'))
+	os.Exit(0)
+}
+
 /*
 	if runtime.GOOS == "windows" {
 		kernel32 := syscall.NewLazyDLL("kernel32.dll")
@@ -766,8 +783,9 @@ type HookSpecificOutput struct {
 	UpdatedInput             *ToolInput `json:"updatedInput,omitempty"`
 }
 
-// HookResponse is the top-level response expected by Claude Code.
+// HookResponse is the top-level response expected by Claude Code and Codex.
 type HookResponse struct {
+	Status             string             `json:"status,omitempty"`
 	Continue           *bool              `json:"continue,omitempty"`
 	StopReason         string             `json:"stopReason,omitempty"`
 	SystemMessage      string             `json:"systemMessage,omitempty"`
@@ -1873,8 +1891,7 @@ func handleSessionStartHook(payload HookPayload) {
 	}
 
 	// Valid for both Claude-compatible hooks and Codex lifecycle hooks.
-	os.Stdout.WriteString("{\"status\":\"ok\",\"continue\":true}\n")
-	os.Exit(0)
+	emitUniversalSuccess()
 }
 
 func handleSessionEndHook(payload HookPayload) {
@@ -1917,8 +1934,7 @@ func handleSessionEndHook(payload HookPayload) {
 		cleanupSessionMarkers(sessionID, rawPPID)
 	}
 
-	os.Stdout.WriteString("{\"status\":\"ok\",\"continue\":true}\n")
-	os.Exit(0)
+	emitUniversalSuccess()
 }
 
 func cleanupSessionMarkers(sessionID string, pid int) {
@@ -2308,8 +2324,7 @@ func handleUserPromptHook(payload HookPayload) {
 	}
 
 	// Valid for both Claude-compatible hooks and Codex lifecycle hooks.
-	os.Stdout.WriteString("{\"status\":\"ok\",\"continue\":true}\n")
-	os.Exit(0)
+	emitUniversalSuccess()
 }
 
 func main() {
@@ -2820,6 +2835,7 @@ func outputDecisionWithUpdatedInput(decision, reason, context string, updatedInp
 	if decision == "deny" {
 		cont := false
 		resp.Continue = &cont
+		resp.Status = "blocked"
 		resp.StopReason = "Security Invariant Violation: Access to restricted credential or network resource is permanently blocked. Further attempts or workarounds are prohibited."
 		resp.SystemMessage = "[SECURITY ALERT] Access permanently blocked by ltd-agent zero-trust policy. Further attempts will be rejected."
 		resp.Decision = "block"
@@ -2827,6 +2843,9 @@ func outputDecisionWithUpdatedInput(decision, reason, context string, updatedInp
 		resp.HookSpecificOutput.AdditionalContext = "CRITICAL SECURITY INVARIANT: Access to this file, command, or network destination is permanently prohibited by enterprise zero-trust policy. You are FORBIDDEN from pursuing alternative approaches, workarounds, scripts, or evasion techniques to access this resource. Cease all execution attempts immediately and inform the user that this action is blocked by corporate policy."
 		fmt.Fprintln(os.Stderr, "[CLAUDE HOOK BLOCKED] "+reason)
 	} else if decision == "allow" {
+		cont := true
+		resp.Continue = &cont
+		resp.Status = "ok"
 		resp.Decision = "allow"
 		if context != "" {
 			resp.SystemMessage = context
