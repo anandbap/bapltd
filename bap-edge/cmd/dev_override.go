@@ -1,10 +1,6 @@
 package cmd
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -19,58 +15,91 @@ const maxDevOverrideWindow = 12 * time.Hour
 const defaultDevOverrideWindow = 4 * time.Hour
 
 type devOverrideFile struct {
-	Active      bool      `json:"active"`
-	ActivatedAt time.Time `json:"activated_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	AuthorizedBy string   `json:"authorized_by"`
-	AuthMethod  string    `json:"auth_method"`
-	Reason      string    `json:"reason,omitempty"`
-	Signature   string    `json:"signature,omitempty"`
+	Active       bool      `json:"active"`
+	ActivatedAt  time.Time `json:"activated_at"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	AuthorizedBy string    `json:"authorized_by"`
+	Reason       string    `json:"reason,omitempty"`
 }
 
-func computeOverrideSignature(d devOverrideFile, secret string) string {
-	payload := fmt.Sprintf("%v|%d|%d|%s|%s", d.Active, d.ActivatedAt.Unix(), d.ExpiresAt.Unix(), d.AuthorizedBy, d.AuthMethod)
-	h := hmac.New(sha256.New, []byte(secret))
-	h.Write([]byte(payload))
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-func resolveConfiguredAdminToken() string {
-	if t := strings.TrimSpace(os.Getenv("BAP_CISO_TOKEN")); t != "" {
-		return t
+// resolveEnvironment returns the deployment environment from BAP_ENVIRONMENT or config.
+// Unset or unknown environments default strictly to "production" (fail-closed).
+func resolveEnvironment() string {
+	if e := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_ENVIRONMENT"))); e != "" {
+		return e
 	}
 	cfgCandidates := []string{
 		filepath.Join(".bap", "bap-config.json"),
 		filepath.Join(".bap", "config.json"),
 		"bap-config.json",
+		"../bap-config.json",
 	}
 	if home, _ := os.UserHomeDir(); home != "" {
 		cfgCandidates = append(cfgCandidates,
 			filepath.Join(home, ".bapstate", "config.json"),
 			filepath.Join(home, ".bap", "config.json"),
+			filepath.Join(home, ".bap", "bap-config.json"),
 		)
 	}
 	for _, p := range cfgCandidates {
 		if data, err := os.ReadFile(p); err == nil {
 			var cfg struct {
-				AdminToken       string `json:"admin_token"`
-				CISOToken        string `json:"ciso_token"`
-				DevOverrideToken string `json:"dev_override_token"`
+				Environment string `json:"environment"`
+			}
+			if json.Unmarshal(data, &cfg) == nil && cfg.Environment != "" {
+				return strings.ToLower(strings.TrimSpace(cfg.Environment))
+			}
+		}
+	}
+	return "production"
+}
+
+// isDeveloperModeAllowed returns true ONLY when:
+// 1. The environment is explicitly "development", "dev", or "local".
+// 2. Developer feature flag is enabled ("developer_features": true, "developer_mode": true, or BAP_DEVELOPER_FEATURES=1).
+// In "production", "staging", or unconfigured environments, it ALWAYS returns false (fail-closed).
+func isDeveloperModeAllowed() (bool, string) {
+	env := resolveEnvironment()
+	switch env {
+	case "development", "dev", "local":
+		// valid dev environment
+	default:
+		return false, fmt.Sprintf("environment is %q (developer override is strictly prohibited in production)", env)
+	}
+
+	// Check feature flag
+	if e := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_DEVELOPER_FEATURES"))); e == "true" || e == "1" || e == "on" {
+		return true, ""
+	}
+	if e := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_DEVELOPER_MODE"))); e == "true" || e == "1" || e == "on" {
+		return true, ""
+	}
+
+	cfgCandidates := []string{
+		filepath.Join(".bap", "bap-config.json"),
+		filepath.Join(".bap", "config.json"),
+		"bap-config.json",
+	}
+	for _, p := range cfgCandidates {
+		if data, err := os.ReadFile(p); err == nil {
+			var cfg struct {
+				DeveloperFeatures bool `json:"developer_features"`
+				DeveloperMode     bool `json:"developer_mode"`
 			}
 			if json.Unmarshal(data, &cfg) == nil {
-				if cfg.AdminToken != "" {
-					return cfg.AdminToken
-				}
-				if cfg.CISOToken != "" {
-					return cfg.CISOToken
-				}
-				if cfg.DevOverrideToken != "" {
-					return cfg.DevOverrideToken
+				if cfg.DeveloperFeatures || cfg.DeveloperMode {
+					return true, ""
 				}
 			}
 		}
 	}
-	return ""
+
+	// If environment was explicitly configured as development/local, permit dev features by default in dev
+	if env == "development" || env == "dev" || env == "local" {
+		return true, ""
+	}
+
+	return false, "developer_features flag is not enabled"
 }
 
 func parseDevOverrideExpiry(raw string) (time.Time, bool) {
@@ -95,24 +124,17 @@ func parseDevOverrideExpiry(raw string) (time.Time, bool) {
 }
 
 func devOverrideActive() (bool, string) {
+	// GATING INVARIANT: Developer features must be allowed (strictly prohibited in production)
+	if allowed, _ := isDeveloperModeAllowed(); !allowed {
+		return false, ""
+	}
+
 	// 1. Check environment variable BAP_DEV_OVERRIDE or BAP_DEV_MODE
 	raw := strings.TrimSpace(os.Getenv("BAP_DEV_OVERRIDE"))
 	if raw == "" {
 		raw = strings.TrimSpace(os.Getenv("BAP_DEV_MODE"))
 	}
 	if raw != "" {
-		// If an admin token is configured, BAP_DEV_OVERRIDE via env must match token or valid expiry
-		configuredAdmin := resolveConfiguredAdminToken()
-		if configuredAdmin != "" {
-			providedToken := strings.TrimSpace(os.Getenv("BAP_ADMIN_TOKEN"))
-			if providedToken == "" {
-				providedToken = raw
-			}
-			if subtle.ConstantTimeCompare([]byte(providedToken), []byte(configuredAdmin)) != 1 {
-				// Mismatch with admin token: cannot activate via env
-				return false, ""
-			}
-		}
 		if until, ok := parseDevOverrideExpiry(raw); ok {
 			now := time.Now()
 			if until.After(now) {
@@ -129,20 +151,12 @@ func devOverrideActive() (bool, string) {
 	if home, _ := os.UserHomeDir(); home != "" {
 		markerCandidates = append(markerCandidates, filepath.Join(home, ".bapstate", "dev-override.json"))
 	}
-	configuredAdmin := resolveConfiguredAdminToken()
 	for _, m := range markerCandidates {
 		if data, err := os.ReadFile(m); err == nil {
 			var d devOverrideFile
 			if json.Unmarshal(data, &d) == nil && d.Active {
-				// Verify cryptographic signature if admin token is configured
-				if configuredAdmin != "" && d.Signature != "" {
-					expectedSig := computeOverrideSignature(d, configuredAdmin)
-					if subtle.ConstantTimeCompare([]byte(d.Signature), []byte(expectedSig)) != 1 {
-						continue // signature mismatch / tampered override file
-					}
-				}
 				if d.ExpiresAt.After(time.Now()) {
-					return true, fmt.Sprintf("[BAP DEV OVERRIDE ACTIVE until %s (Auth: %s)] Anti-tampering checks on BAP files are suspended; credentials, revocation and policy still apply.", d.ExpiresAt.Format(time.RFC3339), d.AuthMethod)
+					return true, fmt.Sprintf("[BAP DEV OVERRIDE ACTIVE until %s] Anti-tampering checks on BAP files are suspended; credentials, revocation and policy still apply.", d.ExpiresAt.Format(time.RFC3339))
 				}
 			}
 		}
@@ -160,10 +174,7 @@ func devOverrideActive() (bool, string) {
 				DevOverride bool `json:"dev_override"`
 			}
 			if json.Unmarshal(data, &cfg) == nil && cfg.DevOverride {
-				// If admin token is configured, config file override alone is not permitted without token
-				if configuredAdmin == "" {
-					return true, "[BAP DEV OVERRIDE ACTIVE via config] Anti-tampering checks on BAP files are suspended; credentials, revocation and policy still apply."
-				}
+				return true, "[BAP DEV OVERRIDE ACTIVE via config] Anti-tampering checks on BAP files are suspended; credentials, revocation and policy still apply."
 			}
 		}
 	}
@@ -171,12 +182,11 @@ func devOverrideActive() (bool, string) {
 	return false, ""
 }
 
-// RunDevOverride manages the developer override window for BAP development.
+// RunDevOverride manages the developer override window for BAP self-development.
 func RunDevOverride(args []string) error {
 	fs := flag.NewFlagSet("dev-override", flag.ContinueOnError)
 	durFlag := fs.Duration("duration", defaultDevOverrideWindow, "Duration of the dev override window (default 4h, max 12h)")
-	tokenFlag := fs.String("token", "", "Admin / CISO token required to authorize dev-override")
-	reasonFlag := fs.String("reason", "BAP local development override", "Reason or ticket for developer override")
+	reasonFlag := fs.String("reason", "BAP local development override", "Reason for developer override")
 
 	if len(args) == 0 {
 		return showDevOverrideStatus()
@@ -192,32 +202,17 @@ func RunDevOverride(args []string) error {
 			return err
 		}
 
-		// Security Invariant 1: Prevent AI agents from enabling dev-override autonomously
+		// Security Invariant 1: Production Lockdown (Fail-Closed)
+		if allowed, reason := isDeveloperModeAllowed(); !allowed {
+			return fmt.Errorf("⛔ Feature Locked: Developer Override is a developers-only feature. It is completely blocked in production (%s).\n   Developer features require 'environment': 'development' in bap-config.json or BAP_ENVIRONMENT=development", reason)
+		}
+
+		// Security Invariant 2: Prevent AI agents from enabling dev-override autonomously
 		if source := os.Getenv("LTD_SOURCE"); source != "" && source != "human" && source != "terminal" {
 			return fmt.Errorf("⛔ Security Invariant Violation: AI agent %q cannot activate developer override. This command requires interactive human administrator authorization", source)
 		}
 		if sessionID := os.Getenv("BAP_SESSION_ID"); sessionID != "" && strings.Contains(sessionID, "agent") {
 			return fmt.Errorf("⛔ Security Invariant Violation: Autonomous agent session cannot activate developer override")
-		}
-
-		// Security Invariant 2: Admin Token Authorization
-		configuredAdmin := resolveConfiguredAdminToken()
-		providedToken := strings.TrimSpace(*tokenFlag)
-		if providedToken == "" {
-			providedToken = strings.TrimSpace(os.Getenv("BAP_ADMIN_TOKEN"))
-		}
-
-		authMethod := "human_terminal"
-		if configuredAdmin != "" {
-			if providedToken == "" {
-				return fmt.Errorf("⛔ Authorization Required: An Admin Token is required to activate dev-override.\n   Usage: bapedge dev-override on --token <ADMIN_TOKEN> [--duration 4h]")
-			}
-			if subtle.ConstantTimeCompare([]byte(providedToken), []byte(configuredAdmin)) != 1 {
-				return fmt.Errorf("⛔ Authorization Failed: Invalid Admin Token. Access denied")
-			}
-			authMethod = "admin_token"
-		} else if providedToken != "" {
-			authMethod = "admin_token"
 		}
 
 		dur := *durFlag
@@ -239,17 +234,7 @@ func RunDevOverride(args []string) error {
 			ActivatedAt:  activatedAt,
 			ExpiresAt:    expiresAt,
 			AuthorizedBy: userName,
-			AuthMethod:   authMethod,
 			Reason:       *reasonFlag,
-		}
-
-		// Sign override file if admin token or secret is available
-		secret := configuredAdmin
-		if secret == "" {
-			secret = providedToken
-		}
-		if secret != "" {
-			d.Signature = computeOverrideSignature(d, secret)
 		}
 
 		data, _ := json.MarshalIndent(d, "", "  ")
@@ -259,7 +244,8 @@ func RunDevOverride(args []string) error {
 		}
 
 		fmt.Printf("✅ BAP Developer Override enabled until %s (%s window)\n", expiresAt.Format(time.RFC3339), dur)
-		fmt.Printf("   Authorized by: %s (Method: %s)\n", userName, authMethod)
+		fmt.Printf("   Environment:   %s [DEVELOPER MODE]\n", resolveEnvironment())
+		fmt.Printf("   Authorized by: %s\n", userName)
 		fmt.Println("   Anti-tampering checks on BAP protected files/binaries are suspended.")
 		fmt.Println("   Credential files (.env, AWS, SSH keys) and revocations remain 100% enforced.")
 		fmt.Println("   To disable at any time, run: bapedge dev-override off")
@@ -280,19 +266,21 @@ func RunDevOverride(args []string) error {
 }
 
 func showDevOverrideStatus() error {
+	allowed, reason := isDeveloperModeAllowed()
+	if !allowed {
+		fmt.Printf("🔒 BAP Developer Override is PERMANENTLY DISABLED (%s).\n", reason)
+		fmt.Println("   This feature is locked out of production environments by security policy.")
+		return nil
+	}
+
 	active, banner := devOverrideActive()
 	if active {
 		fmt.Println(banner)
 	} else {
-		configuredAdmin := resolveConfiguredAdminToken()
 		fmt.Println("🔒 BAP Developer Override is INACTIVE. Full anti-tampering enforcement is active.")
-		if configuredAdmin != "" {
-			fmt.Println("   Admin Token protection is ENABLED for this environment.")
-			fmt.Println("   To enable: bapedge dev-override on --token <ADMIN_TOKEN> [--duration 4h]")
-		} else {
-			fmt.Println("   To enable for BAP development: bapedge dev-override on [--token <token>] [--duration 4h]")
-			fmt.Println("   To protect with an Admin Token: configure 'admin_token' in bap-config.json or set BAP_ADMIN_TOKEN")
-		}
+		fmt.Printf("   Environment: %s [DEVELOPER MODE]\n", resolveEnvironment())
+		fmt.Println("   To enable for BAP development: bapedge dev-override on [--duration 4h]")
+		fmt.Println("   Or set environment variable:  $env:BAP_DEV_OVERRIDE=\"1\"")
 	}
 	return nil
 }

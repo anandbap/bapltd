@@ -4,7 +4,8 @@
   "envoy_url": "http://localhost:10000",
   "trust_domain": "bap.internal",
   "environment": "development",
-  "enforcement_mode": "audit",
+  "enforcement_mode": "enforce",
+  "developer_features": true,
   "oidc": {
     "enabled": false
   }
