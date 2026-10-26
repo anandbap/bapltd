@@ -311,6 +311,7 @@ def install_core_binaries(target_dir: str):
         "run_claude_bap",
         "run_cursor_bap",
         "run_gemini_cli_bap",
+        "run_codex_cli_bap",
     ]
 
     wrappers = []
@@ -658,7 +659,91 @@ All terminal and tool commands must be routed through the BAP broker:
         print(f"  {TermColor.GREEN}[+] Python SDK:{TermColor.RESET} Local SDK available at {py_agent_dir}")
         detected_agents.append("Python Agent SDK (Available)")
 
+    # 6. PowerShell Profile Auto-Binding (Codex, Claude Code, Antigravity, Copilot)
+    if sys.platform == "win32":
+        deploy_powershell_profile(target_dir)
+        detected_agents.append("PowerShell Auto-Binding Profile (~/.bap/bap-profile.ps1)")
+
     return detected_agents
+
+
+def deploy_powershell_profile(target_dir: str):
+    """Deploys ~/.bap/bap-profile.ps1 and injects auto-binding into user PowerShell profiles."""
+    home = os.path.expanduser("~")
+    bap_dir = os.path.join(home, ".bap")
+    os.makedirs(bap_dir, exist_ok=True)
+    dst_profile = os.path.join(bap_dir, "bap-profile.ps1")
+    src_profile = os.path.join(REPO_ROOT, "bap", "bap-profile.ps1")
+    if not os.path.isfile(src_profile):
+        src_profile = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bap-profile.ps1")
+    if os.path.isfile(src_profile):
+        shutil.copy2(src_profile, dst_profile)
+        print(f"  {TermColor.GREEN}[+] PowerShell Auto-Binding:{TermColor.RESET} Deployed {dst_profile}")
+
+    source_line = '\n# BAP Zero-Trust Agent Auto-Binding\nif (Test-Path "$env:USERPROFILE\\.bap\\bap-profile.ps1") { . "$env:USERPROFILE\\.bap\\bap-profile.ps1" }\n'
+
+    docs = os.path.join(home, "Documents")
+    onedrive_docs = os.path.join(home, "OneDrive", "Documents")
+    profile_candidates = [
+        os.path.join(docs, "PowerShell", "Microsoft.PowerShell_profile.ps1"),
+        os.path.join(docs, "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1"),
+        os.path.join(onedrive_docs, "PowerShell", "Microsoft.PowerShell_profile.ps1"),
+        os.path.join(onedrive_docs, "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1"),
+    ]
+    for p in profile_candidates:
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            existing = ""
+            if os.path.isfile(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    existing = f.read()
+            if "bap-profile.ps1" not in existing:
+                with open(p, "a", encoding="utf-8") as f:
+                    f.write(source_line)
+                print(f"  {TermColor.GREEN}[+] Configured Auto-Binding in:{TermColor.RESET} {p}")
+        except Exception:
+            pass
+
+    # Also deploy CMD and POSIX shims to ~/.bap/bin for cmd.exe, Win+R Run dialog, and Git Bash
+    bin_dir = os.path.join(bap_dir, "bin")
+    os.makedirs(bin_dir, exist_ok=True)
+    shim_targets = [
+        ("codex", "codex", [
+            os.path.join(home, r"AppData\Local\Programs\OpenAI\Codex\bin\codex.exe"),
+            os.path.join(home, r"AppData\Local\Programs\codex\codex.exe"),
+        ]),
+        ("claude-code", "claude", [
+            os.path.join(home, r".local\bin\claude.exe"),
+            os.path.join(home, r"AppData\Roaming\npm\claude.cmd"),
+        ]),
+        ("antigravity", "agy", [
+            os.path.join(home, r"AppData\Local\agy\bin\agy.exe"),
+            os.path.join(home, r"AppData\Roaming\Antigravity\bin\agy-node.cmd"),
+        ]),
+        ("copilot", "copilot", [
+            os.path.join(home, r"AppData\Local\Microsoft\WinGet\Packages\GitHub.Copilot_Microsoft.Winget.Source_8wekyb3d8bbwe\copilot.exe"),
+            os.path.join(home, r"AppData\Local\Programs\copilot\copilot.exe"),
+        ]),
+    ]
+    for agent_id, cmd_name, candidates in shim_targets:
+        real_bin = None
+        for cand in candidates:
+            if os.path.isfile(cand):
+                real_bin = cand
+                break
+        if not real_bin:
+            resolved = shutil.which(f"{cmd_name}.exe") or shutil.which(cmd_name)
+            if resolved and "bap" not in resolved.lower():
+                real_bin = resolved
+        if real_bin:
+            cmd_shim = os.path.join(bin_dir, f"{cmd_name}.cmd")
+            cmd_content = f"""@echo off\r\nsetlocal EnableExtensions\r\nif "%BAP_SHIM_ACTIVE%"=="1" goto RUN_RAW\r\nset "BAP_SHIM_ACTIVE=1"\r\nset "LTD_SOURCE={agent_id}"\r\nif "%BAP_SESSION_ID%"=="" set "BAP_SESSION_ID=sess-{agent_id}-cmd-%RANDOM%"\r\nif exist "%~dp0bapedge.exe" (\r\n  "%~dp0bapedge.exe" session-start --app-id {agent_id} --session-id %BAP_SESSION_ID% >nul 2>&1\r\n)\r\n:RUN_RAW\r\n"{real_bin}" %*\r\nset "EXIT_CODE=%ERRORLEVEL%"\r\nif "%BAP_SHIM_ACTIVE%"=="1" (\r\n  if exist "%~dp0bapedge.exe" (\r\n    "%~dp0bapedge.exe" session-end --session-id %BAP_SESSION_ID% >nul 2>&1\r\n  )\r\n)\r\nexit /b %EXIT_CODE%\r\n"""
+            try:
+                with open(cmd_shim, "w", encoding="utf-8") as f:
+                    f.write(cmd_content)
+                print(f"  {TermColor.GREEN}[+] Command Prompt / Win+R Shim:{TermColor.RESET} {cmd_shim}")
+            except Exception:
+                pass
 
 
 def verify_controlplane_handshake(server_url: str) -> bool:

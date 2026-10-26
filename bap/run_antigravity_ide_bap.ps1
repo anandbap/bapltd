@@ -22,6 +22,10 @@ $configureFiles = {
     param($Workspace, $SessionId)
     $repoRoot = (Get-Item -Path $PSScriptRoot).FullName
     $mcpCandidates = @(
+        (Join-Path $env:ProgramFiles "BAP\bin\bapmcp.exe"),
+        (Join-Path $env:ProgramFiles "BAP\bapmcp.exe"),
+        (Join-Path $env:USERPROFILE ".bap\bin\bapmcp.exe"),
+        (Join-Path $env:USERPROFILE ".bap\bapmcp.exe"),
         (Join-Path $PSScriptRoot "bapmcp.exe"),
         (Join-Path $repoRoot "bapmcp.exe"),
         (Join-Path $repoRoot "dist\windows-amd64\bapmcp.exe")

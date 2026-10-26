@@ -1076,8 +1076,9 @@ try {
     $candidateHomes = @(
         $BapHome,
         $env:BAP_HOME,
-        (Join-Path $env:USERPROFILE 'pyprj\bapltd'),
+        (Join-Path $env:ProgramFiles 'BAP'),
         (Join-Path $env:USERPROFILE '.bap'),
+        (Join-Path $env:USERPROFILE 'pyprj\bapltd'),
         (Join-Path $env:USERPROFILE 'bin')
     ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) }
 

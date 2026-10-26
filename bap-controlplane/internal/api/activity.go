@@ -208,6 +208,8 @@ func (s *Server) sessionToActivityEvent(sess *session.Session) *types.AgentActiv
 			agentType = "Claude Code"
 		case "copilot":
 			agentType = "GitHub Copilot"
+		case "codex":
+			agentType = "OpenAI Codex"
 		default:
 			agentType = sess.AppID
 		}

@@ -439,9 +439,14 @@ function Ensure-ControlPlaneRunning {
         $portOpen = Test-TcpPortOpen -HostName $uri.Host -Port $uri.Port
         if (-not $portOpen) {
             $cpCandidates = @(
+                (Join-Path $env:ProgramFiles 'BAP\bin\bapcontrolplane.exe'),
+                (Join-Path $env:ProgramFiles 'BAP\bapcontrolplane.exe'),
+                (Join-Path $env:USERPROFILE '.bap\bin\bapcontrolplane.exe'),
+                (Join-Path $env:USERPROFILE '.bap\bapcontrolplane.exe'),
                 (Join-Path $RepoRoot 'dist\windows-amd64\bapcontrolplane.exe'),
                 (Join-Path $RepoRoot 'dist\windows-amd64\controlplane\bapcontrolplane.exe'),
-                (Join-Path $RepoRoot 'bap-controlplane\bapcontrolplane.exe')
+                (Join-Path $RepoRoot 'bap-controlplane\bapcontrolplane.exe'),
+                (Join-Path $RepoRoot 'bapcontrolplane.exe')
             )
             $cpBin = Resolve-BinaryPath -Paths $cpCandidates -Commands @('bapcontrolplane.exe')
             if (-not [string]::IsNullOrWhiteSpace($cpBin)) {
@@ -698,6 +703,7 @@ function Invoke-BapGovernedSession {
     # 1. Parse Launcher/Watchdog mode
     $Mode = 'Launcher'
     $ServerUrl = $null
+    $BapEdgeBin = $null
     $ServerExplicit = $false
     $ManifestArg = $null
     $MutexArg = $null
@@ -835,6 +841,10 @@ function Invoke-BapGovernedSession {
 
         # 5. Resolve Edge Daemon and Interceptor
         $edgeCandidates = @(
+            (Join-Path $env:ProgramFiles 'BAP\bin\bapedge.exe'),
+            (Join-Path $env:ProgramFiles 'BAP\bapedge.exe'),
+            (Join-Path $env:USERPROFILE '.bap\bin\bapedge.exe'),
+            (Join-Path $env:USERPROFILE '.bap\bapedge.exe'),
             (Join-Path $RepoRoot 'dist\windows-amd64\bapedge.exe'),
             (Join-Path $RepoRoot 'bap-edge\bapedge.exe'),
             (Join-Path $RepoRoot 'bapedge.exe')
@@ -1255,10 +1265,27 @@ function Invoke-BapGovernedSession {
             if ($AgentId -eq 'copilot' -and ($TargetBin -like '*gh.exe' -or $TargetBin -like '*\gh') -and ($cliExecArgs.Count -eq 0 -or $cliExecArgs[0] -ne 'copilot')) {
                 $cliExecArgs = @('copilot') + $cliExecArgs
             }
-            & $TargetBin @cliExecArgs
-            $pExit = $LASTEXITCODE
-            $ExitCode = if ($null -eq $pExit) { 0 } else { [int]$pExit }
-            Write-Host "[*] $DisplayName exited with code $ExitCode." -ForegroundColor Gray
+            $cancelHandler = $null
+            try {
+                $cancelHandler = [ConsoleCancelEventHandler]{
+                    param($sender, $eventArgs)
+                    # Intercept Ctrl+C so child process receives signal and terminates,
+                    # while parent PowerShell script remains alive to execute finally cleanup.
+                    $eventArgs.Cancel = $true
+                }
+                [Console]::add_CancelKeyPress($cancelHandler)
+            } catch { }
+
+            try {
+                & $TargetBin @cliExecArgs
+                $pExit = $LASTEXITCODE
+                $ExitCode = if ($null -eq $pExit) { 0 } else { [int]$pExit }
+                Write-Host "[*] $DisplayName exited with code $ExitCode." -ForegroundColor Gray
+            } finally {
+                if ($null -ne $cancelHandler) {
+                    try { [Console]::remove_CancelKeyPress($cancelHandler) } catch { }
+                }
+            }
         }
     }
     catch {
