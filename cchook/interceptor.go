@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"embed"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1038,6 +1041,51 @@ func resolveEnvironment() string {
 	return "production"
 }
 
+func resolveConfiguredAdminToken() string {
+	if t := strings.TrimSpace(os.Getenv("BAP_CISO_TOKEN")); t != "" {
+		return t
+	}
+	cfgCandidates := []string{
+		filepath.Join(".bap", "bap-config.json"),
+		filepath.Join(".bap", "config.json"),
+		"bap-config.json",
+	}
+	if home, _ := os.UserHomeDir(); home != "" {
+		cfgCandidates = append(cfgCandidates,
+			filepath.Join(home, ".bapstate", "config.json"),
+			filepath.Join(home, ".bap", "config.json"),
+		)
+	}
+	for _, p := range cfgCandidates {
+		if data, err := os.ReadFile(p); err == nil {
+			var cfg struct {
+				AdminToken       string `json:"admin_token"`
+				CISOToken        string `json:"ciso_token"`
+				DevOverrideToken string `json:"dev_override_token"`
+			}
+			if json.Unmarshal(data, &cfg) == nil {
+				if cfg.AdminToken != "" {
+					return cfg.AdminToken
+				}
+				if cfg.CISOToken != "" {
+					return cfg.CISOToken
+				}
+				if cfg.DevOverrideToken != "" {
+					return cfg.DevOverrideToken
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func computeOverrideSignature(active bool, activatedAt, expiresAt int64, authorizedBy, authMethod, secret string) string {
+	payload := fmt.Sprintf("%v|%d|%d|%s|%s", active, activatedAt, expiresAt, authorizedBy, authMethod)
+	h := hmac.New(sha256.New, []byte(secret))
+	h.Write([]byte(payload))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 func parseDevOverrideExpiry(raw string) (time.Time, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -1063,12 +1111,23 @@ func parseDevOverrideExpiry(raw string) (time.Time, bool) {
 // window. It relaxes only the anti-tampering rules on BAP's own files and binaries so BAP itself
 // can be developed under BAP. Credential protection, revocation and Cedar policy stay in force.
 func devOverrideActive() (bool, string) {
+	configuredAdmin := resolveConfiguredAdminToken()
+
 	// 1. Check environment variable BAP_DEV_OVERRIDE or BAP_DEV_MODE
 	raw := strings.TrimSpace(os.Getenv("BAP_DEV_OVERRIDE"))
 	if raw == "" {
 		raw = strings.TrimSpace(os.Getenv("BAP_DEV_MODE"))
 	}
 	if raw != "" {
+		if configuredAdmin != "" {
+			providedToken := strings.TrimSpace(os.Getenv("BAP_ADMIN_TOKEN"))
+			if providedToken == "" {
+				providedToken = raw
+			}
+			if subtle.ConstantTimeCompare([]byte(providedToken), []byte(configuredAdmin)) != 1 {
+				return false, ""
+			}
+		}
 		if until, ok := parseDevOverrideExpiry(raw); ok {
 			now := time.Now()
 			if until.After(now) {
@@ -1088,12 +1147,22 @@ func devOverrideActive() (bool, string) {
 	for _, m := range markerCandidates {
 		if data, err := os.ReadFile(m); err == nil {
 			var d struct {
-				Active    bool      `json:"active"`
-				ExpiresAt time.Time `json:"expires_at"`
+				Active       bool      `json:"active"`
+				ActivatedAt  time.Time `json:"activated_at"`
+				ExpiresAt    time.Time `json:"expires_at"`
+				AuthorizedBy string    `json:"authorized_by"`
+				AuthMethod   string    `json:"auth_method"`
+				Signature    string    `json:"signature,omitempty"`
 			}
 			if json.Unmarshal(data, &d) == nil && d.Active {
+				if configuredAdmin != "" && d.Signature != "" {
+					expectedSig := computeOverrideSignature(d.Active, d.ActivatedAt.Unix(), d.ExpiresAt.Unix(), d.AuthorizedBy, d.AuthMethod, configuredAdmin)
+					if subtle.ConstantTimeCompare([]byte(d.Signature), []byte(expectedSig)) != 1 {
+						continue
+					}
+				}
 				if d.ExpiresAt.After(time.Now()) {
-					return true, fmt.Sprintf("[BAP DEV OVERRIDE ACTIVE until %s] Anti-tampering checks on BAP files are suspended; credentials, revocation and policy still apply.", d.ExpiresAt.Format(time.RFC3339))
+					return true, fmt.Sprintf("[BAP DEV OVERRIDE ACTIVE until %s (Auth: %s)] Anti-tampering checks on BAP files are suspended; credentials, revocation and policy still apply.", d.ExpiresAt.Format(time.RFC3339), d.AuthMethod)
 				}
 			}
 		}
@@ -1111,7 +1180,9 @@ func devOverrideActive() (bool, string) {
 				DevOverride bool `json:"dev_override"`
 			}
 			if json.Unmarshal(data, &cfg) == nil && cfg.DevOverride {
-				return true, "[BAP DEV OVERRIDE ACTIVE via config] Anti-tampering checks on BAP files are suspended; credentials, revocation and policy still apply."
+				if configuredAdmin == "" {
+					return true, "[BAP DEV OVERRIDE ACTIVE via config] Anti-tampering checks on BAP files are suspended; credentials, revocation and policy still apply."
+				}
 			}
 		}
 	}
