@@ -103,14 +103,24 @@ func inspectCallerProcess(pid int) CallerProcessInfo {
 	return info
 }
 
+// processStem lower-cases a process name and drops a trailing .exe so "bash.exe" and "bash"
+// are treated alike.
+func processStem(exeName string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(exeName)), ".exe")
+}
+
 func isTransientShell(exeName string) bool {
-	lower := strings.ToLower(exeName)
-	switch lower {
-	case "cmd.exe", "powershell.exe", "pwsh.exe", "cmd", "powershell", "pwsh", "sh", "bash", "zsh", "conhost.exe", "conhost":
+	switch processStem(exeName) {
+	case "cmd", "powershell", "pwsh", "sh", "bash", "zsh", "dash", "fish", "conhost", "env", "wsl", "wslhost", "mintty":
 		return true
 	default:
 		return false
 	}
+}
+
+// isClaudeBinary matches the per-session Claude Code process (claude / claude.exe).
+func isClaudeBinary(exeName string) bool {
+	return strings.Contains(processStem(exeName), "claude")
 }
 
 func isAgentBinary(exeName string) bool {
@@ -125,56 +135,76 @@ func isAgentBinary(exeName string) bool {
 		lower == "code"
 }
 
+const maxAncestryDepth = 16
+
+// watchPIDFor returns the PID a watcher should monitor. A shell that exits with the hook is
+// never a valid target: pid 0 makes the watcher follow the session marker instead, which the
+// SessionEnd hook removes.
+func watchPIDFor(pid int, caller CallerProcessInfo) int {
+	if isTransientShell(caller.BinaryName) {
+		return 0
+	}
+	return pid
+}
+
+// pickAgentProcess walks up from the hook's parent and returns the process whose lifetime
+// matches the agent session, never a shell that exits as soon as the hook finishes.
+//
+//   - Shells (cmd, pwsh, bash, sh ...) are skipped at any depth, with or without ".exe".
+//   - An unreadable process name is skipped, not treated as the end of the chain.
+//   - The nearest claude/claude.exe wins: it is the per-session CLI process, so the session
+//     ends when it exits. The desktop app that hosts it keeps running and must not pin it.
+//   - Other agents (node, bun, code, antigravity, copilot, cursor) climb to the topmost
+//     contiguous agent process, since helper workers are ephemeral.
+//
+// If only shells are found it returns initialPID so the caller can detect that case.
+func pickAgentProcess(initialPID int, parentOf func(int) int, nameOf func(int) string) int {
+	topAgent := 0
+	firstOwner := 0
+	cur := initialPID
+	for i := 0; i < maxAncestryDepth && cur > 0; i++ {
+		name := nameOf(cur)
+		switch {
+		case name == "" || isTransientShell(name):
+			// skip: unreadable or short-lived
+		case isClaudeBinary(name):
+			return cur
+		case isAgentBinary(name):
+			topAgent = cur
+		default:
+			if topAgent != 0 {
+				return topAgent
+			}
+			if firstOwner == 0 {
+				firstOwner = cur
+			}
+		}
+		next := parentOf(cur)
+		if next <= 0 || next == cur {
+			break
+		}
+		cur = next
+	}
+	if topAgent != 0 {
+		return topAgent
+	}
+	if firstOwner != 0 {
+		return firstOwner
+	}
+	return initialPID
+}
+
 // resolveAgentProcess inspects caller process ancestry to pierce through transient shells,
 // npm shims, and ephemeral child workers (e.g. Bun/Node helper processes spawned for hooks)
 // to find the true, long-running root agent process.
 func resolveAgentProcess(initialPID int) (int, CallerProcessInfo) {
-	currPID := initialPID
-	currInfo := inspectCallerProcess(currPID)
-
-	bestPID := currPID
-	bestInfo := currInfo
-
-	if isAgentBinary(currInfo.BinaryName) {
-		bestPID = currPID
-		bestInfo = currInfo
-	}
-
-	for i := 0; i < 12; i++ {
-		parentPID := getParentPID(currPID)
-		if parentPID <= 0 || parentPID == currPID {
-			break
+	bestPID := pickAgentProcess(initialPID, getParentPID, func(pid int) string {
+		if p := getProcessExecutablePath(pid); p != "" {
+			return filepath.Base(p)
 		}
-		parentInfo := inspectCallerProcess(parentPID)
-		if parentInfo.BinaryName == "" {
-			break
-		}
-
-		if isAgentBinary(parentInfo.BinaryName) {
-			bestPID = parentPID
-			bestInfo = parentInfo
-			currPID = parentPID
-			currInfo = parentInfo
-			continue
-		}
-
-		if isTransientShell(parentInfo.BinaryName) {
-			grandPID := getParentPID(parentPID)
-			if grandPID > 0 && grandPID != parentPID {
-				grandInfo := inspectCallerProcess(grandPID)
-				if isAgentBinary(grandInfo.BinaryName) {
-					bestPID = grandPID
-					bestInfo = grandInfo
-					currPID = grandPID
-					currInfo = grandInfo
-					continue
-				}
-			}
-			break
-		}
-
-		break
-	}
+		return ""
+	})
+	bestInfo := inspectCallerProcess(bestPID)
 
 	baseLower := strings.ToLower(bestInfo.BinaryName)
 	switch {
@@ -1667,7 +1697,7 @@ func handleSessionStartHook(payload HookPayload) {
 		ltdBin = findBinary("bapedge")
 	}
 	if ltdBin != "" && !launcherOwnsWatcher {
-		wCmd := exec.Command(ltdBin, "watch", fmt.Sprintf("--pid=%d", targetPID), fmt.Sprintf("--server=%s", serverURL), fmt.Sprintf("--session-id=%s", sessionID), fmt.Sprintf("--app-id=%s", appID), "--detach")
+		wCmd := exec.Command(ltdBin, "watch", fmt.Sprintf("--pid=%d", watchPIDFor(targetPID, caller)), fmt.Sprintf("--server=%s", serverURL), fmt.Sprintf("--session-id=%s", sessionID), fmt.Sprintf("--app-id=%s", appID), "--detach")
 		_ = wCmd.Start()
 	}
 
@@ -1971,7 +2001,7 @@ func ensureSessionAndWatcher(sessionID, serverURL string) {
 	}
 
 	// 3. Spawn detached watcher monitoring the true root agent PID
-	wCmd := exec.Command(ltdBin, "watch", fmt.Sprintf("--pid=%d", targetPID), fmt.Sprintf("--server=%s", serverURL), fmt.Sprintf("--session-id=%s", sessionID), fmt.Sprintf("--app-id=%s", caller.AppID), "--detach")
+	wCmd := exec.Command(ltdBin, "watch", fmt.Sprintf("--pid=%d", watchPIDFor(targetPID, caller)), fmt.Sprintf("--server=%s", serverURL), fmt.Sprintf("--session-id=%s", sessionID), fmt.Sprintf("--app-id=%s", caller.AppID), "--detach")
 	if err := wCmd.Start(); err != nil {
 		hookLog("ensureSessionAndWatcher: failed to spawn watcher for %s: %v", sessionID, err)
 		return
@@ -2296,7 +2326,7 @@ func main() {
 			ltdBin = findBinary("bapedge")
 		}
 		if ltdBin != "" {
-			wCmd := exec.Command(ltdBin, "watch", fmt.Sprintf("--pid=%d", targetPID), fmt.Sprintf("--server=%s", serverURL), fmt.Sprintf("--session-id=%s", sessionID), fmt.Sprintf("--app-id=%s", caller.AppID), "--detach")
+			wCmd := exec.Command(ltdBin, "watch", fmt.Sprintf("--pid=%d", watchPIDFor(targetPID, caller)), fmt.Sprintf("--server=%s", serverURL), fmt.Sprintf("--session-id=%s", sessionID), fmt.Sprintf("--app-id=%s", caller.AppID), "--detach")
 			_ = wCmd.Start()
 		}
 	}
