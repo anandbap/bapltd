@@ -315,6 +315,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/sessions/heartbeat", s.handleHeartbeat)
 	s.mux.HandleFunc("/api/v1/sessions/end", s.handleSessionEnd)
 	s.mux.HandleFunc("/api/v1/sessions/prompt", s.handleSessionPrompt)
+	s.mux.HandleFunc("/api/v1/sessions/response", s.handleSessionResponse)
+	s.mux.HandleFunc("/api/v1/sessions/transcript", s.handleSessionTranscript)
 	s.mux.HandleFunc("/api/v1/sessions", s.handleListSessions)
 	s.mux.HandleFunc("/api/v1/sessions/", s.handleGetSession)
 	s.mux.HandleFunc("/api/v1/auth/envoy", s.handleEnvoyExtAuthz)
@@ -2255,6 +2257,130 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// maxAgentResponseBytes bounds a single stored agent response.
+const maxAgentResponseBytes = 64 << 10
+
+// handleSessionResponse records the agent's reply to the latest prompt. The Stop hook is the
+// producer and only sends text when response capture is enabled at the edge.
+func (s *Server) handleSessionResponse(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req struct {
+		SessionID     string `json:"session_id"`
+		AgentResponse string `json:"agent_response"`
+		Producer      string `json:"producer"`
+		ResponseHash  string `json:"response_hash"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request payload: "+err.Error())
+		return
+	}
+	if req.SessionID == "" {
+		writeError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+	if req.Producer != "claude-lifecycle-hook" && req.Producer != "bap-agent" {
+		writeError(w, http.StatusBadRequest, "response telemetry must come from an authorized agent producer")
+		return
+	}
+	if s.sessionStore == nil || s.auditStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "Session store unavailable")
+		return
+	}
+	if s.sessionStore.IsRevoked(req.SessionID) || s.sessionStore.IsUserRevoked(req.SessionID) {
+		writeError(w, http.StatusForbidden, "Session authority has been revoked by administrator.")
+		return
+	}
+	sess, err := s.sessionStore.Get(req.SessionID)
+	if err != nil || sess == nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	if len(req.AgentResponse) > maxAgentResponseBytes {
+		req.AgentResponse = req.AgentResponse[:maxAgentResponseBytes] + "\n[truncated]"
+	}
+	// Idempotent replays: the event id is derived from the response digest.
+	eventID := fmt.Sprintf("ev-response-%s", req.ResponseHash)
+	if req.ResponseHash == "" {
+		eventID = fmt.Sprintf("ev-response-%d", time.Now().UnixNano())
+	}
+	_, _ = s.auditStore.Ingest([]audit.Event{{
+		EventID:       eventID,
+		SessionID:     req.SessionID,
+		Source:        sess.AppID,
+		Executable:    "agent_response",
+		FullCommand:   "AGENT_RESPONSE",
+		Decision:      "allow",
+		Reason:        "Agent reply recorded at BAP Edge",
+		Timestamp:     time.Now().UTC().Format(time.RFC3339),
+		AgentResponse: req.AgentResponse,
+		UserID:        sess.UserID,
+		UserEmail:     sess.UserEmail,
+	}})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "recorded"})
+}
+
+// handleSessionTranscript returns every prompt, agent reply and governed action for a session,
+// oldest first, so the dashboard can show the whole conversation rather than the latest prompt.
+func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	sessionID := r.URL.Query().Get("session_id")
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+	if s.auditStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "Audit store unavailable")
+		return
+	}
+	type item struct {
+		Kind      string `json:"kind"` // prompt | response | action
+		Timestamp string `json:"timestamp"`
+		Text      string `json:"text,omitempty"`
+		Action    string `json:"action,omitempty"`
+		Decision  string `json:"decision,omitempty"`
+		Reason    string `json:"reason,omitempty"`
+		Intent    string `json:"intent,omitempty"`
+		EventHash string `json:"event_hash"`
+		PrevHash  string `json:"previous_hash"`
+		Captured  bool   `json:"captured"`
+	}
+	items := make([]item, 0)
+	for _, ev := range s.auditStore.ListBySession(sessionID) {
+		it := item{Timestamp: ev.Timestamp, Decision: ev.Decision, Reason: ev.Reason,
+			EventHash: ev.EventHash, PrevHash: ev.PreviousHash}
+		switch ev.FullCommand {
+		case "USER_PROMPT_SUBMITTED":
+			it.Kind, it.Text, it.Intent, it.Captured = "prompt", ev.UserPrompt, ev.PrimaryIntent, ev.PromptCaptured
+		case "AGENT_RESPONSE":
+			it.Kind, it.Text, it.Captured = "response", ev.AgentResponse, ev.AgentResponse != ""
+		default:
+			it.Kind, it.Action = "action", ev.FullCommand
+		}
+		items = append(items, it)
+	}
+	isAdmin := s.isAdminCaller(r) || (s.adminToken == "" && isLoopbackAddress(r.RemoteAddr))
+	if !isAdmin {
+		for i := range items {
+			if items[i].Text != "" {
+				items[i].Text = "[Protected: Leadership Authentication Required]"
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id": sessionID,
+		"count":      len(items),
+		"items":      items,
+		"unlocked":   isAdmin,
+	})
+}
+
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -3198,7 +3324,7 @@ func redactedTelemetry(value any) any {
 		case map[string]any:
 			for key, item := range v {
 				switch key {
-				case "user_prompt", "prompt_hash", "user_id", "user_email", "owner_email", "session_id", "instance_id", "spiffe_id", "hostname", "prompt_summary":
+				case "user_prompt", "agent_response", "prompt_hash", "user_id", "user_email", "owner_email", "session_id", "instance_id", "spiffe_id", "hostname", "prompt_summary":
 					if item != "" && item != nil {
 						v[key] = "[Protected: Admin Authentication Required]"
 					}

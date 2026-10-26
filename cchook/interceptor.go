@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -363,6 +364,124 @@ func shouldCaptureUserPrompt() bool {
 	return true
 }
 
+// shouldCaptureAgentResponse mirrors shouldCaptureUserPrompt: raw agent output retention is an
+// independent privacy choice that defaults to following the prompt-capture setting.
+func shouldCaptureAgentResponse() bool {
+	if value := strings.TrimSpace(os.Getenv("BAP_CAPTURE_AGENT_RESPONSE")); value != "" {
+		if enabled, err := strconv.ParseBool(value); err == nil {
+			return enabled
+		}
+	}
+	for _, cfgPath := range []string{filepath.Join(".bap", "bap-config.json"), filepath.Join(".bap", "config.json"), "bap-config.json", "../bap-config.json"} {
+		if cfgData, err := os.ReadFile(cfgPath); err == nil {
+			var cfg struct {
+				CaptureAgentResponse *bool `json:"capture_agent_response"`
+			}
+			if json.Unmarshal(cfgData, &cfg) == nil && cfg.CaptureAgentResponse != nil {
+				return *cfg.CaptureAgentResponse
+			}
+		}
+	}
+	return shouldCaptureUserPrompt()
+}
+
+// lastAssistantText returns the assistant text produced since the most recent user prompt in a
+// Claude Code JSONL transcript. Tool-result turns are not prompts, so they do not reset it.
+func lastAssistantText(transcriptPath string) string {
+	data, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		return ""
+	}
+	var parts []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var entry struct {
+			Type    string `json:"type"`
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &entry) != nil {
+			continue
+		}
+		var blocks []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		switch entry.Type {
+		case "user":
+			var asString string
+			if json.Unmarshal(entry.Message.Content, &asString) == nil {
+				parts = nil
+			} else if json.Unmarshal(entry.Message.Content, &blocks) == nil {
+				for _, b := range blocks {
+					if b.Type == "text" {
+						parts = nil
+					}
+				}
+			}
+		case "assistant":
+			if json.Unmarshal(entry.Message.Content, &blocks) == nil {
+				for _, b := range blocks {
+					if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+						parts = append(parts, b.Text)
+					}
+				}
+			}
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n\n"))
+}
+
+// handleStopHook reports the agent's finished reply so the dashboard can show it next to the
+// prompt. It is telemetry only: it never blocks the agent from stopping.
+func handleStopHook(payload HookPayload) {
+	defer func() {
+		os.Stdout.WriteString("{}\n")
+		os.Exit(0)
+	}()
+	if !shouldCaptureAgentResponse() {
+		return
+	}
+	response := strings.TrimSpace(payload.LastAssistantMessage)
+	if response == "" && payload.TranscriptPath != "" {
+		response = lastAssistantText(payload.TranscriptPath)
+	}
+	if response == "" {
+		return
+	}
+	serverURL := resolveServerURL()
+	sessionID := resolveSessionID(payload)
+	if sessionID == "" {
+		targetPID, caller := resolveAgentProcess(os.Getppid())
+		sessionID = fmt.Sprintf("sess-%s-pid-%d", caller.AppID, targetPID)
+	}
+	if serverURL == "" {
+		return
+	}
+	digest := sha256.Sum256([]byte(sessionID + "\x00" + response))
+	reqBody, _ := json.Marshal(map[string]any{
+		"session_id":     sessionID,
+		"producer":       "claude-lifecycle-hook",
+		"agent_response": response,
+		"response_hash":  fmt.Sprintf("%x", digest[:]),
+	})
+	client := getHTTPClient()
+	client.Timeout = 2 * time.Second
+	resp, err := client.Post(serverURL+"/api/v1/sessions/response", "application/json", bytes.NewReader(reqBody))
+	if err != nil || resp == nil {
+		hookLog("response delivery failed (session %s): %v", sessionID, err)
+		return
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		hookLog("response POST returned HTTP %d (session %s)", resp.StatusCode, sessionID)
+	}
+}
+
 func promptPathForSession(sessionID string) string {
 	sum := sha256.Sum256([]byte(sessionID))
 	return filepath.Join(".bap", "prompts", fmt.Sprintf("%x.txt", sum[:]))
@@ -435,6 +554,10 @@ type HookPayload struct {
 	UserPrompt    string    `json:"user_prompt,omitempty"`
 	Prompt        string    `json:"prompt,omitempty"`
 	SessionID     string    `json:"session_id,omitempty"`
+
+	// Stop hook fields.
+	TranscriptPath       string `json:"transcript_path,omitempty"`
+	LastAssistantMessage string `json:"last_assistant_message,omitempty"`
 }
 
 // HookSpecificOutput represents the PreToolUse decision schema.
@@ -887,13 +1010,234 @@ func isProtectedBAPAsset(pathStr string) bool {
 	return false
 }
 
+const maxDevOverrideWindow = 12 * time.Hour
+
+// resolveEnvironment returns the deployment environment from BAP_ENVIRONMENT or the first config
+// that declares one. An unknown environment is treated as production.
+func resolveEnvironment() string {
+	if e := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_ENVIRONMENT"))); e != "" {
+		return e
+	}
+	cfgCandidates := []string{filepath.Join(".bap", "bap-config.json"), filepath.Join(".bap", "config.json"), "bap-config.json", "../bap-config.json"}
+	if home, _ := os.UserHomeDir(); home != "" {
+		cfgCandidates = append(cfgCandidates,
+			filepath.Join(home, ".bapstate", "config.json"),
+			filepath.Join(home, ".bap", "config.json"),
+			filepath.Join(home, ".bap", "bap-config.json"))
+	}
+	for _, p := range cfgCandidates {
+		if data, err := os.ReadFile(p); err == nil {
+			var cfg struct {
+				Environment string `json:"environment"`
+			}
+			if json.Unmarshal(data, &cfg) == nil && cfg.Environment != "" {
+				return strings.ToLower(strings.TrimSpace(cfg.Environment))
+			}
+		}
+	}
+	return "production"
+}
+
+func parseDevOverrideExpiry(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false
+	}
+	lower := strings.ToLower(raw)
+	if lower == "1" || lower == "true" || lower == "on" || lower == "yes" || lower == "active" {
+		return time.Now().Add(maxDevOverrideWindow), true
+	}
+	if dur, err := time.ParseDuration(raw); err == nil && dur > 0 {
+		if dur > maxDevOverrideWindow {
+			dur = maxDevOverrideWindow
+		}
+		return time.Now().Add(dur), true
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
+}
+
+// devOverrideActive reports whether the human operator has opened a time-boxed development
+// window. It relaxes only the anti-tampering rules on BAP's own files and binaries so BAP itself
+// can be developed under BAP. Credential protection, revocation and Cedar policy stay in force.
+func devOverrideActive() (bool, string) {
+	// 1. Check environment variable BAP_DEV_OVERRIDE or BAP_DEV_MODE
+	raw := strings.TrimSpace(os.Getenv("BAP_DEV_OVERRIDE"))
+	if raw == "" {
+		raw = strings.TrimSpace(os.Getenv("BAP_DEV_MODE"))
+	}
+	if raw != "" {
+		if until, ok := parseDevOverrideExpiry(raw); ok {
+			now := time.Now()
+			if until.After(now) {
+				return true, fmt.Sprintf("[BAP DEV OVERRIDE ACTIVE until %s] Anti-tampering checks on BAP files are suspended; credentials, revocation and policy still apply.", until.Format(time.RFC3339))
+			}
+		}
+	}
+
+	// 2. Check marker file: .bap/dev-override.json or ~/.bapstate/dev-override.json
+	markerCandidates := []string{
+		filepath.Join(".bap", "dev-override.json"),
+		"dev-override.json",
+	}
+	if home, _ := os.UserHomeDir(); home != "" {
+		markerCandidates = append(markerCandidates, filepath.Join(home, ".bapstate", "dev-override.json"))
+	}
+	for _, m := range markerCandidates {
+		if data, err := os.ReadFile(m); err == nil {
+			var d struct {
+				Active    bool      `json:"active"`
+				ExpiresAt time.Time `json:"expires_at"`
+			}
+			if json.Unmarshal(data, &d) == nil && d.Active {
+				if d.ExpiresAt.After(time.Now()) {
+					return true, fmt.Sprintf("[BAP DEV OVERRIDE ACTIVE until %s] Anti-tampering checks on BAP files are suspended; credentials, revocation and policy still apply.", d.ExpiresAt.Format(time.RFC3339))
+				}
+			}
+		}
+	}
+
+	// 3. Check bap-config.json
+	cfgCandidates := []string{
+		filepath.Join(".bap", "bap-config.json"),
+		filepath.Join(".bap", "config.json"),
+		"bap-config.json",
+	}
+	for _, p := range cfgCandidates {
+		if data, err := os.ReadFile(p); err == nil {
+			var cfg struct {
+				DevOverride bool `json:"dev_override"`
+			}
+			if json.Unmarshal(data, &cfg) == nil && cfg.DevOverride {
+				return true, "[BAP DEV OVERRIDE ACTIVE via config] Anti-tampering checks on BAP files are suspended; credentials, revocation and policy still apply."
+			}
+		}
+	}
+
+	return false, ""
+}
+
+func stripHeredocs(cmdStr string) string {
+	lines := strings.Split(cmdStr, "\n")
+	var result []string
+	var heredocDelim string
+	inHeredoc := false
+	isStripTabs := false
+
+	heredocRe := regexp.MustCompile(`<<(-)?\s*(?:'([^']+)'|"([^"]+)"|\\?([a-zA-Z0-9_]+))`)
+
+	for _, line := range lines {
+		if inHeredoc {
+			checkLine := strings.TrimRight(line, "\r")
+			if isStripTabs {
+				checkLine = strings.TrimLeft(checkLine, "\t ")
+			}
+			if checkLine == heredocDelim {
+				inHeredoc = false
+				heredocDelim = ""
+			}
+			continue
+		}
+
+		result = append(result, line)
+
+		if matches := heredocRe.FindStringSubmatch(line); len(matches) > 0 {
+			isStripTabs = matches[1] == "-"
+			delim := matches[2]
+			if delim == "" {
+				delim = matches[3]
+			}
+			if delim == "" {
+				delim = matches[4]
+			}
+			if delim != "" {
+				inHeredoc = true
+				heredocDelim = delim
+			}
+		}
+	}
+	return strings.Join(result, "\n")
+}
+
+func pathMatchesProtectedAsset(p, asset string) bool {
+	p = strings.Trim(strings.TrimSpace(p), `"'`)
+	p = strings.TrimSuffix(filepath.ToSlash(p), "/")
+	asset = strings.TrimSuffix(filepath.ToSlash(asset), "/")
+	if strings.EqualFold(p, asset) || strings.HasSuffix(strings.ToLower(p), "/"+strings.ToLower(asset)) {
+		return true
+	}
+	return false
+}
+
+func splitShellWords(cmd string) []string {
+	var words []string
+	var cur strings.Builder
+	inSingle := false
+	inDouble := false
+	for i := 0; i < len(cmd); i++ {
+		ch := cmd[i]
+		if ch == '\'' && !inDouble {
+			inSingle = !inSingle
+			cur.WriteByte(ch)
+		} else if ch == '"' && !inSingle {
+			inDouble = !inDouble
+			cur.WriteByte(ch)
+		} else if (ch == ' ' || ch == '\t') && !inSingle && !inDouble {
+			if cur.Len() > 0 {
+				words = append(words, cur.String())
+				cur.Reset()
+			}
+		} else {
+			cur.WriteByte(ch)
+		}
+	}
+	if cur.Len() > 0 {
+		words = append(words, cur.String())
+	}
+	return words
+}
+
+func splitSubCommands(cmd string) []string {
+	var subs []string
+	var cur strings.Builder
+	inSingle := false
+	inDouble := false
+	for i := 0; i < len(cmd); i++ {
+		ch := cmd[i]
+		if ch == '\'' && !inDouble {
+			inSingle = !inSingle
+			cur.WriteByte(ch)
+		} else if ch == '"' && !inSingle {
+			inDouble = !inDouble
+			cur.WriteByte(ch)
+		} else if !inSingle && !inDouble && (ch == '\n' || ch == ';' || ch == '|' || (ch == '&' && i+1 < len(cmd) && cmd[i+1] == '&')) {
+			if cur.Len() > 0 {
+				subs = append(subs, strings.TrimSpace(cur.String()))
+				cur.Reset()
+			}
+			if ch == '&' {
+				i++ // skip second '&'
+			}
+		} else {
+			cur.WriteByte(ch)
+		}
+	}
+	if cur.Len() > 0 {
+		subs = append(subs, strings.TrimSpace(cur.String()))
+	}
+	return subs
+}
+
 func isTamperingCommand(cmdStr string) (bool, string) {
-	lower := strings.ToLower(filepath.ToSlash(cmdStr))
+	stripped := stripHeredocs(cmdStr)
+	lower := strings.ToLower(filepath.ToSlash(stripped))
+
 	protected := []string{
 		"policy.cedar",
 		".claude/settings.json",
 		".claude/hooks",
-		".bap/",
 		".bap-session.json",
 		".bap-revoked",
 		"bap-config.json",
@@ -905,21 +1249,105 @@ func isTamperingCommand(cmdStr string) (bool, string) {
 		"bapcontrolplane",
 		"bapgateway.exe",
 		"bapgateway",
+		".bap",
 	}
-	destructive := []string{
-		"rm ", "rm -", "del ", "erase ", "remove-item", "unlink", "rmdir", "rd /", "rd ",
-		">", ">>", "set-content", "out-file", "add-content", "truncate", "sed ",
-		"ren ", "rename ", "move ", "mv ", "copy ", "cp ", "chmod ", "attrib ",
-	}
+
+	// Quick check: does the stripped command mention any protected asset?
+	hasProtected := false
 	for _, p := range protected {
 		if strings.Contains(lower, p) {
-			for _, d := range destructive {
-				if strings.Contains(lower, d) {
-					return true, fmt.Sprintf("Security Invariant Violation: Direct modification, deletion, or tampering with BAP protected asset %q is strictly forbidden.", p)
+			hasProtected = true
+			break
+		}
+	}
+	if !hasProtected {
+		return false, ""
+	}
+
+	// 1. Check redirection targets: > target, >> target, 1> target, 2> target
+	redirRe := regexp.MustCompile(`(?:[0-9&]?>>?)\s*("[^"]+"|\'[^\']+\'|[^\s;&|]+)`)
+	for _, match := range redirRe.FindAllStringSubmatch(stripped, -1) {
+		target := match[1]
+		for _, p := range protected {
+			if pathMatchesProtectedAsset(target, p) {
+				return true, fmt.Sprintf("Security Invariant Violation: Direct modification, deletion, or tampering with BAP protected asset %q is strictly forbidden.", p)
+			}
+		}
+	}
+
+	// 2. Check destructive commands across subcommands
+	subCmds := splitSubCommands(stripped)
+	for _, sub := range subCmds {
+		words := splitShellWords(sub)
+		if len(words) == 0 {
+			continue
+		}
+		cmdName := strings.ToLower(filepath.Base(strings.Trim(words[0], `"'`)))
+		cmdName = strings.TrimSuffix(cmdName, ".exe")
+
+		switch cmdName {
+		case "rm", "del", "erase", "remove-item", "unlink", "rmdir", "rd",
+			"truncate", "chmod", "attrib", "set-content", "out-file", "add-content":
+			for _, arg := range words[1:] {
+				if strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "/") {
+					continue // skip flags
+				}
+				for _, p := range protected {
+					if pathMatchesProtectedAsset(arg, p) {
+						return true, fmt.Sprintf("Security Invariant Violation: Direct modification, deletion, or tampering with BAP protected asset %q is strictly forbidden.", p)
+					}
+				}
+			}
+
+		case "mv", "move", "ren", "rename":
+			for _, arg := range words[1:] {
+				if strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "/") {
+					continue // skip flags
+				}
+				for _, p := range protected {
+					if pathMatchesProtectedAsset(arg, p) {
+						return true, fmt.Sprintf("Security Invariant Violation: Direct modification, deletion, or tampering with BAP protected asset %q is strictly forbidden.", p)
+					}
+				}
+			}
+
+		case "cp", "copy":
+			var nonFlags []string
+			for _, arg := range words[1:] {
+				if !strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "/") {
+					nonFlags = append(nonFlags, arg)
+				}
+			}
+			if len(nonFlags) >= 2 {
+				dest := nonFlags[len(nonFlags)-1]
+				for _, p := range protected {
+					if pathMatchesProtectedAsset(dest, p) {
+						return true, fmt.Sprintf("Security Invariant Violation: Direct modification, deletion, or tampering with BAP protected asset %q is strictly forbidden.", p)
+					}
+				}
+			}
+
+		case "sed":
+			isInline := false
+			var nonFlags []string
+			for _, arg := range words[1:] {
+				if strings.Contains(arg, "-i") {
+					isInline = true
+				} else if !strings.HasPrefix(arg, "-") {
+					nonFlags = append(nonFlags, arg)
+				}
+			}
+			if isInline && len(nonFlags) >= 2 {
+				dest := nonFlags[len(nonFlags)-1]
+				for _, p := range protected {
+					if pathMatchesProtectedAsset(dest, p) {
+						return true, fmt.Sprintf("Security Invariant Violation: Direct modification, deletion, or tampering with BAP protected asset %q is strictly forbidden.", p)
+					}
 				}
 			}
 		}
 	}
+
 	return false, ""
 }
 
@@ -1620,6 +2048,12 @@ func main() {
 		return
 	}
 
+	// 3b. Lifecycle Hook Handling: Stop (agent finished replying)
+	if strings.EqualFold(payload.HookEventName, "Stop") {
+		handleStopHook(payload)
+		return
+	}
+
 	// 4. Lifecycle Hook Handling: UserPromptSubmit / UserPrompt
 	if strings.EqualFold(payload.HookEventName, "UserPromptSubmit") || strings.EqualFold(payload.HookEventName, "UserPrompt") {
 		handleUserPromptHook(payload)
@@ -1650,8 +2084,13 @@ func main() {
 
 		// Anti-tampering check on file write/edit
 		if (payload.ToolName == "Edit" || payload.ToolName == "Write") && isProtectedBAPAsset(normPath) {
-			outputDecision("deny", fmt.Sprintf("Security Invariant Violation: Direct modification or tampering with BAP protected asset %q is strictly forbidden", targetFile), "Modifying or tampering with BAP configuration, policies, hooks, or binaries is prohibited.")
-			return
+			if active, banner := devOverrideActive(); active {
+				hookLog("DEV OVERRIDE allowed %s of protected asset %s (session %s)", payload.ToolName, targetFile, sessionID)
+				fmt.Fprintln(os.Stderr, banner)
+			} else {
+				outputDecision("deny", fmt.Sprintf("Security Invariant Violation: Direct modification or tampering with BAP protected asset %q is strictly forbidden", targetFile), "Modifying or tampering with BAP configuration, policies, hooks, or binaries is prohibited.")
+				return
+			}
 		}
 
 		// Secret protection applies to all files inside or outside workspace
@@ -1801,8 +2240,17 @@ func main() {
 	// The decoded payload—not the wrapper text—is subject to the same local
 	// invariants and Cedar decision as an original agent command.
 	if isTamper, tamperReason := isTamperingCommand(command); isTamper {
-		outputDecision("deny", tamperReason, "Direct modification or tampering with BAP configuration, policies, hooks, or binaries is prohibited.")
-		return
+		mode := resolveEnforcementMode()
+		if mode == "audit" || mode == "shadow" {
+			hookLog("AUDIT MODE allowed tamper-guarded command (session %s): %s", sessionID, tamperReason)
+			fmt.Fprintf(os.Stderr, "[BAP AUDIT MODE] Policy violation detected: %s. Execution permitted in audit mode.\n", tamperReason)
+		} else if active, banner := devOverrideActive(); active {
+			hookLog("DEV OVERRIDE allowed tamper-guarded command (session %s): %s", sessionID, tamperReason)
+			fmt.Fprintln(os.Stderr, banner)
+		} else {
+			outputDecision("deny", tamperReason, "Direct modification or tampering with BAP configuration, policies, hooks, or binaries is prohibited.")
+			return
+		}
 	}
 	if checkCommandWorkspaceEscape(workspaceRoot, command) {
 		isMutating := isMutatingShellCommand(command)
@@ -1819,8 +2267,14 @@ func main() {
 				} else if stepUpDec == "session" || stepUpDec == "s" {
 					_ = grantTargetPermission(workspaceRoot, sessionID, target, "session", []string{"write", "delete"})
 				} else {
-					outputDecision("deny", fmt.Sprintf("Directory traversal outside workspace is forbidden in command: %s", command), fmt.Sprintf("Commands modifying files outside workspace require authorization. Authorize via 'bapedge trust %q --project' (or --session / --global).", target))
-					return
+					mode := resolveEnforcementMode()
+					if mode == "audit" || mode == "shadow" {
+						hookLog("AUDIT MODE allowed workspace traversal (session %s): %s", sessionID, target)
+						fmt.Fprintf(os.Stderr, "[BAP AUDIT MODE] Directory traversal outside workspace detected: %s. Execution permitted in audit mode.\n", target)
+					} else {
+						outputDecision("deny", fmt.Sprintf("Directory traversal outside workspace is forbidden in command: %s", command), fmt.Sprintf("Commands modifying files outside workspace require authorization. Authorize via 'bapedge trust %q --project' (or --session / --global).", target))
+						return
+					}
 				}
 			}
 		}
@@ -1935,6 +2389,11 @@ func main() {
 		}
 		outputDecisionWithUpdatedInput("allow", "", "Command authorized by BAP Cedar policy - routed to BAP broker sandbox", &ToolInput{Command: rewritten})
 	} else {
+		mode := resolveEnforcementMode()
+		if mode == "audit" || mode == "shadow" {
+			outputDecision("allow", "", fmt.Sprintf("[BAP AUDIT MODE] Policy violation detected: %s. Execution permitted in audit mode.", execResp.Reason))
+			return
+		}
 		reason := execResp.Reason
 		if reason == "" {
 			reason = "Command execution denied by bapedge Cedar security policy"

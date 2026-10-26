@@ -46,6 +46,7 @@ Execution & Protocol Integration:
 Identity & Central Control Plane:
   setup        1-click workstation onboarding for Claude Code & AI agents (BAP-471)
   doctor       Pre-flight environment and diagnostic health check
+  dev-override Manage temporary developer override for BAP self-development (on, off, status)
   login        Authenticate developer identity via enterprise OIDC/OAuth2 device flow (Okta/Entra)
   register     Enroll edge LTD with central BAP Control Plane using one-time code (OTC)
   sync         Synchronize or inspect local policy cache from control plane (with offline fallback)
@@ -238,6 +239,11 @@ func main() {
 		}
 	case "doctor":
 		if err := cmd.RunDoctor(args); err != nil {
+			os.Exit(1)
+		}
+	case "dev-override", "dev":
+		if err := cmd.RunDevOverride(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error managing dev override: %v\n", err)
 			os.Exit(1)
 		}
 	case "watch":

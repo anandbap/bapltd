@@ -24,7 +24,8 @@ type Event struct {
 	Decision           string   `json:"decision"`
 	Reason             string   `json:"reason,omitempty"`
 	UserPrompt         string   `json:"user_prompt,omitempty"`
-	PrimaryIntent      string   `json:"primary_intent,omitempty"`
+	AgentResponse      string   `json:"agent_response,omitempty"`
+	PrimaryIntent     string   `json:"primary_intent,omitempty"`
 	SecondaryIntents   []string `json:"secondary_intents,omitempty"`
 	IntentTags         []string `json:"intent_tags,omitempty"`
 	IntentConfidence   float64  `json:"intent_confidence,omitempty"`
@@ -110,7 +111,21 @@ func (s *Store) List(limit int) []Event {
 	return result
 }
 
-func (s *Store) VerifyChain() (bool, error) {
+// ListBySession returns every event recorded for a session in ingest order.
+func (s *Store) ListBySession(sessionID string) []Event {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make([]Event, 0)
+	for _, ev := range s.events {
+		if ev.SessionID == sessionID {
+			result = append(result, ev)
+		}
+	}
+	return result
+}
+
+func (s *Store) VerifyChain()(bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

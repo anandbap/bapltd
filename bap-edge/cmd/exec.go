@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -345,15 +346,125 @@ func promptHumanStepUpApproval(ec *execContext, fullCommand, executable, reason 
 	}
 }
 
+func stripHeredocs(cmdStr string) string {
+	lines := strings.Split(cmdStr, "\n")
+	var result []string
+	var heredocDelim string
+	inHeredoc := false
+	isStripTabs := false
+
+	heredocRe := regexp.MustCompile(`<<(-)?\s*(?:'([^']+)'|"([^"]+)"|\\?([a-zA-Z0-9_]+))`)
+
+	for _, line := range lines {
+		if inHeredoc {
+			checkLine := strings.TrimRight(line, "\r")
+			if isStripTabs {
+				checkLine = strings.TrimLeft(checkLine, "\t ")
+			}
+			if checkLine == heredocDelim {
+				inHeredoc = false
+				heredocDelim = ""
+			}
+			continue
+		}
+
+		result = append(result, line)
+
+		if matches := heredocRe.FindStringSubmatch(line); len(matches) > 0 {
+			isStripTabs = matches[1] == "-"
+			delim := matches[2]
+			if delim == "" {
+				delim = matches[3]
+			}
+			if delim == "" {
+				delim = matches[4]
+			}
+			if delim != "" {
+				inHeredoc = true
+				heredocDelim = delim
+			}
+		}
+	}
+	return strings.Join(result, "\n")
+}
+
+func pathMatchesProtectedAsset(p, asset string) bool {
+	p = strings.Trim(strings.TrimSpace(p), `"'`)
+	p = strings.TrimSuffix(filepath.ToSlash(p), "/")
+	asset = strings.TrimSuffix(filepath.ToSlash(asset), "/")
+	if strings.EqualFold(p, asset) || strings.HasSuffix(strings.ToLower(p), "/"+strings.ToLower(asset)) {
+		return true
+	}
+	return false
+}
+
+func splitShellWords(cmd string) []string {
+	var words []string
+	var cur strings.Builder
+	inSingle := false
+	inDouble := false
+	for i := 0; i < len(cmd); i++ {
+		ch := cmd[i]
+		if ch == '\'' && !inDouble {
+			inSingle = !inSingle
+			cur.WriteByte(ch)
+		} else if ch == '"' && !inSingle {
+			inDouble = !inDouble
+			cur.WriteByte(ch)
+		} else if (ch == ' ' || ch == '\t') && !inSingle && !inDouble {
+			if cur.Len() > 0 {
+				words = append(words, cur.String())
+				cur.Reset()
+			}
+		} else {
+			cur.WriteByte(ch)
+		}
+	}
+	if cur.Len() > 0 {
+		words = append(words, cur.String())
+	}
+	return words
+}
+
+func splitSubCommands(cmd string) []string {
+	var subs []string
+	var cur strings.Builder
+	inSingle := false
+	inDouble := false
+	for i := 0; i < len(cmd); i++ {
+		ch := cmd[i]
+		if ch == '\'' && !inDouble {
+			inSingle = !inSingle
+			cur.WriteByte(ch)
+		} else if ch == '"' && !inSingle {
+			inDouble = !inDouble
+			cur.WriteByte(ch)
+		} else if !inSingle && !inDouble && (ch == '\n' || ch == ';' || ch == '|' || (ch == '&' && i+1 < len(cmd) && cmd[i+1] == '&')) {
+			if cur.Len() > 0 {
+				subs = append(subs, strings.TrimSpace(cur.String()))
+				cur.Reset()
+			}
+			if ch == '&' {
+				i++ // skip second '&'
+			}
+		} else {
+			cur.WriteByte(ch)
+		}
+	}
+	if cur.Len() > 0 {
+		subs = append(subs, strings.TrimSpace(cur.String()))
+	}
+	return subs
+}
+
 func isTamperingAttempt(cmdStr string) (bool, string) {
-	lower := strings.ToLower(cmdStr)
-	norm := strings.ReplaceAll(lower, "\\", "/")
+	stripped := stripHeredocs(cmdStr)
+	lower := strings.ToLower(filepath.ToSlash(stripped))
 
 	protectedAssets := []string{
 		"policy.cedar",
 		".claude/settings.json",
 		".claude/hooks",
-		".bap/",
 		".bap-session.json",
 		".bap-revoked",
 		"bap-config.json",
@@ -365,23 +476,105 @@ func isTamperingAttempt(cmdStr string) (bool, string) {
 		"bapcontrolplane",
 		"bapgateway.exe",
 		"bapgateway",
+		".bap",
 	}
 
-	destructiveOperators := []string{
-		"rm ", "rm -", "del ", "erase ", "remove-item", "unlink", "rmdir", "rd /", "rd ",
-		">", ">>", "set-content", "out-file", "add-content", "truncate", "sed ",
-		"ren ", "rename ", "move ", "mv ", "copy ", "cp ", "chmod ", "attrib ",
-	}
-
+	// Quick check: does the stripped command mention any protected asset?
+	hasProtected := false
 	for _, asset := range protectedAssets {
-		if strings.Contains(norm, asset) {
-			for _, op := range destructiveOperators {
-				if strings.Contains(norm, op) {
-					return true, fmt.Sprintf("Security Invariant Violation: Direct modification, deletion, or tampering with BAP protected asset %q is strictly forbidden.", asset)
+		if strings.Contains(lower, asset) {
+			hasProtected = true
+			break
+		}
+	}
+	if !hasProtected {
+		return false, ""
+	}
+
+	// 1. Check redirection targets: > target, >> target, 1> target, 2> target
+	redirRe := regexp.MustCompile(`(?:[0-9&]?>>?)\s*("[^"]+"|\'[^\']+\'|[^\s;&|]+)`)
+	for _, match := range redirRe.FindAllStringSubmatch(stripped, -1) {
+		target := match[1]
+		for _, asset := range protectedAssets {
+			if pathMatchesProtectedAsset(target, asset) {
+				return true, fmt.Sprintf("Security Invariant Violation: Direct modification, deletion, or tampering with BAP protected asset %q is strictly forbidden.", asset)
+			}
+		}
+	}
+
+	// 2. Check destructive commands across subcommands
+	subCmds := splitSubCommands(stripped)
+	for _, sub := range subCmds {
+		words := splitShellWords(sub)
+		if len(words) == 0 {
+			continue
+		}
+		cmdName := strings.ToLower(filepath.Base(strings.Trim(words[0], `"'`)))
+		cmdName = strings.TrimSuffix(cmdName, ".exe")
+
+		switch cmdName {
+		case "rm", "del", "erase", "remove-item", "unlink", "rmdir", "rd",
+			"truncate", "chmod", "attrib", "set-content", "out-file", "add-content":
+			for _, arg := range words[1:] {
+				if strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "/") {
+					continue // skip flags
+				}
+				for _, asset := range protectedAssets {
+					if pathMatchesProtectedAsset(arg, asset) {
+						return true, fmt.Sprintf("Security Invariant Violation: Direct modification, deletion, or tampering with BAP protected asset %q is strictly forbidden.", asset)
+					}
+				}
+			}
+
+		case "mv", "move", "ren", "rename":
+			for _, arg := range words[1:] {
+				if strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "/") {
+					continue // skip flags
+				}
+				for _, asset := range protectedAssets {
+					if pathMatchesProtectedAsset(arg, asset) {
+						return true, fmt.Sprintf("Security Invariant Violation: Direct modification, deletion, or tampering with BAP protected asset %q is strictly forbidden.", asset)
+					}
+				}
+			}
+
+		case "cp", "copy":
+			var nonFlags []string
+			for _, arg := range words[1:] {
+				if !strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "/") {
+					nonFlags = append(nonFlags, arg)
+				}
+			}
+			if len(nonFlags) >= 2 {
+				dest := nonFlags[len(nonFlags)-1]
+				for _, asset := range protectedAssets {
+					if pathMatchesProtectedAsset(dest, asset) {
+						return true, fmt.Sprintf("Security Invariant Violation: Direct modification, deletion, or tampering with BAP protected asset %q is strictly forbidden.", asset)
+					}
+				}
+			}
+
+		case "sed":
+			isInline := false
+			var nonFlags []string
+			for _, arg := range words[1:] {
+				if strings.Contains(arg, "-i") {
+					isInline = true
+				} else if !strings.HasPrefix(arg, "-") {
+					nonFlags = append(nonFlags, arg)
+				}
+			}
+			if isInline && len(nonFlags) >= 2 {
+				dest := nonFlags[len(nonFlags)-1]
+				for _, asset := range protectedAssets {
+					if pathMatchesProtectedAsset(dest, asset) {
+						return true, fmt.Sprintf("Security Invariant Violation: Direct modification, deletion, or tampering with BAP protected asset %q is strictly forbidden.", asset)
+					}
 				}
 			}
 		}
 	}
+
 	return false, ""
 }
 
@@ -771,26 +964,40 @@ func RunExec(args []string) {
 	// Pre-flight anti-tampering check:
 	// Verify if the agent attempts to modify, rename, delete, or overwrite BAP hooks, policies, or binaries
 	if isTamper, tamperReason := isTamperingAttempt(fullCommand); isTamper {
-		resp := types.ExecResponse{
-			Allowed: false,
-			Reason:  tamperReason,
-			Mode:    ec.enforcementMode,
+		if active, banner := devOverrideActive(); active {
+			fmt.Fprintln(os.Stderr, banner)
+		} else if strings.EqualFold(ec.enforcementMode, "audit") || strings.EqualFold(ec.enforcementMode, "shadow") {
+			ec.shadowDenied = true
+			ec.shadowReason = tamperReason
+			fmt.Fprintf(os.Stderr, "[BAP AUDIT MODE] Policy violation detected: %s. Execution permitted in audit mode.\n", tamperReason)
+		} else {
+			resp := types.ExecResponse{
+				Allowed: false,
+				Reason:  tamperReason,
+				Mode:    ec.enforcementMode,
+			}
+			ec.exit(resp, 1)
+			return
 		}
-		ec.exit(resp, 1)
-		return
 	}
 
 	// Pre-flight Anti-Bypass Enforcement Engine (BAP-560):
 	// Detects unmediated subshell invocations, raw sockets, or proxy/session tampering
 	antiBypass := antibypass.NewAntiBypassEngine()
 	if viol, err := antiBypass.CheckCommand(ec.sessionID, fullCommand, nil); err != nil {
-		resp := types.ExecResponse{
-			Allowed: false,
-			Reason:  fmt.Sprintf("[DENIED_BYPASS] %s: %s", viol.Vector, viol.Reason),
-			Mode:    ec.enforcementMode,
+		if strings.EqualFold(ec.enforcementMode, "audit") || strings.EqualFold(ec.enforcementMode, "shadow") {
+			ec.shadowDenied = true
+			ec.shadowReason = fmt.Sprintf("[DENIED_BYPASS] %s: %s", viol.Vector, viol.Reason)
+			fmt.Fprintf(os.Stderr, "[BAP AUDIT MODE] Policy violation detected: %s. Execution permitted in audit mode.\n", ec.shadowReason)
+		} else {
+			resp := types.ExecResponse{
+				Allowed: false,
+				Reason:  fmt.Sprintf("[DENIED_BYPASS] %s: %s", viol.Vector, viol.Reason),
+				Mode:    ec.enforcementMode,
+			}
+			ec.exit(resp, 1)
+			return
 		}
-		ec.exit(resp, 1)
-		return
 	}
 
 	// Fast sync of remote revocations from control plane if reachable
@@ -835,13 +1042,19 @@ func RunExec(args []string) {
 	// Pre-flight File-Integrity Monitoring (FIM) & Anti-Tamper Check (BAP-537)
 	fimReport, fimErr := fim.VerifyIntegrity(workspaceRoot)
 	if fimErr != nil {
-		resp := types.ExecResponse{
-			Allowed: false,
-			Reason:  fmt.Sprintf("TamperDetected: %v", fimErr),
-			Mode:    ec.enforcementMode,
+		if strings.EqualFold(ec.enforcementMode, "audit") || strings.EqualFold(ec.enforcementMode, "shadow") {
+			ec.shadowDenied = true
+			ec.shadowReason = fmt.Sprintf("TamperDetected: %v", fimErr)
+			fmt.Fprintf(os.Stderr, "[BAP AUDIT MODE] Policy violation detected: %s. Execution permitted in audit mode.\n", ec.shadowReason)
+		} else {
+			resp := types.ExecResponse{
+				Allowed: false,
+				Reason:  fmt.Sprintf("TamperDetected: %v", fimErr),
+				Mode:    ec.enforcementMode,
+			}
+			ec.exit(resp, 1)
+			return
 		}
-		ec.exit(resp, 1)
-		return
 	}
 
 	// Tiered Fail-Closed Enforcement for Quarantined Endpoints (BAP-537)
