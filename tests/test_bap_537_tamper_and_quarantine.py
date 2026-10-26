@@ -132,6 +132,7 @@ class TestBAP537TamperAndQuarantine(unittest.TestCase):
         cmd = [BAPEDGE_BIN] + args
         env = os.environ.copy()
         env.setdefault("BAP_SESSION_ID", "sess-bap537-test")
+        env.setdefault("BAP_ENFORCEMENT_MODE", "enforce")
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd, env=env)
         return proc
 

@@ -31,6 +31,7 @@ def run_interceptor(payload: dict, env=None) -> dict:
     """Invokes the Claude Code PreToolUse interceptor binary with a JSON payload."""
     test_env = os.environ.copy()
     test_env["BAP_WORKSPACE_ROOT"] = WORKSPACE_ROOT
+    test_env.setdefault("BAP_ENFORCEMENT_MODE", "enforce")
     if env:
         test_env.update(env)
 
@@ -52,6 +53,7 @@ def run_bapedge(args: list, env=None) -> tuple[int, dict, str]:
     test_env = os.environ.copy()
     test_env["BAP_WORKSPACE_ROOT"] = WORKSPACE_ROOT
     test_env.setdefault("BAP_SESSION_ID", "sess-bap200-test")
+    test_env.setdefault("BAP_ENFORCEMENT_MODE", "enforce")
     if env:
         test_env.update(env)
 
