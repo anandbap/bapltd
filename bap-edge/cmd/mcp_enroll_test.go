@@ -52,3 +52,14 @@ func TestEnsureMCPSessionSkippedUnderDevOverride(t *testing.T) {
 		t.Fatalf("enrollment must be skipped under dev override, got %q", got)
 	}
 }
+
+func TestEnsureMCPSessionInheritsEnvSession(t *testing.T) {
+	clearDevEnv(t)
+	t.Setenv("LTD_SOURCE", "antigravity")
+	t.Setenv("BAP_SESSION_ID", "sess-test-env-12345")
+	// Using a closed port so sessionIsLive is false, it enrolls with the inherited session ID
+	got := ensureMCPSession("", "http://127.0.0.1:59999")
+	if got != "sess-test-env-12345" {
+		t.Fatalf("expected inherited session ID %q, got %q", "sess-test-env-12345", got)
+	}
+}

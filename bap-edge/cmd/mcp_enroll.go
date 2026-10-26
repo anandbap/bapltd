@@ -1,13 +1,18 @@
 package cmd
 
 import (
+	"bufio"
+	"bytes"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"bap-edge/internal/httptransport"
@@ -90,20 +95,186 @@ func ensureMCPSession(sessionID, serverURL string) string {
 		fmt.Fprintln(os.Stderr, "[BAP DEV OVERRIDE ACTIVE] Antigravity self-enrollment skipped; this session is not governed or reported.")
 		return sessionID
 	}
-	if sessionIsLive(serverURL, sessionID) {
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(os.Getenv("BAP_SESSION_ID"))
+	}
+	if sessionID != "" && sessionIsLive(serverURL, sessionID) {
+		startAntigravityPromptTail(sessionID, serverURL)
 		return sessionID
 	}
+	targetID := sessionID
 	ppid := os.Getppid()
-	fresh := fmt.Sprintf("sess-antigravity-%d", ppid)
+	if targetID == "" {
+		targetID = fmt.Sprintf("sess-antigravity-%d", ppid)
+	}
 	if err := RunSessionStart([]string{
 		"--server=" + serverURL,
-		"--session-id=" + fresh,
+		"--session-id=" + targetID,
 		"--app-id=antigravity",
 		fmt.Sprintf("--pid=%d", ppid),
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "[BAP] Antigravity self-enrollment failed: %v\n", err)
 		return sessionID
 	}
-	os.Setenv("BAP_SESSION_ID", fresh)
-	return fresh
+	os.Setenv("BAP_SESSION_ID", targetID)
+	startAntigravityPromptTail(targetID, serverURL)
+	return targetID
 }
+
+var (
+	promptTailMu     sync.Mutex
+	promptTailActive bool
+)
+
+func startAntigravityPromptTail(sessionID, serverURL string) {
+	if serverURL == "" || sessionID == "" {
+		return
+	}
+	promptTailMu.Lock()
+	if promptTailActive {
+		promptTailMu.Unlock()
+		return
+	}
+	promptTailActive = true
+	promptTailMu.Unlock()
+
+	go runAntigravityPromptTailLoop(sessionID, serverURL)
+}
+
+func runAntigravityPromptTailLoop(sessionID, serverURL string) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return
+	}
+	searchRoots := []string{
+		filepath.Join(home, ".gemini", "antigravity-cli", "brain"),
+		filepath.Join(home, ".gemini", "antigravity", "brain"),
+	}
+
+	seenHashes := make(map[string]bool)
+	client := httptransport.New(2 * time.Second)
+
+	for {
+		time.Sleep(800 * time.Millisecond)
+
+		for _, root := range searchRoots {
+			fi, err := os.Stat(root)
+			if err != nil || !fi.IsDir() {
+				continue
+			}
+
+			entries, err := os.ReadDir(root)
+			if err != nil {
+				continue
+			}
+			cutoff := time.Now().Add(-15 * time.Minute)
+			for _, e := range entries {
+				if !e.IsDir() {
+					continue
+				}
+				candidatePaths := []string{
+					filepath.Join(root, e.Name(), ".system_generated", "logs", "transcript.jsonl"),
+					filepath.Join(root, e.Name(), "transcript.jsonl"),
+				}
+				for _, p := range candidatePaths {
+					info, err := os.Stat(p)
+					if err != nil || !info.ModTime().After(cutoff) {
+						continue
+					}
+					prompts := extractPromptsFromTranscript(p)
+					for _, userReq := range prompts {
+						userReq = strings.TrimSpace(userReq)
+						if userReq == "" {
+							continue
+						}
+						h := sha256.Sum256([]byte(userReq))
+						pHash := fmt.Sprintf("%x", h[:])
+						if seenHashes[pHash] {
+							continue
+						}
+						seenHashes[pHash] = true
+
+						payload := map[string]any{
+							"session_id":             sessionID,
+							"user_prompt":            userReq,
+							"producer":               "antigravity-cli",
+							"prompt_hash":            pHash,
+							"prompt_capture_enabled": true,
+							"intent": map[string]any{
+								"primary":            "INVESTIGATION",
+								"confidence":         0.90,
+								"classifier_version": "bap-edge-rules-v1",
+								"source":             "antigravity-transcript-tail",
+							},
+						}
+						data, err := json.Marshal(payload)
+						if err != nil {
+							continue
+						}
+						reqURL := strings.TrimRight(serverURL, "/") + "/api/v1/sessions/prompt"
+						resp, err := client.Post(reqURL, "application/json", bytes.NewReader(data))
+						if err == nil && resp != nil {
+							_ = resp.Body.Close()
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+func extractPromptsFromTranscript(path string) []string {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	var lines []string
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+		if len(lines) > 50 {
+			lines = lines[1:]
+		}
+	}
+
+	var results []string
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l == "" {
+			continue
+		}
+		var prompt string
+		if strings.Contains(l, "<USER_REQUEST>") {
+			start := strings.Index(l, "<USER_REQUEST>") + len("<USER_REQUEST>")
+			if end := strings.Index(l[start:], "</USER_REQUEST>"); end != -1 {
+				prompt = l[start : start+end]
+			}
+		} else if strings.Contains(l, `"type":"USER_INPUT"`) || strings.Contains(l, `"type": "USER_INPUT"`) {
+			var obj struct {
+				Content string `json:"content"`
+			}
+			if json.Unmarshal([]byte(l), &obj) == nil && obj.Content != "" {
+				raw := obj.Content
+				if start := strings.Index(raw, "<USER_REQUEST>"); start != -1 {
+					start += len("<USER_REQUEST>")
+					if end := strings.Index(raw[start:], "</USER_REQUEST>"); end != -1 {
+						prompt = raw[start : start+end]
+					}
+				} else {
+					prompt = raw
+				}
+			}
+		}
+		prompt = strings.TrimSpace(prompt)
+		if prompt != "" {
+			results = append(results, prompt)
+		}
+	}
+	return results
+}
+

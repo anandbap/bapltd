@@ -191,13 +191,35 @@ func (s *Server) sessionToActivityEvent(sess *session.Session) *types.AgentActiv
 		summary = "Autonomous agent session active"
 	}
 
+	userDisplay := sess.UserEmail
+	if userDisplay == "" || strings.EqualFold(userDisplay, "NA") {
+		userDisplay = sess.UserID
+	}
+	if userDisplay == "" || strings.EqualFold(userDisplay, "NA") {
+		userDisplay = "Developer"
+	}
+
+	agentType := sess.AgentName
+	if agentType == "" {
+		switch strings.ToLower(sess.AppID) {
+		case "antigravity":
+			agentType = "Google Antigravity"
+		case "claude-code":
+			agentType = "Claude Code"
+		case "copilot":
+			agentType = "GitHub Copilot"
+		default:
+			agentType = sess.AppID
+		}
+	}
+
 	return &types.AgentActivityEvent{
 		Timestamp:          sess.LastActiveAt.Format(time.RFC3339),
 		SessionID:          sess.SessionID,
 		AgentID:            sess.InstanceID,
-		AgentType:          sess.AgentName,
+		AgentType:          agentType,
 		RuntimeID:          sess.Hostname,
-		UserID:             sess.UserEmail,
+		UserID:             userDisplay,
 		BusinessUnit:       bu,
 		Application:        sess.AppID,
 		PromptSummary:      summary,

@@ -915,16 +915,16 @@
           else if (Array.isArray(live.activities)) agents = live.activities;
         }
         S.raw = agents.slice();
-        // The live feed is a stream of events, not agents: keep the newest event per agent.
+        // The live feed is a stream of events, not agents: keep the newest event per agent session.
         var latest = {};
         agents.forEach(function (a, i) {
-          var k = a.agent_id || a.trace_id || a.session_id || ('evt-' + i);
+          var k = a.session_id || a.agent_id || a.trace_id || ('evt-' + i);
           var t = Date.parse(a.timestamp) || 0;
           if (!latest[k] || t >= latest[k]._t) { latest[k] = Object.assign({}, a, { _t: t }); }
         });
         agents = Object.keys(latest).map(function (k) { return latest[k]; }).sort(function (x, y) { return y._t - x._t; });
         // Seeded demo sessions must never be presented as real agents.
-        var isSim = function (a) { return /^sess-v3-/.test(a.agent_id || '') || /demo/i.test(a.action || ''); };
+        var isSim = function (a) { return /^sess-v3-/.test(a.session_id || a.agent_id || '') || /demo/i.test(a.action || ''); };
         var simCount = agents.filter(isSim).length;
         agents = agents.filter(function (a) { return !isSim(a); });
         S.updated = new Date();
@@ -1000,7 +1000,7 @@
               tech: ['Enforced by: bapedge daemon (Layer 1-4)', 'Evaluator: Cedar policy engine', 'Status: Zero host side effects']
             };
           }
-          var clean = function (v) { return v && String(v).indexOf('[Protected') !== 0 ? v : ''; };
+          var clean = function (v) { return v && String(v).indexOf('[Protected') !== 0 && !/^na$/i.test(String(v).trim()) ? v : ''; };
           return { who: clean(a.operator || a.user || a.user_id || a.owner) ? (clean(a.operator || a.user || a.user_id || a.owner) + ' · ' + (a.agent_type || a.agent_id || a.application || 'agent')) : (a.agent_type || clean(a.agent_id) || a.application || 'Agent'),
                    ask: clean(a.prompt || a.mission || a.prompt_summary) || a.intent_category || a.intent || 'Task in progress',
                    did: a.last_action || a.action || a.tool || (a.action_status ? 'Status: ' + a.action_status : 'Working'),
