@@ -57,6 +57,18 @@ func TestPickAgentProcessClimbsHelperWorkers(t *testing.T) {
 	}
 }
 
+func TestPickAgentProcessFindsCodex(t *testing.T) {
+	chain := map[int]proc{
+		10: {20, "cmd.exe"},
+		20: {30, "codex.exe"},
+		30: {40, "Codex.exe"},
+		40: {0, "explorer.exe"},
+	}
+	if got := pick(10, chain); got != 30 {
+		t.Fatalf("got %d, want topmost Codex process (30)", got)
+	}
+}
+
 func TestPickAgentProcessOnlyShellsReturnsInitial(t *testing.T) {
 	chain := map[int]proc{10: {20, "bash.exe"}, 20: {0, "cmd.exe"}}
 	if got := pick(10, chain); got != 10 {

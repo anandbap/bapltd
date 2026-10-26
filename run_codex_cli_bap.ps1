@@ -32,8 +32,16 @@ $configureFiles = {
     )
     $mcpBin = Resolve-BinaryPath -Paths $mcpCandidates -Commands @('bapmcp.exe', 'bapmcp')
 
+	$interceptorCandidates = @(
+		(Join-Path $env:ProgramFiles "BAP\bin\interceptor.exe"),
+		(Join-Path $env:USERPROFILE ".bap\bin\interceptor.exe"),
+		(Join-Path $PSScriptRoot "interceptor.exe"),
+		(Join-Path $repoRoot "dist\windows-amd64\interceptor.exe")
+	)
+	$interceptorBin = Resolve-BinaryPath -Paths $interceptorCandidates -Commands @('interceptor.exe', 'interceptor')
+
     $codexRule = @"
-# BAP Zero-Trust Policy & Enterprise Governance for Codex (Governed Session: `$SessionId)
+# BAP Zero-Trust Policy & Enterprise Governance for Codex (Governed Session: $SessionId)
 
 This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (bapedge.exe).
 
@@ -54,7 +62,7 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
    - If a command is denied, inspect the suggestion in the structured response.
 6. **Identity & Audit Logging**:
    - LTD_SOURCE=codex
-   - BAP_SESSION_ID=`$SessionId
+   - BAP_SESSION_ID=$SessionId
 "@
 
     $mcpConfig = [ordered]@{
@@ -70,6 +78,23 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
         }
     }
 
+	$hookHandler = [ordered]@{
+		type           = "command"
+		command        = $interceptorBin
+		commandWindows = $interceptorBin
+		timeout        = 10
+	}
+	$codexHooks = [ordered]@{
+		description = "BAP zero-trust lifecycle governance and prompt telemetry."
+		hooks = [ordered]@{
+			SessionStart     = @( [ordered]@{ hooks = @($hookHandler) } )
+			UserPromptSubmit = @( [ordered]@{ hooks = @($hookHandler) } )
+			PreToolUse       = @( [ordered]@{ matcher = ".*"; hooks = @($hookHandler) } )
+			Stop             = @( [ordered]@{ hooks = @($hookHandler) } )
+			SessionEnd       = @( [ordered]@{ hooks = @($hookHandler) } )
+		}
+	}
+
     return @(
         @{
             Path    = Join-Path $Workspace "CODEX.md"
@@ -82,6 +107,10 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
         @{
             Path    = Join-Path $Workspace ".codex\mcp.json"
             Content = ($mcpConfig | ConvertTo-Json -Depth 10)
+		},
+		@{
+			Path    = Join-Path $Workspace ".codex\hooks.json"
+			Content = ($codexHooks | ConvertTo-Json -Depth 10)
         }
     )
 }

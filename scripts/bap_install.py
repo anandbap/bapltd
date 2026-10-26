@@ -508,6 +508,62 @@ def configure_claude_code(claude_dir: str, cchook_bin: str, mcp_bin: str, bapedg
     print(f"  {TermColor.GREEN}[+] Claude Code ({scope}):{TermColor.RESET} Configured hooks in {claude_settings_path}")
 
 
+def configure_codex_hooks(codex_dir: str, cchook_bin: str, is_global: bool = False):
+    """Install native Codex lifecycle hooks while preserving unrelated hooks."""
+    os.makedirs(codex_dir, exist_ok=True)
+    hooks_path = os.path.join(codex_dir, "hooks.json")
+    hooks_doc = {}
+    if os.path.isfile(hooks_path):
+        try:
+            with open(hooks_path, "r", encoding="utf-8") as f:
+                hooks_doc = json.load(f)
+        except Exception:
+            hooks_doc = {}
+
+    hooks = hooks_doc.setdefault("hooks", {})
+    hooks_doc.setdefault("description", "Codex lifecycle hooks, including BAP zero-trust governance.")
+    hook_command = os.path.abspath(cchook_bin)
+
+    def bap_handler(timeout: int):
+        handler = {
+            "type": "command",
+            "command": hook_command,
+            "timeout": timeout,
+        }
+        if sys.platform == "win32":
+            handler["commandWindows"] = hook_command
+        return handler
+
+    def without_old_bap(groups):
+        clean = []
+        for group in groups if isinstance(groups, list) else []:
+            handlers = group.get("hooks", []) if isinstance(group, dict) else []
+            if any(
+                "interceptor" in str(h.get("command", "")).lower()
+                or "interceptor" in str(h.get("commandWindows", "")).lower()
+                for h in handlers if isinstance(h, dict)
+            ):
+                continue
+            clean.append(group)
+        return clean
+
+    event_groups = {
+        "SessionStart": {"hooks": [bap_handler(10)]},
+        "UserPromptSubmit": {"hooks": [bap_handler(10)]},
+        "PreToolUse": {"matcher": ".*", "hooks": [bap_handler(30)]},
+        "Stop": {"hooks": [bap_handler(10)]},
+        "SessionEnd": {"hooks": [bap_handler(3)]},
+    }
+    for event, group in event_groups.items():
+        hooks[event] = without_old_bap(hooks.get(event, [])) + [group]
+
+    with open(hooks_path, "w", encoding="utf-8") as f:
+        json.dump(hooks_doc, f, indent=2)
+
+    scope = "Global User (~/.codex)" if is_global else f"Workspace ({codex_dir})"
+    print(f"  {TermColor.GREEN}[+] Codex ({scope}):{TermColor.RESET} Configured native hooks in {hooks_path}")
+
+
 def configure_agent_hooks(workspace_root: str, target_dir: str):
     """Autodetects installed agents and configures hooks, MCP configs, and rules."""
     print(f"\n[*] Autodetecting and Configuring Developer Agent Hooks in: {workspace_root}...")
@@ -539,7 +595,18 @@ def configure_agent_hooks(workspace_root: str, target_dir: str):
             configure_claude_code(global_claude_dir, cchook_bin, mcp_bin, bapedge_bin, is_global=True)
             detected_agents.append("Claude Code (Global Hooks + MCP Installed)")
 
-    # 2. Google Antigravity
+    # 2. OpenAI Codex - native lifecycle hooks work with the launcher, normal
+    # `codex` invocations, the IDE integration, and local Codex desktop threads.
+    ws_codex_dir = os.path.join(workspace_root, ".codex")
+    configure_codex_hooks(ws_codex_dir, cchook_bin, is_global=False)
+    detected_agents.append("OpenAI Codex (Native Hooks Installed)")
+    if norm_workspace == norm_home or norm_target in (default_dir, roaming_dir):
+        global_codex_dir = os.path.join(home, ".codex")
+        if os.path.normpath(global_codex_dir).lower() != os.path.normpath(ws_codex_dir).lower():
+            configure_codex_hooks(global_codex_dir, cchook_bin, is_global=True)
+            detected_agents.append("OpenAI Codex (Global Native Hooks Installed)")
+
+    # 3. Google Antigravity
     antigravity_dir = os.path.join(workspace_root, ".antigravity")
     os.makedirs(antigravity_dir, exist_ok=True)
     gemini_md_path = os.path.join(workspace_root, "GEMINI.md")
@@ -567,7 +634,7 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
         detected_agents.append("Google Antigravity (Existing GEMINI.md Preserved + MCP Installed)")
         print(f"  {TermColor.GREEN}[+] Google Antigravity:{TermColor.RESET} Verified active zero-trust rule at {gemini_md_path}")
 
-    # 3. Cursor IDE (.cursorrules + .cursor/mcp.json)
+    # 4. Cursor IDE (.cursorrules + .cursor/mcp.json)
     cursor_dir = os.path.join(workspace_root, ".cursor")
     os.makedirs(cursor_dir, exist_ok=True)
     cursorrules_path = os.path.join(workspace_root, ".cursorrules")
@@ -592,7 +659,7 @@ All terminal and tool commands must be routed through the BAP broker:
     detected_agents.append("Cursor IDE (.cursorrules + MCP Installed)")
     print(f"  {TermColor.GREEN}[+] Cursor IDE:{TermColor.RESET} Configured broker routing in {cursorrules_path}")
 
-    # 4. GitHub Copilot (.vscode/settings.json + .vscode/mcp.json)
+    # 5. GitHub Copilot (.vscode/settings.json + .vscode/mcp.json)
     vscode_dir = os.path.join(workspace_root, ".vscode")
     os.makedirs(vscode_dir, exist_ok=True)
     vscode_settings_path = os.path.join(vscode_dir, "settings.json")
@@ -653,13 +720,13 @@ All terminal and tool commands must be routed through the BAP broker:
     detected_agents.append("GitHub Copilot (VS Code Profile + MCP Installed)")
     print(f"  {TermColor.GREEN}[+] GitHub Copilot:{TermColor.RESET} Configured VS Code sandbox in {vscode_settings_path}")
 
-    # 5. Python Agent SDK
+    # 6. Python Agent SDK
     py_agent_dir = os.path.join(REPO_ROOT, "python-agent")
     if os.path.isdir(py_agent_dir):
         print(f"  {TermColor.GREEN}[+] Python SDK:{TermColor.RESET} Local SDK available at {py_agent_dir}")
         detected_agents.append("Python Agent SDK (Available)")
 
-    # 6. PowerShell Profile Auto-Binding (Codex, Claude Code, Antigravity, Copilot)
+    # 7. PowerShell Profile Auto-Binding (Codex, Claude Code, Antigravity, Copilot)
     if sys.platform == "win32":
         deploy_powershell_profile(target_dir)
         detected_agents.append("PowerShell Auto-Binding Profile (~/.bap/bap-profile.ps1)")

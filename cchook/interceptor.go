@@ -24,8 +24,8 @@ import (
 	"strings"
 
 	"time"
-
 )
+
 // CallerProcessInfo captures parent process attestation details.
 type CallerProcessInfo struct {
 	PID        int    `json:"pid"`
@@ -91,6 +91,8 @@ func inspectCallerProcess(pid int) CallerProcessInfo {
 			info.AppID = "antigravity"
 		case strings.Contains(baseLower, "copilot"):
 			info.AppID = "copilot"
+		case strings.Contains(baseLower, "codex"):
+			info.AppID = "codex"
 		case strings.Contains(baseLower, "cursor"):
 			info.AppID = "cursor"
 		default:
@@ -130,6 +132,7 @@ func isAgentBinary(exeName string) bool {
 		strings.Contains(lower, "bun") ||
 		strings.Contains(lower, "antigravity") ||
 		strings.Contains(lower, "copilot") ||
+		strings.Contains(lower, "codex") ||
 		strings.Contains(lower, "cursor") ||
 		strings.Contains(lower, "code.exe") ||
 		lower == "code"
@@ -218,6 +221,8 @@ func resolveAgentProcess(initialPID int) (int, CallerProcessInfo) {
 		bestInfo.AppID = "antigravity"
 	case strings.Contains(baseLower, "copilot"):
 		bestInfo.AppID = "copilot"
+	case strings.Contains(baseLower, "codex"):
+		bestInfo.AppID = "codex"
 	case strings.Contains(baseLower, "cursor"):
 		bestInfo.AppID = "cursor"
 	default:
@@ -493,9 +498,9 @@ func allUserPrompts(transcriptPath, conversationID string) []string {
 			continue
 		}
 		var entry struct {
-			Type    string          `json:"type"`
-			Source  string          `json:"source"`
-			Content string          `json:"content"`
+			Type    string `json:"type"`
+			Source  string `json:"source"`
+			Content string `json:"content"`
 			Message struct {
 				Content json.RawMessage `json:"content"`
 			} `json:"message"`
@@ -568,9 +573,9 @@ func lastUserPromptText(transcriptPath, conversationID string) string {
 			continue
 		}
 		var entry struct {
-			Type    string          `json:"type"`
-			Source  string          `json:"source"`
-			Content string          `json:"content"`
+			Type    string `json:"type"`
+			Source  string `json:"source"`
+			Content string `json:"content"`
 			Message struct {
 				Content json.RawMessage `json:"content"`
 			} `json:"message"`
@@ -804,7 +809,7 @@ func unwrapBrokerCommand(command, expectedSessionID string) (string, bool, error
 			return rawInner, false, nil
 		}
 	}
-	validSource := len(fields) > 3 && (fields[3] == "claude-code" || fields[3] == "copilot" || fields[3] == "antigravity")
+	validSource := len(fields) > 3 && (fields[3] == "claude-code" || fields[3] == "copilot" || fields[3] == "antigravity" || fields[3] == "codex")
 	if len(fields) != 8 || fields[1] != "exec" || fields[2] != "--source" || !validSource || fields[4] != "--session-id" || fields[6] != "--cmd-b64" {
 		return "", true, fmt.Errorf("untrusted BAPEdge invocation: expected the broker-owned exec wrapper")
 	}
@@ -1867,7 +1872,7 @@ func handleSessionStartHook(payload HookPayload) {
 		_ = wCmd.Start()
 	}
 
-	os.Stdout.WriteString("{\"status\":\"ok\"}\n")
+	os.Stdout.WriteString("{\"continue\":true}\n")
 	os.Exit(0)
 }
 
@@ -2231,6 +2236,8 @@ func handleUserPromptHook(payload HookPayload) {
 	producer := "claude-lifecycle-hook"
 	if payload.ConversationID != "" || caller.AppID == "antigravity" {
 		producer = "antigravity-hook"
+	} else if caller.AppID == "codex" || strings.EqualFold(os.Getenv("LTD_SOURCE"), "codex") {
+		producer = "codex-lifecycle-hook"
 	}
 	capturePrompt := shouldCaptureUserPrompt()
 
@@ -2299,7 +2306,8 @@ func handleUserPromptHook(payload HookPayload) {
 		}
 	}
 
-	os.Stdout.WriteString("{\"status\":\"ok\"}\n")
+	// Valid for both Claude-compatible hooks and Codex lifecycle hooks.
+	os.Stdout.WriteString("{\"continue\":true}\n")
 	os.Exit(0)
 }
 
@@ -2688,7 +2696,7 @@ func main() {
 			return
 		}
 		// Rewrite tool input command to route through bapedge exec using safe structured --cmd-b64
-				caller := inspectCallerProcess(ppid)
+		caller := inspectCallerProcess(ppid)
 		callerSource := caller.AppID
 		if callerSource == "" {
 			callerSource = "claude-code"

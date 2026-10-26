@@ -1,0 +1,66 @@
+{
+  "description": "BAP zero-trust lifecycle governance and prompt telemetry.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "interceptor",
+            "commandWindows": "interceptor.exe",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "interceptor",
+            "commandWindows": "interceptor.exe",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "interceptor",
+            "commandWindows": "interceptor.exe",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "interceptor",
+            "commandWindows": "interceptor.exe",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "interceptor",
+            "commandWindows": "interceptor.exe",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}
