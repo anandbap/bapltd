@@ -9,6 +9,8 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+
+	"bap-controlplane/pkg/version"
 )
 
 //go:embed web
@@ -18,6 +20,15 @@ var assets embed.FS
 func AssetsFS() fs.FS {
 	web, _ := fs.Sub(assets, "web")
 	return web
+}
+
+// VersionHandler reports the build version and git commit for the dashboard UI.
+func VersionHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"version":    version.Version,
+		"git_commit": version.GitCommit,
+	})
 }
 
 // Handler serves the dashboard and forwards API requests over the transport
@@ -151,6 +162,7 @@ func Handler(controlPlane *url.URL, transport http.RoundTripper, allowRemoteAdmi
 		}
 		proxy.ServeHTTP(w, r)
 	}))
+	mux.HandleFunc("/dashboard-version", VersionHandler)
 	mux.HandleFunc("/dashboard-health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok","service":"bapdashboard"}`))

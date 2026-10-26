@@ -302,6 +302,7 @@
   <header class="top" aria-label="Agent operations">
     <div class="brand"><i></i> Agent Watch <span class="badge" style="display:none">Agent operations</span></div>
     <div class="top-right">
+      <span class="conn" id="buildVer" title="Build version and git commit" style="font-family:var(--mono);font-size:12px;color:var(--ink-3)"></span>
       <span class="conn" id="conn" title="Connection to the central control plane">Control plane connected</span>
       <div class="admin-ctl" id="adminCtl">
         <button class="admin-toggle" id="adminToggle" type="button" aria-pressed="false" title="Toggle Admin Mode to view raw prompts and execute actions">
@@ -547,9 +548,7 @@
   function activateAdmin(token) {
     S.adminToken = token;
     try {
-      localStorage.setItem('bap_admin_token', token);
       sessionStorage.setItem('bap_admin_token', token);
-      document.cookie = 'bap_admin_token=' + encodeURIComponent(token) + '; path=/; SameSite=Lax';
     } catch (_) {}
     updateAdminUI(true);
     closeAdminPopover();
@@ -1264,9 +1263,13 @@
   (function initAdminAuth() {
     var q = new URLSearchParams(location.search);
     var qToken = q.get('token') || q.get('admin_token');
-    var cookieMatch = document.cookie.match(/(?:^|;\s*)bap_admin_token=([^;]+)/);
-    var cookieToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
-    var saved = qToken || localStorage.getItem('bap_admin_token') || sessionStorage.getItem('bap_admin_token') || cookieToken || '';
+    // Only an explicit token (URL query) or this tab's own verified session may unlock admin.
+    // Never trust ambient cookies/localStorage: a server-set cookie once made admin look active without a password.
+    try {
+      localStorage.removeItem('bap_admin_token');
+      document.cookie = 'bap_admin_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax';
+    } catch (_) {}
+    var saved = qToken || sessionStorage.getItem('bap_admin_token') || '';
     if (saved) {
       verifyAdminToken(saved).then(function (ok) {
         if (ok) {
@@ -1285,6 +1288,11 @@
       updateAdminUI(false);
     }
   })();
+
+  fetch('/dashboard-version').then(function (r) { return r.json(); }).then(function (v) {
+    var el = $('buildVer');
+    if (el && v) el.textContent = (v.version || '') + (v.git_commit ? ' (' + String(v.git_commit).slice(0, 7) + ')' : '');
+  }).catch(function () {});
 
   try { S.sessId = new URLSearchParams(location.search).get('session') || localStorage.getItem('aw3.session') || ''; } catch (_) { S.sessId = ''; }
   $('sessId').value = S.sessId;

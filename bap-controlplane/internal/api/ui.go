@@ -16,20 +16,7 @@ func (s *Server) registerControlPlaneRoutes() {
 	webFS := dashboardui.AssetsFS()
 	files := http.StripPrefix("/dashboard/", http.FileServer(http.FS(webFS)))
 
-	setAuthCookie := func(w http.ResponseWriter, r *http.Request) {
-		if isLoopbackAddress(r.RemoteAddr) && s.adminToken != "" {
-			http.SetCookie(w, &http.Cookie{
-				Name:     "bap_admin_token",
-				Value:    s.adminToken,
-				Path:     "/",
-				SameSite: http.SameSiteLaxMode,
-				HttpOnly: false,
-			})
-		}
-	}
-
 	serveV3 := func(w http.ResponseWriter, r *http.Request) {
-		setAuthCookie(w, r)
 		v3Data, err := fs.ReadFile(webFS, "v3.html")
 		if err != nil {
 			http.Error(w, "v3 asset unavailable", http.StatusNotFound)
@@ -41,7 +28,6 @@ func (s *Server) registerControlPlaneRoutes() {
 	}
 
 	serveV2 := func(w http.ResponseWriter, r *http.Request) {
-		setAuthCookie(w, r)
 		v2Data, err := fs.ReadFile(webFS, "v2.html")
 		if err != nil {
 			http.Error(w, "v2 asset unavailable", http.StatusNotFound)
@@ -53,7 +39,6 @@ func (s *Server) registerControlPlaneRoutes() {
 	}
 
 	serveV1 := func(w http.ResponseWriter, r *http.Request) {
-		setAuthCookie(w, r)
 		v1Data, err := fs.ReadFile(webFS, "index.html")
 		if err != nil {
 			http.Error(w, "legacy asset unavailable", http.StatusNotFound)
@@ -102,7 +87,6 @@ func (s *Server) registerControlPlaneRoutes() {
 	})
 
 	s.mux.HandleFunc("/dashboard/", func(w http.ResponseWriter, r *http.Request) {
-		setAuthCookie(w, r)
 		if r.URL.Path == "/dashboard/" {
 			if r.URL.Query().Get("persona") != "" || r.URL.Query().Get("v") == "v2" {
 				serveV2(w, r)
@@ -125,6 +109,7 @@ func (s *Server) registerControlPlaneRoutes() {
 		http.Redirect(w, r, target, http.StatusFound)
 	})
 
+	s.mux.HandleFunc("/dashboard-version", dashboardui.VersionHandler)
 	s.mux.HandleFunc("/dashboard-config", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		scheme := "http"
