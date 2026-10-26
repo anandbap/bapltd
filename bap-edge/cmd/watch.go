@@ -180,21 +180,23 @@ func RunSessionStart(args []string) error {
 	writeSessionMarker(sessionID, serverURL, *appFlag, username, hostname, initialPrompt, watchPID, instanceID)
 
 	// 4. Start continuous background heartbeat watcher
-	exe, err := os.Executable()
-	if err != nil {
-		exe = "bapedge.exe"
+	if !isTestEnv() {
+		exe, err := os.Executable()
+		if err != nil {
+			exe = "bapedge.exe"
+		}
+		cmdArgs := []string{
+			"watch",
+			fmt.Sprintf("--pid=%d", watchPID),
+			fmt.Sprintf("--server=%s", serverURL),
+			fmt.Sprintf("--session-id=%s", sessionID),
+			fmt.Sprintf("--app-id=%s", *appFlag),
+			fmt.Sprintf("--instance-id=%s", instanceID),
+		}
+		detachedCmd := exec.Command(exe, cmdArgs...)
+		detachedCmd.SysProcAttr = getSysProcAttrDetached()
+		_ = detachedCmd.Start()
 	}
-	cmdArgs := []string{
-		"watch",
-		fmt.Sprintf("--pid=%d", watchPID),
-		fmt.Sprintf("--server=%s", serverURL),
-		fmt.Sprintf("--session-id=%s", sessionID),
-		fmt.Sprintf("--app-id=%s", *appFlag),
-		fmt.Sprintf("--instance-id=%s", instanceID),
-	}
-	detachedCmd := exec.Command(exe, cmdArgs...)
-	detachedCmd.SysProcAttr = getSysProcAttrDetached()
-	_ = detachedCmd.Start()
 
 	return nil
 }

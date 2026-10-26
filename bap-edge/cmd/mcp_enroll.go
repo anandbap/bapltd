@@ -3,9 +3,11 @@ package cmd
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -124,24 +126,47 @@ func ensureMCPSession(sessionID, serverURL string) string {
 var (
 	promptTailMu     sync.Mutex
 	promptTailActive bool
+	promptTailCancel context.CancelFunc
 )
 
-func startAntigravityPromptTail(sessionID, serverURL string) {
-	if serverURL == "" || sessionID == "" {
-		return
+func isTestEnv() bool {
+	if flag.Lookup("test.v") != nil {
+		return true
 	}
-	promptTailMu.Lock()
-	if promptTailActive {
-		promptTailMu.Unlock()
-		return
+	for _, arg := range os.Args {
+		if strings.HasPrefix(arg, "-test.") {
+			return true
+		}
 	}
-	promptTailActive = true
-	promptTailMu.Unlock()
-
-	go runAntigravityPromptTailLoop(sessionID, serverURL)
+	base := strings.ToLower(filepath.Base(os.Args[0]))
+	return strings.HasSuffix(base, ".test.exe") || strings.HasSuffix(base, ".test")
 }
 
-func runAntigravityPromptTailLoop(sessionID, serverURL string) {
+func startAntigravityPromptTail(sessionID, serverURL string) func() {
+	if serverURL == "" || sessionID == "" || isTestEnv() {
+		return nil
+	}
+	promptTailMu.Lock()
+	defer promptTailMu.Unlock()
+	if promptTailActive {
+		return promptTailCancel
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	promptTailCancel = cancel
+	promptTailActive = true
+
+	go runAntigravityPromptTailLoop(ctx, sessionID, serverURL)
+	return cancel
+}
+
+func runAntigravityPromptTailLoop(ctx context.Context, sessionID, serverURL string) {
+	defer func() {
+		promptTailMu.Lock()
+		promptTailActive = false
+		promptTailCancel = nil
+		promptTailMu.Unlock()
+	}()
+
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return
@@ -153,9 +178,15 @@ func runAntigravityPromptTailLoop(sessionID, serverURL string) {
 
 	seenHashes := make(map[string]bool)
 	client := httptransport.New(2 * time.Second)
+	ticker := time.NewTicker(800 * time.Millisecond)
+	defer ticker.Stop()
 
 	for {
-		time.Sleep(800 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 
 		for _, root := range searchRoots {
 			fi, err := os.Stat(root)
@@ -277,4 +308,5 @@ func extractPromptsFromTranscript(path string) []string {
 	}
 	return results
 }
+
 
