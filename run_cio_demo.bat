@@ -12,10 +12,10 @@ echo                       Real-Time Multi-Agent Fleet Governance, Proof & HITL 
 echo =========================================================================================================
 echo.
 echo  Welcome! This launcher provides access to the BAP Zero-Trust CIO demonstration suite:
-echo   - [Default] Agent Watch V3 Executive Demonstration (Live multi-agent fleet simulation, Cedar policy,
-echo               real-time HITL approvals, tamper-proof cryptographic receipts, instant fleet freeze)
-echo   - [Workforce] 15 Enterprise Teams / 75 Governed AI Agents concurrent dynamic workloads
-echo   - [Remote]    Remote Control Plane CIO Demonstration Engine
+echo   - [Default / v3] Agent Watch V3 Executive Demonstration (Live multi-agent fleet simulation, Cedar policy,
+echo                    real-time HITL approvals, tamper-proof cryptographic receipts, instant fleet freeze)
+echo   - [Remote]       Connect to remote cloud Control Plane (https://bap-controlplane.onrender.com)
+echo   - [Workforce]    15 Enterprise Teams / 75 Governed AI Agents concurrent dynamic workloads
 echo.
 
 :: 1. Check Python
@@ -50,7 +50,7 @@ goto :DONE
 
 :RUN_REMOTE
 shift
-python demo_remote_cio.py %*
+python demo_v3_cio.py --remote %*
 goto :DONE
 
 :DONE

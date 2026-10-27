@@ -5,6 +5,10 @@
     Launches the BAP Agent Watch V3 Executive CIO Demonstration or Workforce scenarios.
 .PARAMETER Mode
     Demo scenario to execute: 'v3' (default), 'workforce', or 'remote'
+.PARAMETER Remote
+    Target the remote Render control plane (https://bap-controlplane.onrender.com)
+.PARAMETER Local
+    Force local embedded control plane (http://localhost:8080)
 .PARAMETER NoBrowser
     Do not automatically launch web browser
 .PARAMETER Url
@@ -18,6 +22,8 @@
 param(
     [ValidateSet('v3', 'workforce', 'remote')]
     [string]$Mode = 'v3',
+    [switch]$Remote,
+    [switch]$Local,
     [switch]$NoBrowser,
     [string]$Url = '',
     [int]$Duration = 0,
@@ -26,7 +32,6 @@ param(
     [string[]]$RemainingArgs
 )
 
-$ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
 Write-Host "=========================================================================================================" -ForegroundColor Cyan
@@ -36,15 +41,20 @@ Write-Host "====================================================================
 Write-Host ""
 
 # Verify Python
-try {
-    $pyVer = & python --version 2>&1
-    Write-Host "[+] Using Python: $pyVer" -ForegroundColor Green
-} catch {
-    Write-Error "Python 3 is not found in PATH. Please install Python 3.8+ to run this demo."
-    exit 1
+$pyBin = "python"
+$pyCheck = Get-Command python -ErrorAction SilentlyContinue
+if (-not $pyCheck) {
+    foreach ($cand in @("$env:LOCALAPPDATA\Programs\Python\Python312\python.exe", "$env:ProgramFiles\Python312\python.exe", "C:\Python312\python.exe")) {
+        if (Test-Path $cand) {
+            $pyBin = $cand
+            break
+        }
+    }
 }
 
 $pyArgs = @()
+if ($Remote -or ($Mode.ToLower() -eq 'remote')) { $pyArgs += '--remote' }
+if ($Local) { $pyArgs += '--local' }
 if ($NoBrowser) { $pyArgs += '--no-browser' }
 if ($Url) { $pyArgs += @('--url', $Url) }
 if ($Duration -gt 0) { $pyArgs += @('--duration', $Duration.ToString()) }
@@ -53,12 +63,9 @@ if ($RemainingArgs) { $pyArgs += $RemainingArgs }
 
 switch ($Mode.ToLower()) {
     'workforce' {
-        & python demo_cio_workforce.py @pyArgs
-    }
-    'remote' {
-        & python demo_remote_cio.py @pyArgs
+        & $pyBin demo_cio_workforce.py @pyArgs
     }
     default {
-        & python demo_v3_cio.py @pyArgs
+        & $pyBin demo_v3_cio.py @pyArgs
     }
 }

@@ -18,6 +18,11 @@ echo   - Real-time Human-in-the-Loop (HITL) approval queue with one-click decisi
 echo   - Cryptographically sealed anti-tamper receipts with verifiable Merkle / SHA-256 integrity
 echo   - Instant fleet freeze kill-switch (sub-100ms fleet-wide pause)
 echo.
+echo  Usage Tips:
+echo   run_v3_cio_demo.bat             ^: Auto-resolves (remote Render cloud or local server)
+echo   run_v3_cio_demo.bat --remote    ^: Force remote Render control plane (https://bap-controlplane.onrender.com)
+echo   run_v3_cio_demo.bat --local     ^: Force local embedded control plane (http://localhost:8080)
+echo.
 
 :: 1. Check Python
 python --version >nul 2>&1
