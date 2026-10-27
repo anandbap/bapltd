@@ -243,6 +243,35 @@ def run_doctor():
     except Exception:
         checklist.report(f"Control Plane ({server_url})", "WARN", "Listener idle. Edge enforces cached Cedar policies offline.")
 
+    # Check Corporate Identity / OIDC Enrollment
+    creds_candidates = [
+        os.environ.get("BAP_CREDENTIALS"),
+        os.path.expanduser("~/.bapstate/credentials.json"),
+        os.path.join(os.getcwd(), ".bapstate", "credentials.json"),
+        os.path.expanduser("~/.bap/credentials.json"),
+        os.path.join(os.getcwd(), ".bap", "credentials.json"),
+        os.path.expanduser("~/.ltd/credentials.json"),
+    ]
+    enrolled_identity = None
+    for cp in creds_candidates:
+        if cp and os.path.isfile(cp):
+            try:
+                with open(cp, "r", encoding="utf-8") as f:
+                    cdata = json.load(f)
+                    if cdata.get("user_email") or cdata.get("auth_mode"):
+                        enrolled_identity = cdata
+                        break
+            except Exception:
+                pass
+    if enrolled_identity:
+        email = enrolled_identity.get("user_email", "enrolled")
+        idp = enrolled_identity.get("idp_provider") or enrolled_identity.get("auth_mode", "active")
+        dept = enrolled_identity.get("department", "")
+        info = f"{email} ({idp.upper()}" + (f", {dept}" if dept else "") + ")"
+        checklist.report("Corporate Identity (SSO)", "PASS", info)
+    else:
+        checklist.report("Corporate Identity (SSO)", "WARN", "Not authenticated. Run 'bap login' to bind your corporate IdP.")
+
     # Section 4: Cedar Policy Engine & Schema Invariants
     print(f"\n{CYAN}[4/5] Cedar Policy Engine & Schema Invariants...{RESET}")
     policy_candidates = [

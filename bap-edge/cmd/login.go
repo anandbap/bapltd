@@ -158,15 +158,23 @@ func RunLogin(args []string) error {
 	idpLabel := "Microsoft Entra ID"
 	if strings.EqualFold(provider, "okta") {
 		idpLabel = "Okta Workforce Identity Cloud"
+	} else if strings.EqualFold(provider, "google") {
+		idpLabel = "Google Identity (Free Community / Beta)"
+	} else if strings.EqualFold(provider, "github") {
+		idpLabel = "GitHub Developer Identity"
 	} else if strings.EqualFold(provider, "generic") {
 		idpLabel = "Corporate OpenID Connect (OIDC)"
 	}
 
 	fmt.Println()
 	fmt.Println("===========================================================================")
-	fmt.Printf("   BAP Enterprise Identity Provider Federation (RFC 8628 Device Flow)\n")
+	fmt.Printf("   BAP Identity Provider Federation (RFC 8628 Device Flow)\n")
 	fmt.Println("===========================================================================")
-	fmt.Printf(" Corporate IdP: %s (MFA Enforced)\n", idpLabel)
+	if strings.EqualFold(provider, "google") || strings.EqualFold(provider, "github") {
+		fmt.Printf(" Identity Provider: %s\n", idpLabel)
+	} else {
+		fmt.Printf(" Corporate IdP: %s (MFA Enforced)\n", idpLabel)
+	}
 	fmt.Println(" To authenticate your local agent session:")
 	fmt.Printf("   1. Open your browser and navigate to:\n")
 	fmt.Printf("      %s\n", codeResp.VerificationURI)
@@ -176,7 +184,7 @@ func RunLogin(args []string) error {
 		fmt.Printf("   (Direct Link: %s)\n", codeResp.VerificationURIComplete)
 	}
 	fmt.Println("===========================================================================")
-	fmt.Println("[*] Waiting for corporate MFA authorization...")
+	fmt.Println("[*] Waiting for browser authorization...")
 
 	// 5. If --verify-now is specified (e.g. CI/scripting/testing), trigger instant verification
 	if *verifyNow {

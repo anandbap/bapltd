@@ -17,3 +17,5 @@ services:
         generateValue: true
       - key: BAP_DB_PATH
         value: /app/bap-controlplane.db
+      - key: BAP_OIDC_PROVIDER
+        value: google

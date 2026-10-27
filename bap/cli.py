@@ -21,6 +21,7 @@ Usage: bap <command> [options]
 Commands:
   install       Run single-click user-mode onboarding installer
   uninstall     Cleanly remove BAP binaries, PATH entries, and agent hooks
+  login         Authenticate workstation session with corporate SSO (Entra ID / Okta OIDC)
   launch        Start developer cockpit, verify hooks & monitor agents
   doctor        Run comprehensive pre-flight diagnostic health check
   status        Check health of local edge daemon and central control plane
@@ -30,6 +31,7 @@ Commands:
 
 Examples:
   bap install
+  bap login
   bap uninstall
   bap doctor
   bap launch
@@ -78,6 +80,13 @@ def main():
     elif cmd in ["uninstall", "remove"]:
         sys.argv = [sys.argv[0], "--uninstall"] + rest
         install_main()
+    elif cmd == "login":
+        bapedge = find_bapedge()
+        if not os.path.isfile(bapedge):
+            print(f"[!] bapedge binary not found. Please run 'bap install' first.")
+            sys.exit(1)
+        sub_cmd = [bapedge, "login"] + rest
+        sys.exit(subprocess.call(sub_cmd))
     elif cmd == "launch":
         sys.argv = [sys.argv[0]] + rest
         launch_main()

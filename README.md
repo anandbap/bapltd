@@ -34,10 +34,13 @@ pip install bap-ltd
 # 2. Run single-click user-mode installer (No admin / UAC required)
 bap install
 
-# 3. Verify workstation health with pre-flight doctor
+# 3. Authenticate with corporate SSO / MFA (Microsoft Entra ID / Okta)
+bap login
+
+# 4. Verify workstation health with pre-flight doctor
 bap doctor
 
-# 4. Launch developer cockpit & verify governed agents
+# 5. Launch developer cockpit & verify governed agents
 bap launch
 ```
 

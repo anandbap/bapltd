@@ -181,6 +181,42 @@ class TestEnterpriseIdPFederation(unittest.TestCase):
         self.assertEqual(creds.get("department"), "Finance")
         self.assertIn("finance-team", creds.get("groups", []))
 
+    def test_06_device_portal_html_render(self):
+        """Validates that the free community /device portal renders cleanly with user code."""
+        url = f"http://127.0.0.1:{DEV_PORT}/device?user_code=ABCD-9999"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertIn("text/html", resp.headers.get("Content-Type", ""))
+            body = resp.read().decode("utf-8")
+            self.assertIn("ABCD-9999", body)
+            self.assertIn("Google Account", body)
+            self.assertIn("Authorize Device Session", body)
+
+    def test_07_google_identity_login_flow(self):
+        """Validates free community / beta login using Google Identity."""
+        creds_path = os.path.join(self.temp_dir, "creds_google_login_test.json")
+        login_cmd = [
+            BAPEDGE_BIN,
+            "login",
+            f"--server=http://127.0.0.1:{DEV_PORT}",
+            "--provider=google",
+            "--email=tester@corp.internal",
+            "--department=Beta Community",
+            "--groups=beta-testers,community-developers",
+            "--verify-now",
+            f"--config={creds_path}",
+        ]
+        res = subprocess.run(login_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        self.assertEqual(res.returncode, 0, f"Google login failed: {res.stderr}\n{res.stdout}")
+        self.assertIn("Identity Verified", res.stdout)
+        self.assertIn("tester@corp.internal", res.stdout)
+
+        with open(creds_path, "r", encoding="utf-8") as f:
+            creds = json.load(f)
+        self.assertEqual(creds.get("user_email"), "tester@corp.internal")
+        self.assertEqual(creds.get("idp_provider"), "google")
+
 
 if __name__ == "__main__":
     unittest.main()

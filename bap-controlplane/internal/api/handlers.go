@@ -342,6 +342,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/auth/admin-login", s.handleAdminLogin)
 
 	// Enterprise Identity Provider Federation & OIDC Device Flow (Epic 25)
+	s.mux.HandleFunc("/device", s.handleDevicePortal)
 	s.mux.HandleFunc("/api/v1/auth/otc/dev-request", s.handleDevOTCRequest)
 	s.mux.HandleFunc("/api/v1/auth/oidc/config", s.handleGetOIDCConfig)
 	s.mux.HandleFunc("/api/v1/auth/oidc/device-code", s.handleOIDCDeviceCode)
@@ -743,11 +744,17 @@ func (s *Server) handleOIDCDeviceCode(w http.ResponseWriter, r *http.Request) {
 		host = "localhost:8080"
 	}
 
-	verificationURI := "https://login.microsoftonline.com/common/oauth2/deviceauth"
+	verificationURI := fmt.Sprintf("%s://%s/device", scheme, host)
 	if oidcCfg.VerificationURI != "" {
 		verificationURI = oidcCfg.VerificationURI
+	} else if provider == "entra" {
+		verificationURI = "https://login.microsoftonline.com/common/oauth2/deviceauth"
 	} else if provider == "okta" {
 		verificationURI = "https://auth.corp.okta.com/device"
+	} else if provider == "github" {
+		verificationURI = "https://github.com/login/device"
+	} else if provider == "google" {
+		verificationURI = fmt.Sprintf("%s://%s/device", scheme, host)
 	}
 
 	completeURI := fmt.Sprintf("%s://%s/device?user_code=%s", scheme, host, userCode)
@@ -983,6 +990,121 @@ func (s *Server) handleOIDCDeviceVerify(w http.ResponseWriter, r *http.Request) 
 		"provider":    provider,
 	})
 }
+
+// handleDevicePortal renders the free community & beta device authorization landing page.
+func (s *Server) handleDevicePortal(w http.ResponseWriter, r *http.Request) {
+	userCode := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("user_code")))
+	html := fmt.Sprintf(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BAP Zero-Trust Device Authorization</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 32px; max-width: 460px; width: 100%%; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); }
+    h1 { font-size: 20px; margin: 0 0 8px 0; color: #38bdf8; display: flex; align-items: center; gap: 8px; }
+    p { font-size: 14px; color: #94a3b8; line-height: 1.5; margin: 0 0 20px 0; }
+    .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; background: #0369a1; color: #e0f2fe; margin-bottom: 12px; text-transform: uppercase; }
+    label { font-size: 12px; font-weight: 600; text-transform: uppercase; color: #94a3b8; display: block; margin-bottom: 6px; }
+    .code-input { font-family: monospace; font-size: 22px; font-weight: bold; letter-spacing: 4px; text-align: center; width: 100%%; box-sizing: border-box; padding: 12px; background: #0f172a; border: 1px solid #475569; border-radius: 8px; color: #38bdf8; margin-bottom: 16px; }
+    input[type="email"], select { width: 100%%; box-sizing: border-box; padding: 10px 12px; background: #0f172a; border: 1px solid #475569; border-radius: 6px; color: #fff; font-size: 14px; margin-bottom: 16px; }
+    input:focus, select:focus { outline: none; border-color: #38bdf8; }
+    button { width: 100%%; padding: 12px; background: #2563eb; color: #fff; border: none; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+    button:hover { background: #1d4ed8; }
+    button:disabled { background: #475569; cursor: not-allowed; }
+    .status { margin-top: 16px; padding: 12px; border-radius: 6px; font-size: 13px; text-align: center; display: none; }
+    .status.success { display: block; background: #064e3b; color: #34d399; border: 1px solid #059669; }
+    .status.error { display: block; background: #7f1d1d; color: #f87171; border: 1px solid #dc2626; }
+    .footer { margin-top: 24px; font-size: 12px; color: #64748b; text-align: center; border-top: 1px solid #334155; padding-top: 16px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">Community & Beta Access</div>
+    <h1>🛡️ BAP Device Authorization</h1>
+    <p>Authorize your local developer agent session running under BAP Zero-Trust Governance.</p>
+
+    <form id="verifyForm">
+      <label for="code">User Verification Code</label>
+      <input type="text" id="code" class="code-input" value="%s" placeholder="XXXX-XXXX" required autofocus />
+
+      <label for="provider">Identity Provider</label>
+      <select id="provider">
+        <option value="google" selected>Google Account (Free / Community)</option>
+        <option value="github">GitHub Identity</option>
+        <option value="generic">Developer / Free Account</option>
+      </select>
+
+      <label for="email">Developer Email</label>
+      <input type="email" id="email" placeholder="you@gmail.com" required />
+
+      <button type="submit" id="submitBtn">Authorize Device Session</button>
+    </form>
+
+    <div id="statusBox" class="status"></div>
+
+    <div class="footer">
+      Free for beta testers and individual developers.<br/>Enterprise organizations connect with Microsoft Entra ID or Okta.
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('verifyForm');
+    const statusBox = document.getElementById('statusBox');
+    const submitBtn = document.getElementById('submitBtn');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const code = document.getElementById('code').value.trim().toUpperCase();
+      const email = document.getElementById('email').value.trim();
+      const provider = document.getElementById('provider').value;
+
+      statusBox.className = 'status';
+      statusBox.style.display = 'none';
+      submitBtn.disabled = true;
+      submitBtn.innerText = 'Authorizing...';
+
+      try {
+        const res = await fetch('/api/v1/auth/oidc/device-verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_code: code,
+            user_email: email,
+            department: 'Beta Community',
+            groups: ['community-developers', 'beta-testers'],
+            provider: provider
+          })
+        });
+
+        const data = await res.json();
+        if (res.ok && data.status === 'authorized') {
+          statusBox.className = 'status success';
+          statusBox.innerHTML = '<strong>[✓] Session Authorized!</strong><br/>You can return to your terminal now.';
+          submitBtn.innerText = 'Authorized';
+        } else {
+          statusBox.className = 'status error';
+          statusBox.innerText = data.error || 'Failed to authorize user code. Please check the code and try again.';
+          submitBtn.disabled = false;
+          submitBtn.innerText = 'Authorize Device Session';
+        }
+      } catch (err) {
+        statusBox.className = 'status error';
+        statusBox.innerText = 'Connection error: ' + err.message;
+        submitBtn.disabled = false;
+        submitBtn.innerText = 'Authorize Device Session';
+      }
+    });
+  </script>
+</body>
+</html>`, userCode)
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(html))
+}
+
 
 func (s *Server) handleAcquireGrant(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
