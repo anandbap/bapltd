@@ -1059,6 +1059,51 @@ def uninstall(target_dir: str, workspace_root: str):
     print("=" * 80)
 
 
+
+def configure_bap_config(target_dir: str, workspace_root: str, server_url: str, is_offline: bool = False):
+    """Writes the active bap-config.json with the chosen server URL to installation target, workspace, and user state dirs."""
+    effective_url = "http://localhost:8080" if is_offline else server_url.strip().rstrip("/")
+    is_render = "onrender.com" in effective_url
+    is_local = "localhost" in effective_url or "127.0.0.1" in effective_url
+
+    cfg_data = {
+        "controlplane_url": effective_url,
+        "gateway_url": "http://localhost:9090",
+        "envoy_url": "http://localhost:10000",
+        "trust_domain": "bap.internal",
+        "environment": "development" if (is_offline or is_local) else "production",
+        "enforcement_mode": "enforce",
+        "capture_user_prompt": True,
+        "capture_agent_response": True,
+        "developer_features": True,
+        "oidc": {
+            "enabled": not is_offline,
+            "provider": "google" if is_render else ("entra" if not is_offline else "")
+        }
+    }
+    
+    cfg_json = json.dumps(cfg_data, indent=2) + "\n"
+
+    destinations = [
+        os.path.join(target_dir, "bap-config.json"),
+        os.path.join(workspace_root, "bap-config.json"),
+        os.path.join(workspace_root, ".bap", "bap-config.json"),
+        os.path.expanduser("~/.bapstate/config.json"),
+        os.path.expanduser("~/.bapstate/bap-config.json"),
+        os.path.expanduser("~/.bap/config.json"),
+        os.path.expanduser("~/.bap/bap-config.json"),
+    ]
+
+    for dst in destinations:
+        try:
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            with open(dst, "w", encoding="utf-8") as f:
+                f.write(cfg_json)
+        except Exception:
+            pass
+
+    print(f"  {TermColor.GREEN}[+] Control Plane Config : {effective_url} (written to bap-config.json){TermColor.RESET}")
+
 def main():
     parser = argparse.ArgumentParser(
         description="BAP Universal User-Mode Installer — Single-click Zero-Trust onboarding for AI developer agents"

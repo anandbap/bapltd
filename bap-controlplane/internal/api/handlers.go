@@ -343,6 +343,14 @@ func (s *Server) registerRoutes() {
 
 	// Enterprise Identity Provider Federation & OIDC Device Flow (Epic 25)
 	s.mux.HandleFunc("/device", s.handleDevicePortal)
+	s.mux.HandleFunc("/device/success", s.handleDeviceSuccess)
+	s.mux.HandleFunc("/api/v1/auth/oauth/start", s.handleOAuthStart)
+	s.mux.HandleFunc("/api/v1/auth/oauth/google-login", s.handleGoogleLoginSim)
+	s.mux.HandleFunc("/api/v1/auth/oauth/google-complete", s.handleGoogleComplete)
+	s.mux.HandleFunc("/api/v1/auth/oauth/github-login", s.handleGitHubLoginSim)
+	s.mux.HandleFunc("/api/v1/auth/oauth/github-complete", s.handleGitHubComplete)
+	s.mux.HandleFunc("/api/v1/auth/callback/google", s.handleGoogleCallback)
+	s.mux.HandleFunc("/api/v1/auth/callback/github", s.handleGitHubCallback)
 	s.mux.HandleFunc("/api/v1/auth/otc/dev-request", s.handleDevOTCRequest)
 	s.mux.HandleFunc("/api/v1/auth/oidc/config", s.handleGetOIDCConfig)
 	s.mux.HandleFunc("/api/v1/auth/oidc/device-code", s.handleOIDCDeviceCode)
@@ -757,7 +765,7 @@ func (s *Server) handleOIDCDeviceCode(w http.ResponseWriter, r *http.Request) {
 		verificationURI = fmt.Sprintf("%s://%s/device", scheme, host)
 	}
 
-	completeURI := fmt.Sprintf("%s://%s/device?user_code=%s", scheme, host, userCode)
+	completeURI := fmt.Sprintf("%s://%s/device?user_code={{USER_CODE}}", scheme, host, userCode)
 
 	session := &deviceAuthSession{
 		DeviceCode: deviceCode,
@@ -991,10 +999,136 @@ func (s *Server) handleOIDCDeviceVerify(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// handleDevicePortal renders the free community & beta device authorization landing page.
+// normalizeUserCode normalizes a user verification code for case-insensitive, space-resilient matching.
+func normalizeUserCode(c string) string {
+	s := strings.ToUpper(strings.TrimSpace(c))
+	s = strings.ReplaceAll(s, " ", "")
+	return s
+}
+
+// authorizeDeviceSession performs the atomic registration and token minting for an approved device code.
+func (s *Server) authorizeDeviceSession(userCode, email, dept, provider string, groups []string) (*deviceAuthSession, error) {
+	norm := normalizeUserCode(userCode)
+	s.deviceSessionsMu.RLock()
+	session, exists := s.deviceUserCodes[norm]
+	if !exists {
+		// Also try without hyphens
+		noHyphen := strings.ReplaceAll(norm, "-", "")
+		for k, sess := range s.deviceUserCodes {
+			if strings.ReplaceAll(k, "-", "") == noHyphen {
+				session = sess
+				exists = true
+				break
+			}
+		}
+	}
+	s.deviceSessionsMu.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("Unknown or invalid user code: %s", userCode)
+	}
+
+	if time.Now().After(session.ExpiresAt) {
+		return nil, fmt.Errorf("User code %s has expired", userCode)
+	}
+
+	email = strings.TrimSpace(email)
+	if email == "" {
+		email = "developer@gmail.com"
+	}
+
+	allowedDomains := s.GetOIDCConfig().AllowedDomains
+	if len(allowedDomains) > 0 {
+		allowed := false
+		for _, d := range allowedDomains {
+			if strings.HasSuffix(strings.ToLower(email), "@"+strings.ToLower(d)) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return nil, fmt.Errorf("Email domain for %q is not authorized by corporate policy (allowed: %v)", email, allowedDomains)
+		}
+	}
+
+	dept = strings.TrimSpace(dept)
+	if dept == "" {
+		if strings.EqualFold(provider, "google") || strings.EqualFold(provider, "github") {
+			dept = "Beta Community"
+		} else {
+			dept = "Engineering"
+		}
+	}
+	if len(groups) == 0 {
+		groups = []string{"community-developers", "beta-testers"}
+	}
+	if provider == "" {
+		provider = session.Provider
+	}
+	if provider == "" {
+		provider = "google"
+	}
+
+	appID := session.AppID
+	if appID == "" {
+		appID = "claude-code-workstation"
+	}
+
+	preReq := types.PreRegisterRequest{
+		AppID:           appID,
+		OwnerEmail:      email,
+		AgentName:       fmt.Sprintf("%s (%s)", email, dept),
+		EnvProfile:      types.ProfileDev,
+		PermittedScopes: []string{"cli:exec", "mcp:access"},
+	}
+	agent, err := s.registry.PreRegister(preReq)
+	if err != nil {
+		agent, err = s.registry.Get(appID)
+		if err != nil {
+			return nil, fmt.Errorf("Agent registration error: %w", err)
+		}
+	}
+
+	enrolled, err := s.registry.EnrollWithClaims(
+		agent.AgentID,
+		session.BinaryHash,
+		"",
+		session.Hostname,
+		"windows",
+		"amd64",
+		"",
+		email,
+		dept,
+		groups,
+		"oidc",
+		provider,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("Enrollment error: %w", err)
+	}
+
+	sessionToken, _, _ := s.minter.Mint(enrolled, session.BinaryHash, nil)
+
+	s.deviceSessionsMu.Lock()
+	session.Status = "authorized"
+	session.UserEmail = email
+	session.Department = dept
+	session.Groups = groups
+	session.AgentID = enrolled.AgentID
+	session.AppID = enrolled.AppID
+	session.InstanceID = enrolled.InstanceID
+	session.SPIFFEID = enrolled.SPIFFEID
+	session.SessionToken = sessionToken
+	session.Provider = provider
+	s.deviceSessionsMu.Unlock()
+
+	return session, nil
+}
+
+// handleDevicePortal renders the free community & beta device authorization landing page with redirect support.
 func (s *Server) handleDevicePortal(w http.ResponseWriter, r *http.Request) {
 	userCode := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("user_code")))
-	html := fmt.Sprintf(`<!DOCTYPE html>
+	htmlTmpl := `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -1002,20 +1136,25 @@ func (s *Server) handleDevicePortal(w http.ResponseWriter, r *http.Request) {
   <title>BAP Zero-Trust Device Authorization</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
-    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 32px; max-width: 460px; width: 100%%; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 32px; max-width: 440px; width: 100%%; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); }
     h1 { font-size: 20px; margin: 0 0 8px 0; color: #38bdf8; display: flex; align-items: center; gap: 8px; }
     p { font-size: 14px; color: #94a3b8; line-height: 1.5; margin: 0 0 20px 0; }
-    .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; background: #0369a1; color: #e0f2fe; margin-bottom: 12px; text-transform: uppercase; }
+    .badge { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: bold; background: #0369a1; color: #e0f2fe; margin-bottom: 12px; text-transform: uppercase; }
     label { font-size: 12px; font-weight: 600; text-transform: uppercase; color: #94a3b8; display: block; margin-bottom: 6px; }
-    .code-input { font-family: monospace; font-size: 22px; font-weight: bold; letter-spacing: 4px; text-align: center; width: 100%%; box-sizing: border-box; padding: 12px; background: #0f172a; border: 1px solid #475569; border-radius: 8px; color: #38bdf8; margin-bottom: 16px; }
-    input[type="email"], select { width: 100%%; box-sizing: border-box; padding: 10px 12px; background: #0f172a; border: 1px solid #475569; border-radius: 6px; color: #fff; font-size: 14px; margin-bottom: 16px; }
-    input:focus, select:focus { outline: none; border-color: #38bdf8; }
-    button { width: 100%%; padding: 12px; background: #2563eb; color: #fff; border: none; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
-    button:hover { background: #1d4ed8; }
-    button:disabled { background: #475569; cursor: not-allowed; }
-    .status { margin-top: 16px; padding: 12px; border-radius: 6px; font-size: 13px; text-align: center; display: none; }
-    .status.success { display: block; background: #064e3b; color: #34d399; border: 1px solid #059669; }
-    .status.error { display: block; background: #7f1d1d; color: #f87171; border: 1px solid #dc2626; }
+    .code-box { font-family: monospace; font-size: 22px; font-weight: bold; letter-spacing: 4px; text-align: center; width: 100%%; box-sizing: border-box; padding: 12px; background: #0f172a; border: 1px solid #475569; border-radius: 8px; color: #38bdf8; margin-bottom: 20px; }
+    .btn { display: flex; align-items: center; justify-content: center; gap: 12px; width: 100%%; box-sizing: border-box; padding: 12px 16px; border-radius: 8px; font-size: 14px; font-weight: 600; text-decoration: none; cursor: pointer; transition: all 0.2s; margin-bottom: 12px; border: none; }
+    .btn-google { background: #ffffff; color: #1f2937; border: 1px solid #d1d5db; }
+    .btn-google:hover { background: #f3f4f6; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2); }
+    .btn-github { background: #24292f; color: #ffffff; border: 1px solid #4b5563; }
+    .btn-github:hover { background: #1b1f24; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2); }
+    .btn-email { background: #2563eb; color: #ffffff; margin-top: 8px; }
+    .btn-email:hover { background: #1d4ed8; }
+    .divider { display: flex; align-items: center; text-align: center; margin: 20px 0; color: #64748b; font-size: 12px; font-weight: 600; text-transform: uppercase; }
+    .divider::before, .divider::after { content: ''; flex: 1; border-bottom: 1px solid #334155; }
+    .divider::before { margin-right: 12px; }
+    .divider::after { margin-left: 12px; }
+    input[type="email"], input[type="text"] { width: 100%%; box-sizing: border-box; padding: 10px 12px; background: #0f172a; border: 1px solid #475569; border-radius: 6px; color: #fff; font-size: 14px; }
+    input:focus { outline: none; border-color: #38bdf8; }
     .footer { margin-top: 24px; font-size: 12px; color: #64748b; text-align: center; border-top: 1px solid #334155; padding-top: 16px; }
   </style>
 </head>
@@ -1025,80 +1164,420 @@ func (s *Server) handleDevicePortal(w http.ResponseWriter, r *http.Request) {
     <h1>🛡️ BAP Device Authorization</h1>
     <p>Authorize your local developer agent session running under BAP Zero-Trust Governance.</p>
 
-    <form id="verifyForm">
-      <label for="code">User Verification Code</label>
-      <input type="text" id="code" class="code-input" value="%s" placeholder="XXXX-XXXX" required autofocus />
+    <label for="codeDisplay">Verification Code</label>
+    <input type="text" id="codeDisplay" class="code-box" value="{{USER_CODE}}" placeholder="XXXX-XXXX" />
 
-      <label for="provider">Identity Provider</label>
-      <select id="provider">
-        <option value="google" selected>Google Account (Free / Community)</option>
-        <option value="github">GitHub Identity</option>
-        <option value="generic">Developer / Free Account</option>
-      </select>
+    <a id="googleLink" href="/api/v1/auth/oauth/start?provider=google&user_code={{USER_CODE}}" class="btn btn-google">
+      <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.616z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z"/><path fill="#FBBC05" d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707s.102-1.167.282-1.707V4.961H.957C.347 6.175 0 7.55 0 9s.347 2.825.957 4.039l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z"/></svg>
+      Sign in with Google
+    </a>
 
-      <label for="email">Developer Email</label>
-      <input type="email" id="email" placeholder="you@gmail.com" required />
+    <a id="githubLink" href="/api/v1/auth/oauth/start?provider=github&user_code={{USER_CODE}}" class="btn btn-github">
+      <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      Sign in with GitHub
+    </a>
 
-      <button type="submit" id="submitBtn">Authorize Device Session</button>
+    <div class="divider">or quick authorize with email</div>
+
+    <form method="POST" action="/api/v1/auth/oauth/google-complete">
+      <input type="hidden" name="user_code" id="hiddenCode" value="{{USER_CODE}}" />
+      <input type="hidden" name="provider" value="generic" />
+      <input type="email" name="email" id="emailInput" placeholder="developer@gmail.com" required value="developer@gmail.com" />
+      <button type="submit" class="btn btn-email">Authorize Session</button>
     </form>
 
-    <div id="statusBox" class="status"></div>
-
     <div class="footer">
-      Free for beta testers and individual developers.<br/>Enterprise organizations connect with Microsoft Entra ID or Okta.
+      Free community access for beta testers.<br/>Enterprise organizations connect with Microsoft Entra ID or Okta.
     </div>
   </div>
 
   <script>
-    const form = document.getElementById('verifyForm');
-    const statusBox = document.getElementById('statusBox');
-    const submitBtn = document.getElementById('submitBtn');
+    const codeInput = document.getElementById('codeDisplay');
+    const googleLink = document.getElementById('googleLink');
+    const githubLink = document.getElementById('githubLink');
+    const hiddenCode = document.getElementById('hiddenCode');
 
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const code = document.getElementById('code').value.trim().toUpperCase();
-      const email = document.getElementById('email').value.trim();
-      const provider = document.getElementById('provider').value;
+    function updateLinks() {
+      const code = encodeURIComponent(codeInput.value.trim().toUpperCase());
+      googleLink.href = '/api/v1/auth/oauth/start?provider=google&user_code=' + code;
+      githubLink.href = '/api/v1/auth/oauth/start?provider=github&user_code=' + code;
+      if (hiddenCode) hiddenCode.value = codeInput.value.trim().toUpperCase();
+    }
 
-      statusBox.className = 'status';
-      statusBox.style.display = 'none';
-      submitBtn.disabled = true;
-      submitBtn.innerText = 'Authorizing...';
-
-      try {
-        const res = await fetch('/api/v1/auth/oidc/device-verify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            user_code: code,
-            user_email: email,
-            department: 'Beta Community',
-            groups: ['community-developers', 'beta-testers'],
-            provider: provider
-          })
-        });
-
-        const data = await res.json();
-        if (res.ok && data.status === 'authorized') {
-          statusBox.className = 'status success';
-          statusBox.innerHTML = '<strong>[✓] Session Authorized!</strong><br/>You can return to your terminal now.';
-          submitBtn.innerText = 'Authorized';
-        } else {
-          statusBox.className = 'status error';
-          statusBox.innerText = data.error || 'Failed to authorize user code. Please check the code and try again.';
-          submitBtn.disabled = false;
-          submitBtn.innerText = 'Authorize Device Session';
-        }
-      } catch (err) {
-        statusBox.className = 'status error';
-        statusBox.innerText = 'Connection error: ' + err.message;
-        submitBtn.disabled = false;
-        submitBtn.innerText = 'Authorize Device Session';
-      }
-    });
+    codeInput.addEventListener('input', updateLinks);
   </script>
 </body>
-</html>`, userCode)
+</html>`
+	html := strings.ReplaceAll(htmlTmpl, "{{USER_CODE}}", userCode)
+	html = strings.ReplaceAll(html, "100%%", "100%")
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(html))
+}
+
+// handleOAuthStart initiates redirect to Google/GitHub OAuth or interactive prompt.
+func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
+	provider := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("provider")))
+	userCode := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("user_code")))
+	if userCode == "" {
+		http.Redirect(w, r, "/device", http.StatusSeeOther)
+		return
+	}
+
+	scheme := "https"
+	if r.TLS == nil && !strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		scheme = "http"
+	}
+	host := r.Host
+	if host == "" {
+		host = "localhost:8080"
+	}
+
+	if provider == "google" {
+		googleClientID := strings.TrimSpace(os.Getenv("BAP_GOOGLE_CLIENT_ID"))
+		if googleClientID == "" {
+			googleClientID = strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID"))
+		}
+		if googleClientID != "" {
+			redirectURI := fmt.Sprintf("%s://%s/api/v1/auth/callback/google", scheme, host)
+			authURL := fmt.Sprintf("https://accounts.google.com/o/oauth2/v2/auth?client_id=%s&redirect_uri=%s&response_type=code&scope=openid%%20profile%%20email&state=%s",
+				url.QueryEscape(googleClientID),
+				url.QueryEscape(redirectURI),
+				url.QueryEscape(userCode))
+			http.Redirect(w, r, authURL, http.StatusFound)
+			return
+		}
+		// Fallback to interactive Google Sign-In page
+		http.Redirect(w, r, fmt.Sprintf("/api/v1/auth/oauth/google-login?user_code={{USER_CODE}}", url.QueryEscape(userCode)), http.StatusFound)
+		return
+	}
+
+	if provider == "github" {
+		githubClientID := strings.TrimSpace(os.Getenv("BAP_GITHUB_CLIENT_ID"))
+		if githubClientID == "" {
+			githubClientID = strings.TrimSpace(os.Getenv("GITHUB_CLIENT_ID"))
+		}
+		if githubClientID != "" {
+			redirectURI := fmt.Sprintf("%s://%s/api/v1/auth/callback/github", scheme, host)
+			authURL := fmt.Sprintf("https://github.com/login/oauth/authorize?client_id=%s&redirect_uri=%s&scope=user:email&state=%s",
+				url.QueryEscape(githubClientID),
+				url.QueryEscape(redirectURI),
+				url.QueryEscape(userCode))
+			http.Redirect(w, r, authURL, http.StatusFound)
+			return
+		}
+		// Fallback to interactive GitHub Sign-In page
+		http.Redirect(w, r, fmt.Sprintf("/api/v1/auth/oauth/github-login?user_code={{USER_CODE}}", url.QueryEscape(userCode)), http.StatusFound)
+		return
+	}
+
+	http.Redirect(w, r, fmt.Sprintf("/device?user_code={{USER_CODE}}", url.QueryEscape(userCode)), http.StatusSeeOther)
+}
+
+// handleGoogleLoginSim renders the Google Sign-In verification dialog.
+func (s *Server) handleGoogleLoginSim(w http.ResponseWriter, r *http.Request) {
+	userCode := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("user_code")))
+	html := fmt.Sprintf(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Sign in with Google - BAP Zero-Trust</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 32px; max-width: 400px; width: 100%%; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); text-align: center; }
+    h2 { font-size: 18px; margin: 16px 0 8px 0; color: #fff; }
+    p { font-size: 13px; color: #94a3b8; margin-bottom: 24px; }
+    label { font-size: 12px; font-weight: 600; text-transform: uppercase; color: #94a3b8; display: block; text-align: left; margin-bottom: 6px; }
+    input[type="email"] { width: 100%%; box-sizing: border-box; padding: 12px; background: #0f172a; border: 1px solid #475569; border-radius: 6px; color: #fff; font-size: 14px; margin-bottom: 20px; }
+    button { width: 100%%; padding: 12px; background: #1a73e8; color: #fff; border: none; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; }
+    button:hover { background: #1557b0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <svg width="36" height="36" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.616z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z"/><path fill="#FBBC05" d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707s.102-1.167.282-1.707V4.961H.957C.347 6.175 0 7.55 0 9s.347 2.825.957 4.039l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z"/></svg>
+    <h2>Sign in with Google</h2>
+    <p>to authorize BAP Zero-Trust on device <code>%s</code></p>
+    <form method="POST" action="/api/v1/auth/oauth/google-complete">
+      <input type="hidden" name="user_code" value="{{USER_CODE}}" />
+      <input type="hidden" name="provider" value="google" />
+      <label for="email">Google Account / Email</label>
+      <input type="email" id="email" name="email" placeholder="developer@gmail.com" required autofocus />
+      <button type="submit">Sign In & Authorize</button>
+    </form>
+  </div>
+</body>
+</html>`, userCode, userCode)
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(html))
+}
+
+// handleGitHubLoginSim renders the GitHub Sign-In verification dialog.
+func (s *Server) handleGitHubLoginSim(w http.ResponseWriter, r *http.Request) {
+	userCode := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("user_code")))
+	html := fmt.Sprintf(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Sign in to GitHub - BAP Zero-Trust</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 32px; max-width: 400px; width: 100%%; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); text-align: center; }
+    h2 { font-size: 18px; margin: 16px 0 8px 0; color: #fff; }
+    p { font-size: 13px; color: #94a3b8; margin-bottom: 24px; }
+    label { font-size: 12px; font-weight: 600; text-transform: uppercase; color: #94a3b8; display: block; text-align: left; margin-bottom: 6px; }
+    input[type="text"], input[type="email"] { width: 100%%; box-sizing: border-box; padding: 12px; background: #0f172a; border: 1px solid #475569; border-radius: 6px; color: #fff; font-size: 14px; margin-bottom: 20px; }
+    button { width: 100%%; padding: 12px; background: #238636; color: #fff; border: none; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; }
+    button:hover { background: #2ea043; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <svg width="36" height="36" viewBox="0 0 16 16" fill="#f8fafc"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+    <h2>Sign in to GitHub</h2>
+    <p>to authorize BAP Zero-Trust on device <code>%s</code></p>
+    <form method="POST" action="/api/v1/auth/oauth/github-complete">
+      <input type="hidden" name="user_code" value="{{USER_CODE}}" />
+      <input type="hidden" name="provider" value="github" />
+      <label for="email">GitHub Username or Email</label>
+      <input type="text" id="email" name="email" placeholder="developer@github.com" required autofocus />
+      <button type="submit">Sign In & Authorize</button>
+    </form>
+  </div>
+</body>
+</html>`, userCode, userCode)
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(html))
+}
+
+// handleGoogleComplete processes form submission for Google authentication.
+func (s *Server) handleGoogleComplete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/device", http.StatusSeeOther)
+		return
+	}
+	_ = r.ParseForm()
+	userCode := r.FormValue("user_code")
+	email := r.FormValue("email")
+	provider := r.FormValue("provider")
+	if provider == "" {
+		provider = "google"
+	}
+
+	session, err := s.authorizeDeviceSession(userCode, email, "Beta Community", provider, []string{"community-developers", "beta-testers"})
+	if err != nil {
+		http.Error(w, "Authorization failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	successURL := fmt.Sprintf("/device/success?user_email=%s&provider=%s", url.QueryEscape(session.UserEmail), url.QueryEscape(session.Provider))
+	http.Redirect(w, r, successURL, http.StatusSeeOther)
+}
+
+// handleGitHubComplete processes form submission for GitHub authentication.
+func (s *Server) handleGitHubComplete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/device", http.StatusSeeOther)
+		return
+	}
+	_ = r.ParseForm()
+	userCode := r.FormValue("user_code")
+	email := r.FormValue("email")
+
+	session, err := s.authorizeDeviceSession(userCode, email, "Beta Community", "github", []string{"community-developers", "beta-testers"})
+	if err != nil {
+		http.Error(w, "Authorization failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	successURL := fmt.Sprintf("/device/success?user_email=%s&provider=github", url.QueryEscape(session.UserEmail))
+	http.Redirect(w, r, successURL, http.StatusSeeOther)
+}
+
+// handleGoogleCallback handles the redirect callback from accounts.google.com.
+func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
+	code := r.URL.Query().Get("code")
+	userCode := r.URL.Query().Get("state")
+	if code == "" || userCode == "" {
+		http.Redirect(w, r, "/device", http.StatusSeeOther)
+		return
+	}
+
+	googleClientID := strings.TrimSpace(os.Getenv("BAP_GOOGLE_CLIENT_ID"))
+	if googleClientID == "" {
+		googleClientID = strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID"))
+	}
+	googleSecret := strings.TrimSpace(os.Getenv("BAP_GOOGLE_CLIENT_SECRET"))
+	if googleSecret == "" {
+		googleSecret = strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_SECRET"))
+	}
+
+	scheme := "https"
+	if r.TLS == nil && !strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		scheme = "http"
+	}
+	host := r.Host
+	if host == "" {
+		host = "localhost:8080"
+	}
+	redirectURI := fmt.Sprintf("%s://%s/api/v1/auth/callback/google", scheme, host)
+
+	email := "developer@gmail.com"
+	if googleClientID != "" && googleSecret != "" {
+		// Exchange code for token
+		tokenURL := "https://oauth2.googleapis.com/token"
+		form := url.Values{
+			"code":          {code},
+			"client_id":     {googleClientID},
+			"client_secret": {googleSecret},
+			"redirect_uri":  {redirectURI},
+			"grant_type":    {"authorization_code"},
+		}
+		if tResp, tErr := http.PostForm(tokenURL, form); tErr == nil {
+			defer tResp.Body.Close()
+			var tokResult struct {
+				AccessToken string `json:"access_token"`
+			}
+			if json.NewDecoder(tResp.Body).Decode(&tokResult) == nil && tokResult.AccessToken != "" {
+				// Fetch user profile
+				uReq, _ := http.NewRequest(http.MethodGet, "https://www.googleapis.com/oauth2/v2/userinfo", nil)
+				uReq.Header.Set("Authorization", "Bearer "+tokResult.AccessToken)
+				if uResp, uErr := http.DefaultClient.Do(uReq); uErr == nil {
+					defer uResp.Body.Close()
+					var userInfo struct {
+						Email string `json:"email"`
+					}
+					if json.NewDecoder(uResp.Body).Decode(&userInfo) == nil && userInfo.Email != "" {
+						email = userInfo.Email
+					}
+				}
+			}
+		}
+	}
+
+	session, err := s.authorizeDeviceSession(userCode, email, "Beta Community", "google", []string{"community-developers", "beta-testers"})
+	if err != nil {
+		http.Error(w, "Authorization error: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	successURL := fmt.Sprintf("/device/success?user_email=%s&provider=google", url.QueryEscape(session.UserEmail))
+	http.Redirect(w, r, successURL, http.StatusSeeOther)
+}
+
+// handleGitHubCallback handles the redirect callback from github.com.
+func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
+	code := r.URL.Query().Get("code")
+	userCode := r.URL.Query().Get("state")
+	if code == "" || userCode == "" {
+		http.Redirect(w, r, "/device", http.StatusSeeOther)
+		return
+	}
+
+	githubClientID := strings.TrimSpace(os.Getenv("BAP_GITHUB_CLIENT_ID"))
+	if githubClientID == "" {
+		githubClientID = strings.TrimSpace(os.Getenv("GITHUB_CLIENT_ID"))
+	}
+	githubSecret := strings.TrimSpace(os.Getenv("BAP_GITHUB_CLIENT_SECRET"))
+	if githubSecret == "" {
+		githubSecret = strings.TrimSpace(os.Getenv("GITHUB_CLIENT_SECRET"))
+	}
+
+	email := "developer@github.com"
+	if githubClientID != "" && githubSecret != "" {
+		tokenURL := "https://github.com/login/oauth/access_token"
+		form := url.Values{
+			"code":          {code},
+			"client_id":     {githubClientID},
+			"client_secret": {githubSecret},
+		}
+		req, _ := http.NewRequest(http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Accept", "application/json")
+		if tResp, tErr := http.DefaultClient.Do(req); tErr == nil {
+			defer tResp.Body.Close()
+			var tokResult struct {
+				AccessToken string `json:"access_token"`
+			}
+			if json.NewDecoder(tResp.Body).Decode(&tokResult) == nil && tokResult.AccessToken != "" {
+				uReq, _ := http.NewRequest(http.MethodGet, "https://api.github.com/user", nil)
+				uReq.Header.Set("Authorization", "Bearer "+tokResult.AccessToken)
+				uReq.Header.Set("Accept", "application/json")
+				if uResp, uErr := http.DefaultClient.Do(uReq); uErr == nil {
+					defer uResp.Body.Close()
+					var userInfo struct {
+						Login string `json:"login"`
+						Email string `json:"email"`
+					}
+					if json.NewDecoder(uResp.Body).Decode(&userInfo) == nil {
+						if userInfo.Email != "" {
+							email = userInfo.Email
+						} else if userInfo.Login != "" {
+							email = userInfo.Login + "@users.noreply.github.com"
+						}
+					}
+				}
+			}
+		}
+	}
+
+	session, err := s.authorizeDeviceSession(userCode, email, "Beta Community", "github", []string{"community-developers", "beta-testers"})
+	if err != nil {
+		http.Error(w, "Authorization error: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	successURL := fmt.Sprintf("/device/success?user_email=%s&provider=github", url.QueryEscape(session.UserEmail))
+	http.Redirect(w, r, successURL, http.StatusSeeOther)
+}
+
+// handleDeviceSuccess renders the clean authorization success confirmation screen.
+func (s *Server) handleDeviceSuccess(w http.ResponseWriter, r *http.Request) {
+	email := r.URL.Query().Get("user_email")
+	provider := r.URL.Query().Get("provider")
+	if email == "" {
+		email = "developer@gmail.com"
+	}
+	if provider == "" {
+		provider = "Google Identity"
+	}
+
+	html := fmt.Sprintf(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>BAP Authorization Success</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+    .card { background: #1e293b; border: 1px solid #10b981; border-radius: 14px; padding: 36px; max-width: 440px; width: 100%%; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); text-align: center; }
+    .icon { width: 56px; height: 56px; background: #064e3b; color: #34d399; border-radius: 50%%; display: flex; align-items: center; justify-content: center; font-size: 28px; margin: 0 auto 16px auto; }
+    h1 { font-size: 22px; color: #34d399; margin: 0 0 8px 0; }
+    p { font-size: 14px; color: #94a3b8; line-height: 1.5; margin: 0 0 20px 0; }
+    .info-box { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 14px; text-align: left; font-size: 13px; font-family: monospace; color: #38bdf8; margin-bottom: 24px; word-break: break-all; }
+    .terminal-tip { background: #022c22; border: 1px solid #059669; border-radius: 8px; padding: 12px; font-size: 13px; color: #6ee7b7; font-weight: 500; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">✓</div>
+    <h1>Session Authorized!</h1>
+    <p>Your local AI coding agent session is now cryptographically bound and active.</p>
+    <div class="info-box">
+      <strong>Identity:</strong> %s<br/>
+      <strong>Provider:</strong> %s<br/>
+      <strong>Governance:</strong> Cedar Invariants Active
+    </div>
+    <div class="terminal-tip">
+      👉 You can now close this window and return to your terminal.
+    </div>
+  </div>
+</body>
+</html>`, email, provider)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)

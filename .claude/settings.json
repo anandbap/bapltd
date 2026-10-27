@@ -60,6 +60,16 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "interceptor.exe"
+          }
+        ]
+      }
     ]
   }
 }

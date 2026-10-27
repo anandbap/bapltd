@@ -190,8 +190,8 @@ class TestEnterpriseIdPFederation(unittest.TestCase):
             self.assertIn("text/html", resp.headers.get("Content-Type", ""))
             body = resp.read().decode("utf-8")
             self.assertIn("ABCD-9999", body)
-            self.assertIn("Google Account", body)
-            self.assertIn("Authorize Device Session", body)
+            self.assertIn("Sign in with Google", body)
+            self.assertIn("Sign in with GitHub", body)
 
     def test_07_google_identity_login_flow(self):
         """Validates free community / beta login using Google Identity."""

@@ -6,9 +6,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "interceptor",
-            "commandWindows": "interceptor.exe",
-            "timeout": 10
+            "command": "C:\\Users\\User\\bin\\interceptor.exe",
+            "timeout": 10,
+            "commandWindows": "C:\\Users\\User\\bin\\interceptor.exe"
           }
         ]
       }
@@ -18,9 +18,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "interceptor",
-            "commandWindows": "interceptor.exe",
-            "timeout": 10
+            "command": "C:\\Users\\User\\bin\\interceptor.exe",
+            "timeout": 10,
+            "commandWindows": "C:\\Users\\User\\bin\\interceptor.exe"
           }
         ]
       }
@@ -31,9 +31,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "interceptor",
-            "commandWindows": "interceptor.exe",
-            "timeout": 30
+            "command": "C:\\Users\\User\\bin\\interceptor.exe",
+            "timeout": 30,
+            "commandWindows": "C:\\Users\\User\\bin\\interceptor.exe"
           }
         ]
       }
@@ -43,9 +43,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "interceptor",
-            "commandWindows": "interceptor.exe",
-            "timeout": 10
+            "command": "C:\\Users\\User\\bin\\interceptor.exe",
+            "timeout": 10,
+            "commandWindows": "C:\\Users\\User\\bin\\interceptor.exe"
           }
         ]
       }
@@ -55,9 +55,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "interceptor",
-            "commandWindows": "interceptor.exe",
-            "timeout": 3
+            "command": "C:\\Users\\User\\bin\\interceptor.exe",
+            "timeout": 3,
+            "commandWindows": "C:\\Users\\User\\bin\\interceptor.exe"
           }
         ]
       }
