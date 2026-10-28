@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -28,33 +29,52 @@ func RunLogout(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	_ = *force
 
 	credsFile := *configPath
 	if credsFile == "" {
 		credsFile = DefaultCredentialsPath()
 	}
 
-	// 1. Check if enrolled credentials exist
-	credsData, err := os.ReadFile(credsFile)
-	if err != nil {
-		altPath := state.CredentialsPath()
-		if altPath != credsFile {
-			if altData, altErr := os.ReadFile(altPath); altErr == nil {
-				credsFile = altPath
-				credsData = altData
-				err = nil
-			}
+	// 1. Discover and load enrolled credentials from any candidate location
+	candidatePaths := []string{
+		credsFile,
+		state.CredentialsPath(),
+	}
+	if home, hErr := os.UserHomeDir(); hErr == nil && home != "" {
+		candidatePaths = append(candidatePaths,
+			filepath.Join(home, ".bapstate", "credentials.json"),
+			filepath.Join(home, ".ltd", "credentials.json"),
+			filepath.Join(home, ".bap", "credentials.json"),
+		)
+	}
+	candidatePaths = append(candidatePaths,
+		filepath.Join(".bapstate", "credentials.json"),
+		filepath.Join(".ltd", "credentials.json"),
+		filepath.Join(".bap", "credentials.json"),
+	)
+	if envCreds := os.Getenv("BAP_CREDENTIALS"); envCreds != "" {
+		candidatePaths = append(candidatePaths, envCreds)
+	}
+
+	var credsData []byte
+	foundPath := credsFile
+	for _, cp := range candidatePaths {
+		if cp == "" {
+			continue
+		}
+		if data, err := os.ReadFile(cp); err == nil && len(data) > 0 {
+			credsData = data
+			foundPath = cp
+			break
 		}
 	}
 
-	if err != nil || len(credsData) == 0 {
-		fmt.Println("[i] No active enrolled credentials found. Workstation is already logged out.")
-		return nil
-	}
-
 	var creds StoredCredentials
-	if jErr := json.Unmarshal(credsData, &creds); jErr != nil {
-		fmt.Printf("[!] Warning: Could not parse %s: %v\n", credsFile, jErr)
+	if len(credsData) > 0 {
+		if jErr := json.Unmarshal(credsData, &creds); jErr != nil {
+			fmt.Printf("[!] Warning: Could not parse %s: %v\n", foundPath, jErr)
+		}
 	}
 
 	// 2. Prepare HTTP client
@@ -87,47 +107,44 @@ func RunLogout(args []string) error {
 	}
 
 	serverContacted := false
-	if serverURL != "" {
-		deregURL := strings.TrimRight(serverURL, "/") + "/api/v1/agents/deregister"
-		reqPayload := map[string]string{
-			"agent_id":      creds.AgentID,
-			"instance_id":   creds.InstanceID,
-			"session_token": creds.SessionToken,
-			"reason":        "User logged out via bapedge logout",
-		}
-		reqBody, _ := json.Marshal(reqPayload)
-		httpReq, rErr := http.NewRequest(http.MethodPost, deregURL, bytes.NewReader(reqBody))
-		if rErr == nil {
-			httpReq.Header.Set("Content-Type", "application/json")
-			if creds.SessionToken != "" {
-				httpReq.Header.Set("Authorization", "Bearer "+creds.SessionToken)
+	if serverURL != "" && (creds.AgentID != "" || creds.InstanceID != "" || creds.SessionToken != "") {
+		for _, endpoint := range []string{"/api/v1/agents/deregister", "/api/v1/auth/logout"} {
+			deregURL := strings.TrimRight(serverURL, "/") + endpoint
+			reqPayload := map[string]string{
+				"agent_id":      creds.AgentID,
+				"instance_id":   creds.InstanceID,
+				"session_token": creds.SessionToken,
+				"target":        creds.AgentID,
+				"reason":        "User logged out via bapedge logout",
 			}
-			resp, postErr := httpClient.Do(httpReq)
-			if postErr == nil {
-				defer resp.Body.Close()
-				if resp.StatusCode == http.StatusOK {
-					serverContacted = true
+			reqBody, _ := json.Marshal(reqPayload)
+			httpReq, rErr := http.NewRequest(http.MethodPost, deregURL, bytes.NewReader(reqBody))
+			if rErr == nil {
+				httpReq.Header.Set("Content-Type", "application/json")
+				if creds.SessionToken != "" {
+					httpReq.Header.Set("Authorization", "Bearer "+creds.SessionToken)
+				}
+				resp, postErr := httpClient.Do(httpReq)
+				if postErr == nil {
+					_ = resp.Body.Close()
+					if resp.StatusCode == http.StatusOK {
+						serverContacted = true
+					}
 				}
 			}
 		}
 	}
 
-	// 4. Remove local credentials file
-	if rErr := os.Remove(credsFile); rErr != nil && !os.IsNotExist(rErr) {
-		if !*force {
-			return fmt.Errorf("failed to remove local credentials file %s: %w", credsFile, rErr)
-		}
-	}
-
-	// 5. Also purge secondary session state if present
-	_ = os.Remove(state.CredentialsPath())
+	// 4. Exhaustively purge all local credentials and session tokens across all candidate locations
+	state.PurgeAllCredentials(foundPath)
+	state.PurgeAllCredentials(credsFile)
 
 	fmt.Println("================================================================================")
 	fmt.Println("  [BAP ZERO-TRUST] 🚪 Developer Workstation Logout & Deregistration")
 	fmt.Println("================================================================================")
 	if serverContacted {
 		fmt.Printf("  [✓] Central Control Plane Session Revoked: %s\n", serverURL)
-	} else if serverURL != "" {
+	} else if serverURL != "" && (creds.AgentID != "" || creds.InstanceID != "") {
 		fmt.Printf("  [!] Remote Server Notice: Control plane unreachable (%s); deregistered locally.\n", serverURL)
 	}
 	if creds.UserEmail != "" {
@@ -136,7 +153,7 @@ func RunLogout(args []string) error {
 	if creds.InstanceID != "" {
 		fmt.Printf("  [✓] Workstation Instance:   %s\n", creds.InstanceID)
 	}
-	fmt.Printf("  [✓] Removed credentials:    %s\n", credsFile)
+	fmt.Printf("  [✓] Removed credentials:    %s\n", foundPath)
 	fmt.Println("  [✓] Workstation is now logged out. Run 'bap login' to re-authenticate.")
 	fmt.Println("================================================================================")
 	return nil

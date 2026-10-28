@@ -199,4 +199,15 @@ func TestRunLogin_DuplicatePreventionAndForce(t *testing.T) {
 	if forceErr != nil {
 		t.Fatalf("RunLogin with --force failed: %v", forceErr)
 	}
+
+	// 4. RunLogout should purge credentials and allow clean RunLogin without --force
+	logoutErr := RunLogout([]string{"--config", configPath, "--insecure"})
+	if logoutErr != nil {
+		t.Fatalf("RunLogout failed: %v", logoutErr)
+	}
+
+	reloginErr := RunLogin(args)
+	if reloginErr != nil {
+		t.Fatalf("RunLogin after RunLogout should succeed without --force, but failed: %v", reloginErr)
+	}
 }

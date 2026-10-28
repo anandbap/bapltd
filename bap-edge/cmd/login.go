@@ -4,14 +4,15 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"runtime"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -97,34 +98,77 @@ func RunLogin(args []string) error {
 		if cErr == nil && len(cData) > 0 {
 			var existing StoredCredentials
 			if json.Unmarshal(cData, &existing) == nil && existing.AgentID != "" && existing.SessionToken != "" {
-				// Verify if existing enrollment has been revoked or deregistered on the control plane
+				// Verify if existing enrollment has expired, been revoked, or been deregistered on the control plane
 				isDeregistered := false
+
+				// 1. Check local JWT expiration
+				if isTokenExpired(existing.SessionToken) {
+					isDeregistered = true
+				}
+
 				checkURL := *serverURL
 				if checkURL == "" {
 					checkURL = existing.ServerURL
 				}
-				if checkURL != "" {
-					probeClient := httptransport.New(2 * time.Second)
+
+				// 2. Query central revocations and active session health
+				if !isDeregistered && checkURL != "" {
+					probeClient := httptransport.New(5 * time.Second)
 					if *insecureTLS {
 						probeClient.Transport = &http.Transport{
 							TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 						}
 					}
+
+					// Check central revocations
 					if rResp, rErr := probeClient.Get(strings.TrimRight(checkURL, "/") + "/api/v1/control/revocations"); rErr == nil {
 						if rResp.StatusCode == http.StatusOK {
 							var rData struct {
 								DeregisteredAgents []string `json:"deregistered_agents"`
+								RevokedSessions    []string `json:"revoked_sessions"`
+								RevokedAgents      []string `json:"revoked_agents"`
+								QuarantinedAgents  []string `json:"quarantined_agents"`
 							}
 							if json.NewDecoder(rResp.Body).Decode(&rData) == nil {
-								for _, d := range rData.DeregisteredAgents {
-									if d == existing.AgentID || d == existing.InstanceID || (existing.UserEmail != "" && strings.EqualFold(d, existing.UserEmail)) {
+								allRevoked := append(append(append(rData.DeregisteredAgents, rData.RevokedSessions...), rData.RevokedAgents...), rData.QuarantinedAgents...)
+								for _, d := range allRevoked {
+									if d == existing.AgentID || d == existing.InstanceID || d == existing.SessionToken || (existing.UserEmail != "" && strings.EqualFold(d, existing.UserEmail)) {
 										isDeregistered = true
 										break
 									}
 								}
 							}
 						}
-						rResp.Body.Close()
+						_ = rResp.Body.Close()
+					}
+
+					// Verify active session with heartbeat probe
+					if !isDeregistered {
+						hbPayload := map[string]string{
+							"agent_id":   existing.AgentID,
+							"session_id": existing.AgentID,
+						}
+						hbBytes, _ := json.Marshal(hbPayload)
+						if hbReq, hbErr := http.NewRequest(http.MethodPost, strings.TrimRight(checkURL, "/")+"/api/v1/sessions/heartbeat", bytes.NewReader(hbBytes)); hbErr == nil {
+							hbReq.Header.Set("Content-Type", "application/json")
+							if existing.SessionToken != "" {
+								hbReq.Header.Set("Authorization", "Bearer "+existing.SessionToken)
+							}
+							if hbResp, postErr := probeClient.Do(hbReq); postErr == nil {
+								if hbResp.StatusCode == http.StatusOK {
+									var hbData struct {
+										Status string `json:"status"`
+										Action string `json:"action"`
+									}
+									if json.NewDecoder(hbResp.Body).Decode(&hbData) == nil {
+										if hbData.Status == "revoked" || hbData.Status == "closed" || hbData.Status == "deregistered" || hbData.Action == "terminate" {
+											isDeregistered = true
+										}
+									}
+								}
+								_ = hbResp.Body.Close()
+							}
+						}
 					}
 				}
 
@@ -150,9 +194,8 @@ func RunLogin(args []string) error {
 					fmt.Println("================================================================================")
 					return fmt.Errorf("workstation is already authenticated as %s (Agent ID: %s); run 'bap logout' before logging in again", existing.UserEmail, existing.AgentID)
 				} else {
-					// Stale credentials from a remotely deregistered session; cleanly purge
-					_ = os.Remove(credsFile)
-					_ = os.Remove(state.CredentialsPath())
+					// Stale credentials from an expired, revoked, or remotely deregistered session; cleanly purge all
+					state.PurgeAllCredentials(credsFile)
 				}
 			}
 		}
@@ -418,3 +461,26 @@ func RunLogin(args []string) error {
 	}
 	return nil
 }
+
+func isTokenExpired(tokenStr string) bool {
+	parts := strings.Split(tokenStr, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		// Try standard URL encoding with padding if raw fails
+		payloadBytes, err = base64.URLEncoding.DecodeString(parts[1])
+		if err != nil {
+			return false
+		}
+	}
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(payloadBytes, &claims); err == nil && claims.Exp > 0 {
+		return time.Now().Unix() > claims.Exp
+	}
+	return false
+}
+

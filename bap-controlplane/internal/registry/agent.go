@@ -287,12 +287,18 @@ func (s *Store) Deregister(target string) (*types.RegisteredAgent, error) {
 		return nil, fmt.Errorf("target is required")
 	}
 	now := time.Now()
+	var matched *types.RegisteredAgent
 	for _, a := range s.agents {
 		if a.AgentID == target || a.InstanceID == target || (a.OwnerEmail != "" && strings.EqualFold(a.OwnerEmail, target)) || (a.UserEmail != "" && strings.EqualFold(a.UserEmail, target)) {
 			a.Status = types.StatusDeregistered
 			a.RevokedAt = &now
-			return a, nil
+			if matched == nil {
+				matched = a
+			}
 		}
+	}
+	if matched != nil {
+		return matched, nil
 	}
 	return nil, fmt.Errorf("no agent found matching %q", target)
 }

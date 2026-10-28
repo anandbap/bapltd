@@ -130,29 +130,39 @@ def main():
         sys.exit(subprocess.call(sub_cmd))
     elif cmd == "logout":
         bapedge = find_bapedge()
+        rc = 0
         if os.path.isfile(bapedge):
             sub_cmd = [bapedge, "logout"] + rest
-            sys.exit(subprocess.call(sub_cmd))
-        else:
-            # Fallback local credential cleanup
-            home = os.path.expanduser("~")
-            candidates = [
-                os.path.join(home, ".bapstate", "credentials.json"),
-                os.path.join(home, ".ltd", "credentials.json"),
-            ]
-            removed = False
-            for c in candidates:
-                if os.path.exists(c):
-                    try:
-                        os.remove(c)
-                        removed = True
-                    except Exception:
-                        pass
-            if removed:
-                print("[✓] Local session credentials removed. Workstation is logged out.")
-            else:
-                print("[i] No active enrolled credentials found. Workstation is already logged out.")
-            sys.exit(0)
+            rc = subprocess.call(sub_cmd)
+
+        # Comprehensive credential cleanup across all candidate locations
+        home = os.path.expanduser("~")
+        candidates = [
+            os.path.join(home, ".bapstate", "credentials.json"),
+            os.path.join(home, ".ltd", "credentials.json"),
+            os.path.join(home, ".bap", "credentials.json"),
+            os.path.join(os.getcwd(), ".bapstate", "credentials.json"),
+            os.path.join(os.getcwd(), ".ltd", "credentials.json"),
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), "BAP", "credentials.json"),
+            os.path.join(os.environ.get("APPDATA", ""), "BAP", "credentials.json"),
+        ]
+        for c in candidates:
+            if c and os.path.exists(c):
+                try:
+                    os.remove(c)
+                except Exception:
+                    pass
+        # Also clean session tokens
+        for sdir in [os.path.join(home, ".bapstate", "sessions"), os.path.join(home, ".ltd", "sessions")]:
+            if os.path.isdir(sdir):
+                try:
+                    shutil.rmtree(sdir, ignore_errors=True)
+                except Exception:
+                    pass
+
+        if not os.path.isfile(bapedge):
+            print("[✓] Local session credentials removed. Workstation is logged out.")
+        sys.exit(rc)
     elif cmd == "launch":
         sys.argv = [sys.argv[0]] + rest
         launch_main()

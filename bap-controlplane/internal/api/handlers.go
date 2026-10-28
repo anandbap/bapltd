@@ -2031,6 +2031,18 @@ func (s *Server) handleDeregisterAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	agent, err := s.registry.Deregister(target)
+	if payload.AgentID != "" && payload.AgentID != target {
+		if a2, err2 := s.registry.Deregister(payload.AgentID); err2 == nil && agent == nil {
+			agent = a2
+			err = nil
+		}
+	}
+	if payload.InstanceID != "" && payload.InstanceID != target {
+		if a3, err3 := s.registry.Deregister(payload.InstanceID); err3 == nil && agent == nil {
+			agent = a3
+			err = nil
+		}
+	}
 	if err != nil {
 		if token != "" {
 			writeJSON(w, http.StatusOK, map[string]any{
@@ -2044,10 +2056,18 @@ func (s *Server) handleDeregisterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.sessionStore != nil && agent != nil {
-		_ = s.sessionStore.RevokeSession(agent.AgentID, "Deregistered via logout")
-		if agent.InstanceID != "" {
-			_ = s.sessionStore.RevokeSession(agent.InstanceID, "Deregistered via logout")
+	if s.sessionStore != nil {
+		if agent != nil {
+			_ = s.sessionStore.RevokeSession(agent.AgentID, "Deregistered via logout")
+			if agent.InstanceID != "" {
+				_ = s.sessionStore.RevokeSession(agent.InstanceID, "Deregistered via logout")
+			}
+		}
+		if payload.AgentID != "" {
+			_ = s.sessionStore.RevokeSession(payload.AgentID, "Deregistered via logout")
+		}
+		if payload.InstanceID != "" {
+			_ = s.sessionStore.RevokeSession(payload.InstanceID, "Deregistered via logout")
 		}
 	}
 

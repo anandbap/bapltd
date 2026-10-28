@@ -115,17 +115,66 @@ func CredentialsPath() string {
 	if env := os.Getenv("BAP_CREDENTIALS"); env != "" {
 		return env
 	}
-	target := filepath.Join(Dir(), "credentials.json")
-	if _, err := os.Stat(target); os.IsNotExist(err) {
-		// Fallback check legacy ~/.ltd/credentials.json
-		if home, err := os.UserHomeDir(); err == nil {
-			legacy := filepath.Join(home, ".ltd", "credentials.json")
-			if _, err := os.Stat(legacy); err == nil {
-				_ = copyFile(legacy, target)
-			}
+	return filepath.Join(Dir(), "credentials.json")
+}
+
+// PurgeAllCredentials exhaustively removes all local credentials and session state across
+// .bapstate, legacy .ltd, .bap, and working directory targets to guarantee clean logout.
+func PurgeAllCredentials(explicitPath string) {
+	candidates := []string{
+		explicitPath,
+		CredentialsPath(),
+		filepath.Join(Dir(), "credentials.json"),
+		filepath.Join(Dir(), "session.json"),
+		filepath.Join(Dir(), "token.json"),
+	}
+
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		candidates = append(candidates,
+			filepath.Join(home, ".bapstate", "credentials.json"),
+			filepath.Join(home, ".bapstate", "session.json"),
+			filepath.Join(home, ".bapstate", "token.json"),
+			filepath.Join(home, ".ltd", "credentials.json"),
+			filepath.Join(home, ".bap", "credentials.json"),
+			filepath.Join(home, "credentials.json"),
+		)
+	}
+
+	candidates = append(candidates,
+		filepath.Join(".bapstate", "credentials.json"),
+		filepath.Join(".bapstate", "session.json"),
+		filepath.Join(".bapstate", "token.json"),
+		filepath.Join(".ltd", "credentials.json"),
+		filepath.Join(".bap", "credentials.json"),
+	)
+
+	if envCreds := os.Getenv("BAP_CREDENTIALS"); envCreds != "" {
+		candidates = append(candidates, envCreds)
+	}
+
+	seen := make(map[string]bool)
+	for _, c := range candidates {
+		if c == "" {
+			continue
+		}
+		abs, err := filepath.Abs(c)
+		if err != nil {
+			abs = c
+		}
+		if seen[abs] {
+			continue
+		}
+		seen[abs] = true
+		_ = os.Remove(abs)
+	}
+
+	// Also purge active session markers in SessionsDir()
+	sessionsDir := SessionsDir()
+	if entries, err := os.ReadDir(sessionsDir); err == nil {
+		for _, e := range entries {
+			_ = os.Remove(filepath.Join(sessionsDir, e.Name()))
 		}
 	}
-	return target
 }
 
 // ConfigPath returns the path to the central endpoints config file.
@@ -211,7 +260,9 @@ func MigrateLegacy() {
 		if _, err := os.Stat(targetCreds); os.IsNotExist(err) && home != "" {
 			legacyCreds := filepath.Join(home, ".ltd", "credentials.json")
 			if _, err := os.Stat(legacyCreds); err == nil {
-				_ = copyFile(legacyCreds, targetCreds)
+				if err := copyFile(legacyCreds, targetCreds); err == nil {
+					_ = os.Remove(legacyCreds)
+				}
 			}
 		}
 
