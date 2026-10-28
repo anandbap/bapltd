@@ -40,25 +40,64 @@ Examples:
   bap pin verify
 """
 
+def get_platform_id() -> str:
+    import platform
+    machine = platform.machine().lower()
+    is_arm = machine in ("arm64", "aarch64", "armv8b", "armv8l")
+    if sys.platform == "win32":
+        return "windows-arm64" if is_arm else "windows-amd64"
+    elif sys.platform == "darwin":
+        return "darwin-arm64" if is_arm else "darwin-amd64"
+    else:
+        return "linux-arm64" if is_arm else "linux-amd64"
+
 def find_bapedge() -> str:
     ext = ".exe" if sys.platform == "win32" else ""
     binary_name = "bapedge" + ext
     home = os.path.expanduser("~")
+    pkg_dir = os.path.dirname(os.path.abspath(__file__))
+    plat_id = get_platform_id()
+
     candidates = [
         os.path.join(home, "bin", binary_name),
-        os.path.join(os.environ.get("APPDATA", ""), "BAP", "bin", binary_name),
         os.path.join(os.environ.get("LOCALAPPDATA", ""), "BAP", "bin", binary_name),
+        os.path.join(os.environ.get("APPDATA", ""), "BAP", "bin", binary_name),
         os.path.expanduser(f"~/.local/bin/{binary_name}"),
         os.path.expanduser(f"~/.bap/bin/{binary_name}"),
+        os.path.join(pkg_dir, "bin", plat_id, binary_name),
+        os.path.join(pkg_dir, "bin", plat_id.replace("arm64", "amd64"), binary_name),
         os.path.abspath(binary_name),
     ]
     for c in candidates:
         if c and os.path.isfile(c):
-            return c
+            bin_dir = os.path.dirname(os.path.abspath(c))
+            path_parts = os.environ.get("PATH", "").split(os.pathsep)
+            if bin_dir and bin_dir not in path_parts:
+                os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+            return os.path.abspath(c)
+
+    # Search system PATH, skipping python script shims to avoid recursion
+    curr_exe = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else ""
     found = shutil.which(binary_name)
     if found:
-        return found
+        found_abs = os.path.abspath(found)
+        if found_abs.lower() != curr_exe.lower() and "scripts" not in os.path.dirname(found_abs).lower():
+            return found_abs
+
     return candidates[0]
+
+def bapedge_proxy():
+    """Direct proxy console_script entry point for 'bapedge'.
+    Enables 'bapedge' to be immediately available on PATH right after 'pip install bap-ltd'
+    via Python's Scripts directory.
+    """
+    bapedge = find_bapedge()
+    if os.path.isfile(bapedge):
+        sys.exit(subprocess.call([bapedge] + sys.argv[1:]))
+    else:
+        print("[!] bapedge binary not found in standard user paths (~/bin, %LOCALAPPDATA%\\BAP\\bin).")
+        print("    Please run 'bap install' to download and set up the local BAP Edge engine.")
+        sys.exit(1)
 
 def main():
     if len(sys.argv) < 2:
@@ -103,7 +142,9 @@ def main():
     elif cmd == "status":
         bapedge = find_bapedge()
         if os.path.isfile(bapedge):
-            sys.exit(subprocess.call([bapedge, "daemon", "status"] + rest))
+            if rest and rest[0] == "daemon":
+                sys.exit(subprocess.call([bapedge, "daemon", "status"] + rest[1:]))
+            sys.exit(subprocess.call([bapedge, "status"] + rest))
         else:
             print(f"[!] bapedge binary not found. Please run 'bap install' first.")
             sys.exit(1)

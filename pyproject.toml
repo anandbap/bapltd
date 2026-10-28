@@ -38,8 +38,10 @@ dependencies = []
 
 [project.scripts]
 bap = "bap.cli:main"
+bapedge = "bap.cli:bapedge_proxy"
 bap-install = "bap.install:main"
 bap-launch = "bap.launch:main"
+bap-doctor = "bap.doctor:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

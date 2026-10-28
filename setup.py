@@ -13,7 +13,7 @@ with open(os.path.join(here, "README.md"), encoding="utf-8") as f:
 
 setup(
     name="bap-ltd",
-    version="1.8.1",
+    version="1.8.2",
     description="Bounded Authority Plane (BAP) - Zero-Trust Local Trusted Daemon & Governance for AI Developer Agents",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -30,6 +30,7 @@ setup(
     entry_points={
         "console_scripts": [
             "bap = bap.cli:main",
+            "bapedge = bap.cli:bapedge_proxy",
             "bap-install = bap.install:main",
             "bap-launch = bap.launch:main",
             "bap-doctor = bap.doctor:main",

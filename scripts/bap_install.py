@@ -170,6 +170,7 @@ def update_user_path(target_dir: str):
                 new_path = ";".join(clean_entries)
                 winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, new_path)
                 print(f"  {TermColor.GREEN}[+] Added to Windows User PATH (HKCU\\Environment\\Path){TermColor.RESET}")
+                print(f"  {TermColor.CYAN}[i] Tip: Open a new terminal window to load the updated PATH in your shell.{TermColor.RESET}")
                 
                 # Broadcast WM_SETTINGCHANGE so existing explorer and new shells pick it up
                 try:
@@ -1271,9 +1272,13 @@ def main():
     print(f"  2. Antigravity   : Governed automatically via {TermColor.CYAN}GEMINI.md{TermColor.RESET} & BAP MCP")
     print(f"  3. VS Code Copilot: Opens with {TermColor.CYAN}CopilotSandbox{TermColor.RESET} governed profile")
     print(f"  4. Direct CLI    : {TermColor.CYAN}bapedge exec \"<command>\"{TermColor.RESET}")
-    print(f"  5. Verification  : {TermColor.CYAN}bap doctor{TermColor.RESET} (Pre-flight diagnostic health check)")
-    print(f"  6. Cockpit       : {TermColor.CYAN}bap launch{TermColor.RESET} (Open developer cockpit & monitor fleet)")
-    print(f"  7. Uninstall     : {TermColor.CYAN}bap uninstall{TermColor.RESET} (Clean removal)")
+    print(f"  5. Workstation Status: {TermColor.CYAN}bap status{TermColor.RESET} (Inspect 5-layer compliance & identity)")
+    print(f"  6. Verification  : {TermColor.CYAN}bap doctor{TermColor.RESET} (Pre-flight diagnostic health check)")
+    print(f"  7. Cockpit       : {TermColor.CYAN}bap launch{TermColor.RESET} (Open developer cockpit & monitor fleet)")
+    print(f"  8. Uninstall     : {TermColor.CYAN}bap uninstall{TermColor.RESET} (Clean removal)")
+    print("-" * 80)
+    print(f"  {TermColor.YELLOW}Note: If 'bapedge' is not recognized in your current open terminal, simply open a{TermColor.RESET}")
+    print(f"  {TermColor.YELLOW}new terminal window (or run 'refreshenv') so your shell reloads the updated PATH.{TermColor.RESET}")
     print("=" * 80)
 
 
