@@ -297,6 +297,28 @@ func (s *Store) Deregister(target string) (*types.RegisteredAgent, error) {
 	return nil, fmt.Errorf("no agent found matching %q", target)
 }
 
+// SupersedeWorkstationAgent marks any older active agent matching the same hostname and user email as deregistered to prevent duplicates.
+func (s *Store) SupersedeWorkstationAgent(appID, email, hostname string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if hostname == "" && email == "" {
+		return
+	}
+
+	now := time.Now()
+	for _, a := range s.agents {
+		if a.Status == types.StatusActive || a.Status == types.StatusPendingEnrollment || a.Status == types.StatusOffline {
+			matchHost := hostname != "" && a.Hostname != "" && strings.EqualFold(a.Hostname, hostname)
+			matchEmail := email != "" && ((a.OwnerEmail != "" && strings.EqualFold(a.OwnerEmail, email)) || (a.UserEmail != "" && strings.EqualFold(a.UserEmail, email)))
+			if matchHost && matchEmail {
+				a.Status = types.StatusDeregistered
+				a.RevokedAt = &now
+			}
+		}
+	}
+}
+
 func (s *Store) Heartbeat(agentID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

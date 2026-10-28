@@ -18,6 +18,7 @@ import (
 	"bap-edge/internal/attest"
 	"bap-edge/internal/config"
 	"bap-edge/internal/httptransport"
+	"bap-edge/internal/state"
 )
 
 type oidcDiscoveryConfig struct {
@@ -68,9 +69,93 @@ func RunLogin(args []string) error {
 	caCertPath := fs.String("ca-cert", os.Getenv("BAP_CA_CERT"), "Path to custom CA certificate for HTTPS verification")
 	insecureTLS := fs.Bool("insecure", false, "Skip TLS certificate verification (development only)")
 	deviceTypeFlag := fs.String("type", "", "Workstation device type ('laptop', 'desktop', or 'server')")
+	forceFlag := fs.Bool("force", false, "Force re-authentication even if already registered")
 
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	// 1. Prevent duplicate agent registration if workstation is already authenticated
+	credsFile := *configPath
+	if credsFile == "" {
+		credsFile = DefaultCredentialsPath()
+	}
+
+	if !*forceFlag {
+		cData, cErr := os.ReadFile(credsFile)
+		if cErr != nil && (*configPath == "" || *configPath == DefaultCredentialsPath()) {
+			altPath := state.CredentialsPath()
+			if altPath != credsFile {
+				if aData, aErr := os.ReadFile(altPath); aErr == nil {
+					cData = aData
+					cErr = nil
+					credsFile = altPath
+				}
+			}
+		}
+
+		if cErr == nil && len(cData) > 0 {
+			var existing StoredCredentials
+			if json.Unmarshal(cData, &existing) == nil && existing.AgentID != "" && existing.SessionToken != "" {
+				// Verify if existing enrollment has been revoked or deregistered on the control plane
+				isDeregistered := false
+				checkURL := *serverURL
+				if checkURL == "" {
+					checkURL = existing.ServerURL
+				}
+				if checkURL != "" {
+					probeClient := httptransport.New(2 * time.Second)
+					if *insecureTLS {
+						probeClient.Transport = &http.Transport{
+							TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+						}
+					}
+					if rResp, rErr := probeClient.Get(strings.TrimRight(checkURL, "/") + "/api/v1/control/revocations"); rErr == nil {
+						if rResp.StatusCode == http.StatusOK {
+							var rData struct {
+								DeregisteredAgents []string `json:"deregistered_agents"`
+							}
+							if json.NewDecoder(rResp.Body).Decode(&rData) == nil {
+								for _, d := range rData.DeregisteredAgents {
+									if d == existing.AgentID || d == existing.InstanceID || (existing.UserEmail != "" && strings.EqualFold(d, existing.UserEmail)) {
+										isDeregistered = true
+										break
+									}
+								}
+							}
+						}
+						rResp.Body.Close()
+					}
+				}
+
+				if !isDeregistered {
+					fmt.Println()
+					fmt.Println("================================================================================")
+					fmt.Println("  ❌ ERROR: This workstation is already registered and authenticated.")
+					fmt.Println("================================================================================")
+					if existing.UserEmail != "" {
+						fmt.Printf("   User Email:    %s (%s)\n", existing.UserEmail, existing.IdPProvider)
+					}
+					fmt.Printf("   Agent ID:      %s\n", existing.AgentID)
+					if existing.InstanceID != "" {
+						fmt.Printf("   Workstation:   %s\n", existing.InstanceID)
+					}
+					if existing.ServerURL != "" {
+						fmt.Printf("   Control Plane: %s\n", existing.ServerURL)
+					}
+					fmt.Println("--------------------------------------------------------------------------------")
+					fmt.Println("   You must run 'bap logout' before you can log in again.")
+					fmt.Println("   Alternatively, run 'bap status' to inspect current session health,")
+					fmt.Println("   or run 'bap login --force' to force re-authentication.")
+					fmt.Println("================================================================================")
+					return fmt.Errorf("workstation is already authenticated as %s (Agent ID: %s); run 'bap logout' before logging in again", existing.UserEmail, existing.AgentID)
+				} else {
+					// Stale credentials from a remotely deregistered session; cleanly purge
+					_ = os.Remove(credsFile)
+					_ = os.Remove(state.CredentialsPath())
+				}
+			}
+		}
 	}
 
 	// 1. Build HTTP client

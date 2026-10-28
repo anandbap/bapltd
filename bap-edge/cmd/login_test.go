@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -105,5 +106,97 @@ func TestRunLogin_EndToEnd(t *testing.T) {
 	}
 	if creds.SessionToken != "mock-bap-session-jwt-token-123" {
 		t.Errorf("unexpected SessionToken: %s", creds.SessionToken)
+	}
+}
+
+func TestRunLogin_DuplicatePreventionAndForce(t *testing.T) {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/api/v1/auth/oidc/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"enabled":          true,
+			"provider":         "entra",
+			"verification_uri": "https://login.microsoftonline.com/common/oauth2/deviceauth",
+		})
+	})
+
+	mux.HandleFunc("/api/v1/auth/oidc/device-code", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"device_code":               "devcode-mock-dup",
+			"user_code":                 "DUPP-1234",
+			"verification_uri":          "https://login.microsoftonline.com/common/oauth2/deviceauth",
+			"verification_uri_complete": "http://localhost:8080/device?user_code=DUPP-1234",
+			"expires_in":                60,
+			"interval":                  1,
+		})
+	})
+
+	mux.HandleFunc("/api/v1/auth/oidc/device-verify", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "authorized",
+		})
+	})
+
+	mux.HandleFunc("/api/v1/auth/oidc/device-token", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":        "authorized",
+			"user_email":    "dup@corp.internal",
+			"department":    "Engineering",
+			"groups":        []string{"engineers"},
+			"agent_id":      "agent-mock-dup",
+			"app_id":        "claude-code-workstation",
+			"instance_id":   "inst-dup-01",
+			"session_token": "mock-token-dup",
+			"provider":      "entra",
+		})
+	})
+
+	mux.HandleFunc("/api/v1/control/revocations", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"deregistered_agents": []string{},
+			"quarantined_agents":  []string{},
+		})
+	})
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "credentials.json")
+
+	args := []string{
+		"--server", ts.URL,
+		"--provider", "entra",
+		"--email", "dup@corp.internal",
+		"--verify-now",
+		"--config", configPath,
+		"--insecure",
+	}
+
+	// 1. First login should succeed
+	err := RunLogin(args)
+	if err != nil {
+		t.Fatalf("First RunLogin failed: %v", err)
+	}
+
+	// 2. Second login without --force should FAIL with already logged in error
+	dupErr := RunLogin(args)
+	if dupErr == nil {
+		t.Fatalf("Second RunLogin should have failed with duplicate error, but succeeded")
+	}
+	if !strings.Contains(dupErr.Error(), "already authenticated") && !strings.Contains(dupErr.Error(), "bap logout") {
+		t.Errorf("Expected error to mention 'already authenticated' and 'bap logout', got: %v", dupErr)
+	}
+
+	// 3. Third login with --force should succeed
+	forceArgs := append(args, "--force")
+	forceErr := RunLogin(forceArgs)
+	if forceErr != nil {
+		t.Fatalf("RunLogin with --force failed: %v", forceErr)
 	}
 }

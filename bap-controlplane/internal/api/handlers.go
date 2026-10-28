@@ -967,6 +967,9 @@ func (s *Server) handleOIDCDeviceVerify(w http.ResponseWriter, r *http.Request) 
 		appID = "claude-code-workstation"
 	}
 
+	// Supersede any older active registration for this workstation and user to prevent duplicates
+	s.registry.SupersedeWorkstationAgent(appID, email, session.Hostname)
+
 	// 1. Create registered agent definition
 	preReq := types.PreRegisterRequest{
 		AppID:           appID,
@@ -1120,6 +1123,9 @@ func (s *Server) authorizeDeviceSession(userCode, email, dept, provider string, 
 		devTitle = "Desktop"
 	}
 	agentName := fmt.Sprintf("%s @ %s (%s Workstation)", email, hostname, devTitle)
+
+	// Supersede any older active registration for this workstation and user to prevent duplicates
+	s.registry.SupersedeWorkstationAgent(appID, email, hostname)
 
 	preReq := types.PreRegisterRequest{
 		AppID:           appID,

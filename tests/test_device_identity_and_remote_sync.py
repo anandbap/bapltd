@@ -46,5 +46,18 @@ class TestDeviceIdentityAndRemoteSync(unittest.TestCase):
         self.assertIn('elif cmd == "daemon":', cli_content)
         self.assertIn('daemon <cmd>', cli_content)
 
+    def test_login_prevents_duplicate_agent_registration(self):
+        login_path = "bap-edge/cmd/login.go"
+        with open(login_path, "r", encoding="utf-8") as f:
+            login_content = f.read()
+        self.assertIn("already authenticated as", login_content)
+        self.assertIn("run 'bap logout' before logging in again", login_content)
+        self.assertIn("forceFlag := fs.Bool(\"force\"", login_content)
+
+        registry_path = "bap-controlplane/internal/registry/agent.go"
+        with open(registry_path, "r", encoding="utf-8") as f:
+            reg_content = f.read()
+        self.assertIn("SupersedeWorkstationAgent", reg_content)
+
 if __name__ == "__main__":
     unittest.main()
