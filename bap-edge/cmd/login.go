@@ -322,8 +322,10 @@ func RunLogin(args []string) error {
 	fmt.Printf("[✓] Enrolled credentials saved to: %s\n", *configPath)
 	fmt.Println("[✓] Local agent session is now bound to your corporate identity and ready for Cedar governance.")
 
-	// Launch background supervisor daemon in user mode if not already running
-	if !isDaemonRunning() {
+	// Launch background supervisor daemon in user mode if not already running (skip if running under test runner)
+	currentExe, _ := os.Executable()
+	isTestRunner := strings.HasSuffix(strings.ToLower(currentExe), ".test.exe") || strings.HasSuffix(strings.ToLower(currentExe), ".test")
+	if !isDaemonRunning() && !isTestRunner {
 		_ = runDaemonStart([]string{"-server", *serverURL})
 		if isDaemonRunning() {
 			fmt.Println("[✓] Background supervisor daemon launched. Workstation is actively monitored in V3 Dashboard.")

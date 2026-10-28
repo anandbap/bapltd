@@ -546,6 +546,9 @@ func runDaemonStart(args []string) error {
 	if !*fgFlag {
 		// Spawn as background detached process
 		exe, _ := os.Executable()
+		if strings.HasSuffix(strings.ToLower(exe), ".test.exe") || strings.HasSuffix(strings.ToLower(exe), ".test") {
+			return nil
+		}
 		cmd := exec.Command(exe, "daemon", "start", "-foreground", "-port", strconv.Itoa(*portFlag), "-server", serverURL)
 		cmd.Dir = "."
 		cmd.Stdout = nil
