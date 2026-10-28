@@ -76,10 +76,8 @@ func (s *Store) Get(agentID string) (*types.RegisteredAgent, error) {
 			lastAct = *copy.LastHeartbeatAt
 		}
 		elapsed := time.Since(lastAct)
-		if elapsed > 45*time.Second {
+		if elapsed > 15*time.Minute {
 			copy.Status = types.StatusOffline
-		} else if elapsed > 9*time.Second {
-			copy.Status = types.StatusQuarantined
 		}
 	}
 	return &copy, nil
@@ -275,6 +273,26 @@ func (s *Store) RestoreTarget(target string) (*types.RegisteredAgent, error) {
 	return nil, fmt.Errorf("no agent found matching %q", target)
 }
 
+// Deregister marks an agent or instance as deregistered (e.g. via 'bap logout').
+func (s *Store) Deregister(target string) (*types.RegisteredAgent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return nil, fmt.Errorf("target is required")
+	}
+	now := time.Now()
+	for _, a := range s.agents {
+		if a.AgentID == target || a.InstanceID == target || (a.OwnerEmail != "" && strings.EqualFold(a.OwnerEmail, target)) || (a.UserEmail != "" && strings.EqualFold(a.UserEmail, target)) {
+			a.Status = types.StatusDeregistered
+			a.RevokedAt = &now
+			return a, nil
+		}
+	}
+	return nil, fmt.Errorf("no agent found matching %q", target)
+}
+
 func (s *Store) Heartbeat(agentID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -317,10 +335,8 @@ func (s *Store) List() []*types.RegisteredAgent {
 				lastAct = *copy.LastHeartbeatAt
 			}
 			elapsed := now.Sub(lastAct)
-			if elapsed > 45*time.Second {
+			if elapsed > 15*time.Minute {
 				copy.Status = types.StatusOffline
-			} else if elapsed > 9*time.Second {
-				copy.Status = types.StatusQuarantined
 			}
 		}
 		list = append(list, &copy)
@@ -356,10 +372,8 @@ func (s *Store) ListVisible(maxAge time.Duration, isUserRevoked func(string) boo
 				lastAct = *copy.LastHeartbeatAt
 			}
 			elapsed := now.Sub(lastAct)
-			if elapsed > 45*time.Second {
+			if elapsed > 15*time.Minute {
 				copy.Status = types.StatusOffline
-			} else if elapsed > 9*time.Second {
-				copy.Status = types.StatusQuarantined
 			}
 		}
 		list = append(list, &copy)

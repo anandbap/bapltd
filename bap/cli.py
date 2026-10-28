@@ -21,7 +21,8 @@ Usage: bap <command> [options]
 Commands:
   install       Run single-click user-mode onboarding installer
   uninstall     Cleanly remove BAP binaries, PATH entries, and agent hooks
-  login         Authenticate workstation session with corporate SSO (Entra ID / Okta OIDC)
+  login         Authenticate workstation session with corporate SSO (Google / GitHub / Entra / Okta)
+  logout        Deregister workstation and clear authenticated corporate session
   launch        Start developer cockpit, verify hooks & monitor agents
   doctor        Run comprehensive pre-flight diagnostic health check
   status        Check health of local edge daemon and central control plane
@@ -126,6 +127,31 @@ def main():
             sys.exit(1)
         sub_cmd = [bapedge, "login"] + rest
         sys.exit(subprocess.call(sub_cmd))
+    elif cmd == "logout":
+        bapedge = find_bapedge()
+        if os.path.isfile(bapedge):
+            sub_cmd = [bapedge, "logout"] + rest
+            sys.exit(subprocess.call(sub_cmd))
+        else:
+            # Fallback local credential cleanup
+            home = os.path.expanduser("~")
+            candidates = [
+                os.path.join(home, ".bapstate", "credentials.json"),
+                os.path.join(home, ".ltd", "credentials.json"),
+            ]
+            removed = False
+            for c in candidates:
+                if os.path.exists(c):
+                    try:
+                        os.remove(c)
+                        removed = True
+                    except Exception:
+                        pass
+            if removed:
+                print("[✓] Local session credentials removed. Workstation is logged out.")
+            else:
+                print("[i] No active enrolled credentials found. Workstation is already logged out.")
+            sys.exit(0)
     elif cmd == "launch":
         sys.argv = [sys.argv[0]] + rest
         launch_main()

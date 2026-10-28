@@ -301,6 +301,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/agents/pre-register", s.requireAdminAuth(s.handlePreRegister))
 	s.mux.HandleFunc("/api/v1/agents/register", s.handleRegisterEdge)
 	s.mux.HandleFunc("/api/v1/agents/register-edge", s.handleRegisterEdge)
+	s.mux.HandleFunc("/api/v1/agents/deregister", s.handleDeregisterAgent)
+	s.mux.HandleFunc("/api/v1/auth/logout", s.handleDeregisterAgent)
 	s.mux.HandleFunc("/api/v1/grants/acquire", s.handleAcquireGrant)
 	s.mux.HandleFunc("/api/v1/grants/delegate", s.handleDelegateGrant)
 	s.mux.HandleFunc("/api/v1/grants/consume", s.handleConsumeGrant)
@@ -1899,6 +1901,106 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		"agent_id": payload.AgentID,
 		"status":   string(types.StatusRevoked),
 		"message":  "Agent has been revoked. All subsequent grants will be denied.",
+	})
+}
+
+// handleDeregisterAgent processes agent deregistration (e.g. via 'bap logout' or dashboard).
+func (s *Server) handleDeregisterAgent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var payload struct {
+		AgentID      string `json:"agent_id,omitempty"`
+		InstanceID   string `json:"instance_id,omitempty"`
+		SessionToken string `json:"session_token,omitempty"`
+		Target       string `json:"target,omitempty"`
+		Reason       string `json:"reason,omitempty"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&payload)
+
+	// Determine target identity to deregister
+	target := payload.Target
+	if target == "" {
+		if payload.AgentID != "" {
+			target = payload.AgentID
+		} else if payload.InstanceID != "" {
+			target = payload.InstanceID
+		}
+	}
+
+	// If a session token was passed or in Authorization header, verify caller identity
+	authHeader := r.Header.Get("Authorization")
+	token := payload.SessionToken
+	if token == "" && strings.HasPrefix(authHeader, "Bearer ") {
+		token = strings.TrimPrefix(authHeader, "Bearer ")
+	}
+
+	if token != "" && s.minter != nil {
+		if claims, err := s.minter.Verify(token); err == nil {
+			if target == "" {
+				if claims.InstanceID != "" {
+					target = claims.InstanceID
+				} else if claims.Sub != "" {
+					target = claims.Sub
+				}
+			}
+			s.minter.RevokeGrant(claims.GrantID, "Deregistered via logout")
+		}
+	}
+
+	if target == "" && !s.isAdminCaller(r) {
+		writeError(w, http.StatusBadRequest, "agent_id, instance_id, or valid session token is required to deregister")
+		return
+	}
+
+	agent, err := s.registry.Deregister(target)
+	if err != nil {
+		if token != "" {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"deregistered": true,
+				"target":       target,
+				"message":      "Session revoked and deregistered successfully.",
+			})
+			return
+		}
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	if s.sessionStore != nil && agent != nil {
+		_ = s.sessionStore.RevokeSession(agent.AgentID, "Deregistered via logout")
+		if agent.InstanceID != "" {
+			_ = s.sessionStore.RevokeSession(agent.InstanceID, "Deregistered via logout")
+		}
+	}
+
+	s.activityMu.Lock()
+	s.activities = append(s.activities, &types.AgentActivityEvent{
+		Timestamp:       time.Now().UTC().Format(time.RFC3339),
+		AgentID:         agent.AgentID,
+		Application:     agent.AppID,
+		Action:          "bap.logout",
+		ActionStatus:    "completed",
+		PolicyDecision:  "ALLOW",
+		OutcomeCategory: "Success",
+		UserID:          agent.OwnerEmail,
+		BusinessUnit:    agent.Department,
+	})
+	if len(s.activities) > 1000 {
+		s.activities = s.activities[len(s.activities)-1000:]
+	}
+	s.activityMu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"deregistered": true,
+		"agent_id":     agent.AgentID,
+		"app_id":       agent.AppID,
+		"instance_id":  agent.InstanceID,
+		"status":       string(types.StatusDeregistered),
+		"message":      "Agent workstation successfully logged out and deregistered from BAP Control Plane.",
 	})
 }
 

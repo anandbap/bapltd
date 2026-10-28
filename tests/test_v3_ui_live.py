@@ -148,6 +148,76 @@ class TestV3UILive(unittest.TestCase):
         )
         self.assertEqual(st2, 200)
 
+    def test_05_registered_agents_in_v3_ui(self):
+        """Verify V3 HTML contains Registered Agents panel and /api/v1/agents returns agents."""
+        st, _, raw = http_req(f"{CP_URL}/dashboard/")
+        self.assertEqual(st, 200)
+        html = raw.decode("utf-8")
+        self.assertIn("Registered Agent Fleet &amp; Identities", html)
+        self.assertIn("regSearch", html)
+        self.assertIn("regTable", html)
+        self.assertIn("openRiskyActions", html)
+
+        st_agents, res_agents, _ = http_req(f"{CP_URL}/api/v1/agents")
+        self.assertEqual(st_agents, 200)
+        self.assertIn("agents", res_agents)
+
+    def test_06_agent_deregistration_endpoint(self):
+        """Verify POST /api/v1/agents/deregister revokes and deregisters an agent."""
+        # 1. Pre-register and register an agent
+        prereg = {
+            "app_id": "test-logout-agent",
+            "owner_email": "logout-test@corp.internal",
+            "agent_name": "LogoutTestAgent",
+            "env_profile": "dev",
+            "permitted_scopes": ["cli:exec"],
+        }
+        st_pre, pr_res, _ = http_req(
+            f"{CP_URL}/api/v1/agents/pre-register",
+            method="POST",
+            data=prereg,
+            headers={"X-BAP-Admin-Token": TEST_ADMIN_TOKEN}
+        )
+        self.assertIn(st_pre, [200, 201])
+        agent_id = pr_res.get("agent_id")
+        otc = pr_res.get("one_time_code")
+
+        reg = {
+            "one_time_code": otc,
+            "agent_name": "LogoutTestAgent",
+            "hostname": "logout-workstation",
+            "binary_hash": "294ab8c000000000000000000000000000000000000000000000000000000000",
+            "public_key": "pubkey-logout-test",
+            "instance_id": "inst-logout-01"
+        }
+        st_reg, reg_res, _ = http_req(f"{CP_URL}/api/v1/agents/register", method="POST", data=reg)
+        self.assertEqual(st_reg, 200)
+        session_token = reg_res.get("session_token")
+
+        # 2. Deregister via /api/v1/agents/deregister
+        dereg_payload = {
+            "agent_id": agent_id,
+            "instance_id": "inst-logout-01",
+            "session_token": session_token,
+            "reason": "Test logout"
+        }
+        st_d, d_res, _ = http_req(
+            f"{CP_URL}/api/v1/agents/deregister",
+            method="POST",
+            data=dereg_payload,
+            headers={"Authorization": f"Bearer {session_token}"}
+        )
+        self.assertEqual(st_d, 200)
+        self.assertTrue(d_res.get("deregistered"))
+        self.assertEqual(d_res.get("status"), "deregistered")
+
+    def test_07_risky_action_audit_events_endpoint(self):
+        """Verify /api/v1/audit/events returns valid payload for risky action drawer."""
+        st, res, _ = http_req(f"{CP_URL}/api/v1/audit/events")
+        self.assertEqual(st, 200)
+        self.assertIn("events", res)
+        self.assertIn("chain_status", res)
+
 
 if __name__ == "__main__":
     unittest.main()
