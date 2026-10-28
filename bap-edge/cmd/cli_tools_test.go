@@ -63,6 +63,36 @@ func TestRunStatus(t *testing.T) {
 	}
 }
 
+func TestRunStatus_EnrolledDiscovery(t *testing.T) {
+	tmpDir := t.TempDir()
+	credsPath := filepath.Join(tmpDir, "credentials.json")
+	creds := StoredCredentials{
+		ServerURL:    "http://127.0.0.1:54321",
+		AgentID:      "agent-test-status-enrolled",
+		AppID:        "claude-code-workstation",
+		InstanceID:   "inst-status-01",
+		SessionToken: "mock-session-token",
+		AuthMode:     "oidc",
+		UserEmail:    "status-test@corp.internal",
+		Department:   "Engineering",
+		IdPProvider:  "google",
+		EnrolledAt:   time.Now(),
+	}
+	data, _ := json.MarshalIndent(creds, "", "  ")
+	if err := os.WriteFile(credsPath, data, 0600); err != nil {
+		t.Fatalf("failed to write test creds: %v", err)
+	}
+
+	origEnv := os.Getenv("BAP_CREDENTIALS")
+	os.Setenv("BAP_CREDENTIALS", credsPath)
+	defer os.Setenv("BAP_CREDENTIALS", origEnv)
+
+	err := RunStatus([]string{"--json", "--no-sweep"})
+	if err != nil {
+		t.Fatalf("RunStatus with enrolled credentials failed: %v", err)
+	}
+}
+
 func TestRunWhy(t *testing.T) {
 	// Test empty args prints usage
 	if err := RunWhy([]string{}); err != nil {
@@ -111,9 +141,6 @@ func TestRunSweepLocal(t *testing.T) {
 
 func TestCheckOtherBapEdgeInstances(t *testing.T) {
 	status := CheckOtherBapEdgeInstances()
-	// In the test process itself without a background daemon running,
-	// OtherRunning should typically be false, or if another test process is running,
-	// description should be populated.
 	if status.Description == "" {
 		t.Errorf("expected description to be non-empty")
 	}

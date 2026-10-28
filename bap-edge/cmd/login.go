@@ -132,7 +132,7 @@ func RunLogin(args []string) error {
 							if json.NewDecoder(rResp.Body).Decode(&rData) == nil {
 								allRevoked := append(append(append(rData.DeregisteredAgents, rData.RevokedSessions...), rData.RevokedAgents...), rData.QuarantinedAgents...)
 								for _, d := range allRevoked {
-									if d == existing.AgentID || d == existing.InstanceID || d == existing.SessionToken || (existing.UserEmail != "" && strings.EqualFold(d, existing.UserEmail)) {
+									if d == existing.AgentID || d == existing.InstanceID || d == existing.SessionToken {
 										isDeregistered = true
 										break
 									}

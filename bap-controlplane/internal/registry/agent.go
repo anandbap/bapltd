@@ -70,6 +70,7 @@ func (s *Store) Get(agentID string) (*types.RegisteredAgent, error) {
 	copy := *agent
 	copy.AllowedBinaryHashes = append([]string(nil), agent.AllowedBinaryHashes...)
 	copy.PermittedScopes = append([]string(nil), agent.PermittedScopes...)
+	copy.Subagents = append([]string(nil), agent.Subagents...)
 	if copy.Status == types.StatusActive {
 		lastAct := copy.CreatedAt
 		if copy.LastHeartbeatAt != nil {
@@ -114,19 +115,31 @@ func (s *Store) EnrollWithVersion(agentID string, binaryHash, pubKey, hostname, 
 
 	spiffeID := fmt.Sprintf("spiffe://%s/app/%s/instance/%s", s.trustDomain, strings.ToLower(parentAgent.AppID), instanceID)
 
-	// If the parent agent is still pending enrollment, update it directly
-	if parentAgent.Status == types.StatusPendingEnrollment {
+	// If the parent agent is pending enrollment, or is re-enrolling/re-activating on the same workstation:
+	isSameWorkstation := (instanceID != "" && parentAgent.InstanceID == instanceID) || (hostname != "" && strings.EqualFold(parentAgent.Hostname, hostname))
+	if parentAgent.Status == types.StatusPendingEnrollment || parentAgent.Status == types.StatusDeregistered || isSameWorkstation {
 		parentAgent.Status = types.StatusActive
+		parentAgent.RevokedAt = nil
 		parentAgent.InstanceID = instanceID
 		parentAgent.SPIFFEID = spiffeID
 		parentAgent.TrustDomain = s.trustDomain
 		parentAgent.EnrolledBinaryHash = binaryHash
 		parentAgent.PublicKey = pubKey
-		parentAgent.Hostname = hostname
-		parentAgent.OS = osName
-		parentAgent.Arch = arch
-		parentAgent.AgentVersion = agentVersion
-		parentAgent.ProtocolVersion = protocolVersion
+		if hostname != "" {
+			parentAgent.Hostname = hostname
+		}
+		if osName != "" {
+			parentAgent.OS = osName
+		}
+		if arch != "" {
+			parentAgent.Arch = arch
+		}
+		if agentVersion != "" {
+			parentAgent.AgentVersion = agentVersion
+		}
+		if protocolVersion != 0 {
+			parentAgent.ProtocolVersion = protocolVersion
+		}
 		parentAgent.EnrolledAt = &now
 		parentAgent.LastHeartbeatAt = &now
 		return parentAgent, nil
@@ -303,7 +316,27 @@ func (s *Store) Deregister(target string) (*types.RegisteredAgent, error) {
 	return nil, fmt.Errorf("no agent found matching %q", target)
 }
 
-// SupersedeWorkstationAgent marks any older active agent matching the same hostname and user email as deregistered to prevent duplicates.
+// FindWorkstationAgent locates an existing agent registered for this workstation resource (hostname and user/owner email).
+// This guarantees that a developer's machine is represented as a single persistent agent across logins/logouts.
+func (s *Store) FindWorkstationAgent(appID, email, hostname string) *types.RegisteredAgent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if hostname == "" && email == "" {
+		return nil
+	}
+
+	for _, a := range s.agents {
+		matchHost := hostname != "" && a.Hostname != "" && strings.EqualFold(a.Hostname, hostname)
+		matchEmail := email != "" && ((a.OwnerEmail != "" && strings.EqualFold(a.OwnerEmail, email)) || (a.UserEmail != "" && strings.EqualFold(a.UserEmail, email)))
+		if matchHost && (matchEmail || email == "") {
+			return a
+		}
+	}
+	return nil
+}
+
+// SupersedeWorkstationAgent preserves the primary workstation agent and marks any secondary duplicates as deregistered.
 func (s *Store) SupersedeWorkstationAgent(appID, email, hostname string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -313,11 +346,14 @@ func (s *Store) SupersedeWorkstationAgent(appID, email, hostname string) {
 	}
 
 	now := time.Now()
+	var primary *types.RegisteredAgent
 	for _, a := range s.agents {
-		if a.Status == types.StatusActive || a.Status == types.StatusPendingEnrollment || a.Status == types.StatusOffline {
-			matchHost := hostname != "" && a.Hostname != "" && strings.EqualFold(a.Hostname, hostname)
-			matchEmail := email != "" && ((a.OwnerEmail != "" && strings.EqualFold(a.OwnerEmail, email)) || (a.UserEmail != "" && strings.EqualFold(a.UserEmail, email)))
-			if matchHost && matchEmail {
+		matchHost := hostname != "" && a.Hostname != "" && strings.EqualFold(a.Hostname, hostname)
+		matchEmail := email != "" && ((a.OwnerEmail != "" && strings.EqualFold(a.OwnerEmail, email)) || (a.UserEmail != "" && strings.EqualFold(a.UserEmail, email)))
+		if matchHost && (matchEmail || email == "") {
+			if primary == nil {
+				primary = a
+			} else {
 				a.Status = types.StatusDeregistered
 				a.RevokedAt = &now
 			}
@@ -361,6 +397,7 @@ func (s *Store) List() []*types.RegisteredAgent {
 		copy := *a
 		copy.AllowedBinaryHashes = append([]string(nil), a.AllowedBinaryHashes...)
 		copy.PermittedScopes = append([]string(nil), a.PermittedScopes...)
+		copy.Subagents = append([]string(nil), a.Subagents...)
 		if copy.Status == types.StatusActive {
 			lastAct := copy.CreatedAt
 			if copy.LastHeartbeatAt != nil {
@@ -398,6 +435,7 @@ func (s *Store) ListVisible(maxAge time.Duration, isUserRevoked func(string) boo
 		copy := *a
 		copy.AllowedBinaryHashes = append([]string(nil), a.AllowedBinaryHashes...)
 		copy.PermittedScopes = append([]string(nil), a.PermittedScopes...)
+		copy.Subagents = append([]string(nil), a.Subagents...)
 		if copy.Status == types.StatusActive {
 			lastAct := copy.CreatedAt
 			if copy.LastHeartbeatAt != nil {
@@ -476,6 +514,36 @@ func (s *Store) EnsureSessionAgent(appID, instanceID, spiffeID, userEmail, hostn
 	if instanceID == "" {
 		return nil
 	}
+
+	// If a workstation agent exists for this machine resource, record appID as a subagent under that 1 agent
+	if hostname != "" || (userEmail != "" && userEmail != "NA") {
+		for _, a := range s.agents {
+			matchHost := hostname != "" && a.Hostname != "" && strings.EqualFold(a.Hostname, hostname)
+			matchEmail := userEmail != "" && userEmail != "NA" && ((a.OwnerEmail != "" && strings.EqualFold(a.OwnerEmail, userEmail)) || (a.UserEmail != "" && strings.EqualFold(a.UserEmail, userEmail)))
+			if matchHost || matchEmail {
+				sub := appID
+				if customName != "" {
+					sub = customName
+				}
+				hasSub := false
+				for _, ex := range a.Subagents {
+					if strings.EqualFold(ex, sub) {
+						hasSub = true
+						break
+					}
+				}
+				if !hasSub && sub != "" && !strings.EqualFold(sub, a.AppID) {
+					a.Subagents = append(a.Subagents, sub)
+				}
+				a.LastHeartbeatAt = &now
+				if a.Status != types.StatusRevoked && a.Status != types.StatusQuarantined && a.Status != types.StatusDeregistered {
+					a.Status = types.StatusActive
+				}
+				return a
+			}
+		}
+	}
+
 	agentID := fmt.Sprintf("agent-%s-%s", strings.ToLower(appID), instanceID)
 	for _, enrolled := range s.agents {
 		if strings.EqualFold(enrolled.AppID, appID) && (enrolled.InstanceID == instanceID || enrolled.AgentID == agentID) {

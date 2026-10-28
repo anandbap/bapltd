@@ -222,7 +222,41 @@ func RunStatus(args []string) error {
 	var creds StoredCredentials
 	enrolled := false
 	authModeLabel := "Unenrolled"
-	if credsData, err := os.ReadFile(DefaultCredentialsPath()); err == nil {
+
+	candidateCredPaths := []string{
+		DefaultCredentialsPath(),
+		state.CredentialsPath(),
+	}
+	if home, hErr := os.UserHomeDir(); hErr == nil && home != "" {
+		candidateCredPaths = append(candidateCredPaths,
+			filepath.Join(home, ".bapstate", "credentials.json"),
+			filepath.Join(home, ".ltd", "credentials.json"),
+			filepath.Join(home, ".bap", "credentials.json"),
+		)
+	}
+	candidateCredPaths = append(candidateCredPaths,
+		filepath.Join(".bapstate", "credentials.json"),
+		filepath.Join(".ltd", "credentials.json"),
+		filepath.Join(".bap", "credentials.json"),
+	)
+	if envCreds := os.Getenv("BAP_CREDENTIALS"); envCreds != "" {
+		candidateCredPaths = append(candidateCredPaths, envCreds)
+	}
+
+	var credsData []byte
+	foundCredPath := DefaultCredentialsPath()
+	for _, cp := range candidateCredPaths {
+		if cp == "" {
+			continue
+		}
+		if data, err := os.ReadFile(cp); err == nil && len(data) > 0 {
+			credsData = data
+			foundCredPath = cp
+			break
+		}
+	}
+
+	if len(credsData) > 0 {
 		if json.Unmarshal(credsData, &creds) == nil && creds.AgentID != "" {
 			enrolled = true
 			authModeLabel = "One-Time Code (OTC)"
@@ -230,29 +264,40 @@ func RunStatus(args []string) error {
 				idp := "Microsoft Entra ID"
 				if strings.EqualFold(creds.IdPProvider, "okta") {
 					idp = "Okta Workforce Identity"
+				} else if strings.EqualFold(creds.IdPProvider, "google") {
+					idp = "Google Identity"
+				} else if strings.EqualFold(creds.IdPProvider, "github") {
+					idp = "GitHub Developer Identity"
 				} else if creds.IdPProvider != "" {
 					idp = creds.IdPProvider
 				}
 				authModeLabel = fmt.Sprintf("OIDC Federated (%s, MFA Enforced)", idp)
 			}
 
-			// If control plane is reachable, verify that this agent has not been deregistered or frozen
+			// If control plane is reachable, verify that this specific agent has not been deregistered or frozen
 			if creds.ServerURL != "" {
 				cClient := httptransport.New(2 * time.Second)
 				if rResp, rErr := cClient.Get(strings.TrimRight(creds.ServerURL, "/") + "/api/v1/control/revocations"); rErr == nil && rResp.StatusCode == http.StatusOK {
 					var rData struct {
 						DeregisteredAgents []string `json:"deregistered_agents"`
+						RevokedSessions    []string `json:"revoked_sessions"`
+						RevokedAgents      []string `json:"revoked_agents"`
 						QuarantinedAgents  []string `json:"quarantined_agents"`
 					}
 					if json.NewDecoder(rResp.Body).Decode(&rData) == nil {
-						targets := []string{creds.AgentID, creds.InstanceID, creds.UserEmail}
+						targets := []string{creds.AgentID, creds.InstanceID}
+						if creds.SessionToken != "" {
+							targets = append(targets, creds.SessionToken)
+						}
 						isDereg := false
 						isFrozen := false
+						allDereg := append(rData.DeregisteredAgents, rData.RevokedSessions...)
+						allDereg = append(allDereg, rData.RevokedAgents...)
 						for _, t := range targets {
 							if t == "" {
 								continue
 							}
-							for _, d := range rData.DeregisteredAgents {
+							for _, d := range allDereg {
 								if strings.EqualFold(d, t) {
 									isDereg = true
 									break
@@ -266,7 +311,7 @@ func RunStatus(args []string) error {
 							}
 						}
 						if isDereg {
-							_ = os.Remove(DefaultCredentialsPath())
+							state.PurgeAllCredentials(foundCredPath)
 							enrolled = false
 							authModeLabel = "Unenrolled (Workstation was deregistered by central administrator)"
 						} else if isFrozen {

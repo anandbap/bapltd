@@ -71,6 +71,7 @@ type RegisteredAgent struct {
 	IdPProvider         string      `json:"idp_provider,omitempty"` // "entra", "okta", "generic"
 	AgentVersion        string      `json:"agent_version,omitempty"`
 	ProtocolVersion     int         `json:"protocol_version,omitempty"`
+	Subagents           []string    `json:"subagents,omitempty"`
 }
 
 type PreRegisterRequest struct {

@@ -967,23 +967,35 @@ func (s *Server) handleOIDCDeviceVerify(w http.ResponseWriter, r *http.Request) 
 		appID = "claude-code-workstation"
 	}
 
-	// Supersede any older active registration for this workstation and user to prevent duplicates
-	s.registry.SupersedeWorkstationAgent(appID, email, session.Hostname)
-
-	// 1. Create registered agent definition
-	preReq := types.PreRegisterRequest{
-		AppID:           appID,
-		OwnerEmail:      email,
-		AgentName:       fmt.Sprintf("%s (%s)", email, dept),
-		EnvProfile:      types.ProfileDev,
-		PermittedScopes: []string{"*"},
-		TTLMins:         1440,
-		MaxInstances:    20,
-	}
-	agent, err := s.registry.PreRegister(preReq)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to register agent identity: "+err.Error())
-		return
+	// 1. Locate existing workstation agent for this resource or register a new one
+	agentName := fmt.Sprintf("%s (%s)", email, dept)
+	var agent *types.RegisteredAgent
+	if existing := s.registry.FindWorkstationAgent(appID, email, session.Hostname); existing != nil {
+		agent = existing
+		agent.AgentName = agentName
+		agent.OwnerEmail = email
+		agent.UserEmail = email
+		agent.Department = dept
+		agent.Groups = groups
+		agent.IdPProvider = provider
+		agent.Status = types.StatusActive
+		agent.RevokedAt = nil
+	} else {
+		preReq := types.PreRegisterRequest{
+			AppID:           appID,
+			OwnerEmail:      email,
+			AgentName:       agentName,
+			EnvProfile:      types.ProfileDev,
+			PermittedScopes: []string{"*"},
+			TTLMins:         1440,
+			MaxInstances:    20,
+		}
+		var err error
+		agent, err = s.registry.PreRegister(preReq)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Failed to register agent identity: "+err.Error())
+			return
+		}
 	}
 
 	// 2. Enroll agent with identity claims
@@ -1124,21 +1136,33 @@ func (s *Server) authorizeDeviceSession(userCode, email, dept, provider string, 
 	}
 	agentName := fmt.Sprintf("%s @ %s (%s Workstation)", email, hostname, devTitle)
 
-	// Supersede any older active registration for this workstation and user to prevent duplicates
-	s.registry.SupersedeWorkstationAgent(appID, email, hostname)
-
-	preReq := types.PreRegisterRequest{
-		AppID:           appID,
-		OwnerEmail:      email,
-		AgentName:       agentName,
-		EnvProfile:      types.ProfileDev,
-		PermittedScopes: []string{"cli:exec", "mcp:access"},
-	}
-	agent, err := s.registry.PreRegister(preReq)
-	if err != nil {
-		agent, err = s.registry.Get(appID)
+	// Check if a workstation agent already exists for this machine resource
+	var agent *types.RegisteredAgent
+	if existing := s.registry.FindWorkstationAgent(appID, email, hostname); existing != nil {
+		agent = existing
+		agent.AgentName = agentName
+		agent.OwnerEmail = email
+		agent.UserEmail = email
+		agent.Department = dept
+		agent.Groups = groups
+		agent.IdPProvider = provider
+		agent.Status = types.StatusActive
+		agent.RevokedAt = nil
+	} else {
+		preReq := types.PreRegisterRequest{
+			AppID:           appID,
+			OwnerEmail:      email,
+			AgentName:       agentName,
+			EnvProfile:      types.ProfileDev,
+			PermittedScopes: []string{"cli:exec", "mcp:access"},
+		}
+		var err error
+		agent, err = s.registry.PreRegister(preReq)
 		if err != nil {
-			return nil, fmt.Errorf("Agent registration error: %w", err)
+			agent, err = s.registry.Get(appID)
+			if err != nil {
+				return nil, fmt.Errorf("Agent registration error: %w", err)
+			}
 		}
 	}
 
@@ -2707,12 +2731,6 @@ func (s *Server) handleGetRevocations(w http.ResponseWriter, r *http.Request) {
 				}
 				if a.InstanceID != "" {
 					deregisteredAgents = append(deregisteredAgents, a.InstanceID)
-				}
-				if a.OwnerEmail != "" {
-					deregisteredAgents = append(deregisteredAgents, a.OwnerEmail)
-				}
-				if a.UserEmail != "" {
-					deregisteredAgents = append(deregisteredAgents, a.UserEmail)
 				}
 			} else if a.Status == types.StatusQuarantined {
 				if a.AgentID != "" {
