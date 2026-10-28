@@ -91,6 +91,8 @@ class TestV3UILive(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         if hasattr(cls, "proc") and cls.proc:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(cls.proc.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
             cls.proc.terminate()
             try:
                 cls.proc.wait(timeout=3)
@@ -217,6 +219,29 @@ class TestV3UILive(unittest.TestCase):
         self.assertEqual(st, 200)
         self.assertIn("events", res)
         self.assertIn("chain_status", res)
+
+    def test_08_workstation_fleet_separation(self):
+        """Verify V3 separates Governed Workstation Fleet from Live AI Activity."""
+        st, _, raw = http_req(f"{CP_URL}/dashboard/")
+        self.assertEqual(st, 200)
+        html = raw.decode("utf-8")
+        # Navigation tabs
+        self.assertIn('id="navActivity"', html)
+        self.assertIn('id="navWorkstations"', html)
+        self.assertIn("AI Agent Activity", html)
+        self.assertIn("Governed Workstations", html)
+        # Separate views
+        self.assertIn('id="viewActivity"', html)
+        self.assertIn('id="viewWorkstations"', html)
+        # Workstation Fleet KPIs & Controls
+        self.assertIn('id="wsKpiTotal"', html)
+        self.assertIn('id="wsKpiActive"', html)
+        self.assertIn('id="wsKpiSubagents"', html)
+        self.assertIn('id="wsRefreshBtn"', html)
+        self.assertIn('data-filter="quarantined"', html)
+        # Subagent rendering and switchView
+        self.assertIn("renderSubagentBadges", html)
+        self.assertIn("switchView", html)
 
 
 if __name__ == "__main__":
