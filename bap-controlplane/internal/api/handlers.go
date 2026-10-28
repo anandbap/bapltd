@@ -166,16 +166,13 @@ func NewServer(reg *registry.Store, otcStore *otc.Store, minter *authz.TokenMint
 	s.initActivityEngine()
 	s.registerRoutes()
 
-	// Architectural fix: background auto-reaper periodically purges stale sessions and agents
+	// Background auto-reaper periodically sweeps dead ephemeral conversation sessions
 	go func() {
-		ticker := time.NewTicker(10 * time.Second)
+		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
 			if s.sessionStore != nil {
-				s.sessionStore.PurgeStale(90 * time.Second)
-			}
-			if s.registry != nil {
-				s.registry.PurgeStale(90 * time.Second)
+				s.sessionStore.PurgeStale(15 * time.Minute)
 			}
 		}
 	}()

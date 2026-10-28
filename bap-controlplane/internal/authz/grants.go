@@ -99,8 +99,21 @@ type GrantClaims struct {
 }
 
 // Mint maintains backward compatibility with legacy calls.
+// When called without requested scopes, mints a persistent 1-year workstation session token.
 func (tm *TokenMinter) Mint(agent *types.RegisteredAgent, candidateHash string, requestedScopes []string) (string, time.Time, error) {
+	if len(requestedScopes) == 0 {
+		return tm.MintWorkstationSession(agent, candidateHash)
+	}
 	token, exp, _, err := tm.MintWithDetails(agent, candidateHash, requestedScopes, "", "", "", nil, "")
+	return token, exp, err
+}
+
+// MintWorkstationSession mints a persistent workstation enrollment token for developer machines.
+// Valid for 1 year (or until explicitly revoked via 'bap logout' or dashboard revocation).
+func (tm *TokenMinter) MintWorkstationSession(agent *types.RegisteredAgent, candidateHash string) (string, time.Time, error) {
+	now := time.Now()
+	expiresAt := now.Add(365 * 24 * time.Hour)
+	token, exp, _, err := tm.mintWithCustomTTL(agent, candidateHash, agent.PermittedScopes, "", "", "", nil, "", expiresAt)
 	return token, exp, err
 }
 
@@ -117,6 +130,21 @@ func (tm *TokenMinter) MintWithDetails(
 ) (string, time.Time, string, error) {
 	now := time.Now()
 	expiresAt := now.Add(tm.defaultTTL)
+	return tm.mintWithCustomTTL(agent, candidateHash, requestedScopes, sessionID, action, resource, constraints, policyVersion, expiresAt)
+}
+
+func (tm *TokenMinter) mintWithCustomTTL(
+	agent *types.RegisteredAgent,
+	candidateHash string,
+	requestedScopes []string,
+	sessionID string,
+	action string,
+	resource string,
+	constraints *types.GrantConstraints,
+	policyVersion string,
+	expiresAt time.Time,
+) (string, time.Time, string, error) {
+	now := time.Now()
 
 	scopes := agent.PermittedScopes
 	if len(scopes) == 0 {
@@ -219,7 +247,7 @@ func (tm *TokenMinter) Verify(tokenStr string) (*GrantClaims, error) {
 		return nil, fmt.Errorf("failed to parse claims JSON: %w", err)
 	}
 
-	if time.Now().Unix() >= claims.Exp {
+	if claims.Exp > 0 && time.Now().Unix() >= claims.Exp {
 		return nil, fmt.Errorf("token has expired")
 	}
 

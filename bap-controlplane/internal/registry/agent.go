@@ -619,7 +619,8 @@ func (s *Store) HeartbeatInstance(appID, instanceID string) error {
 	return fmt.Errorf("agent instance %q/%q not found", appID, instanceID)
 }
 
-// EndSessionAgent updates the registry status to deregistered when a session closes.
+// EndSessionAgent updates the registry status when an ephemeral session closes.
+// Workstation agents (enrolled via OIDC / device flow) remain enrolled permanently unless explicitly deregistered via 'bap logout'.
 func (s *Store) EndSessionAgent(appID, instanceID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -627,21 +628,24 @@ func (s *Store) EndSessionAgent(appID, instanceID string) {
 	now := time.Now()
 	for _, a := range s.agents {
 		if strings.EqualFold(a.AppID, appID) {
-			if a.Status == types.StatusRevoked {
+			if a.Status == types.StatusRevoked || a.Status == types.StatusDeregistered {
 				continue
 			}
-			if instanceID != "" && a.InstanceID == instanceID {
-				a.Status = "deregistered"
-				a.LastHeartbeatAt = &now
-			} else if instanceID == "" || instanceID == "default" {
-				a.Status = "deregistered"
+			isWorkstation := strings.Contains(strings.ToLower(a.AppID), "workstation") || a.DeviceType != "" || a.AuthMode == "oidc"
+			if instanceID != "" && (a.InstanceID == instanceID || a.AgentID == instanceID) {
+				if isWorkstation {
+					a.Status = types.StatusOffline
+				} else {
+					a.Status = types.StatusDeregistered
+				}
 				a.LastHeartbeatAt = &now
 			}
 		}
 	}
 }
 
-// PurgeStale marks active agents whose last heartbeat/activity exceeds maxIdle as deregistered.
+// PurgeStale marks active agents whose last heartbeat/activity exceeds maxIdle.
+// Workstation agents are transitioned to offline, while ephemeral session agents are deregistered.
 func (s *Store) PurgeStale(maxIdle time.Duration) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -655,10 +659,15 @@ func (s *Store) PurgeStale(maxIdle time.Duration) int {
 				lastAct = *a.LastHeartbeatAt
 			}
 			if now.Sub(lastAct) > maxIdle {
-				if a.Status == types.StatusRevoked {
+				if a.Status == types.StatusRevoked || a.Status == types.StatusDeregistered {
 					continue
 				}
-				a.Status = "deregistered"
+				isWorkstation := strings.Contains(strings.ToLower(a.AppID), "workstation") || a.DeviceType != "" || a.AuthMode == "oidc"
+				if isWorkstation {
+					a.Status = types.StatusOffline
+				} else {
+					a.Status = types.StatusDeregistered
+				}
 				a.LastHeartbeatAt = &now
 				count++
 			}
