@@ -5,6 +5,8 @@
   "trust_domain": "bap.internal",
   "environment": "development",
   "enforcement_mode": "audit",
+  "capture_user_prompt": true,
+  "capture_agent_response": true,
   "developer_features": true,
   "oidc": {
     "enabled": false

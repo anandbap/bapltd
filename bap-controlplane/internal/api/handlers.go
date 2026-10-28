@@ -765,7 +765,7 @@ func (s *Server) handleOIDCDeviceCode(w http.ResponseWriter, r *http.Request) {
 		verificationURI = fmt.Sprintf("%s://%s/device", scheme, host)
 	}
 
-	completeURI := fmt.Sprintf("%s://%s/device?user_code={{USER_CODE}}", scheme, host, userCode)
+	completeURI := fmt.Sprintf("%s://%s/device?user_code=%s", scheme, host, userCode)
 
 	session := &deviceAuthSession{
 		DeviceCode: deviceCode,
@@ -1249,7 +1249,7 @@ func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Fallback to interactive Google Sign-In page
-		http.Redirect(w, r, fmt.Sprintf("/api/v1/auth/oauth/google-login?user_code={{USER_CODE}}", url.QueryEscape(userCode)), http.StatusFound)
+		http.Redirect(w, r, fmt.Sprintf("/api/v1/auth/oauth/google-login?user_code=%s", url.QueryEscape(userCode)), http.StatusFound)
 		return
 	}
 
@@ -1268,11 +1268,11 @@ func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Fallback to interactive GitHub Sign-In page
-		http.Redirect(w, r, fmt.Sprintf("/api/v1/auth/oauth/github-login?user_code={{USER_CODE}}", url.QueryEscape(userCode)), http.StatusFound)
+		http.Redirect(w, r, fmt.Sprintf("/api/v1/auth/oauth/github-login?user_code=%s", url.QueryEscape(userCode)), http.StatusFound)
 		return
 	}
 
-	http.Redirect(w, r, fmt.Sprintf("/device?user_code={{USER_CODE}}", url.QueryEscape(userCode)), http.StatusSeeOther)
+	http.Redirect(w, r, fmt.Sprintf("/device?user_code=%s", url.QueryEscape(userCode)), http.StatusSeeOther)
 }
 
 // handleGoogleLoginSim renders the Google Sign-In verification dialog.
@@ -1300,7 +1300,7 @@ func (s *Server) handleGoogleLoginSim(w http.ResponseWriter, r *http.Request) {
     <h2>Sign in with Google</h2>
     <p>to authorize BAP Zero-Trust on device <code>%s</code></p>
     <form method="POST" action="/api/v1/auth/oauth/google-complete">
-      <input type="hidden" name="user_code" value="{{USER_CODE}}" />
+      <input type="hidden" name="user_code" value="%s" />
       <input type="hidden" name="provider" value="google" />
       <label for="email">Google Account / Email</label>
       <input type="email" id="email" name="email" placeholder="developer@gmail.com" required autofocus />
@@ -1340,7 +1340,7 @@ func (s *Server) handleGitHubLoginSim(w http.ResponseWriter, r *http.Request) {
     <h2>Sign in to GitHub</h2>
     <p>to authorize BAP Zero-Trust on device <code>%s</code></p>
     <form method="POST" action="/api/v1/auth/oauth/github-complete">
-      <input type="hidden" name="user_code" value="{{USER_CODE}}" />
+      <input type="hidden" name="user_code" value="%s" />
       <input type="hidden" name="provider" value="github" />
       <label for="email">GitHub Username or Email</label>
       <input type="text" id="email" name="email" placeholder="developer@github.com" required autofocus />

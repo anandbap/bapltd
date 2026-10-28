@@ -1026,7 +1026,7 @@ function Invoke-BapGovernedSession {
         # Start detached watcher to monitor agent process tree and sync heartbeats/revocations
         if (-not [string]::IsNullOrWhiteSpace($BapEdgeBin) -and -not [string]::IsNullOrWhiteSpace($ServerUrl)) {
             try {
-                Start-Process -FilePath $BapEdgeBin -ArgumentList @("watch", "--pid", "$PID", "--server", $ServerUrl, "--session-id", $SessionId, "--detach") -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
+                Start-Process -FilePath $BapEdgeBin -ArgumentList @("watch", "--pid", "$PID", "--server", $ServerUrl, "--session-id", $SessionId, "--app-id", $AgentId, "--detach") -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
             } catch { }
         }
 
