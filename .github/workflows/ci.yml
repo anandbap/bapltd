@@ -68,7 +68,10 @@ jobs:
           & .\update_binaries.ps1 -AllowDevOverrides "false"
           Push-Location cchook
           go build -ldflags "-s -w -X 'main.AllowDevOverrides=false'" -o interceptor.exe .
+          Copy-Item -Force interceptor.exe ..\interceptor.exe
+          Copy-Item -Force interceptor.exe ..\cchook-interceptor.exe
           Copy-Item -Force interceptor.exe ..\dist\windows-amd64\interceptor.exe
+          Copy-Item -Force interceptor.exe ..\dist\windows-amd64\cchook-interceptor.exe
           Copy-Item -Force interceptor.exe ..\dist\windows-amd64\claude-client\interceptor.exe
           Pop-Location
 

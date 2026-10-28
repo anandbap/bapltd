@@ -827,6 +827,7 @@ func RunExec(args []string) {
 
 	epCfg := config.ResolveEndpoints()
 	serverFlag := fs.String("server", epCfg.ControlPlaneURL, "Central control plane URL for telemetry streaming")
+	fs.StringVar(serverFlag, "server-url", epCfg.ControlPlaneURL, "Alias for --server")
 	modeFlag := fs.String("mode", epCfg.EnforcementMode, "Enforcement mode: 'enforce' (default) or 'audit'/'shadow'")
 	decisionOnlyFlag := fs.Bool("decision-only", false, "Evaluate policy and log audit decision without executing the command")
 	checkOnlyFlag := fs.Bool("check-only", false, "Alias for --decision-only")

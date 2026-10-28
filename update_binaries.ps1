@@ -53,6 +53,15 @@ try {
     Pop-Location
 }
 
+# 3b. Compile cchook interceptor
+Push-Location "cchook"
+try {
+    $ldflags = "-s -w -X 'main.AllowDevOverrides=$AllowDevOverrides'"
+    go build -ldflags $ldflags -o interceptor.exe .
+} finally {
+    Pop-Location
+}
+
 # 4. Safe copy function with file lock handling
 function Safe-Copy($src, $dst) {
     if (-not (Test-Path $src)) { return }

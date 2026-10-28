@@ -72,14 +72,20 @@ def read_admin_token() -> str:
     return os.getenv("BAP_ADMIN_TOKEN", "")
 
 
-def resolve_server_url() -> str:
+def resolve_server_url(cli_override: str = "") -> str:
     """Resolves control plane URL."""
+    if cli_override:
+        return cli_override.rstrip("/")
+    if os.getenv("BAP_CONTROL_PLANE_URL"):
+        return os.getenv("BAP_CONTROL_PLANE_URL").rstrip("/")
+    if os.getenv("BAP_SERVER_URL"):
+        return os.getenv("BAP_SERVER_URL").rstrip("/")
     try:
         from bap_sdk import resolve_endpoints
         ep = resolve_endpoints()
         return ep.get("controlplane_url", "https://localhost:8443").rstrip("/")
     except Exception:
-        return os.getenv("BAP_CONTROL_PLANE_URL", "https://localhost:8443").rstrip("/")
+        return "https://localhost:8443"
 
 
 try:
@@ -141,6 +147,7 @@ def run_bapedge_exec(session_id: str, source: str, cmd_text: str, server_url: st
         "exec",
         "--session-id", session_id,
         "--source", source,
+        "--mode", "enforce",
         "--json",
         "--cmd-b64", b64_cmd
     ]
@@ -444,9 +451,10 @@ def main():
     parser.add_argument("--cleanup", action="store_true", help="Reset all sessions cleanly and exit")
     parser.add_argument("--no-prompt", action="store_true", help="Run without waiting for interactive input (for automated testing)")
     parser.add_argument("--delay", type=float, default=0.6, help="Delay between demo actions in seconds (default: 0.6)")
+    parser.add_argument("--server-url", "--server", type=str, default="", help="Override BAP Control Plane URL (e.g. https://localhost:8443)")
     args = parser.parse_args()
 
-    server_url = resolve_server_url()
+    server_url = resolve_server_url(args.server_url)
     admin_token = read_admin_token()
 
     if args.cleanup:
