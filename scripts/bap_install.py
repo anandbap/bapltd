@@ -104,6 +104,135 @@ def resolve_default_install_dir(roaming: bool = False) -> str:
         return os.path.join(home, "bin")
 
 
+def stop_running_bap_processes(target_dir: str = None):
+    """
+    Terminates any running BAP daemon or agent processes (bapedge, bapcontrolplane, etc.)
+    that would prevent binary replacement or uninstallation on Windows and Unix systems.
+    """
+    # If running inside unit tests, avoid terminating host system processes
+    if "unittest" in sys.modules or os.environ.get("BAP_TEST_ENV") == "1":
+        return
+
+    # 1. Gracefully stop the background daemon if bapedge is available
+    bapedge_names = ["bapedge.exe", "bapedge"]
+    bapedge_bin = None
+    if target_dir:
+        for name in bapedge_names:
+            candidate = os.path.join(target_dir, name)
+            if os.path.isfile(candidate):
+                bapedge_bin = candidate
+                break
+    if not bapedge_bin:
+        bapedge_bin = shutil.which("bapedge")
+
+    if bapedge_bin:
+        try:
+            subprocess.run([bapedge_bin, "daemon", "stop"], capture_output=True, timeout=3)
+        except Exception:
+            pass
+
+    # 2. Check and terminate PID recorded in daemon PID file
+    state_dir = os.path.expanduser("~/.bapstate")
+    pid_file = os.path.join(state_dir, "bap-daemon.pid")
+    if os.path.isfile(pid_file):
+        try:
+            with open(pid_file, "r") as f:
+                daemon_pid = int(f.read().strip())
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(daemon_pid)], capture_output=True, timeout=3)
+            else:
+                subprocess.run(["kill", "-9", str(daemon_pid)], capture_output=True, timeout=3)
+        except Exception:
+            pass
+
+    # 3. Forcefully kill lingering BAP processes to release file locks
+    proc_names = [
+        "bapedge", "bapcontrolplane", "bapdashboard", "bapgateway",
+        "interceptor", "cchook-interceptor", "copilot-interceptor", "bapmcp"
+    ]
+    if sys.platform == "win32":
+        for p in proc_names:
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/IM", f"{p}.exe"],
+                    capture_output=True,
+                    timeout=5
+                )
+            except Exception:
+                pass
+    else:
+        for p in proc_names:
+            try:
+                subprocess.run(["pkill", "-9", "-f", p], capture_output=True, timeout=5)
+            except Exception:
+                pass
+    time.sleep(0.5)
+
+
+def safe_copy_binary(src: str, dst: str):
+    """Copies src to dst, handling file locks on Windows via process termination and rename-and-replace."""
+    try:
+        shutil.copy2(src, dst)
+        if sys.platform != "win32":
+            os.chmod(dst, 0o755)
+        return True
+    except Exception:
+        # File may be locked; attempt to release locks and retry
+        target_dir = os.path.dirname(dst)
+        stop_running_bap_processes(target_dir)
+        try:
+            shutil.copy2(src, dst)
+            if sys.platform != "win32":
+                os.chmod(dst, 0o755)
+            return True
+        except Exception:
+            # If still locked on Windows, attempt rename-and-replace
+            if sys.platform == "win32":
+                old_file = f"{dst}.old"
+                try:
+                    if os.path.isfile(old_file):
+                        try:
+                            os.remove(old_file)
+                        except Exception:
+                            pass
+                    os.rename(dst, old_file)
+                    shutil.copy2(src, dst)
+                    return True
+                except Exception as final_err:
+                    raise final_err
+            raise
+
+
+def safe_remove_file(fp: str):
+    """Deletes fp, handling running process locks on Windows."""
+    try:
+        os.remove(fp)
+        return True
+    except Exception:
+        stop_running_bap_processes(os.path.dirname(fp))
+        try:
+            os.remove(fp)
+            return True
+        except Exception:
+            if sys.platform == "win32":
+                old_file = f"{fp}.old"
+                try:
+                    if os.path.isfile(old_file):
+                        try:
+                            os.remove(old_file)
+                        except Exception:
+                            pass
+                    os.rename(fp, old_file)
+                    try:
+                        os.remove(old_file)
+                    except Exception:
+                        pass
+                    return True
+                except Exception as final_err:
+                    raise final_err
+            raise
+
+
 def get_source_binary(name: str) -> str:
     """Finds built binaries in the package bin directory, repository dist, or build directories."""
     plat_id = get_platform_id()
@@ -241,6 +370,7 @@ def update_user_path(target_dir: str):
 def install_core_binaries(target_dir: str):
     """Copies BAP executables and configuration assets into the user-mode directory."""
     os.makedirs(target_dir, exist_ok=True)
+    stop_running_bap_processes(target_dir)
     plat_id = get_platform_id()
     pkg_dir = os.path.dirname(os.path.abspath(__file__))
     print(f"\n[*] Deploying BAP Binaries to {target_dir} (Platform: {plat_id})...")
@@ -266,19 +396,17 @@ def install_core_binaries(target_dir: str):
                     print(f"  {TermColor.GREEN}[OK] {bin_name:<20}{TermColor.RESET} ({desc}) [{size_kb:.0f} KB]")
                     deployed += 1
                     continue
-                shutil.copy2(src, dst)
-                if sys.platform != "win32":
-                    os.chmod(dst, 0o755)
+                safe_copy_binary(src, dst)
                 size_kb = os.path.getsize(dst) / 1024
                 print(f"  {TermColor.GREEN}[+] {bin_name:<20}{TermColor.RESET} ({desc}) [{size_kb:.0f} KB]")
                 deployed += 1
             except Exception as e:
                 if os.path.isfile(dst):
                     size_kb = os.path.getsize(dst) / 1024
-                    print(f"  {TermColor.GREEN}[OK] {bin_name:<20}{TermColor.RESET} ({desc}) [{size_kb:.0f} KB] (Active)")
+                    print(f"  {TermColor.YELLOW}[!] Warning: could not update {bin_name} (locked by active process: {e}){TermColor.RESET}")
                     deployed += 1
                 else:
-                    print(f"  {TermColor.YELLOW}[!] Failed copying {bin_name}: {e}{TermColor.RESET}")
+                    print(f"  {TermColor.RED}[!] Failed copying {bin_name}: {e}{TermColor.RESET}")
         else:
             if bin_name in ("bapedge", "interceptor"):
                 print(f"  {TermColor.YELLOW}[-] Essential binary not found: {bin_name} (Searched: {src}){TermColor.RESET}")
@@ -921,6 +1049,9 @@ def uninstall(target_dir: str, workspace_root: str):
     print(f"[*] Target Directory to Clean : {target_dir}")
     print(f"[*] Target Workspace to Clean : {workspace_root}")
 
+    # Stop any running daemons or agents locking executable files
+    stop_running_bap_processes(target_dir)
+
     home = os.path.expanduser("~")
     bap_files = [
         "bap", "bap.exe",
@@ -975,7 +1106,7 @@ def uninstall(target_dir: str, workspace_root: str):
             fp = os.path.join(d, f)
             if os.path.isfile(fp):
                 try:
-                    os.remove(fp)
+                    safe_remove_file(fp)
                     removed_count += 1
                 except Exception as e:
                     print(f"  {TermColor.YELLOW}[!] Could not remove {fp}: {e}{TermColor.RESET}")

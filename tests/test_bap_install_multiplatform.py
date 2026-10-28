@@ -270,5 +270,24 @@ class TestBAPInstallMultiPlatform(unittest.TestCase):
         with open(claude_settings, "r") as f:
             self.assertNotIn("hooks", json.load(f))
 
+    def test_safe_copy_and_safe_remove_file(self):
+        """Verify safe_copy_binary and safe_remove_file correctly handle files."""
+        src_file = os.path.join(self.temp_dir, "test_bin.exe")
+        with open(src_file, "w") as f:
+            f.write("binary content v2")
+
+        dst_file = os.path.join(self.install_dir, "test_bin.exe")
+        with open(dst_file, "w") as f:
+            f.write("binary content v1")
+
+        # Test safe copy
+        bap_install.safe_copy_binary(src_file, dst_file)
+        with open(dst_file, "r") as f:
+            self.assertEqual(f.read(), "binary content v2")
+
+        # Test safe remove
+        bap_install.safe_remove_file(dst_file)
+        self.assertFalse(os.path.isfile(dst_file))
+
 if __name__ == "__main__":
     unittest.main()
