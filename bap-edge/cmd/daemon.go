@@ -540,7 +540,7 @@ func runDaemonStart(args []string) error {
 		serverURL = ep.ControlPlaneURL
 	}
 	if serverURL == "" {
-		serverURL = "http://localhost:8080"
+		serverURL = config.DefaultControlPlaneURL
 	}
 
 	if !*fgFlag {

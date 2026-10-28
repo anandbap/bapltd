@@ -88,7 +88,7 @@ func RunSessionStart(args []string) error {
 		serverURL = ep.ControlPlaneURL
 	}
 	if serverURL == "" {
-		serverURL = "http://localhost:8080"
+		serverURL = config.DefaultControlPlaneURL
 	}
 	serverURL = strings.TrimRight(serverURL, "/")
 
@@ -218,7 +218,7 @@ func RunSessionEnd(args []string) error {
 		serverURL = ep.ControlPlaneURL
 	}
 	if serverURL == "" {
-		serverURL = "http://localhost:8080"
+		serverURL = config.DefaultControlPlaneURL
 	}
 	serverURL = strings.TrimRight(serverURL, "/")
 
@@ -279,7 +279,7 @@ func RunWatch(args []string) error {
 		serverURL = ep.ControlPlaneURL
 	}
 	if serverURL == "" {
-		serverURL = "http://localhost:8080"
+		serverURL = config.DefaultControlPlaneURL
 	}
 	serverURL = strings.TrimRight(serverURL, "/")
 

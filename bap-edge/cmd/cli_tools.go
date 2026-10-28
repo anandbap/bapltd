@@ -49,7 +49,7 @@ func RunSetup(args []string) error {
 		serverURL = ep.ControlPlaneURL
 	}
 	if serverURL == "" {
-		serverURL = "http://localhost:8080"
+		serverURL = config.DefaultControlPlaneURL
 	}
 	serverURL = strings.TrimRight(serverURL, "/")
 
@@ -143,7 +143,7 @@ func RunStatus(args []string) error {
 		serverURL = ep.ControlPlaneURL
 	}
 	if serverURL == "" {
-		serverURL = "http://localhost:8080"
+		serverURL = config.DefaultControlPlaneURL
 	}
 	serverURL = strings.TrimRight(serverURL, "/")
 
@@ -955,7 +955,7 @@ func RunSweep(args []string) error {
 		serverURL = ep.ControlPlaneURL
 	}
 	if serverURL == "" {
-		serverURL = "http://localhost:8080"
+		serverURL = config.DefaultControlPlaneURL
 	}
 	serverURL = strings.TrimRight(serverURL, "/")
 

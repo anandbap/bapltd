@@ -104,6 +104,106 @@ def resolve_default_install_dir(roaming: bool = False) -> str:
         return os.path.join(home, "bin")
 
 
+def get_all_bap_candidate_dirs(target_dir: str = None) -> list:
+    """
+    Returns a deduplicated list of all potential directories where BAP binaries,
+    shims, or components could be installed across Windows, macOS, and Linux.
+    """
+    home = os.path.expanduser("~")
+    dirs = []
+    if target_dir:
+        dirs.append(target_dir)
+
+    default_dir = resolve_default_install_dir()
+    dirs.append(default_dir)
+
+    if sys.platform == "win32":
+        if os.environ.get("LOCALAPPDATA"):
+            dirs.append(os.path.join(os.environ["LOCALAPPDATA"], "BAP", "bin"))
+        if os.environ.get("APPDATA"):
+            dirs.append(os.path.join(os.environ["APPDATA"], "BAP", "bin"))
+        dirs.append(os.path.join(home, "bin"))
+        dirs.append(os.path.join(home, ".bap", "bin"))
+        dirs.append(os.path.join(home, ".bap"))
+        if os.environ.get("ProgramData"):
+            dirs.append(os.path.join(os.environ["ProgramData"], "BAP", "bin"))
+    else:
+        dirs.append(os.path.join(home, "bin"))
+        dirs.append(os.path.expanduser("~/.local/bin"))
+        dirs.append(os.path.expanduser("~/.bap/bin"))
+        dirs.append(os.path.expanduser("~/.bap"))
+        dirs.append("/usr/local/bin")
+
+    # Discover any directory currently on PATH containing BAP binaries
+    ext = ".exe" if sys.platform == "win32" else ""
+    path_entries = os.environ.get("PATH", "").split(os.pathsep)
+    for p in path_entries:
+        p_clean = p.strip('"').strip()
+        if not p_clean or not os.path.isdir(p_clean):
+            continue
+        p_lower = p_clean.lower()
+        if "python" in p_lower or "site-packages" in p_lower or "system32" in p_lower or "windows" in p_lower:
+            continue
+        test_edge = os.path.join(p_clean, f"bapedge{ext}")
+        test_cp = os.path.join(p_clean, f"bapcontrolplane{ext}")
+        if os.path.isfile(test_edge) or os.path.isfile(test_cp):
+            dirs.append(p_clean)
+
+    # Deduplicate while preserving order
+    seen = set()
+    result = []
+    for d in dirs:
+        norm = os.path.normpath(d)
+        if norm.lower() not in seen:
+            seen.add(norm.lower())
+            result.append(norm)
+    return result
+
+
+def clean_stale_secondary_installations(target_dir: str):
+    """
+    Ensures single-source-of-truth: cleans stale BAP binaries from other candidate
+    paths so no conflicting older versions of bapedge or BAP components exist on PATH.
+    """
+    # If running inside unit tests, avoid purging host directories
+    if "unittest" in sys.modules or os.environ.get("BAP_TEST_ENV") == "1":
+        return
+
+    all_dirs = get_all_bap_candidate_dirs(target_dir)
+    target_norm = os.path.normpath(target_dir).lower()
+    
+    bap_bins = [
+        "bapedge.exe", "bapedge",
+        "bapcontrolplane.exe", "bapcontrolplane",
+        "bapdashboard.exe", "bapdashboard",
+        "bapgateway.exe", "bapgateway",
+        "bapmcp.exe", "bapmcp",
+        "interceptor.exe", "interceptor",
+        "cchook-interceptor.exe", "cchook-interceptor",
+        "copilot-interceptor.exe", "copilot-interceptor",
+        "bap.exe", "bap",
+        "policy.cedar", "schema.json", "bap-config.json"
+    ]
+    
+    cleaned_count = 0
+    for d in all_dirs:
+        if not os.path.isdir(d):
+            continue
+        if os.path.normpath(d).lower() == target_norm:
+            continue
+        # This is a secondary candidate directory; clean any stale BAP files
+        for f in bap_bins:
+            fp = os.path.join(d, f)
+            if os.path.isfile(fp):
+                try:
+                    safe_remove_file(fp)
+                    cleaned_count += 1
+                except Exception:
+                    pass
+    if cleaned_count > 0:
+        print(f"  {TermColor.GREEN}[+] Purged {cleaned_count} stale BAP component(s) from secondary paths to prevent version conflicts{TermColor.RESET}")
+
+
 def stop_running_bap_processes(target_dir: str = None):
     """
     Terminates any running BAP daemon or agent processes (bapedge, bapcontrolplane, etc.)
@@ -293,13 +393,24 @@ def update_user_path(target_dir: str):
             except FileNotFoundError:
                 current_path = ""
 
-            clean_entries = [p.strip() for p in current_path.split(";") if p.strip()]
+            original_entries = [p.strip() for p in current_path.split(";") if p.strip()]
+            # Clean secondary stale BAP directories from PATH so target_dir is the sole active BAP path
+            other_bap_paths = [d.lower() for d in get_all_bap_candidate_dirs(clean_target) if os.path.normpath(d).lower() != clean_target.lower()]
+            clean_entries = [p for p in original_entries if os.path.normpath(p).lower() not in other_bap_paths]
+
+            added = False
             if clean_target.lower() not in [p.lower() for p in clean_entries]:
                 clean_entries.append(clean_target)
+                added = True
+
+            if added or clean_entries != original_entries:
                 new_path = ";".join(clean_entries)
                 winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, new_path)
-                print(f"  {TermColor.GREEN}[+] Added to Windows User PATH (HKCU\\Environment\\Path){TermColor.RESET}")
-                print(f"  {TermColor.CYAN}[i] Tip: Open a new terminal window to load the updated PATH in your shell.{TermColor.RESET}")
+                if added:
+                    print(f"  {TermColor.GREEN}[+] Added to Windows User PATH (HKCU\\Environment\\Path){TermColor.RESET}")
+                    print(f"  {TermColor.CYAN}[i] Tip: Open a new terminal window to load the updated PATH in your shell.{TermColor.RESET}")
+                else:
+                    print(f"  {TermColor.GREEN}[+] Cleaned secondary stale BAP paths from Windows User PATH{TermColor.RESET}")
                 
                 # Broadcast WM_SETTINGCHANGE so existing explorer and new shells pick it up
                 try:
@@ -371,6 +482,7 @@ def install_core_binaries(target_dir: str):
     """Copies BAP executables and configuration assets into the user-mode directory."""
     os.makedirs(target_dir, exist_ok=True)
     stop_running_bap_processes(target_dir)
+    clean_stale_secondary_installations(target_dir)
     plat_id = get_platform_id()
     pkg_dir = os.path.dirname(os.path.abspath(__file__))
     print(f"\n[*] Deploying BAP Binaries to {target_dir} (Platform: {plat_id})...")
@@ -1064,38 +1176,20 @@ def uninstall(target_dir: str, workspace_root: str):
         "bap_launcher_engine.ps1",
         "policy.cedar", "schema.json", "bap-config.json",
         "policy-state.json", "ltd-audit.jsonl", ".bap-pin.json",
-        "copilot-wrap.bat", "copilot-wrap.ps1", "copilot-wrap.sh"
+        "copilot-wrap.bat", "copilot-wrap.ps1", "copilot-wrap.sh",
+        "codex.cmd", "claude.cmd", "agy.cmd", "copilot.cmd", "bap-profile.ps1"
     ]
     for _base in [
         "run_antigravity_cli_bap", "run_antigravity_ide_bap",
         "run_copilot_cli_bap", "run_copilot_ide_bap",
         "run_claude_cli_bap", "run_claude_ide_bap",
-        "run_claude_bap", "run_cursor_bap", "run_gemini_cli_bap"
+        "run_claude_bap", "run_cursor_bap", "run_gemini_cli_bap",
+        "run_codex_cli_bap"
     ]:
         for _ext in [".bat", ".ps1", ".sh", ""]:
             bap_files.append(_base + _ext)
 
-    default_dir = resolve_default_install_dir()
-    candidate_dirs = [target_dir]
-    if os.path.abspath(target_dir).lower() == os.path.abspath(default_dir).lower():
-        if sys.platform == "win32":
-            if os.environ.get("APPDATA"):
-                candidate_dirs.append(os.path.join(os.environ["APPDATA"], "BAP", "bin"))
-            if os.environ.get("LOCALAPPDATA"):
-                candidate_dirs.append(os.path.join(os.environ["LOCALAPPDATA"], "BAP", "bin"))
-            candidate_dirs.append(os.path.join(home, "bin"))
-        else:
-            candidate_dirs.append(os.path.join(home, "bin"))
-            candidate_dirs.append(os.path.expanduser("~/.local/bin"))
-
-    # Remove duplicates
-    seen = set()
-    unique_dirs = []
-    for d in candidate_dirs:
-        norm = os.path.normpath(d)
-        if norm.lower() not in seen:
-            seen.add(norm.lower())
-            unique_dirs.append(norm)
+    unique_dirs = get_all_bap_candidate_dirs(target_dir)
 
     # 1. Clean BAP files from candidate directories without wiping entire user folders
     for d in unique_dirs:
@@ -1253,6 +1347,23 @@ def uninstall(target_dir: str, workspace_root: str):
         except Exception:
             pass
 
+    # 7. Clean Global User Configs & Stale Session Credentials
+    for global_state in [
+        os.path.join(os.path.expanduser("~"), "bap-config.json"),
+        os.path.expanduser("~/.bap/config.json"),
+        os.path.expanduser("~/.bap/bap-config.json"),
+        os.path.expanduser("~/.bapstate/config.json"),
+        os.path.expanduser("~/.bapstate/bap-config.json"),
+        os.path.expanduser("~/.bapstate/credentials.json"),
+        os.path.expanduser("~/.ltd/config.json"),
+        os.path.expanduser("~/.ltd/credentials.json"),
+    ]:
+        if os.path.isfile(global_state):
+            try:
+                os.remove(global_state)
+            except Exception:
+                pass
+
     print("\n" + "=" * 80)
     print(f"  {TermColor.GREEN}[SUCCESS] BAP Uninstallation Complete.{TermColor.RESET}")
     print("=" * 80)
@@ -1287,6 +1398,7 @@ def configure_bap_config(target_dir: str, workspace_root: str, server_url: str, 
         os.path.join(target_dir, "bap-config.json"),
         os.path.join(workspace_root, "bap-config.json"),
         os.path.join(workspace_root, ".bap", "bap-config.json"),
+        os.path.join(os.path.expanduser("~"), "bap-config.json"),
         os.path.expanduser("~/.bapstate/config.json"),
         os.path.expanduser("~/.bapstate/bap-config.json"),
         os.path.expanduser("~/.bap/config.json"),
@@ -1300,6 +1412,36 @@ def configure_bap_config(target_dir: str, workspace_root: str, server_url: str, 
                 f.write(cfg_json)
         except Exception:
             pass
+
+    # Synchronize via bapedge config set --global if bapedge binary is available
+    bapedge_names = ["bapedge.exe", "bapedge"]
+    bapedge_bin = None
+    for name in bapedge_names:
+        candidate = os.path.join(target_dir, name)
+        if os.path.isfile(candidate):
+            bapedge_bin = candidate
+            break
+    if not bapedge_bin:
+        bapedge_bin = shutil.which("bapedge")
+
+    if bapedge_bin:
+        try:
+            subprocess.run([bapedge_bin, "config", "set", "--server", effective_url, "--global"], capture_output=True, timeout=5)
+        except Exception:
+            pass
+
+    # Purge stale credentials if they were bound to a different server URL (e.g. old localhost:8443)
+    for cred_dir in [os.path.expanduser("~/.bapstate"), os.path.expanduser("~/.ltd")]:
+        cred_file = os.path.join(cred_dir, "credentials.json")
+        if os.path.isfile(cred_file):
+            try:
+                with open(cred_file, "r", encoding="utf-8") as f:
+                    cdata = json.load(f)
+                old_server = cdata.get("server_url", "").strip().rstrip("/")
+                if old_server and old_server.lower() != effective_url.lower():
+                    os.remove(cred_file)
+            except Exception:
+                pass
 
     print(f"  {TermColor.GREEN}[+] Control Plane Config : {effective_url} (written to bap-config.json){TermColor.RESET}")
 
@@ -1374,6 +1516,9 @@ def main():
 
     # 2. Deploy core binaries
     deployed_count = install_core_binaries(target_dir)
+
+    # 2.5 Configure Central Control Plane Endpoints & write bap-config.json
+    configure_bap_config(target_dir, args.workspace, selected_server, is_offline)
 
     # 3. Update User PATH
     if not args.no_path:

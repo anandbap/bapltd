@@ -42,7 +42,7 @@ type EndpointsConfig struct {
 }
 
 const (
-	DefaultControlPlaneURL = "http://localhost:8080"
+	DefaultControlPlaneURL = "https://bap-controlplane.onrender.com"
 	DefaultGatewayURL      = "http://localhost:9090"
 	DefaultEnvoyURL        = "http://localhost:10000"
 	DefaultTrustDomain     = "bap.internal"
@@ -103,8 +103,11 @@ func ResolveEndpoints() EndpointsConfig {
 	// 2. Check credentials.json if control plane URL is still default
 	if cfg.ControlPlaneURL == DefaultControlPlaneURL {
 		if credsURL := loadServerURLFromCredentials(); credsURL != "" {
-			cfg.ControlPlaneURL = credsURL
-			cfg.ConfigSource = "user_credentials"
+			// Do not let a stale local loopback URL (e.g. localhost:8443) override cloud fleet default
+			if !strings.Contains(credsURL, "localhost") && !strings.Contains(credsURL, "127.0.0.1") {
+				cfg.ControlPlaneURL = credsURL
+				cfg.ConfigSource = "user_credentials"
+			}
 		}
 	}
 
