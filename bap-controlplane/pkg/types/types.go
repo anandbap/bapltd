@@ -56,6 +56,8 @@ type RegisteredAgent struct {
 	Hostname            string      `json:"hostname,omitempty"`
 	OS                  string      `json:"os,omitempty"`
 	Arch                string      `json:"arch,omitempty"`
+	DeviceType          string      `json:"device_type,omitempty"`
+	IPAddress           string      `json:"ip_address,omitempty"`
 	CreatedAt           time.Time   `json:"created_at"`
 	EnrolledAt          *time.Time  `json:"enrolled_at,omitempty"`
 	LastGrantAt         *time.Time  `json:"last_grant_at,omitempty"`
@@ -191,6 +193,10 @@ type DelegateGrantResponse struct {
 // DevOTCRequest allows unauthenticated developers in dev mode to request an instant OTC.
 type DevOTCRequest struct {
 	AppID      string `json:"app_id,omitempty"`
+	DeviceType string `json:"device_type,omitempty"`
+	OS         string `json:"os,omitempty"`
+	Arch       string `json:"arch,omitempty"`
+	IPAddress  string `json:"ip_address,omitempty"`
 	OwnerEmail string `json:"owner_email,omitempty"`
 	AgentName  string `json:"agent_name,omitempty"`
 }
@@ -210,6 +216,10 @@ type OIDCDeviceCodeRequest struct {
 	Hostname   string `json:"hostname,omitempty"`
 	BinaryHash string `json:"binary_hash,omitempty"`
 	AppID      string `json:"app_id,omitempty"`
+	DeviceType string `json:"device_type,omitempty"`
+	OS         string `json:"os,omitempty"`
+	Arch       string `json:"arch,omitempty"`
+	IPAddress  string `json:"ip_address,omitempty"`
 }
 
 type OIDCDeviceCodeResponse struct {

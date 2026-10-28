@@ -23,6 +23,7 @@ import (
 	"bap-edge/internal/pinning"
 	"bap-edge/internal/sandbox"
 	"bap-edge/internal/snapshot"
+	"bap-edge/internal/state"
 	"bap-edge/pkg/types"
 )
 
@@ -1395,11 +1396,44 @@ func syncRevocationsFast(serverURL, policyPath string) {
 	defer resp.Body.Close()
 
 	var data struct {
-		KillSwitch      bool     `json:"kill_switch"`
-		RevokedSessions []string `json:"revoked_sessions"`
+		KillSwitch         bool     `json:"kill_switch"`
+		RevokedSessions    []string `json:"revoked_sessions"`
+		DeregisteredAgents []string `json:"deregistered_agents"`
+		QuarantinedAgents  []string `json:"quarantined_agents"`
+		RevokedAgents      []string `json:"revoked_agents"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		return
+	}
+
+	isDereg := false
+	isFrozen := false
+	if credsData, err := os.ReadFile(state.CredentialsPath()); err == nil {
+		var creds StoredCredentials
+		if json.Unmarshal(credsData, &creds) == nil && creds.AgentID != "" {
+			targets := []string{creds.AgentID, creds.InstanceID, creds.UserEmail}
+			for _, t := range targets {
+				if t == "" {
+					continue
+				}
+				for _, d := range data.DeregisteredAgents {
+					if strings.EqualFold(d, t) {
+						isDereg = true
+						break
+					}
+				}
+				for _, q := range data.QuarantinedAgents {
+					if strings.EqualFold(q, t) {
+						isFrozen = true
+						break
+					}
+				}
+			}
+			if isDereg {
+				_ = os.Remove(state.CredentialsPath())
+				fmt.Fprintln(os.Stderr, "[!] NOTICE: This workstation was deregistered by central administrator. Session terminated and logged out.")
+			}
+		}
 	}
 
 	// Update policy-state.json inside .bap/ to avoid littering the workspace
@@ -1421,6 +1455,7 @@ func syncRevocationsFast(serverURL, policyPath string) {
 		existing = make(map[string]any)
 	}
 	existing["kill_switch"] = data.KillSwitch
+	existing["frozen"] = isFrozen
 	existing["revoked_sessions"] = data.RevokedSessions
 	existing["last_sync"] = time.Now().UTC()
 	if updated, err := json.MarshalIndent(existing, "", "  "); err == nil {

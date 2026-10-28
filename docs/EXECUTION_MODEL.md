@@ -198,3 +198,52 @@ BAPEdge is a stateless execution broker. Commands and tool executions originate 
 3. **Execution Receipt Binding**:
    `bapedge exec` seals the calling binary path, binary hash, and parent PID directly into the cryptographic `ExecutionReceipt` and audit ledger (`.bapstate/audit.jsonl`), ensuring immutable attribution back to the specific binary image running in Program Files or the user environment.
 
+
+
+---
+
+## 8. Two-Tier Workstation Execution Architecture
+
+BAP provides a decoupled, two-tier execution architecture to guarantee both **fail-secure standalone performance** and **continuous enterprise fleet visibility**:
+
+```
++---------------------------------------------------------------------------------+
+|                              DEVELOPER WORKSTATION                              |
+|                                                                                 |
+|   +-------------------------------------------------------------------------+   |
+|   | 1. STANDALONE_USER_SPACE (Transient Broker)                             |   |
+|   |    Invoked by: Claude Code, Antigravity, Copilot, or Terminal           |   |
+|   |                                                                         |   |
+|   |    bapedge.exe exec "<command>"                                         |   |
+|   |      • Evaluates Cedar policies locally in sub-millisecond time.        |   |
+|   |      • Checks anti-tampering invariants (credentials, socket leaks).    |   |
+|   |      • Signs execution receipts and writes to local tamper-proof ledger |   |
+|   |      • Executes command inside sandboxed token and EXITS immediately.   |   |
+|   |      • 100% functional with zero background daemons and zero admin rights|   |
+|   +-------------------------------------------------------------------------+   |
+|                                        ▲                                        |
+|                                        │ Shared State & Local Cache             |
+|                                        ▼                                        |
+|   +-------------------------------------------------------------------------+   |
+|   | 2. ENTERPRISE_MANAGED (Persistent Background Supervisor)                |   |
+|   |    Started with: bap daemon start (or auto-launched on login/install)   |   |
+|   |                                                                         |   |
+|   |    • Continuous Heartbeats: Maintains real-time presence in V3 UI.      |   |
+|   |    • Instant Freeze / Unfreeze Sync: Pulls remote suspension signals.   |   |
+|   |    • Remote Deregistration: Automatically deletes local credentials     |   |
+|   |      when an administrator unenrolls the device.                        |   |
+|   |    • Spool Transmission: Flushes local offline audit receipts to CP.    |   |
+|   +-------------------------------------------------------------------------+   |
++---------------------------------------------------------------------------------+
+```
+
+### Comparison Matrix
+
+| Property | Standalone Broker (`bapedge exec`) | Background Supervisor (`bap daemon`) |
+| :--- | :--- | :--- |
+| **Process Lifecycle** | Transient; starts, executes action, exits immediately. | Long-running supervisor worker in user space. |
+| **Privileges Required** | `STANDARD_USER` (zero UAC elevation, no admin). | `STANDARD_USER` (zero UAC elevation, no admin). |
+| **Policy Invariants** | Evaluated on every command execution. | Monitored continuously for tampering & drift. |
+| **Fleet Observability** | Visible on command / heartbeat intervals. | Continuously reported with live heartbeat pulses. |
+| **Remote Freeze Sync** | Synchronized during pre-flight command checks. | Synchronized in real time (within 3 seconds). |
+| **Remote Deregistration** | Local credentials erased on next command attempt. | Local credentials erased immediately on poll. |

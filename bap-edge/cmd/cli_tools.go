@@ -212,10 +212,10 @@ func RunStatus(args []string) error {
 	// 2. Operating Mode & Daemon Detection (Degraded vs Enterprise Managed)
 	daemonActive := isDaemonRunning()
 	operatingMode := "STANDALONE_USER_SPACE"
-	operatingModeDesc := "STANDALONE USER-SPACE (Degraded: Layer 4 child process supervision limited to unprivileged user tokens; zero admin rights required)"
+	operatingModeDesc := "STANDALONE USER-SPACE (Policy Broker Active: Zero admin rights required; evaluates Cedar invariants locally on every command)"
 	if daemonActive {
 		operatingMode = "ENTERPRISE_MANAGED"
-		operatingModeDesc = "ENTERPRISE MANAGED (Full Kernel Supervision with bap-daemon attached)"
+		operatingModeDesc = "ENTERPRISE MANAGED (Background Supervisor Daemon Attached: Live V3 telemetry, active heartbeats, and real-time remote sync)"
 	}
 
 	// 3. Enrolled Identity & Credentials
@@ -234,6 +234,47 @@ func RunStatus(args []string) error {
 					idp = creds.IdPProvider
 				}
 				authModeLabel = fmt.Sprintf("OIDC Federated (%s, MFA Enforced)", idp)
+			}
+
+			// If control plane is reachable, verify that this agent has not been deregistered or frozen
+			if creds.ServerURL != "" {
+				cClient := httptransport.New(2 * time.Second)
+				if rResp, rErr := cClient.Get(strings.TrimRight(creds.ServerURL, "/") + "/api/v1/control/revocations"); rErr == nil && rResp.StatusCode == http.StatusOK {
+					var rData struct {
+						DeregisteredAgents []string `json:"deregistered_agents"`
+						QuarantinedAgents  []string `json:"quarantined_agents"`
+					}
+					if json.NewDecoder(rResp.Body).Decode(&rData) == nil {
+						targets := []string{creds.AgentID, creds.InstanceID, creds.UserEmail}
+						isDereg := false
+						isFrozen := false
+						for _, t := range targets {
+							if t == "" {
+								continue
+							}
+							for _, d := range rData.DeregisteredAgents {
+								if strings.EqualFold(d, t) {
+									isDereg = true
+									break
+								}
+							}
+							for _, q := range rData.QuarantinedAgents {
+								if strings.EqualFold(q, t) {
+									isFrozen = true
+									break
+								}
+							}
+						}
+						if isDereg {
+							_ = os.Remove(DefaultCredentialsPath())
+							enrolled = false
+							authModeLabel = "Unenrolled (Workstation was deregistered by central administrator)"
+						} else if isFrozen {
+							authModeLabel += " [❄️ WORKSTATION FROZEN by Central Administrator]"
+						}
+					}
+					rResp.Body.Close()
+				}
 			}
 		}
 	}

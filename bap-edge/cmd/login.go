@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"runtime"
 	"path/filepath"
 	"strings"
 	"time"
@@ -66,6 +67,7 @@ func RunLogin(args []string) error {
 	configPath := fs.String("config", DefaultCredentialsPath(), "Path to store enrolled credentials")
 	caCertPath := fs.String("ca-cert", os.Getenv("BAP_CA_CERT"), "Path to custom CA certificate for HTTPS verification")
 	insecureTLS := fs.Bool("insecure", false, "Skip TLS certificate verification (development only)")
+	deviceTypeFlag := fs.String("type", "", "Workstation device type ('laptop', 'desktop', or 'server')")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -127,6 +129,11 @@ func RunLogin(args []string) error {
 		return fmt.Errorf("failed to compute binary hash for %q: %w", exePath, err)
 	}
 	hostname, _ := os.Hostname()
+	devType := strings.ToLower(strings.TrimSpace(*deviceTypeFlag))
+	if devType == "" {
+		devType = detectDeviceType()
+	}
+	outboundIP := getOutboundIP()
 
 	// 4. Initiate Device Authorization Flow (RFC 8628)
 	deviceCodeURL := fmt.Sprintf("%s/api/v1/auth/oidc/device-code", *serverURL)
@@ -136,7 +143,11 @@ func RunLogin(args []string) error {
 		"provider":    provider,
 		"hostname":    hostname,
 		"binary_hash": binHash,
-		"app_id":      "claude-code-workstation",
+		"app_id":      "workstation-" + devType,
+		"device_type": devType,
+		"os":          runtime.GOOS,
+		"arch":        runtime.GOARCH,
+		"ip_address":  outboundIP,
 	})
 
 	resp, err := httpClient.Post(deviceCodeURL, "application/json", bytes.NewReader(codeReqBody))
@@ -170,10 +181,10 @@ func RunLogin(args []string) error {
 	fmt.Println("===========================================================================")
 	fmt.Printf("   BAP Identity Provider Federation (RFC 8628 Device Flow)\n")
 	fmt.Println("===========================================================================")
-	if strings.EqualFold(provider, "google") || strings.EqualFold(provider, "github") {
-		fmt.Printf(" Identity Provider: %s\n", idpLabel)
+	if *providerFlag == "" {
+		fmt.Println(" Identity Provider: Community SSO (Google or GitHub) / Enterprise (Entra / Okta)")
 	} else {
-		fmt.Printf(" Corporate IdP: %s (MFA Enforced)\n", idpLabel)
+		fmt.Printf(" Identity Provider: %s\n", idpLabel)
 	}
 	fmt.Println(" To authenticate your local agent session:")
 	fmt.Printf("   1. Open your browser and navigate to:\n")
@@ -256,6 +267,23 @@ func RunLogin(args []string) error {
 		return fmt.Errorf("device authentication timed out waiting for approval")
 	}
 
+	// Resolve verified IdP provider from server response
+	verifiedProvider := strings.ToLower(tokenResp.Provider)
+	if verifiedProvider == "" {
+		verifiedProvider = strings.ToLower(provider)
+	}
+
+	idpLabel = "Microsoft Entra ID"
+	if strings.EqualFold(verifiedProvider, "okta") {
+		idpLabel = "Okta Workforce Identity Cloud"
+	} else if strings.EqualFold(verifiedProvider, "google") {
+		idpLabel = "Google Identity"
+	} else if strings.EqualFold(verifiedProvider, "github") {
+		idpLabel = "GitHub Developer Identity"
+	} else if strings.EqualFold(verifiedProvider, "generic") {
+		idpLabel = "Corporate OpenID Connect (OIDC)"
+	}
+
 	// 7. Store credentials in ~/.ltd/credentials.json
 	creds := StoredCredentials{
 		ServerURL:    *serverURL,
@@ -268,7 +296,7 @@ func RunLogin(args []string) error {
 		UserEmail:    tokenResp.UserEmail,
 		Department:   tokenResp.Department,
 		Groups:       tokenResp.Groups,
-		IdPProvider:  provider,
+		IdPProvider:  verifiedProvider,
 		EnrolledAt:   time.Now().UTC(),
 	}
 
@@ -287,11 +315,19 @@ func RunLogin(args []string) error {
 
 	fmt.Println()
 	fmt.Printf("[✓] Corporate Identity Verified via %s\n", idpLabel)
-	fmt.Printf("    User Email:  %s\n", tokenResp.UserEmail)
-	fmt.Printf("    Department:  %s\n", tokenResp.Department)
-	fmt.Printf("    Groups:      %v\n", tokenResp.Groups)
-	fmt.Printf("    Session ID:  %s\n", tokenResp.InstanceID)
+	fmt.Printf("    User Email:   %s\n", tokenResp.UserEmail)
+	fmt.Printf("    Department:   %s\n", tokenResp.Department)
+	fmt.Printf("    Workstation:  %s (%s, IP: %s)\n", hostname, strings.Title(devType), outboundIP)
+	fmt.Printf("    Session ID:   %s\n", tokenResp.InstanceID)
 	fmt.Printf("[✓] Enrolled credentials saved to: %s\n", *configPath)
 	fmt.Println("[✓] Local agent session is now bound to your corporate identity and ready for Cedar governance.")
+
+	// Launch background supervisor daemon in user mode if not already running
+	if !isDaemonRunning() {
+		_ = runDaemonStart([]string{"-server", *serverURL})
+		if isDaemonRunning() {
+			fmt.Println("[✓] Background supervisor daemon launched. Workstation is actively monitored in V3 Dashboard.")
+		}
+	}
 	return nil
 }

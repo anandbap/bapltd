@@ -75,16 +75,16 @@ bap login
 
 ---
 
-### 2.1 Free Community & Beta Testers (Google Identity / Render.com)
+### 2.1 Free Community & Beta Testers (Google & GitHub Identity / Render.com)
 
-If you are using the free public control plane on Render (`bap-controlplane.onrender.com`), you do **not** need any corporate IT accounts, Microsoft Entra ID, or Okta setup. You can authenticate instantly using your standard **Google Account (`@gmail.com`)** or GitHub Identity:
+If you are using the free public control plane on Render (`bap-controlplane.onrender.com`), you do **not** need any corporate IT accounts, Microsoft Entra ID, or Okta setup. You can authenticate instantly using your standard **Google Account** or **GitHub Account**:
 
-1. Run `bap login`:
+1. Run `bap login` (optionally specifying `--type laptop`, `--type server`, or `--type desktop`):
 ```text
 ===========================================================================
    BAP Identity Provider Federation (RFC 8628 Device Flow)
 ===========================================================================
- Identity Provider: Google Identity (Free Community / Beta)
+ Identity Provider: Community SSO (Google or GitHub) / Enterprise (Entra / Okta)
  To authenticate your local agent session:
    1. Open your browser and navigate to:
       https://bap-controlplane.onrender.com/device
@@ -94,17 +94,18 @@ If you are using the free public control plane on Render (`bap-controlplane.onre
 ===========================================================================
 [*] Waiting for browser authorization...
 ```
-2. Click the **Direct Link**. The built-in device portal on the control plane opens in your browser with your user code already prefilled.
-3. Enter your Google/developer email (e.g. `alex@gmail.com`) and click **Authorize Device Session**.
+2. Click the **Direct Link**. The built-in device portal opens in your browser with your code prefilled.
+3. Choose either **Sign in with Google** or **Sign in with GitHub**.
 4. Your terminal unlocks instantly:
 ```text
-[✓] Identity Verified via Google Identity (Free Community / Beta)
-    User Email:  alex@gmail.com
-    Department:  Beta Community
-    Groups:      [community-developers, beta-testers]
-    Session ID:  sess-claude-91ab4e
+[✓] Corporate Identity Verified via GitHub Developer Identity
+    User Email:   developer@github.com
+    Department:   Beta Community
+    Workstation:  MY-LAPTOP (Laptop, IP: 192.168.1.45)
+    Session ID:   inst-my-laptop-fa31b0
 [✓] Enrolled credentials saved to: ~/.bapstate/credentials.json
-[✓] Local agent session is now bound to your Google identity and ready for Cedar governance.
+[✓] Local agent session is now bound to your corporate identity and ready for Cedar governance.
+[✓] Background supervisor daemon launched. Workstation is actively monitored in V3 Dashboard.
 ```
 
 ---
@@ -135,6 +136,45 @@ For enterprise organizations deploying their own private control plane on AWS, A
 [✓] Enrolled credentials saved to: ~/.bapstate/credentials.json
 [✓] Local agent session is now bound to your corporate identity and ready for Cedar governance.
 ```
+
+### 2.4 Managing the Background Supervisor Daemon (`bap daemon`)
+
+BAP features a two-tier execution model:
+1. **`STANDALONE_USER_SPACE`**: Policy Broker active. Evaluates Cedar policies locally on every command (`bap exec` or MCP `bap_execute`) with **zero admin rights** and **no background processes**.
+2. **`ENTERPRISE_MANAGED`**: Background Supervisor Daemon (`bap daemon`) attached. Heartbeats to the central control plane, keeps the workstation live in the V3 dashboard fleet map, and syncs remote freeze/deregistration commands in real time.
+
+You can manage the background supervisor directly using the unified CLI:
+```bash
+# Check daemon status and operating mode
+bap daemon status
+# or simply
+bap status
+
+# Start supervisor in background (user space, no admin rights required)
+bap daemon start
+
+# Stop background supervisor
+bap daemon stop
+```
+
+---
+
+### 2.5 Workstation Logout & Centralized Governance (`bap logout` & V3 Dashboard)
+
+#### Local Workstation Logout
+To cleanly end your authenticated corporate session and deregister your device:
+```bash
+bap logout
+```
+This revokes the session token on the central control plane and erases local credentials (`~/.bapstate/credentials.json`).
+
+#### Centralized V3 Fleet Management
+Administrators can govern enrolled workstations from the V3 Dashboard (`/dashboard/v3/`):
+- **Freeze (Suspend)**: Temporarily suspends workstation execution without deleting local credentials. Shell commands invoked via `bapedge exec` are blocked with `EXECUTION BLOCKED: Workstation is currently FROZEN`.
+- **Unfreeze (Restore)**: Resumes active policy enforcement and unblocks execution.
+- **Deregister (Logout Device)**: Permanently ends the session and revokes credentials. When the workstation's background daemon or next CLI command syncs, it deletes `credentials.json` on disk and unenrolls the device.
+
+---
 
 ### 2.3 Free Community vs. Enterprise Comparison
 

@@ -519,6 +519,7 @@ func CheckSessionRevocation(policyPath, sessionID string) error {
 
 		var state struct {
 			KillSwitch      bool     `json:"kill_switch"`
+			Frozen          bool     `json:"frozen"`
 			RevokedSessions []string `json:"revoked_sessions"`
 		}
 		if err := json.Unmarshal(stateData, &state); err != nil {
@@ -527,6 +528,10 @@ func CheckSessionRevocation(policyPath, sessionID string) error {
 
 		if state.KillSwitch {
 			return fmt.Errorf("emergency kill-switch is active; all executions are blocked")
+		}
+
+		if state.Frozen {
+			return fmt.Errorf("workstation is currently FROZEN (quarantined) by central administrator; all executions blocked")
 		}
 
 		if sessionID != "" {

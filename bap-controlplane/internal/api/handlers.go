@@ -101,6 +101,10 @@ type deviceAuthSession struct {
 	Hostname     string
 	BinaryHash   string
 	AppID        string
+	DeviceType   string
+	OS           string
+	Arch         string
+	IPAddress    string
 	UserEmail    string
 	Department   string
 	Groups       []string
@@ -769,6 +773,26 @@ func (s *Server) handleOIDCDeviceCode(w http.ResponseWriter, r *http.Request) {
 
 	completeURI := fmt.Sprintf("%s://%s/device?user_code=%s", scheme, host, userCode)
 
+	ipAddr := req.IPAddress
+	if ipAddr == "" {
+		ipAddr = r.RemoteAddr
+		if host, _, err := net.SplitHostPort(ipAddr); err == nil {
+			ipAddr = host
+		}
+	}
+	devType := strings.ToLower(strings.TrimSpace(req.DeviceType))
+	if devType == "" {
+		devType = "laptop"
+	}
+	osName := strings.ToLower(strings.TrimSpace(req.OS))
+	if osName == "" {
+		osName = "windows"
+	}
+	archName := strings.ToLower(strings.TrimSpace(req.Arch))
+	if archName == "" {
+		archName = "amd64"
+	}
+
 	session := &deviceAuthSession{
 		DeviceCode: deviceCode,
 		UserCode:   userCode,
@@ -780,6 +804,10 @@ func (s *Server) handleOIDCDeviceCode(w http.ResponseWriter, r *http.Request) {
 		Hostname:   req.Hostname,
 		BinaryHash: req.BinaryHash,
 		AppID:      req.AppID,
+		DeviceType: devType,
+		OS:         osName,
+		Arch:       archName,
+		IPAddress:  ipAddr,
 	}
 
 	s.deviceSessionsMu.Lock()
@@ -1071,15 +1099,32 @@ func (s *Server) authorizeDeviceSession(userCode, email, dept, provider string, 
 		provider = "google"
 	}
 
+	devType := session.DeviceType
+	if devType == "" {
+		devType = "laptop"
+	}
+	hostname := session.Hostname
+	if hostname == "" {
+		hostname = "workstation"
+	}
+
 	appID := session.AppID
 	if appID == "" {
-		appID = "claude-code-workstation"
+		appID = "workstation-" + devType
 	}
+
+	devTitle := "Laptop"
+	if devType == "server" {
+		devTitle = "Server"
+	} else if devType == "desktop" {
+		devTitle = "Desktop"
+	}
+	agentName := fmt.Sprintf("%s @ %s (%s Workstation)", email, hostname, devTitle)
 
 	preReq := types.PreRegisterRequest{
 		AppID:           appID,
 		OwnerEmail:      email,
-		AgentName:       fmt.Sprintf("%s (%s)", email, dept),
+		AgentName:       agentName,
 		EnvProfile:      types.ProfileDev,
 		PermittedScopes: []string{"cli:exec", "mcp:access"},
 	}
@@ -1091,13 +1136,22 @@ func (s *Server) authorizeDeviceSession(userCode, email, dept, provider string, 
 		}
 	}
 
+	osName := session.OS
+	if osName == "" {
+		osName = "windows"
+	}
+	archName := session.Arch
+	if archName == "" {
+		archName = "amd64"
+	}
+
 	enrolled, err := s.registry.EnrollWithClaims(
 		agent.AgentID,
 		session.BinaryHash,
 		"",
-		session.Hostname,
-		"windows",
-		"amd64",
+		hostname,
+		osName,
+		archName,
 		"",
 		email,
 		dept,
@@ -1105,6 +1159,11 @@ func (s *Server) authorizeDeviceSession(userCode, email, dept, provider string, 
 		"oidc",
 		provider,
 	)
+	if err == nil && enrolled != nil {
+		enrolled.DeviceType = devType
+		enrolled.IPAddress = session.IPAddress
+		enrolled.AgentName = agentName
+	}
 	if err != nil {
 		return nil, fmt.Errorf("Enrollment error: %w", err)
 	}
@@ -1541,12 +1600,21 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 // handleDeviceSuccess renders the clean authorization success confirmation screen.
 func (s *Server) handleDeviceSuccess(w http.ResponseWriter, r *http.Request) {
 	email := r.URL.Query().Get("user_email")
-	provider := r.URL.Query().Get("provider")
+	providerParam := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("provider")))
 	if email == "" {
 		email = "developer@gmail.com"
 	}
-	if provider == "" {
+	provider := "Google Identity"
+	if strings.EqualFold(providerParam, "github") {
+		provider = "GitHub Developer Identity"
+	} else if strings.EqualFold(providerParam, "google") {
 		provider = "Google Identity"
+	} else if strings.EqualFold(providerParam, "entra") {
+		provider = "Microsoft Entra ID"
+	} else if strings.EqualFold(providerParam, "okta") {
+		provider = "Okta Workforce Identity"
+	} else if providerParam != "" {
+		provider = providerParam
 	}
 
 	html := fmt.Sprintf(`<!DOCTYPE html>
@@ -2601,11 +2669,51 @@ func (s *Server) handleGetRevocations(w http.ResponseWriter, r *http.Request) {
 		revokedSessions = s.sessionStore.ListRevoked()
 		revokedUsers = s.sessionStore.ListRevokedUsers()
 	}
+
+	var deregisteredAgents []string
+	var quarantinedAgents []string
+	var revokedAgents []string
+	if s.registry != nil {
+		for _, a := range s.registry.List() {
+			if a.Status == types.StatusDeregistered {
+				if a.AgentID != "" {
+					deregisteredAgents = append(deregisteredAgents, a.AgentID)
+				}
+				if a.InstanceID != "" {
+					deregisteredAgents = append(deregisteredAgents, a.InstanceID)
+				}
+				if a.OwnerEmail != "" {
+					deregisteredAgents = append(deregisteredAgents, a.OwnerEmail)
+				}
+				if a.UserEmail != "" {
+					deregisteredAgents = append(deregisteredAgents, a.UserEmail)
+				}
+			} else if a.Status == types.StatusQuarantined {
+				if a.AgentID != "" {
+					quarantinedAgents = append(quarantinedAgents, a.AgentID)
+				}
+				if a.InstanceID != "" {
+					quarantinedAgents = append(quarantinedAgents, a.InstanceID)
+				}
+			} else if a.Status == types.StatusRevoked {
+				if a.AgentID != "" {
+					revokedAgents = append(revokedAgents, a.AgentID)
+				}
+				if a.InstanceID != "" {
+					revokedAgents = append(revokedAgents, a.InstanceID)
+				}
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"kill_switch":      bundle.KillSwitch,
-		"revoked_sessions": revokedSessions,
-		"revoked_users":    revokedUsers,
-		"updated_at":       time.Now().UTC(),
+		"kill_switch":         bundle.KillSwitch,
+		"revoked_sessions":    revokedSessions,
+		"revoked_users":       revokedUsers,
+		"deregistered_agents": deregisteredAgents,
+		"quarantined_agents":  quarantinedAgents,
+		"revoked_agents":      revokedAgents,
+		"updated_at":          time.Now().UTC(),
 	})
 }
 
@@ -3594,6 +3702,58 @@ func (s *Server) handleTargetedKillAgent(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// 1.5 ACTION: FREEZE / QUARANTINE (blocks executions without clearing credentials)
+	if action == "quarantine" || action == "freeze" {
+		var qName string
+		if targetSession != nil {
+			qName = targetSession.InstanceID
+			if qName == "" {
+				qName = targetSession.SessionID
+			}
+		}
+		if targetAgent != nil && qName == "" {
+			qName = targetAgent.InstanceID
+			if qName == "" {
+				qName = targetAgent.AgentName
+			}
+		}
+		if qName == "" {
+			qName = target
+		}
+
+		if s.sessionStore != nil && sessionTarget != "" {
+			_ = s.sessionStore.RevokeSession(sessionTarget, "Quarantined / Frozen by administrator")
+		}
+		if s.registry != nil && agentTarget != "" {
+			_, _ = s.registry.QuarantineTarget(agentTarget, "Quarantined via dashboard")
+		}
+
+		now := time.Now().UTC()
+		s.auditStore.Ingest([]audit.Event{
+			{
+				Source:      "bap-controlplane",
+				SessionID:   sessionTarget,
+				Executable:  "bapcontrolplane",
+				FullCommand: fmt.Sprintf("FREEZE_WORKSTATION target=%s", target),
+				Decision:    "deny",
+				Reason:      fmt.Sprintf("Workstation %s frozen/quarantined by administrator.", qName),
+				DurationMs:  1,
+				Timestamp:   now.Format(time.RFC3339),
+				ExitCode:    0,
+			},
+		})
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"target":      target,
+			"agent_name":  qName,
+			"status":      "quarantined",
+			"action":      "freeze",
+			"message":     fmt.Sprintf("Workstation %s successfully frozen. Commands are blocked until restored.", qName),
+			"kill_status": "FROZEN",
+		})
+		return
+	}
+
 	// 1. ACTION: STOP SESSION (session termination only, no user revocation)
 	if action == "stop" {
 		var stoppedName string
@@ -3677,7 +3837,7 @@ func (s *Server) handleTargetedKillAgent(w http.ResponseWriter, r *http.Request)
 	}
 
 	// 2. ACTION: RESTORE ACCESS (unblocks user, clears revocation)
-	if action == "restore" {
+	if action == "restore" || action == "unfreeze" || action == "unquarantine" {
 		var restoredName string
 		userID := req.UserID
 		if targetSession != nil {

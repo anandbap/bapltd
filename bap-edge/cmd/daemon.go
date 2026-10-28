@@ -374,6 +374,74 @@ func (s *DaemonServer) runHeartbeatWorker(ctx context.Context) {
 				_, _ = client.Post(strings.TrimRight(s.state.ServerURL, "/")+"/api/v1/sessions/heartbeat", "application/json", bytes.NewReader(body))
 			}
 			s.mu.RUnlock()
+
+			// Pulse registered agent identity & sync revocations
+			if credsData, err := os.ReadFile(state.CredentialsPath()); err == nil {
+				var creds StoredCredentials
+				if json.Unmarshal(credsData, &creds) == nil && creds.AgentID != "" {
+					agentHeartbeat := map[string]any{
+						"id":         creds.AgentID,
+						"agent_id":   creds.AgentID,
+						"instance_id": creds.InstanceID,
+					}
+					body, _ := json.Marshal(agentHeartbeat)
+					_, _ = client.Post(strings.TrimRight(s.state.ServerURL, "/")+"/api/v1/control/heartbeat", "application/json", bytes.NewReader(body))
+
+					// Sync remote revocations
+					if rResp, rErr := client.Get(strings.TrimRight(s.state.ServerURL, "/") + "/api/v1/control/revocations"); rErr == nil && rResp.StatusCode == http.StatusOK {
+						var rData struct {
+							KillSwitch         bool     `json:"kill_switch"`
+							RevokedSessions    []string `json:"revoked_sessions"`
+							DeregisteredAgents []string `json:"deregistered_agents"`
+							QuarantinedAgents  []string `json:"quarantined_agents"`
+						}
+						if json.NewDecoder(rResp.Body).Decode(&rData) == nil {
+							targets := []string{creds.AgentID, creds.InstanceID, creds.UserEmail}
+							isDereg := false
+							isFrozen := false
+							for _, t := range targets {
+								if t == "" {
+									continue
+								}
+								for _, d := range rData.DeregisteredAgents {
+									if strings.EqualFold(d, t) {
+										isDereg = true
+										break
+									}
+								}
+								for _, q := range rData.QuarantinedAgents {
+									if strings.EqualFold(q, t) {
+										isFrozen = true
+										break
+									}
+								}
+							}
+							if isDereg {
+								_ = os.Remove(state.CredentialsPath())
+								fmt.Println("[!] NOTICE: This workstation was deregistered by central administrator. Local credentials cleared and session terminated.")
+							}
+							// Update cached policy state
+							_ = os.MkdirAll(".bap", 0700)
+							statePath := filepath.Join(".bap", "policy-state.json")
+							var existing map[string]any
+							if content, err := os.ReadFile(statePath); err == nil {
+								_ = json.Unmarshal(content, &existing)
+							}
+							if existing == nil {
+								existing = make(map[string]any)
+							}
+							existing["kill_switch"] = rData.KillSwitch
+							existing["frozen"] = isFrozen
+							existing["revoked_sessions"] = rData.RevokedSessions
+							existing["last_sync"] = time.Now().UTC()
+							if updated, err := json.MarshalIndent(existing, "", "  "); err == nil {
+								_ = os.WriteFile(statePath, updated, 0600)
+							}
+						}
+						rResp.Body.Close()
+					}
+				}
+			}
 		}
 	}
 }
@@ -542,7 +610,7 @@ func runDaemonStatus(args []string) error {
 			return nil
 		}
 		fmt.Println("⚠️  BAP Daemon is not currently running.")
-		fmt.Println("   Run 'bapedge daemon start' to launch the background supervisor.")
+		fmt.Println("   Run 'bap daemon start' (or 'bapedge daemon start') to launch the background supervisor.")
 		return nil
 	}
 

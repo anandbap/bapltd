@@ -3630,3 +3630,72 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - `Then` `isTestEnv()` detects active test runners via `flag.Lookup("test.v")` and disables detached background respawning, allowing clean binary cleanup.
 - **Implementation Evidence**:
   - Implemented in `bap-edge/cmd/watch.go` lines 182-187 and `bap-edge/cmd/mcp_enroll.go`. Unit test suite passing cleanly in CI.
+
+
+---
+
+## BAP-790 Series: Workstation Fleet Identity, Remote Governance & Two-Tier Execution Model (BAP-EPIC-38)
+
+### Epic Overview (BAP-EPIC-38)
+**Summary**: Establish hardware workstation attestation (laptop, desktop, server, local IP, OS/arch), free community SSO federation (Google & GitHub), a two-tier execution model (transient zero-privilege broker vs. persistent background supervisor), centralized workstation suspension (Freeze/Unfreeze), and automated remote logout on deregistration.
+
+#### Story BAP-791: Hardware Device Identity & Outbound IP Attestation
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**: Replace hardcoded `claude-code-workstation` identity during enrollment with dynamic hardware attestation. Detect device type (`laptop`, `desktop`, `server`) via kernel battery subsystems (`GetSystemPowerStatus` on Windows, `/sys/class/power_supply` on Linux, `darwin` heuristics on macOS), query outbound routing IP without network emissions, and register agent identity as `<email> @ <hostname> (<DeviceType> Workstation)`.
+- **Security Rationale**: Zero-trust fleet administration requires granular asset attribution. SecOps must distinguish developer laptops roaming untrusted networks from fixed server infrastructure and static CI desktops.
+- **Acceptance Criteria**:
+  - `Given` a developer workstation enrolling via `bap login`,
+  - `When` device authorization is initiated,
+  - `Then` `device_type`, `ip_address`, `os`, `arch`, and `hostname` are attested in the device code payload and saved in the registry.
+- **Implementation Evidence**:
+  - Implemented in `bap-edge/cmd/device.go`, `bap-edge/cmd/device_windows.go`, `bap-edge/cmd/device_unix.go`, `bap-controlplane/pkg/types/types.go`, and `bap-controlplane/internal/api/handlers.go`.
+  - Verified in `tests/test_device_identity_and_remote_sync.py`.
+
+#### Story BAP-792: Free Community SSO Federation with Google & GitHub
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**: Support free community and beta tester authentication using Google and GitHub OAuth 2.0 device authorization flows. Resolve the verified provider from the token response to eliminate provider drift where GitHub users were incorrectly classified as Google.
+- **Security Rationale**: Free community adopters and beta testers should have a frictionless onboarding path without needing enterprise Entra ID or Okta setups, while maintaining immutable cryptographic attribution to their verified IdP identity.
+- **Acceptance Criteria**:
+  - `Given` an engineer authenticating via `bap login`,
+  - `When` the user authorizes via GitHub on the control plane portal,
+  - `Then` the local client and registry reflect `idp_provider: "github"`, and terminal output displays `GitHub Developer Identity`.
+- **Implementation Evidence**:
+  - Implemented in `bap-edge/cmd/login.go` and `bap-controlplane/internal/api/handlers.go`.
+  - Verified in `tests/test_v3_ui_live.py` and `tests/test_device_identity_and_remote_sync.py`.
+
+#### Story BAP-793: Two-Tier Workstation Execution Model & User-Space Supervisor
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**: Implement a dual operating model: (1) `STANDALONE_USER_SPACE` execution broker that enforces Cedar invariants on every command with zero background footprint and zero admin rights required, and (2) `ENTERPRISE_MANAGED` background supervisor daemon (`bap daemon start`) providing continuous telemetry, active dashboard presence, and instant remote freeze/logout sync. Automatically launch the daemon in user space during `bap install` and `bap login`.
+- **Security Rationale**: Developers must never be blocked if a background service crashes or lacks administrative privileges. The broker must remain self-contained and fail-secure, while the supervisor adds continuous real-time fleet observability.
+- **Acceptance Criteria**:
+  - `Given` standard unprivileged user credentials,
+  - `When` `bap install` or `bap login` runs,
+  - `Then` the background supervisor daemon starts in user space without UAC/elevation prompts, and `bap daemon start|stop|status` commands manage its lifecycle.
+- **Implementation Evidence**:
+  - Implemented in `bap/cli.py`, `bap/bap_install.py`, `scripts/bap_install.py`, `bap-edge/cmd/daemon.go`, and `bap-edge/cmd/cli_tools.go`.
+  - Verified in `tests/test_device_identity_and_remote_sync.py`.
+
+#### Story BAP-794: Centralized Workstation Freeze (Quarantine) & Unfreeze (Restore)
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**: Add granular containment controls in the V3 dashboard and control plane API. Allow administrators to temporarily "Freeze" (quarantine) a workstation without erasing its credentials, blocking all shell execution via cached policy state. Unfreezing immediately restores active execution without requiring re-authentication.
+- **Security Rationale**: Incident response teams need a rapid "containment" action to isolate suspicious agent activity during investigations without destroying forensic evidence or permanently unregistering the developer workstation.
+- **Acceptance Criteria**:
+  - `Given` an active registered agent,
+  - `When` an administrator clicks "Freeze" in the V3 dashboard,
+  - `Then` agent status becomes `quarantined`, edge clients fast-sync `frozen: true`, and all command executions are blocked with `EXECUTION BLOCKED: Workstation is currently FROZEN`.
+  - `When` "Unfreeze (Restore)" is clicked, active execution resumes immediately.
+- **Implementation Evidence**:
+  - Implemented in `bap-controlplane/internal/api/handlers.go`, `bap-controlplane/internal/registry/agent.go`, `bap-edge/internal/authz/authorizer.go`, `bap-edge/cmd/exec.go`, and `bap-controlplane/internal/dashboardui/web/v3.html`.
+  - Verified in `tests/test_v3_ui_live.py`.
+
+#### Story BAP-795: Remote Workstation Deregistration & Automated Local Logout
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**: Implement permanent workstation deregistration via `bap logout` CLI and V3 dashboard. Propagate deregistration events through `/api/v1/control/revocations`. When edge daemons or fast-sync brokers detect their agent in `deregistered_agents`, they automatically delete `~/.bapstate/credentials.json` and terminate local sessions. Disallow restoring a permanently deregistered agent.
+- **Security Rationale**: When a developer offboards or a device is decommissioned, centralized revocation must actively purge local cryptographic keys and session tokens from the physical host to prevent unauthorized reuse.
+- **Acceptance Criteria**:
+  - `Given` a registered workstation,
+  - `When` "Deregister" is clicked in the V3 UI or `bap logout` is executed,
+  - `Then` session tokens are permanently revoked, local `credentials.json` is deleted on disk, and attempts to restore a deregistered agent are rejected.
+- **Implementation Evidence**:
+  - Implemented in `bap-edge/cmd/logout.go`, `bap-edge/cmd/daemon.go`, `bap-edge/cmd/exec.go`, `bap-edge/cmd/cli_tools.go`, `bap-controlplane/internal/api/handlers.go`, and `bap-controlplane/internal/registry/agent.go`.
+  - Verified in `bap-edge/cmd/logout_test.go` and `tests/test_v3_ui_live.py`.

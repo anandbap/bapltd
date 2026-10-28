@@ -34,14 +34,25 @@ pip install bap-ltd
 # 2. Run single-click user-mode installer (No admin / UAC required)
 bap install
 
-# 3. Authenticate with corporate SSO / MFA (Microsoft Entra ID / Okta)
+# 3. Authenticate with Identity Provider (Google, GitHub, Entra ID, or Okta)
 bap login
 
-# 4. Verify workstation health with pre-flight doctor
+# 4. Check workstation governance status & operating mode
+bap status
+
+# 5. Manage background supervisor daemon (user-mode, zero admin required)
+bap daemon status
+bap daemon start
+bap daemon stop
+
+# 6. Verify workstation health with pre-flight doctor
 bap doctor
 
-# 5. Launch developer cockpit & verify governed agents
+# 7. Launch developer cockpit & verify governed agents
 bap launch
+
+# 8. Log out and deregister workstation when finished
+bap logout
 ```
 
 Or execute without package installation:

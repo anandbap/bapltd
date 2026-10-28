@@ -1258,6 +1258,23 @@ def main():
     # 6. Cryptographic Pinning Scan
     run_pin_scan(target_dir, args.workspace)
 
+    # 6.5 Launch background supervisor daemon in user mode (zero admin rights required)
+    bapedge_bin = os.path.join(target_dir, "bapedge.exe" if sys.platform == "win32" else "bapedge")
+    if os.path.isfile(bapedge_bin):
+        try:
+            cflags = 0x08000000 | 0x00000200 if sys.platform == "win32" else 0
+            subprocess.Popen(
+                [bapedge_bin, "daemon", "start", "-server", selected_server],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                creationflags=cflags,
+                start_new_session=True if sys.platform != "win32" else False
+            )
+            print(f"  {TermColor.GREEN}[+] BAP background supervisor daemon started in user space (zero admin rights required).{TermColor.RESET}")
+        except Exception as e:
+            pass
+
     # 7. Print Completion & Verification Banner
     print("\n" + "=" * 80)
     print(f"  {TermColor.GREEN}{TermColor.BOLD}[SUCCESS] BAP INSTALLATION COMPLETE! Your machine is ready to govern AI agents.{TermColor.RESET}")

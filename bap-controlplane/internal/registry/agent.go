@@ -264,7 +264,10 @@ func (s *Store) RestoreTarget(target string) (*types.RegisteredAgent, error) {
 		return nil, fmt.Errorf("target is required")
 	}
 	for _, a := range s.agents {
-		if a.AgentID == target {
+		if a.AgentID == target || a.InstanceID == target {
+			if a.Status == types.StatusDeregistered {
+				return nil, fmt.Errorf("agent %q is permanently deregistered and logged out; cannot restore, user must run 'bap login' to re-enroll", target)
+			}
 			a.Status = types.StatusActive
 			a.RevokedAt = nil
 			return a, nil
@@ -272,6 +275,7 @@ func (s *Store) RestoreTarget(target string) (*types.RegisteredAgent, error) {
 	}
 	return nil, fmt.Errorf("no agent found matching %q", target)
 }
+
 
 // Deregister marks an agent or instance as deregistered (e.g. via 'bap logout').
 func (s *Store) Deregister(target string) (*types.RegisteredAgent, error) {
@@ -412,6 +416,9 @@ func (s *Store) UnquarantineTarget(target string) (*types.RegisteredAgent, error
 	}
 	for _, a := range s.agents {
 		if a.AgentID == target || a.AppID == target || (a.InstanceID != "" && a.InstanceID == target) {
+			if a.Status == types.StatusDeregistered {
+				return nil, fmt.Errorf("agent %q is permanently deregistered and logged out; cannot restore, user must run 'bap login' to re-enroll", target)
+			}
 			a.Status = types.StatusActive
 			a.RevokedAt = nil
 			return a, nil

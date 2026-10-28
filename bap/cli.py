@@ -26,6 +26,7 @@ Commands:
   launch        Start developer cockpit, verify hooks & monitor agents
   doctor        Run comprehensive pre-flight diagnostic health check
   status        Check health of local edge daemon and central control plane
+  daemon <cmd>  Manage background supervisor daemon (start, stop, status)
   exec <cmd>    Execute a shell command under Zero-Trust Cedar invariants
   pin <subcmd>  Manage cryptographic content pins (scan, list, verify)
   version       Display current BAP version
@@ -165,6 +166,13 @@ def main():
             sys.exit(1)
         sub_cmd = [bapedge, "exec"] + rest
         sys.exit(subprocess.call(sub_cmd))
+    elif cmd == "daemon":
+        bapedge = find_bapedge()
+        if os.path.isfile(bapedge):
+            sys.exit(subprocess.call([bapedge, "daemon"] + rest))
+        else:
+            print(f"[!] bapedge binary not found. Please run 'bap install' first.")
+            sys.exit(1)
     elif cmd == "status":
         bapedge = find_bapedge()
         if os.path.isfile(bapedge):
