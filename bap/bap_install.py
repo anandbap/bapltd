@@ -160,13 +160,45 @@ def get_all_bap_candidate_dirs(target_dir: str = None) -> list:
     return result
 
 
+def is_real_binary(path: str) -> bool:
+    """Returns True if path is an actual compiled native executable, not a Python script shim."""
+    if not path or not os.path.isfile(path):
+        return False
+    try:
+        with open(path, "rb") as f:
+            header = f.read(512)
+        if not header:
+            return False
+        # If it has a python shebang or mentions python/bap shims, it is not a native binary
+        if header.startswith(b"#!") and (b"python" in header or b"bap" in header):
+            return False
+        if b"bapedge_proxy" in header or b"bap.cli" in header:
+            return False
+        # Mach-O headers for macOS
+        if sys.platform == "darwin":
+            if len(header) >= 4:
+                magic = header[:4]
+                if magic in (b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"):
+                    return True
+        elif sys.platform.startswith("linux"):
+            if header.startswith(b"\x7fELF"):
+                return True
+        elif sys.platform == "win32":
+            if header.startswith(b"MZ"):
+                return True
+        return not header.startswith(b"#!")
+    except Exception:
+        return False
+
+
 def clean_stale_secondary_installations(target_dir: str):
     """
     Ensures single-source-of-truth: cleans stale BAP binaries from other candidate
     paths so no conflicting older versions of bapedge or BAP components exist on PATH.
+    Preserves Python entry point console scripts (e.g. bap and bapedge installed by pip).
     """
-    # If running inside unit tests, avoid purging host directories
-    if "unittest" in sys.modules or os.environ.get("BAP_TEST_ENV") == "1":
+    # If running inside unit tests, avoid purging host directories unless explicitly allowed in mock test
+    if ("unittest" in sys.modules and os.environ.get("BAP_ALLOW_TEST_PURGE") != "1") or os.environ.get("BAP_TEST_ENV") == "1":
         return
 
     all_dirs = get_all_bap_candidate_dirs(target_dir)
@@ -181,7 +213,6 @@ def clean_stale_secondary_installations(target_dir: str):
         "interceptor.exe", "interceptor",
         "cchook-interceptor.exe", "cchook-interceptor",
         "copilot-interceptor.exe", "copilot-interceptor",
-        "bap.exe", "bap",
         "policy.cedar", "schema.json", "bap-config.json"
     ]
     
@@ -191,10 +222,16 @@ def clean_stale_secondary_installations(target_dir: str):
             continue
         if os.path.normpath(d).lower() == target_norm:
             continue
+        d_lower = os.path.normpath(d).lower()
+        if "site-packages" in d_lower or "dist-packages" in d_lower:
+            continue
         # This is a secondary candidate directory; clean any stale BAP files
         for f in bap_bins:
             fp = os.path.join(d, f)
             if os.path.isfile(fp):
+                # Never delete Python console scripts (like pip's ~/.local/bin/bapedge shim)
+                if ("bapedge" in f or "interceptor" in f) and not is_real_binary(fp):
+                    continue
                 try:
                     safe_remove_file(fp)
                     cleaned_count += 1
@@ -649,6 +686,30 @@ def install_core_binaries(target_dir: str):
                 print(f"  {TermColor.GREEN}[+] Agent Launcher: {name:<26}{TermColor.RESET}")
             except Exception:
                 pass
+
+    # Deploy unified 'bap' CLI wrapper so the 'bap' command is immediately available in target_dir
+    bap_wrapper = os.path.join(target_dir, "bap")
+    try:
+        py_exe = sys.executable or "python3"
+        with open(bap_wrapper, "w", encoding="utf-8", newline="\n") as f:
+            f.write(f'#!/bin/sh\nexec "{py_exe}" -m bap.cli "$@"\n')
+        if sys.platform != "win32":
+            os.chmod(bap_wrapper, 0o755)
+        print(f"  {TermColor.GREEN}[+] bap                  (Unified Governance CLI Wrapper){TermColor.RESET}")
+    except Exception as e:
+        print(f"  {TermColor.YELLOW}[!] Notice: Could not create bap wrapper: {e}{TermColor.RESET}")
+
+    if sys.platform == "win32":
+        bap_cmd = os.path.join(target_dir, "bap.cmd")
+        bap_ps1 = os.path.join(target_dir, "bap.ps1")
+        try:
+            py_exe = sys.executable or "python"
+            with open(bap_cmd, "w", encoding="utf-8") as f:
+                f.write(f'@echo off\r\n"{py_exe}" -m bap.cli %*\r\n')
+            with open(bap_ps1, "w", encoding="utf-8") as f:
+                f.write(f'& "{py_exe}" -m bap.cli $args\r\n')
+        except Exception:
+            pass
 
     # For Windows, also deploy extensionless POSIX shims so Git Bash and WSL can run bare commands (bap, bapedge, interceptor)
     if sys.platform == "win32":
@@ -1199,6 +1260,10 @@ def uninstall(target_dir: str, workspace_root: str):
         for f in bap_files:
             fp = os.path.join(d, f)
             if os.path.isfile(fp):
+                # Never remove pip's python console scripts in secondary or python directories
+                if ("bap" in f or "bapedge" in f) and (os.path.normpath(d).lower() != os.path.normpath(target_dir).lower()):
+                    if not is_real_binary(fp):
+                        continue
                 try:
                     safe_remove_file(fp)
                     removed_count += 1

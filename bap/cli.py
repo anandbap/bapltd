@@ -53,6 +53,37 @@ def get_platform_id() -> str:
     else:
         return "linux-arm64" if is_arm else "linux-amd64"
 
+def is_real_binary(path: str) -> bool:
+    """Returns True if path is an actual compiled native executable, not a Python script shim."""
+    if not path or not os.path.isfile(path):
+        return False
+    try:
+        with open(path, "rb") as f:
+            header = f.read(512)
+        if not header:
+            return False
+        # If it has a python shebang or mentions python/bap shims, it is not a native binary
+        if header.startswith(b"#!") and (b"python" in header or b"bap" in header):
+            return False
+        if b"bapedge_proxy" in header or b"bap.cli" in header:
+            return False
+        # Mach-O headers for macOS
+        if sys.platform == "darwin":
+            if len(header) >= 4:
+                magic = header[:4]
+                if magic in (b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"):
+                    return True
+        elif sys.platform.startswith("linux"):
+            if header.startswith(b"\x7fELF"):
+                return True
+        elif sys.platform == "win32":
+            if header.startswith(b"MZ"):
+                return True
+        # If not starting with script shebang, consider binary
+        return not header.startswith(b"#!")
+    except Exception:
+        return False
+
 def find_bapedge() -> str:
     ext = ".exe" if sys.platform == "win32" else ""
     binary_name = "bapedge" + ext
@@ -71,7 +102,13 @@ def find_bapedge() -> str:
         os.path.abspath(binary_name),
     ]
     for c in candidates:
-        if c and os.path.isfile(c):
+        if c and os.path.isfile(c) and is_real_binary(c):
+            if sys.platform != "win32":
+                try:
+                    if not os.access(c, os.X_OK):
+                        os.chmod(c, 0o755)
+                except Exception:
+                    pass
             bin_dir = os.path.dirname(os.path.abspath(c))
             path_parts = os.environ.get("PATH", "").split(os.pathsep)
             if bin_dir and bin_dir not in path_parts:
@@ -83,8 +120,25 @@ def find_bapedge() -> str:
     found = shutil.which(binary_name)
     if found:
         found_abs = os.path.abspath(found)
-        if found_abs.lower() != curr_exe.lower() and "scripts" not in os.path.dirname(found_abs).lower():
+        if found_abs.lower() != curr_exe.lower() and is_real_binary(found_abs):
+            if sys.platform != "win32":
+                try:
+                    if not os.access(found_abs, os.X_OK):
+                        os.chmod(found_abs, 0o755)
+                except Exception:
+                    pass
             return found_abs
+
+    # Fallback to package bundled binary if available
+    pkg_bin = os.path.join(pkg_dir, "bin", plat_id, binary_name)
+    if os.path.isfile(pkg_bin):
+        if sys.platform != "win32":
+            try:
+                if not os.access(pkg_bin, os.X_OK):
+                    os.chmod(pkg_bin, 0o755)
+            except Exception:
+                pass
+        return pkg_bin
 
     return candidates[0]
 
@@ -94,7 +148,13 @@ def bapedge_proxy():
     via Python's Scripts directory.
     """
     bapedge = find_bapedge()
-    if os.path.isfile(bapedge):
+    if os.path.isfile(bapedge) and is_real_binary(bapedge):
+        if sys.platform != "win32":
+            try:
+                if not os.access(bapedge, os.X_OK):
+                    os.chmod(bapedge, 0o755)
+            except Exception:
+                pass
         sys.exit(subprocess.call([bapedge] + sys.argv[1:]))
     else:
         print("[!] bapedge binary not found in standard user paths (~/bin, %LOCALAPPDATA%\\BAP\\bin).")

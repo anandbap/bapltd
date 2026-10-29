@@ -289,5 +289,68 @@ class TestBAPInstallMultiPlatform(unittest.TestCase):
         bap_install.safe_remove_file(dst_file)
         self.assertFalse(os.path.isfile(dst_file))
 
+    def test_clean_stale_secondary_installations_preserves_pip_scripts(self):
+        """Verify clean_stale_secondary_installations preserves pip-installed Python entry points (bap, bapedge)."""
+        secondary_dir = os.path.join(self.temp_dir, ".local", "bin")
+        os.makedirs(secondary_dir, exist_ok=True)
+        
+        # Simulate pip-installed console scripts in ~/.local/bin
+        pip_bap = os.path.join(secondary_dir, "bap")
+        with open(pip_bap, "w", encoding="utf-8") as f:
+            f.write("#!/usr/bin/env python3\nfrom bap.cli import main\nmain()\n")
+
+        pip_bapedge = os.path.join(secondary_dir, "bapedge")
+        with open(pip_bapedge, "w", encoding="utf-8") as f:
+            f.write("#!/usr/bin/env python3\nfrom bap.cli import bapedge_proxy\nbapedge_proxy()\n")
+
+        # Also create a stale compiled binary that SHOULD be removed
+        stale_interceptor = os.path.join(secondary_dir, "interceptor")
+        with open(stale_interceptor, "wb") as f:
+            f.write(b"\x7fELFfakebinarydata")
+
+        # Temporarily mock get_all_bap_candidate_dirs to include secondary_dir
+        with patch("scripts.bap_install.get_all_bap_candidate_dirs", return_value=[self.install_dir, secondary_dir]):
+            with patch.dict(os.environ, {"BAP_ALLOW_TEST_PURGE": "1"}):
+                bap_install.clean_stale_secondary_installations(self.install_dir)
+
+        # bap and bapedge python scripts MUST be preserved
+        self.assertTrue(os.path.isfile(pip_bap), "clean_stale_secondary_installations wiped pip entrypoint 'bap'!")
+        self.assertTrue(os.path.isfile(pip_bapedge), "clean_stale_secondary_installations wiped pip entrypoint 'bapedge'!")
+        # Stale compiled binary MUST be cleaned
+        self.assertFalse(os.path.isfile(stale_interceptor), "Stale binary was not cleaned!")
+
+    def test_install_core_binaries_deploys_bap_wrapper(self):
+        """Verify install_core_binaries deploys bap wrapper across Unix and Windows platforms."""
+        for sys_plat in ["darwin", "linux", "win32"]:
+            test_bin = os.path.join(self.temp_dir, f"bin_{sys_plat}")
+            os.makedirs(test_bin, exist_ok=True)
+            with patch("sys.platform", sys_plat):
+                bap_install.install_core_binaries(test_bin)
+                bap_wrapper = os.path.join(test_bin, "bap")
+                self.assertTrue(os.path.isfile(bap_wrapper), f"bap wrapper missing in {test_bin} on {sys_plat}")
+                if sys_plat == "win32":
+                    self.assertTrue(os.path.isfile(os.path.join(test_bin, "bap.cmd")))
+
+    def test_find_bapedge_skips_python_shims(self):
+        """Verify find_bapedge in bap.cli distinguishes compiled native binaries from Python script shims."""
+        from bap import cli as bap_cli
+        shim_dir = os.path.join(self.temp_dir, "shim_bin")
+        real_dir = os.path.join(self.temp_dir, "real_bin")
+        os.makedirs(shim_dir, exist_ok=True)
+        os.makedirs(real_dir, exist_ok=True)
+
+        shim_edge = os.path.join(shim_dir, "bapedge")
+        with open(shim_edge, "w", encoding="utf-8") as f:
+            f.write("#!/usr/bin/env python3\nfrom bap.cli import bapedge_proxy\n")
+
+        real_edge = os.path.join(real_dir, "bapedge")
+        with open(real_edge, "wb") as f:
+            # macOS 64-bit Mach-O magic
+            f.write(b"\xcf\xfa\xed\xfe\x00\x00\x00\x00" + b"\x00" * 100)
+
+        self.assertFalse(bap_cli.is_real_binary(shim_edge))
+        with patch("sys.platform", "darwin"):
+            self.assertTrue(bap_cli.is_real_binary(real_edge))
+
 if __name__ == "__main__":
     unittest.main()
