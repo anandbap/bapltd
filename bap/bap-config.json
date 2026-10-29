@@ -5,11 +5,7 @@
   "trust_domain": "bap.internal",
   "environment": "production",
   "enforcement_mode": "enforce",
-  "capture_user_prompt": true,
-  "capture_agent_response": true,
-  "developer_features": true,
   "oidc": {
-    "enabled": true,
-    "provider": "google"
+    "enabled": false
   }
 }

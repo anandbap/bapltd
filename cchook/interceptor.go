@@ -1902,36 +1902,35 @@ func handleSessionEndHook(payload HookPayload) {
 
 	hookLog("handleSessionEndHook: session end hook triggered for session %s (agent pid %d)", sessionID, targetPID)
 
-	// 1. Notify control plane that the session has ended
-	if sessionID != "" && serverURL != "" {
-		endPayload := map[string]any{
-			"session_id": sessionID,
-			"reason":     "Claude Code session closed gracefully",
-		}
-		if body, err := json.Marshal(endPayload); err == nil {
-			client := getHTTPClient()
-			client.Timeout = 1500 * time.Millisecond
-			resp, err := client.Post(serverURL+"/api/v1/sessions/end", "application/json", bytes.NewReader(body))
-			if err == nil && resp != nil {
-				_ = resp.Body.Close()
-			}
-		}
+	// 1. Purge all local session markers and watchers immediately
+	cleanupSessionMarkers(sessionID, targetPID)
+	if targetPID != rawPPID {
+		cleanupSessionMarkers(sessionID, rawPPID)
 	}
 
-	// 2. Run bapedge session-end to invoke local state and backend teardown
+	// 2. Perform remote teardown asynchronously so the hook returns to Claude in <5ms without timeout/cancellation
 	ltdBin := findBinary("bapedge.exe")
 	if ltdBin == "" {
 		ltdBin = findBinary("bapedge")
 	}
 	if ltdBin != "" && sessionID != "" {
 		endCmd := exec.Command(ltdBin, "session-end", fmt.Sprintf("--server=%s", serverURL), fmt.Sprintf("--session-id=%s", sessionID))
-		_ = endCmd.Run()
-	}
-
-	// 3. Purge all local session markers and watchers
-	cleanupSessionMarkers(sessionID, targetPID)
-	if targetPID != rawPPID {
-		cleanupSessionMarkers(sessionID, rawPPID)
+		_ = endCmd.Start()
+	} else if sessionID != "" && serverURL != "" {
+		go func() {
+			endPayload := map[string]any{
+				"session_id": sessionID,
+				"reason":     "Claude Code session closed gracefully",
+			}
+			if body, err := json.Marshal(endPayload); err == nil {
+				client := getHTTPClient()
+				client.Timeout = 1500 * time.Millisecond
+				resp, err := client.Post(serverURL+"/api/v1/sessions/end", "application/json", bytes.NewReader(body))
+				if err == nil && resp != nil {
+					_ = resp.Body.Close()
+				}
+			}
+		}()
 	}
 
 	emitUniversalSuccess()

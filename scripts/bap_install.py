@@ -778,9 +778,8 @@ def configure_claude_code(claude_dir: str, cchook_bin: str, mcp_bin: str, bapedg
     claude_settings["hooks"]["Stop"] = [
         {"hooks": [interceptor_hook]}
     ]
-    claude_settings["hooks"]["SessionEnd"] = [
-        {"hooks": [interceptor_hook]}
-    ]
+    # Clean up legacy/duplicate SessionEnd hook so Claude Code does not abort with 'Hook cancelled' on exit
+    claude_settings["hooks"].pop("SessionEnd", None)
 
     with open(claude_settings_path, "w", encoding="utf-8") as f:
         json.dump(claude_settings, f, indent=2)
