@@ -35,14 +35,40 @@ func main() {
 			// Attempt to parse as JSON if it looks like JSON
 			if strings.HasPrefix(raw, "{") {
 				var payload struct {
-					Command string `json:"command"`
-					Input   string `json:"input"`
+					Command     string                 `json:"command"`
+					Cmd         string                 `json:"cmd"`
+					CommandLine string                 `json:"CommandLine"`
+					Input       string                 `json:"input"`
+					ToolInput   struct {
+						Command     string `json:"command"`
+						Cmd         string `json:"cmd"`
+						CommandLine string `json:"CommandLine"`
+					} `json:"tool_input"`
+					Args map[string]interface{} `json:"args"`
 				}
 				if err := json.Unmarshal(inputBytes, &payload); err == nil {
 					if payload.Command != "" {
 						command = payload.Command
-					} else {
+					} else if payload.Cmd != "" {
+						command = payload.Cmd
+					} else if payload.CommandLine != "" {
+						command = payload.CommandLine
+					} else if payload.ToolInput.Command != "" {
+						command = payload.ToolInput.Command
+					} else if payload.ToolInput.Cmd != "" {
+						command = payload.ToolInput.Cmd
+					} else if payload.ToolInput.CommandLine != "" {
+						command = payload.ToolInput.CommandLine
+					} else if payload.Input != "" {
 						command = payload.Input
+					} else if payload.Args != nil {
+						if c, ok := payload.Args["command"].(string); ok && c != "" {
+							command = c
+						} else if c, ok := payload.Args["CommandLine"].(string); ok && c != "" {
+							command = c
+						} else if c, ok := payload.Args["cmd"].(string); ok && c != "" {
+							command = c
+						}
 					}
 				}
 			}

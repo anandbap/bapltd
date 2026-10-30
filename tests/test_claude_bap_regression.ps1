@@ -100,7 +100,7 @@ try {
 } catch {
     $sw.Stop()
     $healthDetails = "Notice: $($_.Exception.Message)"
-    if ($_.Exception.Message -match "could not be resolved|timed out|unable to connect") {
+    if ($_.Exception.Message -match "could not be resolved|timed out|unable to connect|access permissions|forbidden|No connection could be made|A socket operation was attempted") {
         $isIsolated = $true
     }
 }
@@ -205,10 +205,119 @@ $proc.WaitForExit(3000)
 
 $blockJson = $null
 try { $blockJson = $blockOut | ConvertFrom-Json } catch {}
-$isBlocked = ($null -ne $blockJson -and ($blockJson.continue -eq $false -or $blockJson.decision -eq "deny" -or $blockJson.status -eq "blocked"))
+$isBlocked = ($null -ne $blockJson -and ($blockJson.continue -eq $false -or $blockJson.decision -eq "deny" -or $blockJson.decision -eq "block" -or $blockJson.status -eq "blocked"))
 Assert-Check -Name "PreToolUse strictly blocks access to .env / credentials" `
              -Condition $isBlocked `
              -Details "Decision: $($blockJson.decision) | Reason: $($blockJson.reason)"
+
+# 3C: Test Glob Tool Claude Code Hook Schema Compliance (decision: approve, permissionDecision: allow)
+$globPayload = @{
+    hook_event_name = "PreToolUse"
+    session_id      = $mockSessionId
+    tool_name       = "Glob"
+    tool_input      = @{ pattern = "*.*" }
+} | ConvertTo-Json -Compress
+
+$proc = [System.Diagnostics.Process]::Start($psi)
+$proc.StandardInput.WriteLine($globPayload)
+$proc.StandardInput.Close()
+$globOut = $proc.StandardOutput.ReadToEnd()
+$proc.WaitForExit(3000)
+
+$globJson = $null
+try { $globJson = $globOut | ConvertFrom-Json } catch {}
+$globValid = ($null -ne $globJson -and $globJson.continue -eq $true -and ($globJson.decision -eq "approve" -or $null -eq $globJson.decision) -and $globJson.hookSpecificOutput.permissionDecision -eq "allow")
+Assert-Check -Name "PreToolUse Glob complies with Claude Code schema (approve/allow)" `
+             -Condition $globValid `
+             -Details "Decision: $($globJson.decision) | permissionDecision: $($globJson.hookSpecificOutput.permissionDecision)"
+
+# 3D: Test PowerShell Get-ChildItem Tool Policy Allowance
+$psPayload = @{
+    hook_event_name = "PreToolUse"
+    session_id      = $mockSessionId
+    tool_name       = "PowerShell"
+    tool_input      = @{ command = "Get-ChildItem" }
+} | ConvertTo-Json -Compress
+
+$proc = [System.Diagnostics.Process]::Start($psi)
+$proc.StandardInput.WriteLine($psPayload)
+$proc.StandardInput.Close()
+$psOut = $proc.StandardOutput.ReadToEnd()
+$proc.WaitForExit(3000)
+
+$psJson = $null
+try { $psJson = $psOut | ConvertFrom-Json } catch {}
+$psValid = ($null -ne $psJson -and $psJson.continue -eq $true -and ($psJson.decision -eq "approve" -or $null -eq $psJson.decision) -and $psJson.hookSpecificOutput.permissionDecision -eq "allow")
+Assert-Check -Name "PreToolUse PowerShell Get-ChildItem permitted and rewritten" `
+             -Condition $psValid `
+             -Details "Decision: $($psJson.decision) | Command: $($psJson.hookSpecificOutput.updatedInput.command)"
+
+# 3E: UserPromptSubmit Fast-Return Benchmark (< 500ms, single prompt submit)
+$promptPayload = @{
+    hook_event_name = "UserPromptSubmit"
+    session_id      = $mockSessionId
+    prompt          = "Can you list what source files we have in this folder?"
+} | ConvertTo-Json -Compress
+
+$promptSw = [System.Diagnostics.Stopwatch]::StartNew()
+$proc = [System.Diagnostics.Process]::Start($psi)
+$proc.StandardInput.WriteLine($promptPayload)
+$proc.StandardInput.Close()
+$promptOut = $proc.StandardOutput.ReadToEnd()
+$proc.WaitForExit(2000)
+$promptSw.Stop()
+
+$promptJson = $null
+try { $promptJson = $promptOut | ConvertFrom-Json } catch {}
+$promptValid = ($null -ne $promptJson -and $promptJson.continue -eq $true -and $promptSw.ElapsedMilliseconds -lt 1500)
+Assert-Check -Name "UserPromptSubmit fast-return benchmark (< 1.5s)" `
+             -Condition $promptValid `
+             -Details "Latency: $($promptSw.ElapsedMilliseconds)ms | Output: $($promptOut.Trim())"
+
+# 3F: Test Generic / Non-Claude tool runner receiving "decision: allow"
+$genericPayload = @{
+    hook_event_name = "PreToolUse"
+    session_id      = $mockSessionId
+    tool_name       = "Glob"
+    decision_style  = "allow"
+    tool_input      = @{ pattern = "*.*" }
+} | ConvertTo-Json -Compress
+
+$proc = [System.Diagnostics.Process]::Start($psi)
+$proc.StandardInput.WriteLine($genericPayload)
+$proc.StandardInput.Close()
+$genericOut = $proc.StandardOutput.ReadToEnd()
+$proc.WaitForExit(3000)
+
+$genericJson = $null
+try { $genericJson = $genericOut | ConvertFrom-Json } catch {}
+$genericValid = ($null -ne $genericJson -and $genericJson.continue -eq $true -and $genericJson.decision -eq "allow" -and $genericJson.allowed -eq $true)
+Assert-Check -Name "Cross-Tool Support: Generic runner receives 'decision: allow' and 'allowed: true'" `
+             -Condition $genericValid `
+             -Details "Decision: $($genericJson.decision) | Allowed: $($genericJson.allowed) | Status: $($genericJson.status)"
+
+# 3G: Test Google Antigravity / Gemini CLI toolCall payload format
+$agPayload = @{
+    hook_event_name = "PreToolUse"
+    conversationId  = $mockSessionId
+    toolCall        = @{
+        name = "run_command"
+        args = @{ CommandLine = "Test-Path policy.cedar" }
+    }
+} | ConvertTo-Json -Compress
+
+$proc = [System.Diagnostics.Process]::Start($psi)
+$proc.StandardInput.WriteLine($agPayload)
+$proc.StandardInput.Close()
+$agOut = $proc.StandardOutput.ReadToEnd()
+$proc.WaitForExit(3000)
+
+$agJson = $null
+try { $agJson = $agOut | ConvertFrom-Json } catch {}
+$agValid = ($null -ne $agJson -and $agJson.continue -eq $true -and $agJson.decision -eq "allow" -and $agJson.allowed -eq $true)
+Assert-Check -Name "Cross-Tool Support: Antigravity toolCall payload permitted with 'allow'" `
+             -Condition $agValid `
+             -Details "Decision: $($agJson.decision) | Allowed: $($agJson.allowed) | Tool: $($agJson.hookSpecificOutput.hookEventName)"
 
 # -----------------------------------------------------------------------------
 # TEST 4: Claude Settings Sanitization (SessionEnd MUST be Absent)

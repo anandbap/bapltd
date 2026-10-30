@@ -102,7 +102,7 @@ func inspectCallerProcess(pid int) CallerProcessInfo {
 
 		baseLower := strings.ToLower(info.BinaryName)
 		switch {
-		case strings.Contains(baseLower, "claude") || strings.Contains(baseLower, "node"):
+		case isClaudeApp(baseLower) || strings.Contains(baseLower, "node"):
 			info.AppID = "claude-code"
 		case strings.Contains(baseLower, "antigravity"):
 			info.AppID = "antigravity"
@@ -122,6 +122,23 @@ func inspectCallerProcess(pid int) CallerProcessInfo {
 	return info
 }
 
+// isClaudeApp checks if a process name, command, app ID, or starter script refers to Claude Code,
+// Claude IDE, Claude Code CLI, Claude Code plugin, or Claude Desktop.
+func isClaudeApp(s string) bool {
+	lower := strings.ToLower(strings.TrimSpace(s))
+	if lower == "" {
+		return false
+	}
+	if lower == "cc" {
+		return true
+	}
+	clean := strings.ReplaceAll(lower, "-", "")
+	clean = strings.ReplaceAll(clean, "_", "")
+	clean = strings.ReplaceAll(clean, " ", "")
+	clean = strings.ReplaceAll(clean, ".", "")
+	return strings.Contains(clean, "claude")
+}
+
 // processStem lower-cases a process name and drops a trailing .exe so "bash.exe" and "bash"
 // are treated alike.
 func processStem(exeName string) string {
@@ -137,14 +154,15 @@ func isTransientShell(exeName string) bool {
 	}
 }
 
-// isClaudeBinary matches the per-session Claude Code process (claude / claude.exe).
+// isClaudeBinary matches the per-session Claude Code process (claude, claudecode, claude-code, etc.)
+// Claude IDE, Claude Code CLI, Claude plugin, or starter scripts.
 func isClaudeBinary(exeName string) bool {
-	return strings.Contains(processStem(exeName), "claude")
+	return isClaudeApp(processStem(exeName))
 }
 
 func isAgentBinary(exeName string) bool {
 	lower := strings.ToLower(exeName)
-	return strings.Contains(lower, "claude") ||
+	return isClaudeApp(lower) ||
 		strings.Contains(lower, "node") ||
 		strings.Contains(lower, "bun") ||
 		strings.Contains(lower, "antigravity") ||
@@ -228,7 +246,7 @@ func resolveAgentProcess(initialPID int) (int, CallerProcessInfo) {
 
 	baseLower := strings.ToLower(bestInfo.BinaryName)
 	switch {
-	case strings.Contains(baseLower, "claude"):
+	case isClaudeApp(baseLower):
 		bestInfo.AppID = "claude-code"
 	case strings.Contains(baseLower, "node") || strings.Contains(baseLower, "bun"):
 		if bestInfo.AppID == "" || bestInfo.AppID == "node" || bestInfo.AppID == "bun" {
@@ -246,6 +264,13 @@ func resolveAgentProcess(initialPID int) (int, CallerProcessInfo) {
 		if bestInfo.AppID == "" || isTransientShell(bestInfo.BinaryName) {
 			bestInfo.AppID = "claude-code"
 		}
+	}
+
+	// Recognize starter scripts, Claude IDE, Claude plugin, or explicit LTD_SOURCE / BAP_SOURCE
+	if isClaudeApp(os.Getenv("LTD_SOURCE")) || isClaudeApp(os.Getenv("BAP_SOURCE")) ||
+		isClaudeApp(os.Getenv("CLAUDE_CODE_ENTRYPOINT")) || os.Getenv("CLAUDE_IDE") != "" ||
+		os.Getenv("CLAUDE_PLUGIN") != "" {
+		bestInfo.AppID = "claude-code"
 	}
 
 	return bestPID, bestInfo
@@ -743,9 +768,16 @@ func getHTTPClient() *http.Client {
 // ToolInput represents the input object from Claude Code.
 // Supports both command-execution (Bash) and direct file tools (Read, View, Edit, Write).
 type ToolInput struct {
-	Command  string `json:"command,omitempty"`
-	FilePath string `json:"file_path,omitempty"`
-	Path     string `json:"path,omitempty"`
+	Command       string `json:"command,omitempty"`
+	Cmd           string `json:"cmd,omitempty"`
+	CommandLine   string `json:"CommandLine,omitempty"`
+	Script        string `json:"script,omitempty"`
+	FilePath      string `json:"file_path,omitempty"`
+	FilePathCamel string `json:"filePath,omitempty"`
+	Path          string `json:"path,omitempty"`
+	File          string `json:"file,omitempty"`
+	Target        string `json:"target,omitempty"`
+	TargetPath    string `json:"targetPath,omitempty"`
 }
 
 // AntigravityToolCall represents toolCall structure in Antigravity hook payloads.
@@ -754,15 +786,34 @@ type AntigravityToolCall struct {
 	Args map[string]interface{} `json:"args,omitempty"`
 }
 
-// HookPayload represents the Claude Code and Antigravity lifecycle event payload.
+// HookPayload represents the Claude Code, Antigravity, Codex, Copilot, and generic lifecycle event payload.
 type HookPayload struct {
-	HookEventName   string    `json:"hook_event_name"`
-	ToolName        string    `json:"tool_name,omitempty"`
-	ToolInput       ToolInput `json:"tool_input,omitempty"`
-	UserPrompt      string    `json:"user_prompt,omitempty"`
-	UserPromptCamel string    `json:"userPrompt,omitempty"`
-	Prompt          string    `json:"prompt,omitempty"`
-	SessionID       string    `json:"session_id,omitempty"`
+	HookEventName      string                 `json:"hook_event_name"`
+	EventName          string                 `json:"event_name,omitempty"`
+	Event              string                 `json:"event,omitempty"`
+	Type               string                 `json:"type,omitempty"`
+	ToolName           string                 `json:"tool_name,omitempty"`
+	ToolNameCamel      string                 `json:"toolName,omitempty"`
+	Tool               string                 `json:"tool,omitempty"`
+	Name               string                 `json:"name,omitempty"`
+	ToolInput          ToolInput              `json:"tool_input,omitempty"`
+	ToolInputCamel     *ToolInput             `json:"toolInput,omitempty"`
+	Input              *ToolInput             `json:"input,omitempty"`
+	Args               map[string]interface{} `json:"args,omitempty"`
+	Arguments          map[string]interface{} `json:"arguments,omitempty"`
+	Parameters         map[string]interface{} `json:"parameters,omitempty"`
+	UserPrompt         string                 `json:"user_prompt,omitempty"`
+	UserPromptCamel    string                 `json:"userPrompt,omitempty"`
+	Prompt             string                 `json:"prompt,omitempty"`
+	SessionID          string                 `json:"session_id,omitempty"`
+	SessionIDCamel     string                 `json:"sessionId,omitempty"`
+	Session            string                 `json:"session,omitempty"`
+	DecisionStyle      string                 `json:"decision_style,omitempty"`
+	DecisionStyleCamel string                 `json:"decisionStyle,omitempty"`
+	Format             string                 `json:"format,omitempty"`
+	Source             string                 `json:"source,omitempty"`
+	AppID              string                 `json:"app_id,omitempty"`
+	AppIDCamel         string                 `json:"appId,omitempty"`
 
 	// Antigravity lifecycle fields (supports both camelCase and snake_case)
 	ConversationID      string               `json:"conversationId,omitempty"`
@@ -783,15 +834,150 @@ type HookSpecificOutput struct {
 	UpdatedInput             *ToolInput `json:"updatedInput,omitempty"`
 }
 
-// HookResponse is the top-level response expected by Claude Code and Codex.
+// HookResponse is the top-level response expected by Claude Code, Codex, Antigravity, and generic tool runners.
 type HookResponse struct {
-	Status             string             `json:"status,omitempty"`
-	Continue           *bool              `json:"continue,omitempty"`
-	StopReason         string             `json:"stopReason,omitempty"`
-	SystemMessage      string             `json:"systemMessage,omitempty"`
-	Decision           string             `json:"decision,omitempty"`
+	Status             string             `json:"status,omitempty"`             // "ok", "blocked" (UniversalHookResponse)
+	Continue           *bool              `json:"continue,omitempty"`           // true / false (Codex / universal)
+	StopReason         string             `json:"stopReason,omitempty"`         // Claude Code
+	SystemMessage      string             `json:"systemMessage,omitempty"`      // Claude Code
+	Decision           string             `json:"decision,omitempty"`           // "approve" | "block" for Claude; "allow" | "deny" for generic tools
+	Allowed            *bool              `json:"allowed,omitempty"`            // Universal boolean: true / false
+	PermissionDecision string             `json:"permissionDecision,omitempty"` // Direct flat alias: "allow" / "deny"
 	Reason             string             `json:"reason,omitempty"`
+	UpdatedInput       *ToolInput         `json:"updatedInput,omitempty"`       // Direct flat alias for generic runners
 	HookSpecificOutput HookSpecificOutput `json:"hookSpecificOutput"`
+}
+
+var (
+	activeDecisionStyle string
+	activeCallerAppID   string
+)
+
+// normalizeHookPayload ensures all tool runner variants (Claude Code, Antigravity, Copilot, Codex, etc.)
+// map cleanly to normalized fields regardless of casing or schema differences.
+func normalizeHookPayload(payload *HookPayload) {
+	if payload == nil {
+		return
+	}
+	// Normalize HookEventName
+	if payload.HookEventName == "" {
+		if payload.EventName != "" {
+			payload.HookEventName = payload.EventName
+		} else if payload.Event != "" {
+			payload.HookEventName = payload.Event
+		} else if payload.Type != "" {
+			payload.HookEventName = payload.Type
+		}
+	}
+	// Normalize ToolName
+	if payload.ToolName == "" {
+		if payload.ToolNameCamel != "" {
+			payload.ToolName = payload.ToolNameCamel
+		} else if payload.Tool != "" {
+			payload.ToolName = payload.Tool
+		} else if payload.Name != "" {
+			payload.ToolName = payload.Name
+		}
+	}
+	// Normalize ToolInput Command
+	if payload.ToolInput.Command == "" {
+		if payload.ToolInput.Cmd != "" {
+			payload.ToolInput.Command = payload.ToolInput.Cmd
+		} else if payload.ToolInput.CommandLine != "" {
+			payload.ToolInput.Command = payload.ToolInput.CommandLine
+		} else if payload.ToolInput.Script != "" {
+			payload.ToolInput.Command = payload.ToolInput.Script
+		} else if payload.ToolInputCamel != nil && payload.ToolInputCamel.Command != "" {
+			payload.ToolInput = *payload.ToolInputCamel
+		} else if payload.Input != nil && payload.Input.Command != "" {
+			payload.ToolInput = *payload.Input
+		} else if payload.Args != nil {
+			if c, ok := payload.Args["command"].(string); ok && c != "" {
+				payload.ToolInput.Command = c
+			} else if c, ok := payload.Args["CommandLine"].(string); ok && c != "" {
+				payload.ToolInput.Command = c
+			} else if c, ok := payload.Args["cmd"].(string); ok && c != "" {
+				payload.ToolInput.Command = c
+			}
+		} else if payload.Arguments != nil {
+			if c, ok := payload.Arguments["command"].(string); ok && c != "" {
+				payload.ToolInput.Command = c
+			} else if c, ok := payload.Arguments["CommandLine"].(string); ok && c != "" {
+				payload.ToolInput.Command = c
+			} else if c, ok := payload.Arguments["cmd"].(string); ok && c != "" {
+				payload.ToolInput.Command = c
+			}
+		} else if payload.Parameters != nil {
+			if c, ok := payload.Parameters["command"].(string); ok && c != "" {
+				payload.ToolInput.Command = c
+			} else if c, ok := payload.Parameters["CommandLine"].(string); ok && c != "" {
+				payload.ToolInput.Command = c
+			} else if c, ok := payload.Parameters["cmd"].(string); ok && c != "" {
+				payload.ToolInput.Command = c
+			}
+		}
+	}
+	// Normalize ToolInput FilePath
+	if payload.ToolInput.FilePath == "" {
+		if payload.ToolInput.FilePathCamel != "" {
+			payload.ToolInput.FilePath = payload.ToolInput.FilePathCamel
+		} else if payload.ToolInput.Path != "" {
+			payload.ToolInput.FilePath = payload.ToolInput.Path
+		} else if payload.ToolInput.File != "" {
+			payload.ToolInput.FilePath = payload.ToolInput.File
+		} else if payload.ToolInput.Target != "" {
+			payload.ToolInput.FilePath = payload.ToolInput.Target
+		} else if payload.ToolInput.TargetPath != "" {
+			payload.ToolInput.FilePath = payload.ToolInput.TargetPath
+		} else if payload.Args != nil {
+			if f, ok := payload.Args["file_path"].(string); ok && f != "" {
+				payload.ToolInput.FilePath = f
+			} else if f, ok := payload.Args["filePath"].(string); ok && f != "" {
+				payload.ToolInput.FilePath = f
+			} else if f, ok := payload.Args["path"].(string); ok && f != "" {
+				payload.ToolInput.FilePath = f
+			}
+		}
+	}
+	// Normalize SessionID
+	if payload.SessionID == "" {
+		if payload.SessionIDCamel != "" {
+			payload.SessionID = payload.SessionIDCamel
+		} else if payload.Session != "" {
+			payload.SessionID = payload.Session
+		} else if payload.ConversationID != "" {
+			payload.SessionID = payload.ConversationID
+		}
+	}
+	// Normalize UserPrompt
+	if payload.UserPrompt == "" {
+		if payload.UserPromptCamel != "" {
+			payload.UserPrompt = payload.UserPromptCamel
+		} else if payload.Prompt != "" {
+			payload.UserPrompt = payload.Prompt
+		}
+	}
+	// Normalize DecisionStyle / Format
+	if payload.DecisionStyle == "" {
+		if payload.DecisionStyleCamel != "" {
+			payload.DecisionStyle = payload.DecisionStyleCamel
+		} else if payload.Format != "" {
+			payload.DecisionStyle = payload.Format
+		}
+	}
+	// Normalize AppID
+	if payload.AppID == "" {
+		if payload.AppIDCamel != "" {
+			payload.AppID = payload.AppIDCamel
+		} else if payload.Source != "" {
+			payload.AppID = payload.Source
+		} else if payload.ToolCall != nil || payload.ConversationID != "" {
+			payload.AppID = "antigravity"
+		}
+	}
+	if isClaudeApp(payload.AppID) {
+		payload.AppID = "claude-code"
+	}
 }
 
 // ExecResponse represents the JSON output from ltd-agent / bapedge exec or check.
@@ -827,7 +1013,7 @@ func unwrapBrokerCommand(command, expectedSessionID string) (string, bool, error
 			return rawInner, false, nil
 		}
 	}
-	validSource := len(fields) > 3 && (fields[3] == "claude-code" || fields[3] == "copilot" || fields[3] == "antigravity" || fields[3] == "codex")
+	validSource := len(fields) > 3 && (isClaudeApp(fields[3]) || fields[3] == "copilot" || fields[3] == "antigravity" || fields[3] == "codex" || fields[3] == "cursor")
 	if len(fields) != 8 || fields[1] != "exec" || fields[2] != "--source" || !validSource || fields[4] != "--session-id" || fields[6] != "--cmd-b64" {
 		return "", true, fmt.Errorf("untrusted BAPEdge invocation: expected the broker-owned exec wrapper")
 	}
@@ -1178,7 +1364,9 @@ func extractCommandTarget(cmd string) string {
 func isSafeFileTool(toolLower string) bool {
 	return toolLower == "read" || toolLower == "view" || toolLower == "edit" || toolLower == "write" ||
 		toolLower == "read_file" || toolLower == "view_file" || toolLower == "write_file" ||
-		toolLower == "edit_file" || toolLower == "replace_file_content"
+		toolLower == "edit_file" || toolLower == "replace_file_content" ||
+		toolLower == "show_file" || toolLower == "get_file" || toolLower == "create_file" ||
+		toolLower == "delete_file" || toolLower == "patch" || toolLower == "str_replace_editor"
 }
 
 func isSafeSubagentOrInspectionTool(toolLower string) bool {
@@ -1195,7 +1383,11 @@ func isSafeSubagentOrInspectionTool(toolLower string) bool {
 func isShellTool(toolLower string) bool {
 	return toolLower == "bash" || toolLower == "sh" || toolLower == "terminal" ||
 		toolLower == "command" || toolLower == "execute" || toolLower == "run_command" ||
-		toolLower == "shell" || toolLower == ""
+		toolLower == "shell" || toolLower == "powershell" || toolLower == "pwsh" ||
+		toolLower == "cmd" || strings.Contains(toolLower, "shell") ||
+		strings.Contains(toolLower, "terminal") || strings.Contains(toolLower, "command") ||
+		strings.HasPrefix(toolLower, "exec") || strings.HasPrefix(toolLower, "run_") ||
+		toolLower == ""
 }
 
 func isProtectedBAPAsset(pathStr string) bool {
@@ -2257,10 +2449,15 @@ func handleUserPromptHook(payload HookPayload) {
 	}
 	capturePrompt := shouldCaptureUserPrompt()
 
-	// Gather all prompts if transcript is available so historical backlog is synced
+	// Gather prompt to send: if the prompt was passed in the hook payload, send only that
+	// prompt. Only fall back to transcript extraction if prompt text was empty.
 	var promptsToSend []string
-	if tPath != "" || payload.ConversationID != "" {
-		promptsToSend = allUserPrompts(tPath, payload.ConversationID)
+	if prompt != "" {
+		promptsToSend = []string{prompt}
+	} else if tPath != "" || payload.ConversationID != "" {
+		if latest := lastUserPromptText(tPath, payload.ConversationID); latest != "" {
+			promptsToSend = []string{latest}
+		}
 	}
 	if len(promptsToSend) == 0 && prompt != "" {
 		promptsToSend = []string{prompt}
@@ -2296,7 +2493,7 @@ func handleUserPromptHook(payload HookPayload) {
 			reqBody, _ := json.Marshal(request)
 			spoolPath := spoolPrompt(sessionID, reqBody)
 			client := getHTTPClient()
-			client.Timeout = 3500 * time.Millisecond
+			client.Timeout = 1200 * time.Millisecond
 			resp, err := client.Post(serverURL+"/api/v1/sessions/prompt", "application/json", bytes.NewReader(reqBody))
 			if err != nil || resp == nil {
 				hookLog("prompt delivery deferred to spool (session %s): %v", sessionID, err)
@@ -2349,6 +2546,17 @@ func main() {
 		if (arg == "--event" || arg == "-event") && i+1 < len(os.Args) {
 			payload.HookEventName = os.Args[i+1]
 		}
+		if (arg == "--decision-style" || arg == "-decision-style" || arg == "--format" || arg == "-format") && i+1 < len(os.Args) {
+			payload.DecisionStyle = os.Args[i+1]
+		}
+	}
+
+	normalizeHookPayload(&payload)
+	if payload.DecisionStyle != "" {
+		activeDecisionStyle = payload.DecisionStyle
+	}
+	if payload.AppID != "" {
+		activeCallerAppID = payload.AppID
 	}
 
 	// Normalize Antigravity fields if present
@@ -2399,6 +2607,9 @@ func main() {
 	sessionID := resolveSessionID(payload)
 	ppid := os.Getppid()
 	targetPID, caller := resolveAgentProcess(ppid)
+	if activeCallerAppID == "" {
+		activeCallerAppID = caller.AppID
+	}
 	if sessionID == "" {
 		sessionID = fmt.Sprintf("sess-%s-pid-%d", caller.AppID, targetPID)
 	}
@@ -2820,24 +3031,75 @@ func findBinary(name string) string {
 }
 
 // outputDecisionWithUpdatedInput prints formatted JSON response to stdout matching Claude Code PreToolUse schema,
-// optionally supplying updatedInput to rewrite the tool call parameters (e.g. wrapping execution in BAPEdge broker).
+// or generic tool runner schema depending on caller identity and requested decision style.
 func outputDecisionWithUpdatedInput(decision, reason, context string, updatedInput *ToolInput) {
+	// If updatedInput has command, mirror across alternate tool input aliases
+	if updatedInput != nil {
+		if updatedInput.Command != "" {
+			if updatedInput.Cmd == "" {
+				updatedInput.Cmd = updatedInput.Command
+			}
+			if updatedInput.CommandLine == "" {
+				updatedInput.CommandLine = updatedInput.Command
+			}
+		}
+		if updatedInput.FilePath != "" {
+			if updatedInput.Path == "" {
+				updatedInput.Path = updatedInput.FilePath
+			}
+			if updatedInput.FilePathCamel == "" {
+				updatedInput.FilePathCamel = updatedInput.FilePath
+			}
+		}
+	}
+
 	resp := HookResponse{
 		HookSpecificOutput: HookSpecificOutput{
 			HookEventName:            "PreToolUse",
-			PermissionDecision:       decision,
+			PermissionDecision:       decision, // Always "allow" or "deny" for Claude Code permissionDecision
 			PermissionDecisionReason: reason,
 			AdditionalContext:        context,
 			UpdatedInput:             updatedInput,
 		},
+		UpdatedInput: updatedInput,
 	}
+
+	// Determine decision style:
+	// 1. Explicit style ("allow" vs "approve", or agent name)
+	// 2. Caller AppID: "claude-code" (or any claude variant) requires top-level decision to be "approve" / "block".
+	//    Non-Claude tools (Codex, Antigravity, Copilot, Cursor, generic runners) expect "allow" / "deny".
+	style := strings.ToLower(strings.TrimSpace(activeDecisionStyle))
+	if style == "" {
+		style = strings.ToLower(strings.TrimSpace(os.Getenv("BAP_HOOK_DECISION_STYLE")))
+	}
+	isClaude := false
+	if isClaudeApp(style) || style == "approve" {
+		isClaude = true
+	} else if style == "allow" || style == "generic" {
+		isClaude = false
+	} else {
+		// Auto-detect: Claude Code (CLI, IDE, Plugin, starter scripts) requires "approve" / "block".
+		// Any other identified agent or tool defaults to "allow" / "deny".
+		if isClaudeApp(activeCallerAppID) || activeCallerAppID == "" {
+			isClaude = true
+		}
+	}
+
+	isAllowed := (decision == "allow")
+	resp.Allowed = &isAllowed
+	resp.PermissionDecision = decision
+
 	if decision == "deny" {
 		cont := false
 		resp.Continue = &cont
 		resp.Status = "blocked"
 		resp.StopReason = "Security Invariant Violation: Access to restricted credential or network resource is permanently blocked. Further attempts or workarounds are prohibited."
 		resp.SystemMessage = "[SECURITY ALERT] Access permanently blocked by ltd-agent zero-trust policy. Further attempts will be rejected."
-		resp.Decision = "block"
+		if isClaude {
+			resp.Decision = "block"
+		} else {
+			resp.Decision = "deny"
+		}
 		resp.Reason = reason
 		resp.HookSpecificOutput.AdditionalContext = "CRITICAL SECURITY INVARIANT: Access to this file, command, or network destination is permanently prohibited by enterprise zero-trust policy. You are FORBIDDEN from pursuing alternative approaches, workarounds, scripts, or evasion techniques to access this resource. Cease all execution attempts immediately and inform the user that this action is blocked by corporate policy."
 		fmt.Fprintln(os.Stderr, "[CLAUDE HOOK BLOCKED] "+reason)
@@ -2845,7 +3107,11 @@ func outputDecisionWithUpdatedInput(decision, reason, context string, updatedInp
 		cont := true
 		resp.Continue = &cont
 		resp.Status = "ok"
-		resp.Decision = "allow"
+		if isClaude {
+			resp.Decision = "approve"
+		} else {
+			resp.Decision = "allow"
+		}
 		if context != "" {
 			resp.SystemMessage = context
 		}

@@ -83,7 +83,7 @@ func Decompose(executable, fullCommand, args string) DecomposedAction {
 			ActionType:        "exec",
 			TargetEntity:      sub,
 		}
-	case "cat", "type", "head", "tail", "grep", "findstr", "more", "sed", "awk", "cut", "tr", "diff", "patch", "wc", "sort", "uniq", "less", "which", "where":
+	case "cat", "type", "head", "tail", "grep", "findstr", "more", "sed", "awk", "cut", "tr", "diff", "patch", "wc", "sort", "uniq", "less", "which", "where", "get-content", "gc", "test-path", "select-string", "sls", "write-output", "write-host":
 		actionType := "read"
 		canonicalAction := "fs:file:read"
 		if exec == "sed" {
@@ -102,7 +102,7 @@ func Decompose(executable, fullCommand, args string) DecomposedAction {
 			ActionType:        actionType,
 			TargetEntity:      target,
 		}
-	case "ls", "dir", "find":
+	case "ls", "dir", "find", "get-childitem", "gci":
 		target := extractFirstFileTarget(tokens)
 		if target == "." || target == "" {
 			target = "local"
@@ -113,7 +113,7 @@ func Decompose(executable, fullCommand, args string) DecomposedAction {
 			ActionType:        "read",
 			TargetEntity:      target,
 		}
-	case "rm", "del", "unlink", "rmdir":
+	case "rm", "del", "unlink", "rmdir", "remove-item", "ri", "erase":
 		target := extractFirstFileTarget(tokens)
 		return DecomposedAction{
 			CanonicalAction:   "fs:file:delete",
@@ -121,7 +121,7 @@ func Decompose(executable, fullCommand, args string) DecomposedAction {
 			ActionType:        "delete",
 			TargetEntity:      target,
 		}
-	case "cp", "mv", "copy", "move", "mkdir", "touch":
+	case "cp", "mv", "copy", "move", "mkdir", "touch", "copy-item", "cpi", "move-item", "mi", "new-item", "ni", "set-content", "sc", "add-content", "ac", "out-file":
 		target := extractFirstFileTarget(tokens)
 		return DecomposedAction{
 			CanonicalAction:   "fs:file:write",

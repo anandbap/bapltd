@@ -42,8 +42,9 @@ type ExecutionReceipt struct {
 
 // ExecResponse is output by the exec command.
 type ExecResponse struct {
-	Allowed      bool              `json:"allowed"`
-	Output       string            `json:"output,omitempty"`
+	Allowed           bool              `json:"allowed"`
+	Decision          string            `json:"decision,omitempty"`
+	Output            string            `json:"output,omitempty"`
 	ExitCode     int               `json:"exit_code"`
 	Reason       string            `json:"reason,omitempty"`
 	Suggestion   string            `json:"suggestion,omitempty"`

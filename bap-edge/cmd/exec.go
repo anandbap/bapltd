@@ -733,6 +733,7 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 	if ec.shadowDenied {
 		decision = "shadow_deny"
 	}
+	resp.Decision = decision
 	uID, uEmail, spiffeID := resolveLocalIdentity()
 	uPrompt := ec.userPrompt
 	if uPrompt == "" {
@@ -861,8 +862,15 @@ func RunExec(args []string) {
 	if callerHash == "" {
 		callerHash = discoveredHash
 	}
-	if (*sourceFlag == "cli" || *sourceFlag == "") && (discoveredAppID == "claude-code" || discoveredAppID == "antigravity" || discoveredAppID == "copilot" || discoveredAppID == "cursor") {
-		*sourceFlag = discoveredAppID
+	if isClaudeSource(*sourceFlag) {
+		*sourceFlag = "claude-code"
+	}
+	if (*sourceFlag == "cli" || *sourceFlag == "") && (isClaudeSource(discoveredAppID) || discoveredAppID == "antigravity" || discoveredAppID == "copilot" || discoveredAppID == "cursor") {
+		if isClaudeSource(discoveredAppID) {
+			*sourceFlag = "claude-code"
+		} else {
+			*sourceFlag = discoveredAppID
+		}
 	}
 
 	if *sessionFlag == "" {
@@ -1564,7 +1572,7 @@ func resolveCallerLineage(parentPID int) (binaryPath, binaryHash, appID string) 
 		}
 		baseLower := strings.ToLower(filepath.Base(exePath))
 		switch {
-		case strings.Contains(baseLower, "claude"):
+		case isClaudeSource(baseLower):
 			appID = "claude-code"
 		case strings.Contains(baseLower, "antigravity"):
 			appID = "antigravity"
@@ -1577,4 +1585,20 @@ func resolveCallerLineage(parentPID int) (binaryPath, binaryHash, appID string) 
 		}
 	}
 	return
+}
+
+// isClaudeSource checks whether a source identifier, executable, or starter script maps to Claude Code.
+func isClaudeSource(s string) bool {
+	lower := strings.ToLower(strings.TrimSpace(s))
+	if lower == "" {
+		return false
+	}
+	if lower == "cc" {
+		return true
+	}
+	clean := strings.ReplaceAll(lower, "-", "")
+	clean = strings.ReplaceAll(clean, "_", "")
+	clean = strings.ReplaceAll(clean, " ", "")
+	clean = strings.ReplaceAll(clean, ".", "")
+	return strings.Contains(clean, "claude")
 }
