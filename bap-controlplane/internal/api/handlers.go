@@ -4234,7 +4234,7 @@ func redactedTelemetry(value any) any {
 		case map[string]any:
 			for key, item := range v {
 				switch key {
-				case "user_prompt", "agent_response", "prompt_hash", "user_id", "user_email", "owner_email", "session_id", "instance_id", "spiffe_id", "hostname", "prompt_summary":
+				case "user_prompt", "agent_response", "prompt_hash", "user_id", "user_email", "owner_email", "session_id", "instance_id", "resource_id", "spiffe_id", "workstation_spiffe_id", "session_svid", "hostname", "prompt_summary":
 					if item != "" && item != nil {
 						v[key] = "[Protected: Admin Authentication Required]"
 					}
