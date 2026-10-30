@@ -28,6 +28,8 @@ func Decompose(executable, fullCommand, args string) DecomposedAction {
 	if strings.HasPrefix(exec, "---") || strings.HasPrefix(exec, "===") ||
 		strings.HasPrefix(exec, "***") || strings.HasPrefix(exec, "###") ||
 		strings.HasPrefix(exec, "#") || strings.HasPrefix(exec, "//") ||
+		strings.HasPrefix(exec, "@") || strings.HasPrefix(exec, "{") ||
+		strings.Contains(exec, "=") || strings.HasPrefix(exec, "$") ||
 		strings.Contains(exec, " ") {
 		exec = "write-output"
 	}
@@ -98,7 +100,8 @@ func Decompose(executable, fullCommand, args string) DecomposedAction {
 			ActionType:        "exec",
 			TargetEntity:      sub,
 		}
-	case "cat", "type", "head", "tail", "grep", "findstr", "more", "sed", "awk", "cut", "tr", "diff", "patch", "wc", "sort", "uniq", "less", "which", "where", "get-content", "gc", "test-path", "select-string", "sls", "write-output", "write-host", "echo":
+	case "cat", "type", "head", "tail", "grep", "findstr", "more", "sed", "awk", "cut", "tr", "diff", "patch", "wc", "sort", "uniq", "less", "which", "where", "get-content", "gc", "test-path", "select-string", "sls", "write-output", "write-host", "echo",
+		"select-object", "where-object", "sort-object", "measure-object", "group-object", "out-string", "format-table", "ft", "format-list", "fl", "format-wide", "fw":
 		actionType := "read"
 		canonicalAction := "fs:file:read"
 		if exec == "sed" {

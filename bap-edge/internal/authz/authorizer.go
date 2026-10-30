@@ -295,6 +295,8 @@ func (a *Authorizer) evaluateAtomicNode(executable, fullCommand, args, workspace
 	normalizedExec := strings.ToLower(path.Base(strings.TrimSuffix(normExec, ".exe")))
 	if strings.HasPrefix(normalizedExec, "---") || strings.HasPrefix(normalizedExec, "===") ||
 		strings.HasPrefix(normalizedExec, "***") || strings.HasPrefix(normalizedExec, "###") ||
+		strings.HasPrefix(normalizedExec, "@") || strings.HasPrefix(normalizedExec, "{") ||
+		strings.Contains(normalizedExec, "=") || strings.HasPrefix(normalizedExec, "$") ||
 		strings.Contains(normalizedExec, " ") {
 		normalizedExec = "write-output"
 	}

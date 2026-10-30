@@ -419,6 +419,9 @@ func TestClaudeCodePowerShellExpressions(t *testing.T) {
 		`"Listing files:"; ls`,
 		`Write-Host "--- EXEs (recursive) ---"; Get-ChildItem -Filter *.exe -Recurse`,
 		`Get-ChildItem -Recurse -Filter *.exe | Select-Object FullName`,
+		`Get-ChildItem -Recurse -Filter *.exe | Select-Object Name, @{n="Size"; e={[math]::Round($_.Length/1MB,2)}}`,
+		`Get-ChildItem -Recurse *.exe | Format-Table Name, @{Label="Size"; Expression={[math]::Round($_.Length/1MB, 2)}}`,
+		`Get-ChildItem | Where-Object { $_.Length -gt 1MB; $_.Extension -eq ".exe" }`,
 		`C:\hostedtoolcache\windows\Python\3.11.9\x64\python.exe -c "print(1)"`,
 		`/opt/hostedtoolcache/python/3.11.9/x64/bin/python3 -m unittest discover tests`,
 	}

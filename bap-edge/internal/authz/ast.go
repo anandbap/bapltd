@@ -89,11 +89,13 @@ func ParseAST(fullCommand string) (*ASTPipeline, error) {
 			fullCmd = strings.Join(args, " ")
 
 			// Recognize PowerShell / script string literal expressions or decorative banners
-			// e.g. "--- EXEs (recursive) ---", "=== Status ===", or bare string output
+			// e.g. "--- EXEs (recursive) ---", "=== Status ===", calculated property hash tables @{...}, or bare string output
 			lowerExec := strings.ToLower(exec)
 			if strings.HasPrefix(lowerExec, "---") || strings.HasPrefix(lowerExec, "===") ||
 				strings.HasPrefix(lowerExec, "***") || strings.HasPrefix(lowerExec, "###") ||
 				strings.HasPrefix(lowerExec, "#") || strings.HasPrefix(lowerExec, "//") ||
+				strings.HasPrefix(lowerExec, "@") || strings.HasPrefix(lowerExec, "{") ||
+				strings.Contains(lowerExec, "=") || strings.HasPrefix(lowerExec, "$") ||
 				strings.Contains(exec, " ") ||
 				(len(args) == 1 && (strings.HasPrefix(fullCmd, "\"") || strings.HasPrefix(fullCmd, "'"))) {
 				exec = "write-output"
@@ -298,21 +300,44 @@ func tokenizeShell(cmd string) []token {
 
 		// Word token (executable, argument, or path)
 		var wordBuilder strings.Builder
+		braceDepth := 0
+		parenDepth := 0
+		bracketDepth := 0
+
 		for i < n {
 			c := runes[i]
-			if unicode.IsSpace(c) {
-				break
+
+			// Only break if we are at top level (not inside braces, parens, brackets)
+			if braceDepth == 0 && parenDepth == 0 && bracketDepth == 0 {
+				if unicode.IsSpace(c) {
+					break
+				}
+				if c == '&' || c == '|' || c == ';' || c == '>' || c == '<' {
+					break
+				}
 			}
-			if c == '&' || c == '|' || c == ';' || c == '>' || c == '<' {
-				// Stop if not preceded by escape or in quotes
-				break
+
+			// Track nesting delimiters (scriptblocks, hashtables @{}, subshells (), arrays [])
+			if c == '{' {
+				braceDepth++
+			} else if c == '}' && braceDepth > 0 {
+				braceDepth--
+			} else if c == '(' {
+				parenDepth++
+			} else if c == ')' && parenDepth > 0 {
+				parenDepth--
+			} else if c == '[' {
+				bracketDepth++
+			} else if c == ']' && bracketDepth > 0 {
+				bracketDepth--
 			}
 
 			if c == '\\' {
 				if i+1 < n {
 					next := runes[i+1]
 					if next == '\\' || next == '"' || next == '\'' || next == ' ' || next == '\t' ||
-						next == '&' || next == '|' || next == ';' || next == '>' || next == '<' || next == '$' || next == '`' {
+						next == '&' || next == '|' || next == ';' || next == '>' || next == '<' || next == '$' || next == '`' ||
+						next == '{' || next == '}' || next == '(' || next == ')' || next == '[' || next == ']' {
 						wordBuilder.WriteRune(next)
 						i += 2
 						continue
@@ -324,23 +349,35 @@ func tokenizeShell(cmd string) []token {
 			}
 
 			if c == '\'' {
-				// Single quoted literal string (preserve content without escaping)
+				// Single quoted literal string
+				if braceDepth > 0 || parenDepth > 0 || bracketDepth > 0 {
+					wordBuilder.WriteRune(c)
+				}
 				i++
 				for i < n && runes[i] != '\'' {
 					wordBuilder.WriteRune(runes[i])
 					i++
 				}
 				if i < n && runes[i] == '\'' {
-					i++ // consume closing quote
+					if braceDepth > 0 || parenDepth > 0 || bracketDepth > 0 {
+						wordBuilder.WriteRune(runes[i])
+					}
+					i++
 				}
 				continue
 			}
 
 			if c == '"' {
 				// Double quoted string (preserves content, allows \" and nested substitutions)
+				if braceDepth > 0 || parenDepth > 0 || bracketDepth > 0 {
+					wordBuilder.WriteRune(c)
+				}
 				i++
 				for i < n && runes[i] != '"' {
 					if runes[i] == '\\' && i+1 < n && (runes[i+1] == '"' || runes[i+1] == '\\' || runes[i+1] == '$') {
+						if braceDepth > 0 || parenDepth > 0 || bracketDepth > 0 {
+							wordBuilder.WriteRune(runes[i])
+						}
 						wordBuilder.WriteRune(runes[i+1])
 						i += 2
 						continue
@@ -349,7 +386,10 @@ func tokenizeShell(cmd string) []token {
 					i++
 				}
 				if i < n && runes[i] == '"' {
-					i++ // consume closing quote
+					if braceDepth > 0 || parenDepth > 0 || bracketDepth > 0 {
+						wordBuilder.WriteRune(runes[i])
+					}
+					i++
 				}
 				continue
 			}
