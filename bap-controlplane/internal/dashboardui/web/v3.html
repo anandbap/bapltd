@@ -181,6 +181,11 @@
   .freeze { flex: none; background: var(--surface); color: var(--bad); border: 1.5px solid var(--bad); border-radius: 10px; padding: 10px 16px; font-weight: 700; font-size: 14px; }
   .freeze:hover { background: var(--bad); color: #fff; }
   .freeze[disabled] { color: var(--ink-3); border-color: var(--line); background: transparent; cursor: default; }
+  .session-actions { text-align: right; width: 180px; }
+  .session-freeze-btn { background: var(--bad); color: #fff; border: 2px solid var(--bad); border-radius: 9px; padding: 11px 16px; font-weight: 700; font-size: 14px; white-space: nowrap; }
+  .session-freeze-btn[data-session-freeze="unfreeze"] { background: var(--ok); border-color: var(--ok); }
+  .session-freeze-btn:disabled { opacity: .6; cursor: wait; }
+  [data-admin-control][hidden] { display: none !important; }
 
   /* proof numbers */
   .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 16px 0 28px; }
@@ -399,7 +404,7 @@
           <h1 id="vHead" aria-live="polite">Loading...</h1>
           <p id="vSub"></p>
           <div class="vactions">
-            <button class="freeze" id="freezeBtn">Freeze all agents</button>
+            <button class="freeze" id="freezeBtn" data-admin-control hidden>Freeze all agents</button>
             <span class="vmeta">Stops every agent in under a second.</span>
           </div>
         </div>
@@ -447,7 +452,7 @@
         <h2 id="covH">Where agent sessions are protected</h2>
         <p class="cov-note" id="covNote"></p>
         <table class="cov">
-          <thead><tr><th>Agent Session &amp; Workstation</th><th>Protection</th><th>Reporting to you</th><th>What it means</th></tr></thead>
+          <thead><tr><th>Agent Session &amp; Workstation</th><th>Protection</th><th>Reporting to you</th><th>What it means</th><th class="session-actions" data-admin-control hidden>Session control</th></tr></thead>
           <tbody id="covBody"></tbody>
         </table>
       </section>
@@ -632,7 +637,11 @@
     options.headers = authHeaders(options.headers);
     options.credentials = 'same-origin';
     return fetch(url, options).then(function (r) {
-      if (!r.ok) throw new Error('Request refused (' + r.status + ')');
+      if (!r.ok) return r.text().then(function (body) {
+        var message = body;
+        try { var detail = JSON.parse(body); message = detail.error || detail.message || body; } catch (_) {}
+        throw new Error('HTTP ' + r.status + ': ' + (message || r.statusText));
+      });
       return r;
     });
   }
@@ -666,6 +675,7 @@
       var inp = $('adminTokenInput');
       if (inp) inp.value = '';
     }
+    document.querySelectorAll('[data-admin-control]').forEach(function (el) { el.hidden = !active; });
   }
 
   function openAdminPopover() {
@@ -762,6 +772,7 @@
     $('tlCap').hidden = !tl.length;
     $('sRecordHint').textContent = S.recordCount != null ? S.recordCount.toLocaleString() + ' records sealed, none altered' : 'Cannot be edited later';
     $('freezeBtn').disabled = false;
+    $('freezeBtn').hidden = !S.adminActive && S.mode !== 'demo';
     $('freezeBtn').textContent = S.frozen ? 'Unfreeze all agents' : 'Freeze all agents';
 
     var fl = $('fleet');
@@ -802,7 +813,8 @@
       return '<tr><td class="surf">' + surf + '</td>' +
         '<td><span class="pill ' + c.pc + '">' + esc(c.protect) + '</span></td>' +
         '<td><span class="pill ' + c.rc + '">' + esc(c.report) + '</span></td>' +
-        '<td>' + esc(c.means) + (c.fix ? ' <span class="fix">' + esc(c.fix) + '</span>' : '') + '</td></tr>';
+        '<td>' + esc(c.means) + (c.fix ? ' <span class="fix">' + esc(c.fix) + '</span>' : '') + '</td>' +
+        (S.adminActive ? '<td class="session-actions" data-admin-control>' + (c.actionHtml || '') + '</td>' : '') + '</tr>';
     }).join('') : '<tr><td colspan="4" class="pending">No agent sessions reported yet. Run an agent (e.g. Claude Code or Antigravity) on a registered workstation to see it here.</td></tr>';
 
     var inc = $('incident'), I = S.incident;
@@ -1086,7 +1098,7 @@
         '<td><div style="display:flex;flex-wrap:wrap;gap:2px">' + subagentsHtml + '</div></td>' +
         '<td><span class="pill ' + statusClass + '">' + esc(statusText) + '</span></td>' +
         '<td>' + esc(lastStr) + '</td>' +
-        '<td>' + actionButtons + '</td>' +
+        '<td data-admin-control' + (S.adminActive ? '' : ' hidden') + '>' + (S.adminActive ? actionButtons : '') + '</td>' +
         '</tr>';
     }).join('');
 
@@ -1129,57 +1141,47 @@
 
   /* ---------- robust risky actions handler ---------- */
   function openRiskyActions() {
-    var rows = allRows().filter(function (r) { return r.blocked || r.shadow; });
-    if (rows.length > 0) {
-      openList('Risky actions stopped', rows, 'No risky actions have been recorded.');
+    if (S.mode === 'demo') {
+      openList('Risky actions', allRows().filter(function (r) { return r.blocked || r.shadow; }), 'No risky actions in this demo.');
       return;
     }
-    // Query audit log directly so clicking always shows true proof
-    getJSON('/api/v1/audit/events').then(function (res) {
-      var events = (res && res.events) || [];
-      var blockedEvents = events.filter(function (e) {
-        return /deny|denied/i.test(e.policy_decision || '') || /audit_permitted|shadow/i.test([e.policy_decision, e.action].join(' '));
-      });
-      if (blockedEvents.length > 0) {
-        var mapped = blockedEvents.map(function (e) {
-          var sId = e.event_id || 'evt-' + Math.random().toString(36).slice(2);
-          stories[sId] = {
-            title: 'Blocked ' + (e.action || 'risky action'),
-            steps: [
-              { k: 'Operator / Workstation', v: (e.user_id || e.agent_id || 'Workstation') + ': "' + (e.reason || e.action || 'Execute command') + '"' },
-              { k: 'The agent tried', v: e.action || e.payload || 'Attempted unauthorized operation' },
-              { k: 'Policy decided', v: 'Blocked by Cedar Zero-Trust invariants (Rule: ' + (e.policy_rule || 'bap-zero-trust') + ')', cls: 'stop' },
-              { k: 'Result', v: 'Execution stopped before running on host. Zero side effects.', cls: 'seal' }
-            ],
-            receipt: { id: e.event_id || '#rec', time: e.timestamp ? fmtTime(Date.parse(e.timestamp)) : 'Recent', agent: e.agent_id || 'agent', rule: e.policy_rule || 'bap-zero-trust', decision: 'BLOCKED before running' },
-            tech: ['Ledger Hash: ' + (e.hash || 'Verified SHA-256 link'), 'Chain integrity: Verified immutable WORM record', 'Status: Zero host side effects']
+    openList('Risky actions', [], 'Loading recorded risky actions...');
+    var box = $('dConvo'), rows = [], snapshot = null;
+    function page(offset) {
+      var url = '/api/v1/audit/risky-events?limit=100&offset=' + offset;
+      if (snapshot !== null) url += '&snapshot=' + snapshot;
+      return getJSON(url).then(function (res) {
+        if (!$('drawer').classList.contains('list') || $('dTitle').textContent.indexOf('Risky actions') !== 0) return;
+        snapshot = res.snapshot;
+        (res.events || []).forEach(function (e) {
+          var shadow = /audit_permitted|shadow/i.test(e.decision || '');
+          var id = e.event_hash || e.event_id;
+          stories[id] = {
+            title: (shadow ? 'Flagged: ' : 'Blocked: ') + (e.full_command || e.executable || 'Recorded action'),
+            steps: [{ k: 'Action', v: e.full_command || e.executable || 'Recorded action' },
+              { k: 'Decision', v: e.decision }, { k: 'Reason', v: e.reason || 'No reason recorded' }],
+            receipt: { id: id, time: e.timestamp, agent: e.source, decision: e.decision },
+            tech: ['Ledger hash: ' + (e.event_hash || 'Not available')]
           };
-          return {
-            who: (e.user_id || e.agent_id || 'Governed Agent'),
-            ask: e.reason || e.action || 'Task command',
-            did: e.action || 'Unauthorized command intercepted',
-            blocked: !/audit_permitted/i.test(e.policy_decision || ''),
-            shadow: /audit_permitted/i.test(e.policy_decision || ''),
-            storyId: sId,
-            sessionId: e.session_id || '',
-            t: Date.parse(e.timestamp) || 0
-          };
+          rows.push({ who: e.user_email || e.user_id || e.source || 'Governed agent',
+            ask: e.user_prompt || e.reason || e.full_command || 'Recorded action',
+            did: e.full_command || e.executable || '', blocked: !shadow, shadow: shadow,
+            storyId: id, sessionId: /^\[Protected/i.test(e.session_id || '') ? '' : (e.session_id || ''), t: Date.parse(e.timestamp) || 0 });
         });
-        openList('Risky actions stopped', mapped, 'No risky actions found.');
-      } else {
-        if (stories.eve) {
-          openStory('eve');
-        } else {
-          openList('Risky actions stopped', [], 'No risky actions have been recorded. Fleet is 100% compliant.');
+        openList('Risky actions (' + rows.length + ' of ' + res.total + ')', rows, 'No risky actions in the retained audit log.');
+        if (res.has_more) {
+          var li = document.createElement('li'), more = document.createElement('button');
+          more.className = 'btn'; more.textContent = 'Load more risky actions';
+          more.addEventListener('click', function () { more.disabled = true; page(res.next_offset); });
+          li.appendChild(more); box.appendChild(li);
         }
-      }
-    }).catch(function () {
-      if (stories.eve) {
-        openStory('eve');
-      } else {
-        openList('Risky actions stopped', [], 'No risky actions recorded.');
-      }
-    });
+      }).catch(function (err) {
+        var li = document.createElement('li'); li.className = 'convo-note';
+        li.textContent = 'Could not load risky actions: ' + err.message + '. Reopen this list to retry.';
+        box.appendChild(li);
+      });
+    }
+    page(0);
   }
 
   // Opens a drawer that lists rows (all agents, or all risky actions); each row opens its detail.
@@ -1308,23 +1310,33 @@
   document.addEventListener('click', function (e) {
     var btn = e.target.closest('[data-session-freeze]');
     if (!btn) return;
+    if (!S.adminActive) { openAdminPopover(); return; }
     var action = btn.getAttribute('data-session-freeze');
     var target = btn.getAttribute('data-session-id');
     if (!confirm((action === 'freeze' ? 'Freeze' : 'Unfreeze') + ' session ' + target + '? This applies only to this session.')) return;
     btn.disabled = true;
     apiFetch('/api/v1/control/agent/kill', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ target: target, action: action, scope: 'session' }) })
-      .then(function () { loadLive(); })
+      .then(function (r) { return r.json(); })
+      .then(function (result) {
+        btn.setAttribute('data-session-freeze', result.status === 'revoked' ? 'unfreeze' : 'freeze');
+        btn.textContent = result.status === 'revoked' ? 'Unfreeze session' : 'Freeze session';
+        btn.disabled = false;
+        loadLive();
+      })
       .catch(function (err) { btn.disabled = false; alert('Session action failed: ' + err.message); });
   });
   var liveTimer = null;
+  var liveRequest = 0;
   var STREAMS = ['Build', 'Operate', 'Analyze', 'Document', 'Support'];
 
   function loadLive() {
-    Promise.allSettled([getJSON('/api/activity/summary'), getJSON('/api/activity/live'),
+    var request = ++liveRequest;
+    return Promise.allSettled([getJSON('/api/activity/summary'), getJSON('/api/activity/live'),
                         getJSON('/api/v1/escalation/requests'), getJSON('/api/v1/control/chain/verify'),
                         getJSON('/api/v1/agents'), getJSON('/api/v1/sessions'), getJSON('/api/v1/control/revocations')])
       .then(function (r) {
+        if (request !== liveRequest) return;
         var sum = r[0].status === 'fulfilled' ? r[0].value : null;
         if (r[6].status === 'fulfilled') S.frozen = r[6].value.kill_switch === true;
         var live = r[1].status === 'fulfilled' ? r[1].value : null;
@@ -1406,10 +1418,7 @@
             if (t > sessionMap[sid]._t) sessionMap[sid]._t = t;
             if (!sessionMap[sid].hostname && host) sessionMap[sid].hostname = host;
             if (!sessionMap[sid].user && user) sessionMap[sid].user = user;
-            if (isClosedAct) {
-              sessionMap[sid].status = 'closed';
-              if (a.action && !sessionMap[sid].close_reason) sessionMap[sid].close_reason = a.action;
-            }
+            // The session store owns lifecycle state; activity can be older.
           } else if (sid) {
             sessionMap[sid] = {
               session_id: sid,
@@ -1472,8 +1481,9 @@
               '</small>';
 
             var sessionFrozen = s.status === 'revoked' && s.close_reason === 'Frozen by administrator';
-            if (s.status === 'active' || sessionFrozen) {
-              surfaceHtml += '<button class="btn-action-sm" type="button" data-session-id="' + esc(s.session_id) +
+            var actionHtml = '';
+            if (S.adminActive && !/^\[Protected/i.test(s.session_id) && (s.status === 'active' || s.status === 'offline' || (s.status === 'closed' && s.close_reason === 'idle_timeout') || sessionFrozen)) {
+              actionHtml = '<button class="session-freeze-btn" data-admin-control type="button" data-session-id="' + esc(s.session_id) +
                 '" data-session-freeze="' + (sessionFrozen ? 'unfreeze' : 'freeze') + '">' +
                 (sessionFrozen ? 'Unfreeze session' : 'Freeze session') + '</button>';
             }
@@ -1488,6 +1498,7 @@
 
             return {
               surfaceHtml: surfaceHtml,
+              actionHtml: actionHtml,
               surface: appPretty,
               detail: s.session_id + ' on ' + host,
               protect: 'Governed',

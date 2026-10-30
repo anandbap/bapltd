@@ -363,6 +363,7 @@ func (s *Server) registerRoutes() {
 	// Administrative & Mutating Operations (Protected by Admin Token)
 	s.mux.HandleFunc("/api/v1/control/kill-switch", s.requireAdminAuth(s.handleKillSwitch))
 	s.mux.HandleFunc("/api/v1/control/agent/kill", s.requireAdminAuth(s.handleTargetedKillAgent))
+	s.mux.HandleFunc("/api/v1/audit/risky-events", s.handleRiskyAuditEvents)
 	s.mux.HandleFunc("/api/v1/control/agent/revoke", s.requireAdminAuth(s.handleTargetedKillAgent))
 	s.mux.HandleFunc("/api/v1/sessions/revoke", s.requireAdminAuth(s.handleTargetedKillAgent))
 	s.mux.HandleFunc("/api/v1/sessions/reset", s.requireDemoMode(s.requireAdminAuth(s.handleResetSessions)))
@@ -3652,32 +3653,20 @@ func (s *Server) handleTargetedKillAgent(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusBadRequest, "Exact session target and scope=session are required")
 			return
 		}
-		sess, err := s.sessionStore.Get(target)
+		_, err := s.sessionStore.Get(target)
 		if err != nil {
 			writeError(w, http.StatusNotFound, "Session not found")
 			return
 		}
-		if action == "freeze" {
-			if sess.Status != "active" {
-				writeError(w, http.StatusConflict, "Only active sessions can be frozen")
-				return
-			}
-			err = s.sessionStore.RevokeSession(target, "Frozen by administrator")
-		} else {
-			if sess.Status != "revoked" || sess.CloseReason != "Frozen by administrator" {
-				writeError(w, http.StatusConflict, "Session is not frozen")
-				return
-			}
-			_, err = s.sessionStore.RestoreTarget(target)
-		}
+		sess, err := s.sessionStore.SetFrozen(target, action == "freeze")
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
 		s.auditStore.Ingest([]audit.Event{{Source: "bap-controlplane", SessionID: target,
 			Executable: "bapcontrolplane", FullCommand: strings.ToUpper(action) + "_SESSION target=" + target,
 			Decision: "allow", Reason: "Administrator session " + action, Timestamp: time.Now().UTC().Format(time.RFC3339)}})
-		writeJSON(w, http.StatusOK, map[string]any{"target": target, "scope": "session", "action": action})
+		writeJSON(w, http.StatusOK, map[string]any{"target": target, "scope": "session", "action": action, "status": sess.Status, "close_reason": sess.CloseReason})
 		return
 	}
 	if target == "" || (action != "restore" && action != "revoke" && action != "stop") {
