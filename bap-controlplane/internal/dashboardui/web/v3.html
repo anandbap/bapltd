@@ -165,6 +165,11 @@
   .cov .surf { font-weight: 600; } .cov .surf small { display: block; font-weight: 400; color: var(--ink-3); font-size: 12.5px; }
   .pill { display: inline-block; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 99px; white-space: nowrap; }
   .pill.g { background: var(--ok-bg); color: var(--ok); } .pill.a { background: var(--warn-bg); color: var(--warn); } .pill.r { background: var(--bad-bg); color: var(--bad); }
+  .pill.off { background: #f1f3f4; color: #5f6368; border: 1px solid #dadce0; }
+  .ws-link { color: var(--accent, #1a73e8); font-weight: 600; text-decoration: none; cursor: pointer; }
+  .ws-link:hover { text-decoration: underline; }
+  .badge-tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; background: #e8f0fe; color: #1a73e8; letter-spacing: 0.02em; text-transform: uppercase; }
+  .sess-pill { font-family: var(--mono); background: #f1f3f4; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
   .cov .fix { color: var(--accent); font-weight: 600; font-size: 13px; }
   @media (max-width: 820px) { .cov th:nth-child(4), .cov td:nth-child(4) { display: none; } }
   .empty-hero { text-align: center; padding: 10px 0 4px; }
@@ -348,8 +353,8 @@
   <header class="top" aria-label="Agent operations">
     <div class="brand"><i></i> Agent Watch <span class="badge" style="display:none">Agent operations</span></div>
     <div class="seg view-nav" role="tablist" aria-label="Dashboard Views">
-      <button id="navActivity" role="tab" aria-selected="true" type="button">⚡ AI Agent Activity</button>
-      <button id="navWorkstations" role="tab" aria-selected="false" type="button">💻 Governed Workstations <span class="badge-count" id="navWsCount">0</span></button>
+      <button id="navActivity" role="tab" aria-selected="true" type="button">🤖 AI Agent Sessions &amp; Activity</button>
+      <button id="navWorkstations" role="tab" aria-selected="false" type="button">💻 Workstation Agents Registered <span class="badge-count" id="navWsCount">0</span></button>
     </div>
     <div class="top-right">
       <span class="conn" id="buildVer" title="Build version and git commit" style="font-family:var(--mono);font-size:12px;color:var(--ink-3)"></span>
@@ -399,14 +404,14 @@
           </div>
         </div>
         <div class="fleetbox">
-          <div class="fleet-cap">Your agent fleet &middot; one dot per agent</div>
+          <div class="fleet-cap">Your agent sessions &middot; one dot per active session</div>
           <div class="fleet" id="fleet" role="img" aria-label="Fleet status"></div>
           <div class="legend"><span>Working within policy</span><span class="la">Just stopped</span><span class="lo">Contained</span></div>
         </div>
       </section>
 
       <section class="stats" aria-label="Proof">
-        <div class="stat" id="sAgentsCard"><div class="n" id="sAgents">-</div><div class="l" id="sAgentsLabel">Workstations governed</div><div class="h" id="sAgentsHint">Click to view workstation fleet</div></div>
+        <div class="stat" id="sAgentsCard"><div class="n" id="sAgents">-</div><div class="l" id="sAgentsLabel">Agent sessions governed</div><div class="h" id="sAgentsHint">Live AI coding sessions</div></div>
         <div class="stat" id="sBlockedCard"><div class="n" id="sBlocked">-</div><div class="l" id="sBlockedLabel">Risky actions stopped</div><div class="h" id="sBlockedHint">Each one has proof</div></div>
         <div class="stat" id="sWaitCard"><div class="n" id="sWait">-</div><div class="l">Waiting for you</div><div class="h">One click to decide</div></div>
         <div class="stat"><div class="n sm" id="sRecord">-</div><div class="l">Tamper-proof record</div><div class="h" id="sRecordHint">Cannot be edited later</div></div>
@@ -439,10 +444,10 @@
       </section>
 
       <section class="panel coverage" aria-labelledby="covH">
-        <h2 id="covH">Where agents are protected</h2>
+        <h2 id="covH">Where agent sessions are protected</h2>
         <p class="cov-note" id="covNote"></p>
         <table class="cov">
-          <thead><tr><th>Where the agent runs</th><th>Protection</th><th>Reporting to you</th><th>What it means</th></tr></thead>
+          <thead><tr><th>Agent Session &amp; Workstation</th><th>Protection</th><th>Reporting to you</th><th>What it means</th></tr></thead>
           <tbody id="covBody"></tbody>
         </table>
       </section>
@@ -453,11 +458,11 @@
       <section class="panel ws-hero">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px">
           <div>
-            <div class="ws-hero-tag"><i></i><span>Zero-Trust Workstation Fleet</span></div>
-            <h1 style="font:500 clamp(24px, 3.2vw, 36px)/1.15 var(--serif);margin:6px 0 8px;letter-spacing:-.02em">Governed Workstations &amp; Hardware Anchors</h1>
+            <div class="ws-hero-tag"><i></i><span>Zero-Trust Registered Workstations</span></div>
+            <h1 style="font:500 clamp(24px, 3.2vw, 36px)/1.15 var(--serif);margin:6px 0 8px;letter-spacing:-.02em">Workstation Agents Registered &amp; Hardware Anchors</h1>
             <p class="cov-note" style="margin:0;max-width:74ch;font-size:14.5px;line-height:1.6">
-              Developer workstations enrolled under Cedar Zero-Trust and bound to corporate SSO identities (Google, GitHub, Entra, Okta).
-              Each workstation acts as a persistent trusted hardware anchor running <b>bapedge</b>. Coding agents (Claude Code, Antigravity, Copilot, Python SDK) operate as monitored subagents on these machines.
+              Developer workstations with <b>bapedge</b> registered under Cedar Zero-Trust and bound to corporate SSO identities (Google, GitHub, Entra, Okta).
+              Each registered workstation agent acts as a persistent trusted hardware anchor running <b>bapedge</b>. Coding agents (Claude Code, Antigravity, Copilot, Python SDK) operate as monitored subagents on these machines.
             </p>
           </div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -469,7 +474,7 @@
         <div class="ws-kpis">
           <div class="ws-kpi">
             <div class="n" id="wsKpiTotal">0</div>
-            <div class="l">Total Workstations</div>
+            <div class="l">Workstation Agents Registered</div>
             <div class="h">Enrolled dev machines</div>
           </div>
           <div class="ws-kpi">
@@ -479,7 +484,7 @@
           </div>
           <div class="ws-kpi">
             <div class="n" id="wsKpiSubagents" style="color:var(--accent)">0</div>
-            <div class="l">Hosted AI Subagents</div>
+            <div class="l">Hosted AI Agent Sessions</div>
             <div class="h">Claude Code, AGY, Copilot, SDK</div>
           </div>
           <div class="ws-kpi">
@@ -493,8 +498,8 @@
       <section class="panel reg-agents" id="regPanel" aria-labelledby="regH">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:12px">
           <div>
-            <h2 id="regH" style="margin:0 0 4px">Registered Agent Fleet &amp; Identities</h2>
-            <p class="cov-note" style="margin:0" id="regNote">Every workstation and developer agent enrolled under Cedar Zero-Trust, bound to verified SSO identity (Google, GitHub, Entra, Okta) or local broker.</p>
+            <h2 id="regH" style="margin:0 0 4px">Workstation Agents Registered &amp; Identities</h2>
+            <p class="cov-note" style="margin:0" id="regNote">Every developer workstation registered with bapedge under Cedar Zero-Trust, bound to verified SSO identity (Google, GitHub, Entra, Okta) or local broker.</p>
           </div>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <div class="seg ws-filters" role="radiogroup" aria-label="Status filter">
@@ -504,7 +509,7 @@
               <button class="ws-filter-btn" data-filter="offline" aria-pressed="false" type="button">Offline / Logged Out (<span id="filterCountOffline">0</span>)</button>
             </div>
             <input id="regSearch" type="search" placeholder="Filter workstations, users, subagents, or hosts..." style="padding:6px 12px;border:1.5px solid var(--line);border-radius:8px;font-size:13px;outline:none;background:#faf9f6;font-family:var(--sans);min-width:260px">
-            <span class="pill g" id="regCountPill">0 Governed</span>
+            <span class="pill g" id="regCountPill">0 Registered</span>
           </div>
         </div>
         <div class="reg-table-wrap">
@@ -515,14 +520,14 @@
                 <th>Hardware / OS</th>
                 <th>Authenticated Identity</th>
                 <th>IdP Provider</th>
-                <th>Hosted AI Subagents</th>
+                <th>Hosted AI Sessions</th>
                 <th>Governance Status</th>
                 <th>Enrolled / Last Seen</th>
                 <th>Action</th>
               </tr>
             </thead>
             <tbody id="regBody">
-              <tr><td colspan="8" class="pending">Checking registered agent fleet...</td></tr>
+              <tr><td colspan="8" class="pending">Checking registered workstation fleet...</td></tr>
             </tbody>
           </table>
         </div>
@@ -780,20 +785,22 @@
 
     renderSession();
     renderRegisteredAgents();
-    var totalGov = S.registeredTotal || S.agents || 0;
-    setNum($('sAgents'), totalGov);
-    if ($('sAgentsLabel')) $('sAgentsLabel').textContent = S.registeredTotal ? 'Agents governed' : 'Agents working now';
-    if ($('sAgentsHint')) $('sAgentsHint').textContent = S.registeredTotal ? (S.registeredTotal + ' enrolled · 100% policy-bound') : 'Across 5 kinds of work';
+    var actCount = S.activeSessionCount != null ? S.activeSessionCount : (S.agents || 0);
+    var totCount = S.totalSessionCount != null ? S.totalSessionCount : actCount;
+    setNum($('sAgents'), actCount);
+    if ($('sAgentsLabel')) $('sAgentsLabel').textContent = 'Agent sessions governed';
+    if ($('sAgentsHint')) $('sAgentsHint').textContent = actCount + ' active · ' + totCount + ' total sessions';
     var cn = $('conn');
     cn.className = 'conn' + (S.conn === 'online' ? '' : ' off');
     cn.textContent = S.conn === 'online' ? 'Control plane connected' : 'Control plane offline';
     $('covNote').textContent = S.covNote;
     $('covBody').innerHTML = S.coverage.length ? S.coverage.map(function (c) {
-      return '<tr><td class="surf">' + esc(c.surface) + '<small>' + esc(c.detail || '') + '</small></td>' +
+      var surf = c.surfaceHtml || ('<span style="font-weight:700">' + esc(c.surface) + '</span>' + (c.detail ? '<small>' + esc(c.detail) + '</small>' : ''));
+      return '<tr><td class="surf">' + surf + '</td>' +
         '<td><span class="pill ' + c.pc + '">' + esc(c.protect) + '</span></td>' +
         '<td><span class="pill ' + c.rc + '">' + esc(c.report) + '</span></td>' +
         '<td>' + esc(c.means) + (c.fix ? ' <span class="fix">' + esc(c.fix) + '</span>' : '') + '</td></tr>';
-    }).join('') : '<tr><td colspan="4" class="pending">Pending telemetry</td></tr>';
+    }).join('') : '<tr><td colspan="4" class="pending">No agent sessions reported yet. Run an agent (e.g. Claude Code or Antigravity) on a registered workstation to see it here.</td></tr>';
 
     var inc = $('incident'), I = S.incident;
     if (I) {
@@ -1292,7 +1299,8 @@
 
   function loadLive() {
     Promise.allSettled([getJSON('/api/activity/summary'), getJSON('/api/activity/live'),
-                        getJSON('/api/v1/escalation/requests'), getJSON('/api/v1/control/chain/verify'), getJSON('/api/v1/agents')])
+                        getJSON('/api/v1/escalation/requests'), getJSON('/api/v1/control/chain/verify'),
+                        getJSON('/api/v1/agents'), getJSON('/api/v1/sessions')])
       .then(function (r) {
         var sum = r[0].status === 'fulfilled' ? r[0].value : null;
         var live = r[1].status === 'fulfilled' ? r[1].value : null;
@@ -1300,6 +1308,8 @@
         var chain = r[3].status === 'fulfilled' ? r[3].value : null;
         var regRes = r[4] && r[4].status === 'fulfilled' ? r[4].value : null;
         var registered = (regRes && regRes.agents) || [];
+        var sessRes = r[5] && r[5].status === 'fulfilled' ? r[5].value : null;
+        var sessionList = (sessRes && (sessRes.sessions || (Array.isArray(sessRes) ? sessRes : []))) || [];
         S.registeredAgents = registered;
         S.registeredTotal = registered.length;
 
@@ -1337,7 +1347,70 @@
           if (isShadow(e) || /deny|denied/i.test(e.policy_decision || '')) buckets[idx].blocked++;
         });
         S.timeline = buckets.some(function (b) { return b.total; }) ? buckets : [];
-        S.agents = live ? agents.filter(function (a) { return a.action_status === 'working'; }).length : (sum && sum.total_active_agents != null ? sum.total_active_agents : null);
+
+        // Build comprehensive Agent Session registry
+        var sessionMap = {};
+        sessionList.forEach(function (s) {
+          if (isSim(s)) return;
+          var sid = s.session_id;
+          if (!sid) return;
+          var t = Date.parse(s.last_active_at || s.started_at) || 0;
+          var app = s.app_id || 'claude-code';
+          sessionMap[sid] = {
+            session_id: sid,
+            app_id: app,
+            agent_name: s.agent_name || (app === 'claude-code' ? 'Claude Code' : (app === 'antigravity' ? 'Google Antigravity' : (app === 'copilot' ? 'GitHub Copilot' : app))),
+            hostname: s.hostname || '',
+            user: s.user_email || s.user_id || '',
+            status: (s.status || 'active').toLowerCase(),
+            close_reason: s.close_reason || '',
+            _t: t
+          };
+        });
+
+        agents.forEach(function (a) {
+          if (isSim(a)) return;
+          var sid = a.session_id;
+          var t = a._t || Date.parse(a.timestamp) || 0;
+          var app = a.application || a.app_id || 'claude-code';
+          var host = a.runtime_id || a.hostname || '';
+          var user = a.user_id || a.user || a.operator || '';
+          var actStatus = (a.action_status || '').toLowerCase();
+          var isClosedAct = actStatus === 'completed' || actStatus === 'closed' || actStatus === 'ended' || actStatus === 'terminated';
+
+          if (sid && sessionMap[sid]) {
+            if (t > sessionMap[sid]._t) sessionMap[sid]._t = t;
+            if (!sessionMap[sid].hostname && host) sessionMap[sid].hostname = host;
+            if (!sessionMap[sid].user && user) sessionMap[sid].user = user;
+            if (isClosedAct) {
+              sessionMap[sid].status = 'closed';
+              if (a.action && !sessionMap[sid].close_reason) sessionMap[sid].close_reason = a.action;
+            }
+          } else if (sid) {
+            sessionMap[sid] = {
+              session_id: sid,
+              app_id: app,
+              agent_name: a.agent_type || (app === 'claude-code' ? 'Claude Code' : (app === 'antigravity' ? 'Google Antigravity' : app)),
+              hostname: host,
+              user: user,
+              status: isClosedAct ? 'closed' : 'active',
+              close_reason: isClosedAct ? (a.action || 'Exited') : '',
+              _t: t
+            };
+          }
+        });
+
+        var allSessions = Object.keys(sessionMap).map(function (k) { return sessionMap[k]; });
+        allSessions.forEach(function (s) {
+          var isClosed = s.status === 'closed' || s.status === 'revoked' || s.status === 'ended' || s.status === 'offline';
+          var isRecent = (nowMs - s._t) <= 75000;
+          s.isLive = !isClosed && isRecent;
+        });
+
+        var liveSessions = allSessions.filter(function (s) { return s.isLive; });
+        S.activeSessionCount = liveSessions.length;
+        S.totalSessionCount = allSessions.length;
+        S.agents = S.activeSessionCount;
         S.simHidden = simCount;
         S.blocked = sum && sum.high_risk_prevented != null ? sum.high_risk_prevented : null;
         if (S.shadow > 0) S.blocked = S.shadow; // audit mode: show flagged count instead
@@ -1352,19 +1425,55 @@
 
         var down = r.every(function (x) { return x.status === 'rejected'; });
         S.conn = down ? 'offline' : 'online';
-        var byApp = {};
-        agents.forEach(function (a) {
-          var k = a.application || a.app_id || a.app || 'Unknown agent';
-          var e = byApp[k] || (byApp[k] = { n: 0, t: 0 });
-          e.n++; e.t = Math.max(e.t, a._t || 0);
-        });
-        S.coverage = Object.keys(byApp).map(function (k) {
-          var last = byApp[k].t ? ' · last event ' + new Date(byApp[k].t).toISOString().slice(11, 16) + ' UTC' : '';
-          return { surface: k, detail: byApp[k].n + ' seen' + last, protect: 'Governed', pc: 'g', report: 'Live', rc: 'g', means: 'Every action is checked and recorded.' };
-        });
+
+        if (allSessions.length) {
+          allSessions.sort(function (x, y) {
+            if (x.isLive !== y.isLive) return x.isLive ? -1 : 1;
+            return y._t - x._t;
+          });
+          S.coverage = allSessions.map(function (s) {
+            var appPretty = s.agent_name || (s.app_id === 'claude-code' ? 'Claude Code' : (s.app_id === 'antigravity' ? 'Google Antigravity' : s.app_id));
+            var host = s.hostname || 'desktop-workstation';
+            var lastStr = s._t ? ('last event ' + new Date(s._t).toISOString().slice(11, 16) + ' UTC') : 'recently';
+            var userStr = s.user ? (' · User: ' + esc(s.user)) : '';
+
+            var surfaceHtml = '<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">' +
+              '<span style="font-weight:700">' + esc(appPretty) + '</span>' +
+              '<span class="badge-tag">Agent Session</span>' +
+              '</div>' +
+              '<small style="display:block;margin-top:4px;color:var(--ink-2);font-size:12.5px;line-height:1.5">' +
+              'Session: <code class="sess-pill">' + esc(s.session_id) + '</code> &middot; ' +
+              '<a href="javascript:void(0)" onclick="goToWorkstation(\'' + esc(host) + '\')" class="ws-link" title="Click to view workstation in registered fleet">💻 Workstation: <b>' + esc(host) + '</b></a>' +
+              userStr + ' &middot; ' + lastStr +
+              '</small>';
+
+            var isLive = s.isLive;
+            var reportText = isLive ? 'Live' : 'Offline';
+            var reportClass = isLive ? 'g' : 'off';
+            var reasonClean = s.close_reason ? ('Session ' + s.close_reason) : 'Session ended';
+            var means = isLive
+              ? 'Every action is checked and recorded in real time.'
+              : (reasonClean + '; workstation policies remain enforced on ' + esc(host) + '.');
+
+            return {
+              surfaceHtml: surfaceHtml,
+              surface: appPretty,
+              detail: s.session_id + ' on ' + host,
+              protect: 'Governed',
+              pc: 'g',
+              report: reportText,
+              rc: reportClass,
+              means: means,
+              fix: ''
+            };
+          });
+        } else {
+          S.coverage = [];
+        }
+
         S.covNote = down
           ? 'The control plane is not reachable, so this screen cannot list what is protected. Governed machines are designed to keep enforcing their last saved policy and to queue records locally, but that cannot be confirmed from here until the connection returns.'
-          : 'Only agents that have reported in are listed. An agent that never reported would not appear, so compare this list with what you expect to be running.' +
+          : 'Only agent sessions that have reported in are listed. When an agent session exits, its reporting status changes to Offline while host workstation policies remain enforced.' +
             (S.simHidden ? ' ' + S.simHidden + ' simulated demo session' + (S.simHidden > 1 ? 's are' : ' is') + ' hidden from this view.' : '');
         var counts = {};
         agents.forEach(function (a) {
@@ -1475,10 +1584,10 @@
           S.conn = 'online';
           S.covNote = 'Every place an agent can run, and whether BAP can stop it there. Gaps are shown, not hidden.';
           S.coverage = [
-            { surface: 'Claude Code - terminal', detail: '31 agents', protect: 'Governed', pc: 'g', report: 'Live', rc: 'g', means: 'Every action is checked before it runs.' },
-            { surface: 'Claude Code - desktop app', detail: '9 agents', protect: 'Governed', pc: 'g', report: 'Live', rc: 'g', means: 'Same checks as the terminal.' },
-            { surface: 'GitHub Copilot CLI', detail: '7 agents', protect: 'Governed', pc: 'g', report: 'Live', rc: 'g', means: 'Every command is checked and recorded.' },
-            { surface: 'Antigravity IDE', detail: '2 detected on laptops', protect: 'Not governed', pc: 'r', report: 'Detected only', rc: 'a', means: 'Seen on the network, but BAP cannot stop it.', fix: 'Install protection' }
+            { surfaceHtml: '<div style="display:flex;align-items:center;gap:7px"><span style="font-weight:700">Claude Code</span><span class="badge-tag">Agent Session</span></div><small style="display:block;margin-top:3px;color:var(--ink-2);font-size:12.5px">Session: <code class="sess-pill">sess-demo-claude-31</code> &middot; <a href="javascript:void(0)" onclick="goToWorkstation(\'PN-MACBOOK-PRO\')" class="ws-link">💻 Workstation: <b>PN-MACBOOK-PRO</b></a> &middot; User: Priya Nair &middot; Live</small>', surface: 'Claude Code', detail: '31 sessions', protect: 'Governed', pc: 'g', report: 'Live', rc: 'g', means: 'Every action is checked before it runs.' },
+            { surfaceHtml: '<div style="display:flex;align-items:center;gap:7px"><span style="font-weight:700">Google Antigravity</span><span class="badge-tag">Agent Session</span></div><small style="display:block;margin-top:3px;color:var(--ink-2);font-size:12.5px">Session: <code class="sess-pill">sess-demo-agy-09</code> &middot; <a href="javascript:void(0)" onclick="goToWorkstation(\'MW-LINUX-DEV\')" class="ws-link">💻 Workstation: <b>MW-LINUX-DEV</b></a> &middot; User: Marcus Webb &middot; Live</small>', surface: 'Google Antigravity', detail: '9 sessions', protect: 'Governed', pc: 'g', report: 'Live', rc: 'g', means: 'Same checks as the terminal.' },
+            { surfaceHtml: '<div style="display:flex;align-items:center;gap:7px"><span style="font-weight:700">GitHub Copilot CLI</span><span class="badge-tag">Agent Session</span></div><small style="display:block;margin-top:3px;color:var(--ink-2);font-size:12.5px">Session: <code class="sess-pill">sess-demo-copilot-07</code> &middot; <a href="javascript:void(0)" onclick="goToWorkstation(\'LF-THINKPAD-X1\')" class="ws-link">💻 Workstation: <b>LF-THINKPAD-X1</b></a> &middot; User: Lena Fischer &middot; Offline</small>', surface: 'GitHub Copilot CLI', detail: '7 sessions', protect: 'Governed', pc: 'g', report: 'Offline', rc: 'off', means: 'Session exited cleanly; workstation policies remain enforced.' },
+            { surfaceHtml: '<div style="display:flex;align-items:center;gap:7px"><span style="font-weight:700">Unmanaged CLI</span><span class="badge-tag" style="background:#fce8e6;color:#d93025">Unprotected</span></div><small style="display:block;margin-top:3px;color:var(--ink-2);font-size:12.5px">2 detected on unmanaged machines &middot; No bapedge broker</small>', surface: 'Unmanaged CLI', detail: '2 detected on laptops', protect: 'Not governed', pc: 'r', report: 'Detected only', rc: 'a', means: 'Seen on the network, but BAP cannot stop it.', fix: 'Install protection' }
           ];
           S.timeline = demoTL(0); S.shadow = 0;
           S.incident = null; S.agents = AGENTS; S.fleetTotal = AGENTS; S.flag = ''; S.blocked = 0; S.waiting = 0; S.record = true; S.frozen = false;
@@ -1636,10 +1745,22 @@
     });
   });
 
+  window.goToWorkstation = function (host) {
+    switchView('workstations');
+    var search = $('regSearch');
+    if (search && host && host !== 'desktop-workstation') {
+      search.value = host;
+      S.regSearchTerm = host;
+      renderRegisteredAgents();
+    }
+    var regP = $('regPanel');
+    if (regP) regP.scrollIntoView({ behavior: 'smooth' });
+  };
+
   $('printBtn').addEventListener('click', function () { window.print(); });
   // Live mode lists every agent that reported; the demo walkthrough only has its feed.
   function allRows() { return S.mode === 'demo' || !S.rows ? S.feed : S.rows; }
-  [['sAgents', function () { switchView('workstations'); }],
+  [['sAgents', function () { var cov = $('covH'); if (cov) cov.scrollIntoView({ behavior: 'smooth' }); }],
    ['sBlocked', openRiskyActions]
   ].forEach(function (p) {
     var card = $(p[0]).parentNode;
