@@ -283,9 +283,12 @@ func (a *Authorizer) evaluateAtomicNode(executable, fullCommand, args, workspace
 		return true, "", nil
 	}
 
-	cleanExec := strings.TrimLeft(executable, "([{\"'$@&")
-	if idx := strings.IndexAny(cleanExec, ")."); idx != -1 {
-		cleanExec = cleanExec[:idx]
+	cleanExec := executable
+	if strings.HasPrefix(executable, "(") {
+		cleanExec = strings.TrimLeft(executable, "([{\"'$@&")
+		if idx := strings.IndexAny(cleanExec, ")."); idx != -1 {
+			cleanExec = cleanExec[:idx]
+		}
 	}
 	normalizedExec := strings.ToLower(cleanExec)
 	if strings.HasPrefix(normalizedExec, "---") || strings.HasPrefix(normalizedExec, "===") ||

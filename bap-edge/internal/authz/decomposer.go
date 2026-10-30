@@ -15,9 +15,12 @@ type DecomposedAction struct {
 
 // Decompose deterministically parses executable, command, and arguments into canonical action and resource.
 func Decompose(executable, fullCommand, args string) DecomposedAction {
-	cleanExec := strings.TrimLeft(executable, "([{\"'$@&")
-	if idx := strings.IndexAny(cleanExec, ")."); idx != -1 {
-		cleanExec = cleanExec[:idx]
+	cleanExec := executable
+	if strings.HasPrefix(executable, "(") {
+		cleanExec = strings.TrimLeft(executable, "([{\"'$@&")
+		if idx := strings.IndexAny(cleanExec, ")."); idx != -1 {
+			cleanExec = cleanExec[:idx]
+		}
 	}
 	exec := strings.ToLower(filepath.Base(strings.TrimSuffix(cleanExec, ".exe")))
 	if strings.HasPrefix(exec, "---") || strings.HasPrefix(exec, "===") ||

@@ -72,10 +72,13 @@ func ParseAST(fullCommand string) (*ASTPipeline, error) {
 		fullCmd := ""
 		if len(args) > 0 {
 			rawArg := args[0]
-			// Strip leading parenthesis, quotes, or PowerShell syntax: (Get-ChildItem -Filter ...).FullName
-			cleanArg := strings.TrimLeft(rawArg, "([{\"'$@&")
-			if idx := strings.IndexAny(cleanArg, ")."); idx != -1 {
-				cleanArg = cleanArg[:idx]
+			cleanArg := rawArg
+			// Strip leading parenthesis, quotes, or PowerShell syntax ONLY if starting with parenthesis
+			if strings.HasPrefix(rawArg, "(") {
+				cleanArg = strings.TrimLeft(rawArg, "([{\"'$@&")
+				if idx := strings.IndexAny(cleanArg, ")."); idx != -1 {
+					cleanArg = cleanArg[:idx]
+				}
 			}
 			if cleanArg != "" {
 				exec = filepath.Base(strings.TrimSuffix(cleanArg, ".exe"))
