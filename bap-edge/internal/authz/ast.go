@@ -71,8 +71,29 @@ func ParseAST(fullCommand string) (*ASTPipeline, error) {
 		exec := ""
 		fullCmd := ""
 		if len(args) > 0 {
-			exec = filepath.Base(strings.TrimSuffix(args[0], ".exe"))
+			rawArg := args[0]
+			// Strip leading parenthesis, quotes, or PowerShell syntax: (Get-ChildItem -Filter ...).FullName
+			cleanArg := strings.TrimLeft(rawArg, "([{\"'$@&")
+			if idx := strings.IndexAny(cleanArg, ")."); idx != -1 {
+				cleanArg = cleanArg[:idx]
+			}
+			if cleanArg != "" {
+				exec = filepath.Base(strings.TrimSuffix(cleanArg, ".exe"))
+			} else {
+				exec = filepath.Base(strings.TrimSuffix(rawArg, ".exe"))
+			}
 			fullCmd = strings.Join(args, " ")
+
+			// Recognize PowerShell / script string literal expressions or decorative banners
+			// e.g. "--- EXEs (recursive) ---", "=== Status ===", or bare string output
+			lowerExec := strings.ToLower(exec)
+			if strings.HasPrefix(lowerExec, "---") || strings.HasPrefix(lowerExec, "===") ||
+				strings.HasPrefix(lowerExec, "***") || strings.HasPrefix(lowerExec, "###") ||
+				strings.HasPrefix(lowerExec, "#") || strings.HasPrefix(lowerExec, "//") ||
+				strings.Contains(exec, " ") ||
+				(len(args) == 1 && (strings.HasPrefix(fullCmd, "\"") || strings.HasPrefix(fullCmd, "'"))) {
+				exec = "write-output"
+			}
 		}
 
 		// Rebuild full command including redirections if present
@@ -167,8 +188,8 @@ func tokenizeShell(cmd string) []token {
 	i := 0
 
 	for i < n {
-		// Skip whitespace
-		for i < n && unicode.IsSpace(runes[i]) {
+		// Skip horizontal whitespace (space, tab)
+		for i < n && (runes[i] == ' ' || runes[i] == '\t') {
 			i++
 		}
 		if i >= n {
@@ -176,6 +197,23 @@ func tokenizeShell(cmd string) []token {
 		}
 
 		ch := runes[i]
+
+		// Newline command separation (\n, \r) outside quotes acts as ';'
+		if ch == '\n' || ch == '\r' {
+			tokens = append(tokens, token{typ: TokenSemi, value: ";"})
+			for i < n && (runes[i] == '\n' || runes[i] == '\r' || runes[i] == ' ' || runes[i] == '\t' || runes[i] == ';') {
+				i++
+			}
+			continue
+		}
+
+		// Comment prefix: # or // outside quotes consumes remainder of line
+		if ch == '#' || (ch == '/' && i+1 < n && runes[i+1] == '/') {
+			for i < n && runes[i] != '\n' && runes[i] != '\r' {
+				i++
+			}
+			continue
+		}
 
 		// Check multi-character and single-character operators
 		if ch == '&' {

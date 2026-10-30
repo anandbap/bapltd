@@ -109,8 +109,22 @@ func ParseCommand(cmdStr string) (string, string) {
 		base = base[:len(base)-4]
 	}
 
-	// Handle "python -m pytest", "python3 -m pytest", or "py -m pytest"
+	// Strip leading parenthesis, wrapper syntax or quotes: (Get-ChildItem -Filter ...).FullName
+	if strings.HasPrefix(base, "(") {
+		clean := strings.TrimLeft(base, "([{\"'$@&")
+		if idx := strings.IndexAny(clean, ")."); idx != -1 {
+			clean = clean[:idx]
+		}
+		if clean != "" {
+			base = clean
+		}
+	}
 	baseLower := strings.ToLower(base)
+	if strings.HasPrefix(baseLower, "---") || strings.HasPrefix(baseLower, "===") ||
+		strings.HasPrefix(baseLower, "***") || strings.HasPrefix(baseLower, "###") ||
+		strings.HasPrefix(baseLower, "#") || strings.HasPrefix(baseLower, "//") {
+		return "write-output", args
+	}
 	if baseLower == "python" || baseLower == "python3" || baseLower == "py" {
 		argParts := strings.Fields(args)
 		if len(argParts) >= 2 && argParts[0] == "-m" && argParts[1] == "pytest" {

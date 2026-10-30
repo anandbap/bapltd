@@ -15,7 +15,17 @@ type DecomposedAction struct {
 
 // Decompose deterministically parses executable, command, and arguments into canonical action and resource.
 func Decompose(executable, fullCommand, args string) DecomposedAction {
-	exec := strings.ToLower(filepath.Base(strings.TrimSuffix(executable, ".exe")))
+	cleanExec := strings.TrimLeft(executable, "([{\"'$@&")
+	if idx := strings.IndexAny(cleanExec, ")."); idx != -1 {
+		cleanExec = cleanExec[:idx]
+	}
+	exec := strings.ToLower(filepath.Base(strings.TrimSuffix(cleanExec, ".exe")))
+	if strings.HasPrefix(exec, "---") || strings.HasPrefix(exec, "===") ||
+		strings.HasPrefix(exec, "***") || strings.HasPrefix(exec, "###") ||
+		strings.HasPrefix(exec, "#") || strings.HasPrefix(exec, "//") ||
+		strings.Contains(exec, " ") {
+		exec = "write-output"
+	}
 	tokens := tokenize(fullCommand)
 	if len(tokens) == 0 {
 		tokens = []string{exec}
@@ -83,7 +93,7 @@ func Decompose(executable, fullCommand, args string) DecomposedAction {
 			ActionType:        "exec",
 			TargetEntity:      sub,
 		}
-	case "cat", "type", "head", "tail", "grep", "findstr", "more", "sed", "awk", "cut", "tr", "diff", "patch", "wc", "sort", "uniq", "less", "which", "where", "get-content", "gc", "test-path", "select-string", "sls", "write-output", "write-host":
+	case "cat", "type", "head", "tail", "grep", "findstr", "more", "sed", "awk", "cut", "tr", "diff", "patch", "wc", "sort", "uniq", "less", "which", "where", "get-content", "gc", "test-path", "select-string", "sls", "write-output", "write-host", "echo":
 		actionType := "read"
 		canonicalAction := "fs:file:read"
 		if exec == "sed" {

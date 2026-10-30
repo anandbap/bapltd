@@ -67,7 +67,7 @@ Open PowerShell or Terminal on Windows, macOS, or Linux:
 - **BAP Binaries**: Ensure repo binaries or package are present (`bap --version` or `.\bapedge.exe version`)
 
 ### Step 1.2: One-Click Installation & Workspace Hooking
-Install the BAP LTD package and initialize your workspace:
+Install the BAP LTD package and initialize your workspace with single-command ease:
 
 ```powershell
 # Option A: Install from PyPI (Production)
@@ -76,23 +76,25 @@ pip install --upgrade bap-ltd
 # Option B: Install in editable mode from local repository root (Development)
 pip install -e .
 
-# Run the BAP workspace installer (provisions hooks, policy, and binaries)
-bap-install --workspace .
-# Or via script: python scripts/bap_install.py --workspace .
+# Run the standard BAP installer (auto-provisions hooks, policy, and binaries)
+bap install
 ```
 
 *What happens automatically:*
-- `bapedge.exe` is deployed to `~/.bap/bin` and added to PATH.
-- Claude Code hooks are auto-configured in `.claude/settings.json` pointing to `cchook-interceptor.exe`.
+- `bap` and `bapedge` CLI binaries are deployed and added to PATH.
+- Claude Code hooks are auto-configured in `.claude/settings.json` pointing to `interceptor.exe`.
 - BAP Zero-Trust MCP server (`bapmcp.exe`) is registered in `.claude/mcp.json`.
 - Zero-Trust policy (`policy.cedar`) and schema are linked.
 
 ### Step 1.3: Workstation Master Enrollment (`bap login`)
-Enroll the physical laptop as an authenticated corporate authority anchor:
+Enroll the physical laptop as an authenticated corporate authority anchor using the unified CLI:
 
 ```powershell
-# Run interactive device login (or automated local dev verification)
-.\bapedge.exe login --provider google --email developer@enterprise.internal --verify-now
+# Interactive corporate device login
+bap login
+
+# Or non-interactive / automated login with specific IdP provider:
+bap login --provider google --email developer@enterprise.internal --verify-now
 ```
 
 *Terminal Output:*
@@ -108,22 +110,35 @@ Enroll the physical laptop as an authenticated corporate authority anchor:
 
 ---
 
-## 🚀 Part 2: Launching the Live Control Plane & Cockpit
+## 🚀 Part 2: Connecting the Live Control Plane & Fleet Cockpit
 
-In a **dedicated terminal window**, start the BAP Control Plane server with the interactive CIO dashboard enabled:
+BAP supports both **Remote Central SaaS** and **Local Standalone** control planes. Choose the setup that matches your demonstration environment:
+
+### Option A: Remote Central SaaS Control Plane (Zero Setup / Production Default)
+By default, the BAP Edge daemon and hooks stream live telemetry to the central control plane:
+- **Cockpit Dashboard**: 👉 **[https://bap-controlplane.onrender.com/dashboard/](https://bap-controlplane.onrender.com/dashboard/)**
+- **Live Fleet Inspector**: 👉 **[https://bap-controlplane.onrender.com/inspector.html](https://bap-controlplane.onrender.com/inspector.html)**
+
+*If using a custom corporate endpoint, set `bap login --server https://bap.corp.internal` or `$env:BAP_SERVER_URL="https://bap.corp.internal"`.*
+
+### Option B: Local Standalone Control Plane (Air-Gapped / Offline Localhost)
+To run an isolated control plane locally on your laptop:
 
 ```powershell
-.\bapcontrolplane.exe -port 8443 -https -demo-mode -allow-remote-admin
+# Start local control plane and cockpit in a dedicated terminal window:
+bap launch
+# Or launch binary directly:
+# .\bapcontrolplane.exe -port 8443 -https -demo-mode -allow-remote-admin
 ```
 
 Now open your web browser to:
 👉 **[https://localhost:8443/dashboard/](https://localhost:8443/dashboard/)**  
-*(Accept the self-signed localhost development certificate if prompted).*
+*(Accept the self-signed localhost certificate if prompted).*
 
 ### 🖥️ Audience Visual Setup
 Arrange your screen in a **side-by-side split**:
-- **Left Half**: Terminal running **Claude Code**.
-- **Right Half**: Browser showing the **BAP CIO Fleet Cockpit & Radar**.
+- **Left Half**: Terminal running **Claude Code** (`claude`).
+- **Right Half**: Browser showing the **BAP CIO Fleet Cockpit & Radar** (Remote or Local).
 
 ---
 
@@ -132,25 +147,25 @@ Arrange your screen in a **side-by-side split**:
 ### Act 1: The Transparent Productivity Inner-Loop (Allowed Actions)
 
 **Presenter Talking Point**:  
-*"Security tools often slow developers down. Watch how BAP operates completely transparently. Claude Code runs permitted shell and file actions with zero perceptible lag."*
+*"Security tools often slow developers down or trigger false-positive alerts on simple commands. Watch how BAP operates completely transparently. Claude Code runs permitted shell inspection and pipeline commands with sub-millisecond evaluation and zero perceptible lag."*
 
 1. Start Claude Code in your project directory:
    ```powershell
    # Launch Claude Code directly (hooks in .claude/settings.json automatically enforce BAP)
    claude
    ```
-   *(Or launch via BAP Transactional Guard: `.\run_claude_bap.bat`)*
 
 2. In the Claude Code prompt, enter:
    ```text
-   Can you inspect what git source files we have in this repository and count our lines of code?
+   Can you inspect what we have in this folder and list exe's
    ```
+   *(Or: `Can you inspect what git source files we have in this repository and count our lines of code?`)*
 
 3. **What Claude Does**:
-   - Claude triggers `Bash` tool calls running `git status`, `git ls-files`, `wc -l`.
-   - BAP's `PreToolUse` hook intercepts in **0.8ms**.
-   - Cedar policy confirms git commands are safe within the workspace boundary.
-   - BAP executes the command inside a restricted token sandbox, signs a Merkle execution receipt, and returns output to Claude.
+   - Claude triggers PowerShell/Bash tool calls running commands like `"--- EXEs (recursive) ---"; Get-ChildItem -Filter *.exe -Recurse` or `(Get-ChildItem -Filter *.exe).FullName`.
+   - BAP's `PreToolUse` hook intercepts in **sub-millisecond time (<1ms)**.
+   - Cedar AST parser accurately recognizes string output expressions, parenthesized object pipelines, and read operations within the workspace boundary.
+   - BAP approves the execution, returns output seamlessly to Claude, and signs a Merkle execution receipt.
 
 4. **What the Audience Sees on the Cockpit**:
    - **Agent Card**: 1 single Master Workstation card lights up.
@@ -158,6 +173,7 @@ Arrange your screen in a **side-by-side split**:
    - **Session**: `sess-claude-...` with Session SVID:  
      `spiffe://bap.internal/workstation/inst-ws-7a8b9c/session/sess-claude-...`
    - **Intent Timeline**: Categorized as `INVESTIGATION` (Confidence: 0.95).
+   - **Telemetry Ticker**: Green `ALLOW` badge logged on the radar.
    - **Health Badge**: Bright **GREEN [HEALTHY]** (2 allowed actions, 0 denials).
 
 ---

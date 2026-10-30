@@ -277,7 +277,22 @@ func (a *Authorizer) EvaluateWithWorkspace(executable, fullCommand, args, worksp
 }
 
 func (a *Authorizer) evaluateAtomicNode(executable, fullCommand, args, workspaceRoot, canonicalTarget string, escapesWorkspace bool) (bool, string, error) {
-	normalizedExec := strings.ToLower(executable)
+	// 0. Skip empty or comment lines
+	trimmedFull := strings.TrimSpace(fullCommand)
+	if trimmedFull == "" || strings.HasPrefix(trimmedFull, "#") || strings.HasPrefix(trimmedFull, "//") || strings.HasPrefix(strings.ToLower(trimmedFull), "rem ") {
+		return true, "", nil
+	}
+
+	cleanExec := strings.TrimLeft(executable, "([{\"'$@&")
+	if idx := strings.IndexAny(cleanExec, ")."); idx != -1 {
+		cleanExec = cleanExec[:idx]
+	}
+	normalizedExec := strings.ToLower(cleanExec)
+	if strings.HasPrefix(normalizedExec, "---") || strings.HasPrefix(normalizedExec, "===") ||
+		strings.HasPrefix(normalizedExec, "***") || strings.HasPrefix(normalizedExec, "###") ||
+		strings.Contains(normalizedExec, " ") {
+		normalizedExec = "write-output"
+	}
 	normalizedFull := strings.ToLower(fullCommand)
 	normalizedArgs := strings.ToLower(args)
 
