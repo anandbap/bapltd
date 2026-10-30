@@ -31,6 +31,10 @@ trusted-host = nexus.internal.company.com
 
 Then simply install:
 ```bash
+# Standard universal package (includes CLI, binaries, and bap_sdk)
+pip install bap-ltd
+
+# Or standalone SDK package:
 pip install bap-sdk
 ```
 
