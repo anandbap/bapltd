@@ -631,7 +631,10 @@
     }
     options.headers = authHeaders(options.headers);
     options.credentials = 'same-origin';
-    return fetch(url, options);
+    return fetch(url, options).then(function (r) {
+      if (!r.ok) throw new Error('Request refused (' + r.status + ')');
+      return r;
+    });
   }
   function getJSON(u) {
     return apiFetch(u).then(function (r) {
@@ -758,8 +761,8 @@
     } else { tlEl.innerHTML = ''; }
     $('tlCap').hidden = !tl.length;
     $('sRecordHint').textContent = S.recordCount != null ? S.recordCount.toLocaleString() + ' records sealed, none altered' : 'Cannot be edited later';
-    $('freezeBtn').disabled = S.frozen || !S.agents;
-    $('freezeBtn').textContent = S.frozen ? 'Agents frozen' : 'Freeze all agents';
+    $('freezeBtn').disabled = false;
+    $('freezeBtn').textContent = S.frozen ? 'Unfreeze all agents' : 'Freeze all agents';
 
     var fl = $('fleet');
     var fleetAgents = (S.registeredAgents && S.registeredAgents.length) ? S.registeredAgents : [];
@@ -824,7 +827,7 @@
       li.className = f.blocked ? 'blocked-row' : 'clickable';
       var ini = String(f.who).split(' · ')[0].split(/\s+/).map(function (w) { return w.charAt(0); }).join('').slice(0, 2).toUpperCase();
       li.innerHTML = '<div class="row"><div class="av" aria-hidden="true">' + esc(ini) + '</div><div><div class="who">' + esc(f.who) + '</div>' +
-        '<div class="ask">' + esc(f.ask) + (f.blocked ? '<span class="chip no">Blocked</span>' : (f.shadow ? '<span class="chip wr">Flagged</span>' : '<span class="chip ok">Allowed</span>')) + '</div>' +
+        '<div class="ask">' + esc(f.ask) + (f.blocked ? '<span class="chip no">Blocked</span>' : (f.shadow ? '<span class="chip wr">Flagged</span>' : (f.unknown ? '<span class="chip wr">Not evaluated</span>' : '<span class="chip ok">Allowed</span>'))) + '</div>' +
         '<div class="did">' + esc(f.did) + (f.blocked ? ' &mdash; <u>see the proof</u>' : ' <span class="open-hint">&mdash; click for every prompt and reply</span>') + '</div></div></div>';
       var open = function () { if (f.blocked && stories[f.storyId]) { openStory(f.storyId, f.sessionId); } else { openConvo(f); } };
       li.addEventListener('click', open);
@@ -949,7 +952,7 @@
     S.activeSessionId = f.sessionId;
     $('drawer').classList.remove('list'); $('drawer').classList.add('convo');
     $('dTitle').textContent = f.ask || 'Session activity';
-    $('dSteps').innerHTML = [['Who', f.who], ['Latest action', f.did], ['Result', f.blocked ? 'Blocked' : (f.shadow ? 'Flagged, not stopped' : 'Allowed')]].map(function (p) {
+    $('dSteps').innerHTML = [['Who', f.who], ['Latest action', f.did], ['Result', f.blocked ? 'Blocked' : (f.shadow ? 'Flagged, not stopped' : (f.unknown ? 'Not evaluated' : 'Allowed'))]].map(function (p) {
       return '<li><div class="k">' + esc(p[0]) + '</div><div class="v">' + esc(p[1] || '-') + '</div></li>'; }).join('');
     $('dTech').innerHTML = esc('Session: ' + (f.sessionId || 'not available')) + (f.t ? '<br>' + esc('Last event: ' + fmtTime(f.t)) : '');
     loadConvo(f.sessionId);
@@ -1192,7 +1195,7 @@
       var li = document.createElement('li');
       li.className = 'turn pick' + (f.blocked ? ' action deny' : '');
       li.tabIndex = 0; li.setAttribute('role', 'button');
-      li.innerHTML = '<div class="tk"><span>' + esc(f.who) + '</span><span>' + esc(f.blocked ? 'Blocked' : (f.shadow ? 'Flagged' : (f.status || 'Allowed'))) + '</span></div>' +
+      li.innerHTML = '<div class="tk"><span>' + esc(f.who) + '</span><span>' + esc(f.blocked ? 'Blocked' : (f.shadow ? 'Flagged' : (f.unknown ? 'Not evaluated' : (f.status || 'Allowed')))) + '</span></div>' +
         '<div class="tt">' + esc(f.ask) + '</div><div class="tm">' + esc(f.did) + (f.t ? ' · ' + esc(fmtTime(f.t)) : '') + '</div>';
       var go = function () { if (f.blocked && stories[f.storyId]) { openStory(f.storyId, f.sessionId); } else { openConvo(f); } };
       li.addEventListener('click', go);
@@ -1260,6 +1263,14 @@
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeAll(); });
 
   function openFreeze() {
+    if (S.frozen && S.mode !== 'demo') {
+      if (!confirm('Unfreeze all agents? Workstation and session freezes will remain in effect.')) return;
+      apiFetch('/api/v1/control/kill-switch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: false, reason: 'Fleet restored from V3 dashboard' }) })
+        .then(function () { S.frozen = false; loadLive(); })
+        .catch(function (err) { alert('Unfreeze failed: ' + err.message); });
+      return;
+    }
     lastFocus = document.activeElement;
     $('mBody').textContent = S.mode === 'demo'
       ? 'This will pause all ' + S.agents + ' agents instantly. (Demo: nothing real is affected.)'
@@ -1294,15 +1305,28 @@
   }
 
   /* ---------- LIVE mode ---------- */
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-session-freeze]');
+    if (!btn) return;
+    var action = btn.getAttribute('data-session-freeze');
+    var target = btn.getAttribute('data-session-id');
+    if (!confirm((action === 'freeze' ? 'Freeze' : 'Unfreeze') + ' session ' + target + '? This applies only to this session.')) return;
+    btn.disabled = true;
+    apiFetch('/api/v1/control/agent/kill', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target: target, action: action, scope: 'session' }) })
+      .then(function () { loadLive(); })
+      .catch(function (err) { btn.disabled = false; alert('Session action failed: ' + err.message); });
+  });
   var liveTimer = null;
   var STREAMS = ['Build', 'Operate', 'Analyze', 'Document', 'Support'];
 
   function loadLive() {
     Promise.allSettled([getJSON('/api/activity/summary'), getJSON('/api/activity/live'),
                         getJSON('/api/v1/escalation/requests'), getJSON('/api/v1/control/chain/verify'),
-                        getJSON('/api/v1/agents'), getJSON('/api/v1/sessions')])
+                        getJSON('/api/v1/agents'), getJSON('/api/v1/sessions'), getJSON('/api/v1/control/revocations')])
       .then(function (r) {
         var sum = r[0].status === 'fulfilled' ? r[0].value : null;
+        if (r[6].status === 'fulfilled') S.frozen = r[6].value.kill_switch === true;
         var live = r[1].status === 'fulfilled' ? r[1].value : null;
         var esc_ = r[2].status === 'fulfilled' ? r[2].value : null;
         var chain = r[3].status === 'fulfilled' ? r[3].value : null;
@@ -1447,8 +1471,15 @@
               userStr + ' &middot; ' + lastStr +
               '</small>';
 
+            var sessionFrozen = s.status === 'revoked' && s.close_reason === 'Frozen by administrator';
+            if (s.status === 'active' || sessionFrozen) {
+              surfaceHtml += '<button class="btn-action-sm" type="button" data-session-id="' + esc(s.session_id) +
+                '" data-session-freeze="' + (sessionFrozen ? 'unfreeze' : 'freeze') + '">' +
+                (sessionFrozen ? 'Unfreeze session' : 'Freeze session') + '</button>';
+            }
+
             var isLive = s.isLive;
-            var reportText = isLive ? 'Live' : 'Offline';
+            var reportText = sessionFrozen ? 'Frozen' : (isLive ? 'Live' : 'Offline');
             var reportClass = isLive ? 'g' : 'off';
             var reasonClean = s.close_reason ? ('Session ' + s.close_reason) : 'Session ended';
             var means = isLive
@@ -1489,7 +1520,7 @@
         });
         S.streams = STREAMS.filter(function (n) { return counts[n]; }).map(function (n) { return { name: n, count: counts[n] }; });
         S.rows = agents.map(function (a) {
-          var isBlocked = a.action_status === 'denied' || a.policy_decision === 'DENY' || a.policy_decision === 'DENIED' || a.outcome_category === 'Blocked';
+          var isBlocked = !isShadow(a) && (/deny|denied|block/i.test(a.policy_decision || '') || /^(denied|blocked)$/i.test(a.action_status || '') || a.outcome_category === 'Blocked');
           var storyId = a.session_id || a.agent_id || 'live-story';
           if (isBlocked && !stories[storyId]) {
             stories[storyId] = {
@@ -1510,6 +1541,7 @@
                    did: a.last_action || a.action || a.tool || (a.action_status ? 'Status: ' + a.action_status : 'Working'),
                    blocked: isBlocked,
                    shadow: !isBlocked && isShadow(a),
+                   unknown: !isBlocked && !isShadow(a) && !/^(allow|allowed)$/i.test(a.policy_decision || ''),
                    storyId: storyId, sessionId: a.session_id || '', t: a._t || 0, status: a.action_status || '' };
         });
         S.feed = S.rows.slice(0, 15);
@@ -1524,7 +1556,7 @@
         else if (S.agents != null) { S.state = 'ok'; S.tag = 'In control'; S.headline = S.agents ? 'Every agent is operating within policy.' : 'No agents are running.'; S.sub = S.agents ? 'Nothing has been blocked and nothing needs you.' : 'When agents start working they will appear here.'; }
         else if (S.conn === 'offline') { S.state = 'watch'; S.tag = 'Reporting offline'; S.headline = 'The control plane is offline. This screen cannot see the fleet.'; S.sub = 'Agents on governed machines keep enforcing their saved policy and queue records locally. Nothing here is estimated or invented, so numbers show as pending until it reconnects.'; }
         else { S.state = 'watch'; S.tag = 'No data'; S.headline = 'Connected, but no data yet.'; S.sub = 'The control plane answered without activity data. Nothing on this screen is estimated or invented.'; }
-        if (S.frozen) { S.state = 'frozen'; }
+        if (S.frozen) { S.state = 'frozen'; S.tag = 'Frozen'; S.headline = 'All agents are frozen.'; S.sub = 'Fleet freeze is active. Unfreeze all agents to resume policy enforcement.'; }
         render();
       });
   }

@@ -114,6 +114,12 @@ func mapIntentToCategory(intent string) string {
 }
 
 func (s *Server) sessionToActivityEvent(sess *session.Session) *types.AgentActivityEvent {
+	// List returns summaries without audit events; fetch the immutable detail copy.
+	if s.sessionStore != nil {
+		if detail, err := s.sessionStore.Get(sess.SessionID); err == nil {
+			sess = detail
+		}
+	}
 	intentCat := "Other / Unclassified"
 	if sess.Intent.Primary != "" {
 		intentCat = s.classifyIntentCategory(sess.Intent.Primary, sess.Intent.Confidence)
@@ -215,6 +221,40 @@ func (s *Server) sessionToActivityEvent(sess *session.Session) *types.AgentActiv
 		}
 	}
 
+	// A session heartbeat is liveness, not an authorization decision. Use the
+	// newest recorded decision instead of manufacturing an ALLOW for every session.
+	decision, outcome, action := "UNKNOWN", "Unknown", "No policy decision recorded"
+	var latestTime time.Time
+	var promptTime time.Time
+	if s.sessionStore != nil {
+		promptTime = s.sessionStore.LatestPromptTime(sess.SessionID)
+	}
+	for _, ev := range sess.Events {
+		if ev.PromptHash != "" && sess.Intent.PromptHash != "" && ev.PromptHash != sess.Intent.PromptHash {
+			continue
+		}
+		if ev.UserPrompt != "" && sess.UserPrompt != "" && session.CleanUserPrompt(ev.UserPrompt) != sess.UserPrompt {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339Nano, ev.Timestamp)
+		if ev.PromptHash == "" && ev.UserPrompt == "" && t.Before(promptTime) {
+			continue
+		}
+		if err != nil || t.Before(latestTime) || ev.Decision == "" {
+			continue
+		}
+		latestTime = t
+		decision = strings.ToUpper(ev.Decision)
+		action = ev.FullCommand
+	}
+	switch {
+	case strings.Contains(decision, "AUDIT_PERMITTED") || strings.Contains(decision, "SHADOW"):
+		outcome = "Flagged"
+	case strings.Contains(decision, "DENY") || strings.Contains(decision, "DENIED") || strings.Contains(decision, "BLOCK"):
+		outcome = "Blocked"
+	case decision == "ALLOW" || decision == "ALLOWED":
+		outcome = "Success"
+	}
 	return &types.AgentActivityEvent{
 		Timestamp:          sess.LastActiveAt.Format(time.RFC3339),
 		SessionID:          sess.SessionID,
@@ -227,14 +267,14 @@ func (s *Server) sessionToActivityEvent(sess *session.Session) *types.AgentActiv
 		PromptSummary:      summary,
 		Intent:             sess.Intent.Primary,
 		IntentCategory:     intentCat,
-		Action:             "Active workload execution",
+		Action:             action,
 		Tool:               "bapedge",
 		TargetResource:     "internal://session",
 		DataClassification: "Internal",
-		PolicyDecision:     "ALLOW",
+		PolicyDecision:     decision,
 		RiskScore:          risk,
 		ActionStatus:       status,
-		OutcomeCategory:    "Success",
+		OutcomeCategory:    outcome,
 		TraceID:            "tr-" + sess.SessionID,
 		DeviationLevel:     devLevel,
 	}

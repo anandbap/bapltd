@@ -1681,7 +1681,6 @@ func (s *Server) handleDeviceSuccess(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(html))
 }
 
-
 func (s *Server) handleAcquireGrant(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -3635,6 +3634,7 @@ func (s *Server) handleTargetedKillAgent(w http.ResponseWriter, r *http.Request)
 		Target string `json:"target"`
 		Action string `json:"action"`
 		UserID string `json:"user_id,omitempty"`
+		Scope  string `json:"scope,omitempty"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -3645,6 +3645,40 @@ func (s *Server) handleTargetedKillAgent(w http.ResponseWriter, r *http.Request)
 	action := strings.ToLower(strings.TrimSpace(req.Action))
 	if action == "unrevoke" {
 		action = "restore"
+	}
+	// Session freezes must never quarantine the workstation or revoke its user.
+	if action == "freeze" || action == "unfreeze" {
+		if req.Scope != "session" || target == "" || s.sessionStore == nil {
+			writeError(w, http.StatusBadRequest, "Exact session target and scope=session are required")
+			return
+		}
+		sess, err := s.sessionStore.Get(target)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "Session not found")
+			return
+		}
+		if action == "freeze" {
+			if sess.Status != "active" {
+				writeError(w, http.StatusConflict, "Only active sessions can be frozen")
+				return
+			}
+			err = s.sessionStore.RevokeSession(target, "Frozen by administrator")
+		} else {
+			if sess.Status != "revoked" || sess.CloseReason != "Frozen by administrator" {
+				writeError(w, http.StatusConflict, "Session is not frozen")
+				return
+			}
+			_, err = s.sessionStore.RestoreTarget(target)
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		s.auditStore.Ingest([]audit.Event{{Source: "bap-controlplane", SessionID: target,
+			Executable: "bapcontrolplane", FullCommand: strings.ToUpper(action) + "_SESSION target=" + target,
+			Decision: "allow", Reason: "Administrator session " + action, Timestamp: time.Now().UTC().Format(time.RFC3339)}})
+		writeJSON(w, http.StatusOK, map[string]any{"target": target, "scope": "session", "action": action})
+		return
 	}
 	if target == "" || (action != "restore" && action != "revoke" && action != "stop") {
 		writeError(w, http.StatusBadRequest, "Exact target and action (stop, revoke, or restore) are required")
@@ -5167,7 +5201,12 @@ func (s *Server) handleControlQuarantine(w http.ResponseWriter, r *http.Request)
 			return
 		}
 
-		if req.Action == "restore" || req.Action == "unquarantine" {
+		req.Action = strings.ToLower(strings.TrimSpace(req.Action))
+		if req.Action != "freeze" && req.Action != "quarantine" && req.Action != "restore" && req.Action != "unfreeze" && req.Action != "unquarantine" {
+			writeError(w, http.StatusBadRequest, "Action must be freeze or unfreeze")
+			return
+		}
+		if req.Action == "restore" || req.Action == "unfreeze" || req.Action == "unquarantine" {
 			agent, err := s.registry.UnquarantineTarget(req.Target)
 			if err != nil {
 				writeError(w, http.StatusNotFound, err.Error())
@@ -5588,6 +5627,3 @@ func (s *Server) handleGetEscalation(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, esc)
 }
-
-
-
