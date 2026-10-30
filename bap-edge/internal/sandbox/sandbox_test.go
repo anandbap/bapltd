@@ -105,5 +105,65 @@ func TestParseCommandNormalization(t *testing.T) {
 	}
 }
 
+func TestIsPowerShellCommand(t *testing.T) {
+	psCmds := []struct {
+		cmd  string
+		exec string
+	}{
+		{"Get-ChildItem -Filter *.exe -Recurse", "get-childitem"},
+		{"gci -Path C:\\", "gci"},
+		{"Get-ChildItem | Select-Object Name", "get-childitem"},
+		{`Get-ChildItem | Select-Object Name, @{n="Size"; e={[math]::Round($_.Length/1MB,2)}}`, "get-childitem"},
+		{"echo hello | Select-String pattern", "echo"},
+		{"Get-Content file.txt", "get-content"},
+		{"$foo = 'bar'", ""},
+		{"dir -Recurse -Filter *.txt", "dir"},
+	}
+
+	for _, tc := range psCmds {
+		if !isPowerShellCommand(tc.cmd, tc.exec) {
+			t.Errorf("expected isPowerShellCommand(%q, %q) to be true, got false", tc.cmd, tc.exec)
+		}
+	}
+
+	nonPsCmds := []struct {
+		cmd  string
+		exec string
+	}{
+		{"echo hello", "echo"},
+		{"git status", "git"},
+		{"pytest -v tests/", "pytest"},
+		{"python main.py", "python"},
+	}
+
+	for _, tc := range nonPsCmds {
+		if isPowerShellCommand(tc.cmd, tc.exec) {
+			t.Errorf("expected isPowerShellCommand(%q, %q) to be false, got true", tc.cmd, tc.exec)
+		}
+	}
+}
+
+func TestBuildExecCmdWithShell(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+
+	cmdPS := BuildExecCmdWithShell("Get-ChildItem -Filter *.exe", "powershell")
+	if !strings.Contains(strings.ToLower(cmdPS.Path), "powershell") && !strings.Contains(strings.ToLower(cmdPS.Path), "pwsh") {
+		t.Errorf("expected powershell/pwsh executable, got %q", cmdPS.Path)
+	}
+
+	cmdAutoPS := BuildExecCmdWithShell(`Get-ChildItem | Select-Object Name, @{n="Size"; e={[math]::Round($_.Length/1MB,2)}}`, "auto")
+	if !strings.Contains(strings.ToLower(cmdAutoPS.Path), "powershell") && !strings.Contains(strings.ToLower(cmdAutoPS.Path), "pwsh") {
+		t.Errorf("expected auto detection to select powershell/pwsh, got %q", cmdAutoPS.Path)
+	}
+
+	cmdCmd := BuildExecCmdWithShell("echo hello world", "cmd")
+	if !strings.EqualFold(filepath.Base(cmdCmd.Path), "cmd.exe") {
+		t.Errorf("expected cmd.exe, got %q", cmdCmd.Path)
+	}
+}
+
+
 
 

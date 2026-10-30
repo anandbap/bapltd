@@ -37,6 +37,7 @@ type execContext struct {
 	fullCommand     string
 	executable      string
 	cmdArguments    string
+	shell           string
 	enforcementMode string
 	decisionOnly    bool
 	shadowDenied    bool
@@ -845,6 +846,15 @@ func RunExec(args []string) {
 	callerBinaryFlag := fs.String("caller-binary", os.Getenv("BAP_CALLER_BINARY"), "Path to calling agent binary")
 	callerHashFlag := fs.String("caller-hash", os.Getenv("BAP_CALLER_HASH"), "Cryptographic SHA256 hash of calling agent binary")
 
+	defaultShell := os.Getenv("BAP_SHELL")
+	if defaultShell == "" {
+		defaultShell = os.Getenv("LTD_SHELL")
+	}
+	if defaultShell == "" {
+		defaultShell = "auto"
+	}
+	shellFlag := fs.String("shell", defaultShell, "Target shell for execution ('auto', 'cmd', 'powershell', 'pwsh')")
+
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing arguments: %v\n", err)
 		os.Exit(1)
@@ -925,6 +935,7 @@ func RunExec(args []string) {
 		serverURL:       *serverFlag,
 		policyPath:      *policyPath,
 		auditLogPath:    *auditLogFlag,
+		shell:           *shellFlag,
 		enforcementMode: strings.ToLower(strings.TrimSpace(*modeFlag)),
 		decisionOnly:    *decisionOnlyFlag || *checkOnlyFlag,
 		forceJSON:       *jsonFlag,
@@ -1221,7 +1232,7 @@ func RunExec(args []string) {
 	}
 
 	// 6. Execute sandboxed command with process supervision & ancestry tracking (BAP-534)
-	execRes := sandbox.RunSandboxedCommandWithDetails(fullCommand)
+	execRes := sandbox.RunSandboxedCommandWithShell(fullCommand, ec.shell)
 	ec.parentPID = execRes.ParentPID
 	ec.processPID = execRes.ProcessPID
 	ec.processTree = execRes.ProcessTree

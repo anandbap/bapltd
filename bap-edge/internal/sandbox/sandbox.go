@@ -144,10 +144,47 @@ func ParseCommand(cmdStr string) (string, string) {
 	return strings.ToLower(base), args
 }
 
+// isPowerShellCommand determines if a command line string is PowerShell syntax or uses PowerShell cmdlets.
+func isPowerShellCommand(trimmed, executable string) bool {
+	execLower := strings.ToLower(executable)
+	switch execLower {
+	case "get-childitem", "gci", "select-object", "where-object", "foreach-object",
+		"format-table", "ft", "format-list", "fl", "format-wide", "fw",
+		"out-string", "select-string", "sls", "get-content", "gc", "test-path",
+		"set-content", "sc", "add-content", "ac", "new-item", "ni", "remove-item", "ri",
+		"copy-item", "cpi", "move-item", "mi", "write-host", "write-output",
+		"measure-object", "group-object", "get-process", "gps", "start-sleep",
+		"clear-host", "get-item", "gi", "get-command", "gcm", "get-help",
+		"convertfrom-json", "convertto-json", "invoke-webrequest", "iwr",
+		"invoke-restmethod", "irm", "new-object":
+		return true
+	}
+
+	lower := strings.ToLower(trimmed)
+	if strings.Contains(lower, "select-object") || strings.Contains(lower, "format-table") ||
+		strings.Contains(lower, "where-object") || strings.Contains(lower, "get-childitem") ||
+		strings.Contains(lower, "get-content") || strings.Contains(lower, "select-string") ||
+		strings.Contains(lower, "$_") || strings.Contains(lower, "@{") ||
+		strings.Contains(lower, "$env:") || strings.Contains(lower, "[math]") ||
+		strings.Contains(lower, "[system.") || strings.Contains(lower, " -recurse") ||
+		strings.Contains(lower, " -filter ") || strings.Contains(lower, " -property ") ||
+		strings.Contains(lower, " -expandproperty ") || strings.Contains(lower, " -eq ") ||
+		strings.Contains(lower, " -ne ") || strings.Contains(lower, " -gt ") ||
+		strings.Contains(lower, " -lt ") || strings.Contains(lower, " -like ") ||
+		strings.Contains(lower, " -match ") || strings.HasPrefix(trimmed, "$") {
+		return true
+	}
+
+	return false
+}
+
 // BuildExecCmd creates an *exec.Cmd appropriate for the host OS.
-// On Windows, it uses fast cmd.exe /c (32x faster than powershell) with automatic
-// resolution for "ls", shell operators (pipes, chaining, redirection), and dev tools.
 func BuildExecCmd(cmdStr string) *exec.Cmd {
+	return BuildExecCmdWithShell(cmdStr, "auto")
+}
+
+// BuildExecCmdWithShell creates an *exec.Cmd appropriate for the host OS and requested shell.
+func BuildExecCmdWithShell(cmdStr, shell string) *exec.Cmd {
 	trimmed := CleanCommandString(cmdStr)
 	if runtime.GOOS == "windows" {
 		executable, args := ParseCommand(trimmed)
@@ -182,6 +219,16 @@ func BuildExecCmd(cmdStr string) *exec.Cmd {
 		}
 		if executable == "cmd" {
 			return exec.Command("cmd.exe", strings.Fields(args)...)
+		}
+
+		// Explicit shell or detected PowerShell command
+		if strings.EqualFold(shell, "powershell") || strings.EqualFold(shell, "pwsh") ||
+			(shell != "cmd" && isPowerShellCommand(trimmed, executable)) {
+			psExe := "powershell.exe"
+			if pwshPath, err := exec.LookPath("pwsh.exe"); err == nil && pwshPath != "" {
+				psExe = pwshPath
+			}
+			return exec.Command(psExe, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", trimmed)
 		}
 
 		// If command uses shell features (pipes, chaining, redirection), execute via cmd.exe /c
@@ -248,7 +295,13 @@ type ExecResult struct {
 // RunSandboxedCommandWithDetails executes the shell command in an isolated sandbox,
 // capturing combined stdout/stderr, exit code, and complete process tree ancestry (BAP-534).
 func RunSandboxedCommandWithDetails(cmdStr string) ExecResult {
-	cmd := BuildExecCmd(cmdStr)
+	return RunSandboxedCommandWithShell(cmdStr, "auto")
+}
+
+// RunSandboxedCommandWithShell executes the shell command in an isolated sandbox with the target shell,
+// capturing combined stdout/stderr, exit code, and complete process tree ancestry.
+func RunSandboxedCommandWithShell(cmdStr, shell string) ExecResult {
+	cmd := BuildExecCmdWithShell(cmdStr, shell)
 
 	// Apply platform-specific sandbox attributes
 	cleanup := ConfigureSandbox(cmd)

@@ -2927,7 +2927,11 @@ func main() {
 		if callerSource == "" {
 			callerSource = "claude-code"
 		}
-		rewritten := fmt.Sprintf(`%s exec --source %s --session-id %s --cmd-b64 %s`, ltdBin, callerSource, sessionID, cmdB64)
+		shellArg := ""
+		if strings.EqualFold(payload.ToolName, "powershell") || strings.EqualFold(payload.ToolName, "pwsh") {
+			shellArg = " --shell powershell"
+		}
+		rewritten := fmt.Sprintf(`%s exec%s --source %s --session-id %s --cmd-b64 %s`, ltdBin, shellArg, callerSource, sessionID, cmdB64)
 		if caller.BinaryPath != "" {
 			rewritten = fmt.Sprintf(`%s --caller-binary "%s"`, rewritten, caller.BinaryPath)
 		}
