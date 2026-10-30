@@ -11,7 +11,7 @@ import (
 var (
 	// Version is the semantic release version (e.g. "v1.0.0").
 	// Injected at compile-time via -ldflags "-X 'bap-controlplane/pkg/version.Version=...'"
-	Version = "v1.9.5"
+	Version = "v1.9.6"
 
 	// GitCommit is the git SHA hash.
 	GitCommit = "dev"
