@@ -798,9 +798,10 @@ func (s *Store) RecordEvent(sessionID string, ev audit.Event) {
 
 	sess.LastActiveAt = time.Now().UTC()
 	sess.TotalEvents++
-	if strings.Contains(ev.Decision, "allow") {
+	dLower := strings.ToLower(ev.Decision)
+	if strings.Contains(dLower, "allow") || strings.Contains(dLower, "approve") {
 		sess.AllowedCount++
-	} else if strings.Contains(ev.Decision, "deny") {
+	} else if strings.Contains(dLower, "deny") || strings.Contains(dLower, "block") {
 		sess.DeniedCount++
 	}
 	sess.Events = append(sess.Events, ev)

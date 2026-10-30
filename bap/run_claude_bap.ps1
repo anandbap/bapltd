@@ -142,7 +142,26 @@ function Write-AtomicText {
     $tmp = "$Path.tmp.$PID.$([Guid]::NewGuid().ToString('N'))"
     try {
         [System.IO.File]::WriteAllText($tmp, $Text, $Utf8NoBom)
-        Move-Item -LiteralPath $tmp -Destination $Path -Force
+        $retries = 10
+        while ($retries -gt 0) {
+            try {
+                if (Test-Path -LiteralPath $Path) {
+                    Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+                }
+                Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop
+                break
+            }
+            catch {
+                $retries--
+                if ($retries -le 0) {
+                    try {
+                        [System.IO.File]::WriteAllText($Path, $Text, $Utf8NoBom)
+                    } catch { }
+                    break
+                }
+                Start-Sleep -Milliseconds 100
+            }
+        }
     }
     finally {
         if (Test-Path -LiteralPath $tmp) {
@@ -158,14 +177,33 @@ function Write-AtomicBytes {
     )
 
     $dir = Split-Path -Parent $Path
-    if (-not (Test-Path -LiteralPath $dir)) {
+    if (-not [string]::IsNullOrWhiteSpace($dir) -and -not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
     }
 
     $tmp = "$Path.tmp.$PID.$([Guid]::NewGuid().ToString('N'))"
     try {
         [System.IO.File]::WriteAllBytes($tmp, $Bytes)
-        Move-Item -LiteralPath $tmp -Destination $Path -Force
+        $retries = 10
+        while ($retries -gt 0) {
+            try {
+                if (Test-Path -LiteralPath $Path) {
+                    Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+                }
+                Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop
+                break
+            }
+            catch {
+                $retries--
+                if ($retries -le 0) {
+                    try {
+                        [System.IO.File]::WriteAllBytes($Path, $Bytes)
+                    } catch { }
+                    break
+                }
+                Start-Sleep -Milliseconds 100
+            }
+        }
     }
     finally {
         if (Test-Path -LiteralPath $tmp) {

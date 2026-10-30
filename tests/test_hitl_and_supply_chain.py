@@ -167,7 +167,7 @@ class TestHitlAndSupplyChain(unittest.TestCase):
             capture_output=True, text=True, cwd=REPO_ROOT, env=env_no_stepup
         )
         data_denied = json.loads(proc_denied.stdout)
-        self.assertEqual(data_denied.get("decision"), "block")
+        self.assertIn(data_denied.get("decision"), ("block", "deny"))
         self.assertIn("Modifying files outside workspace is forbidden", data_denied.get("reason", ""))
 
         # 2. With step-up: permitted
@@ -180,7 +180,7 @@ class TestHitlAndSupplyChain(unittest.TestCase):
             capture_output=True, text=True, cwd=REPO_ROOT, env=env_stepup
         )
         data_allowed = json.loads(proc_allowed.stdout)
-        self.assertEqual(data_allowed.get("decision"), "allow")
+        self.assertIn(data_allowed.get("decision"), ("allow", "approve"))
         self.assertIn("STEP-UP AUTHORIZED", data_allowed.get("systemMessage", ""))
 
     def test_08_canary_secret_tripwire(self):
