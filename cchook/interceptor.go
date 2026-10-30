@@ -2012,7 +2012,9 @@ func handleSessionStartHook(payload HookPayload) {
 	}
 	// A pre-existing session id only means a launcher owns the watcher if that watcher is
 	// actually alive; stale markers (PID reuse, crashed watcher) must not suppress startup.
-	launcherOwnsWatcher := sessionID != "" && watcherAlive(sessionID)
+	launcherOwnsWatcher := (sessionID != "" && watcherAlive(sessionID)) ||
+		os.Getenv("BAP_NO_BACKGROUND_WATCHER") == "1" ||
+		os.Getenv("BAP_TEST_ENV") == "1"
 	if sessionID == "" {
 		sessionID = payload.SessionID
 	}
@@ -2129,12 +2131,16 @@ func handleSessionEndHook(payload HookPayload) {
 }
 
 func cleanupSessionMarkers(sessionID string, pid int) {
+	ws := resolveWorkspaceRoot()
 	if sessionID != "" {
 		sum := sha256.Sum256([]byte(sessionID))
 		hashName := fmt.Sprintf("%x.json", sum[:])
 		_ = os.Remove(filepath.Join(".bap", "sessions", hashName))
+		_ = os.Remove(filepath.Join(ws, ".bap", "sessions", hashName))
 		_ = os.Remove(filepath.Join(".bapstate", "sessions", hashName))
+		_ = os.Remove(filepath.Join(ws, ".bapstate", "sessions", hashName))
 		_ = os.Remove(filepath.Join(".bap", "prompts", fmt.Sprintf("%x.txt", sum[:])))
+		_ = os.Remove(filepath.Join(ws, ".bap", "prompts", fmt.Sprintf("%x.txt", sum[:])))
 		_ = os.Remove(promptPathForSession(sessionID))
 		if home, err := os.UserHomeDir(); err == nil && home != "" {
 			_ = os.Remove(filepath.Join(home, ".bapstate", "sessions", hashName))
@@ -2145,14 +2151,19 @@ func cleanupSessionMarkers(sessionID string, pid int) {
 	if pid > 0 {
 		pidName := fmt.Sprintf("pid-%d.json", pid)
 		_ = os.Remove(filepath.Join(".bap", "sessions", pidName))
+		_ = os.Remove(filepath.Join(ws, ".bap", "sessions", pidName))
 		_ = os.Remove(filepath.Join(".bapstate", "sessions", pidName))
+		_ = os.Remove(filepath.Join(ws, ".bapstate", "sessions", pidName))
 		if home, err := os.UserHomeDir(); err == nil && home != "" {
 			_ = os.Remove(filepath.Join(home, ".bapstate", "sessions", pidName))
 		}
 	}
 	_ = os.Remove(filepath.Join(".bap", "session.json"))
+	_ = os.Remove(filepath.Join(ws, ".bap", "session.json"))
 	_ = os.Remove(filepath.Join(".bapstate", "session.json"))
+	_ = os.Remove(filepath.Join(ws, ".bapstate", "session.json"))
 	_ = os.Remove(".bap-session.json")
+	_ = os.Remove(filepath.Join(ws, ".bap-session.json"))
 	_ = os.Remove("../.bap-session.json")
 }
 

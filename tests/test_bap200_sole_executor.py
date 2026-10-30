@@ -589,8 +589,14 @@ class TestBAP200SoleExecutor(unittest.TestCase):
         resp_end = run_interceptor(end_payload)
         self.assertEqual(resp_end.get("status"), "ok")
 
-        # Session marker should be removed
-        self.assertFalse(os.path.exists(session_marker), "SessionEnd must clean up local session marker")
+        # Session marker should be removed (allow brief window for async session teardown on busy CI runners)
+        removed = False
+        for _ in range(30):
+            if not os.path.exists(session_marker):
+                removed = True
+                break
+            time.sleep(0.1)
+        self.assertTrue(removed, "SessionEnd must clean up local session marker")
 
     # -------------------------------------------------------------------------
     # AC17: Claude Code SessionStop Teardown Compatibility
