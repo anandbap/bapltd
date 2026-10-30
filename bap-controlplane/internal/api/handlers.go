@@ -2697,6 +2697,7 @@ func (s *Server) handleInspectorData(w http.ResponseWriter, r *http.Request) {
 		"policy_cedar":           bundle.PolicyCedar,
 		"policy_schema":          bundle.SchemaJSON,
 		"kill_switch":            bundle.KillSwitch,
+		"demo_mode":              s.demoMode,
 		"admin_authorized":       isAdmin,
 		"user_prompt_visibility": map[string]any{"admin_only": true, "unlocked": isAdmin},
 		"server_time":            time.Now().UTC(),
@@ -2857,7 +2858,10 @@ func (s *Server) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.registry != nil {
-		instanceID := sess.InstanceID
+		instanceID := sess.ResourceID
+		if instanceID == "" {
+			instanceID = sess.InstanceID
+		}
 		if instanceID == "" {
 			instanceID = sess.SessionID
 		}

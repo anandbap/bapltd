@@ -473,13 +473,30 @@ class BAPSession:
         self.gateway_url = (gateway_url or ep["gateway_url"]).rstrip("/")
         self.envoy_url = ep["envoy_url"].rstrip("/")
         self.session_id = session_id or f"sess-{app_id}-{int(time.time())}"
-        self.instance_id = instance_id or f"node-{os.getpid()}"
+
+        # Resolve unified workstation credentials from host registration
+        creds = {}
+        creds_path = get_bap_credentials_path()
+        if creds_path and os.path.isfile(creds_path):
+            try:
+                with open(creds_path, "r", encoding="utf-8") as cf:
+                    creds = json.load(cf)
+            except Exception:
+                creds = {}
+
+        self.instance_id = instance_id or os.getenv("BAP_INSTANCE_ID") or creds.get("instance_id") or f"node-{os.getpid()}"
+        self.resource_id = creds.get("instance_id") or self.instance_id
+        self.workstation_spiffe_id = creds.get("spiffe_id") or os.getenv("BAP_WORKSTATION_SPIFFE_ID") or ""
         self.bapedge_path = bapedge_path or self._find_bapedge()
         
         # Identity resolution fallback matching BAP 5-stage pipeline
-        self.user_id = user_id or os.getenv("BAP_USER_ID") or os.getenv("USERNAME") or os.getenv("USER") or "NA"
-        self.user_email = user_email or os.getenv("BAP_USER_EMAIL") or os.getenv("USER_EMAIL") or f"{self.user_id}@enterprise.internal"
-        self.spiffe_id = f"spiffe://bap.internal/app/{self.app_id}/instance/{self.instance_id}"
+        self.user_id = user_id or os.getenv("BAP_USER_ID") or creds.get("user_id") or creds.get("agent_id") or os.getenv("USERNAME") or os.getenv("USER") or "NA"
+        self.user_email = user_email or os.getenv("BAP_USER_EMAIL") or creds.get("user_email") or os.getenv("USER_EMAIL") or f"{self.user_id}@enterprise.internal"
+        
+        trust_domain = ep.get("trust_domain", "bap.internal")
+        self.spiffe_id = os.getenv("BAP_SPIFFE_ID") or f"spiffe://{trust_domain}/app/{self.app_id}/instance/{self.instance_id}"
+        # Session SVID: Workload session scoped under master workstation
+        self.session_svid = f"spiffe://{trust_domain}/workstation/{self.instance_id}/session/{self.session_id}"
         self.is_active = False
         self.is_revoked = False
         self.server_registered = False
@@ -583,6 +600,9 @@ class BAPSession:
             "app_id": self.app_id,
             "agent_name": self.agent_name,
             "instance_id": self.instance_id,
+            "resource_id": self.resource_id,
+            "workstation_spiffe_id": self.workstation_spiffe_id,
+            "session_svid": self.session_svid,
             "user_id": self.user_id,
             "user_email": self.user_email,
             "spiffe_id": self.spiffe_id,

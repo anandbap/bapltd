@@ -786,11 +786,16 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 
 	daemonNotified := false
 	if ds, err := ReadDaemonState(); err == nil && ds != nil {
-		client := httptransport.New(200 * time.Millisecond)
-		body, _ := json.Marshal(entry)
-		if r, err := client.Post(ds.URL+"/api/v1/daemon/event", "application/json", bytes.NewReader(body)); err == nil {
-			daemonNotified = true
-			_ = r.Body.Close()
+		// Only delegate to the background daemon if no explicit server override was passed,
+		// or if the daemon targets the same server instance.
+		serverMatches := ec.serverURL == "" || ds.ServerURL == "" || strings.TrimRight(ec.serverURL, "/") == strings.TrimRight(ds.ServerURL, "/")
+		if serverMatches {
+			client := httptransport.New(200 * time.Millisecond)
+			body, _ := json.Marshal(entry)
+			if r, err := client.Post(ds.URL+"/api/v1/daemon/event", "application/json", bytes.NewReader(body)); err == nil {
+				daemonNotified = true
+				_ = r.Body.Close()
+			}
 		}
 	}
 	if !daemonNotified {

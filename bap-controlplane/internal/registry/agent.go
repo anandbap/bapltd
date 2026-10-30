@@ -515,32 +515,31 @@ func (s *Store) EnsureSessionAgent(appID, instanceID, spiffeID, userEmail, hostn
 		return nil
 	}
 
-	// If a workstation agent exists for this machine resource, record appID as a subagent under that 1 agent
-	if hostname != "" || (userEmail != "" && userEmail != "NA") {
-		for _, a := range s.agents {
-			matchHost := hostname != "" && a.Hostname != "" && strings.EqualFold(a.Hostname, hostname)
-			matchEmail := userEmail != "" && userEmail != "NA" && ((a.OwnerEmail != "" && strings.EqualFold(a.OwnerEmail, userEmail)) || (a.UserEmail != "" && strings.EqualFold(a.UserEmail, userEmail)))
-			if matchHost || matchEmail {
-				sub := appID
-				if customName != "" {
-					sub = customName
-				}
-				hasSub := false
-				for _, ex := range a.Subagents {
-					if strings.EqualFold(ex, sub) {
-						hasSub = true
-						break
-					}
-				}
-				if !hasSub && sub != "" && !strings.EqualFold(sub, a.AppID) {
-					a.Subagents = append(a.Subagents, sub)
-				}
-				a.LastHeartbeatAt = &now
-				if a.Status != types.StatusRevoked && a.Status != types.StatusQuarantined && a.Status != types.StatusDeregistered {
-					a.Status = types.StatusActive
-				}
-				return a
+	// If a workstation agent exists for this machine resource, record appID as a subagent under that 1 master agent
+	for _, a := range s.agents {
+		matchInstance := instanceID != "" && (a.InstanceID == instanceID || a.AgentID == instanceID)
+		matchHost := hostname != "" && a.Hostname != "" && strings.EqualFold(a.Hostname, hostname)
+		matchEmail := userEmail != "" && userEmail != "NA" && ((a.OwnerEmail != "" && strings.EqualFold(a.OwnerEmail, userEmail)) || (a.UserEmail != "" && strings.EqualFold(a.UserEmail, userEmail)))
+		if matchInstance || matchHost || matchEmail {
+			sub := appID
+			if customName != "" {
+				sub = customName
 			}
+			hasSub := false
+			for _, ex := range a.Subagents {
+				if strings.EqualFold(ex, sub) {
+					hasSub = true
+					break
+				}
+			}
+			if !hasSub && sub != "" && !strings.EqualFold(sub, a.AppID) {
+				a.Subagents = append(a.Subagents, sub)
+			}
+			a.LastHeartbeatAt = &now
+			if a.Status != types.StatusRevoked && a.Status != types.StatusQuarantined && a.Status != types.StatusDeregistered {
+				a.Status = types.StatusActive
+			}
+			return a
 		}
 	}
 

@@ -81,7 +81,7 @@ class TestExecutiveDemo(unittest.TestCase):
                         if aresp.status == 200:
                             adata = json.loads(aresp.read().decode("utf-8"))
                             sess_list = adata.get("sessions", [])
-                            if not sess_list or not any("[Protected:" in str(s.get("session_id", "")) for s in sess_list):
+                            if adata.get("demo_mode") is True and (not sess_list or not any("[Protected:" in str(s.get("session_id", "")) for s in sess_list)):
                                 healthy = True
         except Exception:
             pass

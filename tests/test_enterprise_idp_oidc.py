@@ -62,6 +62,10 @@ class TestEnterpriseIdPFederation(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        try:
+            subprocess.run([BAPEDGE_BIN, "daemon", "stop"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+        except Exception:
+            pass
         for proc in [cls.dev_proc, cls.prod_proc]:
             try:
                 proc.terminate()
@@ -164,6 +168,7 @@ class TestEnterpriseIdPFederation(unittest.TestCase):
             "--department=Finance",
             "--groups=finance-team,cloud-auditors",
             "--verify-now",
+            "--no-daemon",
             f"--config={creds_path}",
         ]
         res = subprocess.run(login_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
@@ -205,6 +210,7 @@ class TestEnterpriseIdPFederation(unittest.TestCase):
             "--department=Beta Community",
             "--groups=beta-testers,community-developers",
             "--verify-now",
+            "--no-daemon",
             f"--config={creds_path}",
         ]
         res = subprocess.run(login_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")

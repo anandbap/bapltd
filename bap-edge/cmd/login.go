@@ -71,6 +71,7 @@ func RunLogin(args []string) error {
 	insecureTLS := fs.Bool("insecure", false, "Skip TLS certificate verification (development only)")
 	deviceTypeFlag := fs.String("type", "", "Workstation device type ('laptop', 'desktop', or 'server')")
 	forceFlag := fs.Bool("force", false, "Force re-authentication even if already registered")
+	noDaemonFlag := fs.Bool("no-daemon", false, "Do not auto-start background supervisor daemon after login")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -450,10 +451,14 @@ func RunLogin(args []string) error {
 	fmt.Printf("[✓] Enrolled credentials saved to: %s\n", *configPath)
 	fmt.Println("[✓] Local agent session is now bound to your corporate identity and ready for Cedar governance.")
 
-	// Launch background supervisor daemon in user mode if not already running (skip if running under test runner)
+	// Launch background supervisor daemon in user mode if not already running (skip if running under test runner or explicit --no-daemon)
 	currentExe, _ := os.Executable()
-	isTestRunner := strings.HasSuffix(strings.ToLower(currentExe), ".test.exe") || strings.HasSuffix(strings.ToLower(currentExe), ".test")
-	if !isDaemonRunning() && !isTestRunner {
+	isTestRunner := strings.HasSuffix(strings.ToLower(currentExe), ".test.exe") ||
+		strings.HasSuffix(strings.ToLower(currentExe), ".test") ||
+		os.Getenv("BAP_TEST_MODE") == "1" ||
+		os.Getenv("BAP_ENV") == "test" ||
+		os.Getenv("LTD_TEST") == "1"
+	if !*noDaemonFlag && !isDaemonRunning() && !isTestRunner {
 		_ = runDaemonStart([]string{"-server", *serverURL})
 		if isDaemonRunning() {
 			fmt.Println("[✓] Background supervisor daemon launched. Workstation is actively monitored in V3 Dashboard.")

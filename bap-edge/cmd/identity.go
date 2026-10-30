@@ -50,6 +50,22 @@ func resolveLocalIdentity() (userID, userEmail, spiffeID string) {
 		}
 	}
 
+	// Unified Workstation Credentials Fallback (~/.bapstate/credentials.json)
+	if userEmail == "" || userID == "" {
+		credsPath := DefaultCredentialsPath()
+		if data, err := os.ReadFile(credsPath); err == nil {
+			var creds StoredCredentials
+			if err := json.Unmarshal(data, &creds); err == nil {
+				if userEmail == "" && creds.UserEmail != "" {
+					userEmail = creds.UserEmail
+				}
+				if userID == "" && creds.AgentID != "" {
+					userID = creds.AgentID
+				}
+			}
+		}
+	}
+
 	// =========================================================================
 	// STAGE 3: Cross-Platform Standard Library (os/user.Current)
 	// =========================================================================

@@ -18,10 +18,13 @@ import (
 
 // Session represents an active or historical agent execution session (e.g., a Claude Code or Copilot run).
 type Session struct {
-	SessionID     string        `json:"session_id"`
-	AppID         string        `json:"app_id"`
-	InstanceID    string        `json:"instance_id,omitempty"`
-	AgentName     string        `json:"agent_name,omitempty"`
+	SessionID           string        `json:"session_id"`
+	AppID               string        `json:"app_id"`
+	InstanceID          string        `json:"instance_id,omitempty"`
+	ResourceID          string        `json:"resource_id,omitempty"`
+	WorkstationSPIFFEID string        `json:"workstation_spiffe_id,omitempty"`
+	SessionSVID         string        `json:"session_svid,omitempty"`
+	AgentName           string        `json:"agent_name,omitempty"`
 	UserID        string        `json:"user_id,omitempty"`
 	UserEmail     string        `json:"user_email,omitempty"`
 	SPIFFEID      string        `json:"spiffe_id,omitempty"`
@@ -74,10 +77,13 @@ type IntentContext struct {
 
 // SessionStartRequest contains fields to initiate a session.
 type SessionStartRequest struct {
-	SessionID       string        `json:"session_id,omitempty"`
-	AppID           string        `json:"app_id"`
-	InstanceID      string        `json:"instance_id,omitempty"`
-	AgentName       string        `json:"agent_name,omitempty"`
+	SessionID           string        `json:"session_id,omitempty"`
+	AppID               string        `json:"app_id"`
+	InstanceID          string        `json:"instance_id,omitempty"`
+	ResourceID          string        `json:"resource_id,omitempty"`
+	WorkstationSPIFFEID string        `json:"workstation_spiffe_id,omitempty"`
+	SessionSVID         string        `json:"session_svid,omitempty"`
+	AgentName           string        `json:"agent_name,omitempty"`
 	UserID          string        `json:"user_id,omitempty"`
 	UserEmail       string        `json:"user_email,omitempty"`
 	SPIFFEID        string        `json:"spiffe_id,omitempty"`
@@ -362,6 +368,15 @@ func (s *Store) Start(req SessionStartRequest) (*Session, error) {
 		if req.InstanceID != "" {
 			existing.InstanceID = req.InstanceID
 		}
+		if req.ResourceID != "" {
+			existing.ResourceID = req.ResourceID
+		}
+		if req.WorkstationSPIFFEID != "" {
+			existing.WorkstationSPIFFEID = req.WorkstationSPIFFEID
+		}
+		if req.SessionSVID != "" {
+			existing.SessionSVID = req.SessionSVID
+		}
 		if req.ParentSessionID != "" {
 			existing.ParentSessionID = req.ParentSessionID
 		}
@@ -432,11 +447,19 @@ func (s *Store) Start(req SessionStartRequest) (*Session, error) {
 		lineageTree = strings.Join(req.Lineage, " -> ")
 	}
 
+	resourceID := req.ResourceID
+	if resourceID == "" {
+		resourceID = req.InstanceID
+	}
+
 	sess := &Session{
-		SessionID:        sessionID,
-		AppID:            appID,
-		InstanceID:       req.InstanceID,
-		AgentName:        agentName,
+		SessionID:           sessionID,
+		AppID:               appID,
+		InstanceID:          req.InstanceID,
+		ResourceID:          resourceID,
+		WorkstationSPIFFEID: req.WorkstationSPIFFEID,
+		SessionSVID:         req.SessionSVID,
+		AgentName:           agentName,
 		UserID:           userID,
 		UserEmail:        userEmail,
 		SPIFFEID:         spiffeID,

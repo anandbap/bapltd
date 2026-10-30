@@ -141,15 +141,39 @@ func RunSessionStart(args []string) error {
 
 	instanceID := resolveDefaultInstanceID(*instanceFlag)
 
+	var credEmail string
+	var credSPIFFE string
+	if data, err := os.ReadFile(DefaultCredentialsPath()); err == nil {
+		var creds StoredCredentials
+		if json.Unmarshal(data, &creds) == nil {
+			credEmail = creds.UserEmail
+			credSPIFFE = creds.SPIFFEID
+		}
+	}
+	if credEmail == "" {
+		_, credEmail, _ = resolveLocalIdentity()
+	}
+
+	sessionSVID := fmt.Sprintf("spiffe://bap.internal/workstation/%s/session/%s", instanceID, sessionID)
+
 	// 2. Pre-flight check with Central Control Plane
 	startPayload := map[string]any{
-		"session_id":  sessionID,
-		"app_id":      *appFlag,
-		"instance_id": instanceID,
-		"user_id":     username,
-		"hostname":    hostname,
-		"client_pid":  watchPID,
-		"user_prompt": initialPrompt,
+		"session_id":   sessionID,
+		"app_id":       *appFlag,
+		"instance_id":  instanceID,
+		"resource_id":  instanceID,
+		"user_id":      username,
+		"hostname":     hostname,
+		"client_pid":   watchPID,
+		"user_prompt":  initialPrompt,
+		"session_svid": sessionSVID,
+	}
+	if credEmail != "" && credEmail != "NA" {
+		startPayload["user_email"] = credEmail
+	}
+	if credSPIFFE != "" && credSPIFFE != "NA" {
+		startPayload["workstation_spiffe_id"] = credSPIFFE
+		startPayload["spiffe_id"] = credSPIFFE
 	}
 	body, _ := json.Marshal(startPayload)
 	client := httptransport.New(3 * time.Second)
