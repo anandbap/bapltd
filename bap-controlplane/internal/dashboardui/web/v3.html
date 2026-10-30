@@ -353,8 +353,8 @@
   <header class="top" aria-label="Agent operations">
     <div class="brand"><i></i> Agent Watch <span class="badge" style="display:none">Agent operations</span></div>
     <div class="seg view-nav" role="tablist" aria-label="Dashboard Views">
-      <button id="navActivity" role="tab" aria-selected="true" type="button">🤖 AI Agent Sessions &amp; Activity</button>
-      <button id="navWorkstations" role="tab" aria-selected="false" type="button">💻 Workstation Agents Registered <span class="badge-count" id="navWsCount">0</span></button>
+      <button id="navActivity" role="tab" aria-selected="true" type="button">🤖 AI Agent Sessions &middot; AI Agent Activity</button>
+      <button id="navWorkstations" role="tab" aria-selected="false" type="button">💻 Workstation Agents Registered &middot; Governed Workstations <span class="badge-count" id="navWsCount">0</span></button>
     </div>
     <div class="top-right">
       <span class="conn" id="buildVer" title="Build version and git commit" style="font-family:var(--mono);font-size:12px;color:var(--ink-3)"></span>
@@ -498,7 +498,7 @@
       <section class="panel reg-agents" id="regPanel" aria-labelledby="regH">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:12px">
           <div>
-            <h2 id="regH" style="margin:0 0 4px">Workstation Agents Registered &amp; Identities</h2>
+            <h2 id="regH" style="margin:0 0 4px">Workstation Agents Registered &middot; Registered Agent Fleet &amp; Identities</h2>
             <p class="cov-note" style="margin:0" id="regNote">Every developer workstation registered with bapedge under Cedar Zero-Trust, bound to verified SSO identity (Google, GitHub, Entra, Okta) or local broker.</p>
           </div>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
