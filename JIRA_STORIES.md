@@ -77,6 +77,8 @@ This document represents the complete functional and non-functional requirements
 | `BAP-781` | Compile-Time Variable Injection for Developer Overrides | **DONE** | Go linker flag injection (`-X bap-edge/pkg/version.AllowDevOverrides=false`) decoupling enterprise production from dev builds. |
 | `BAP-782` | Edge Daemon & Hook Enforcement Hard-Gating | **DONE** | Strict rejection of `dev-override` CLI commands and override bypass logic when built in enterprise production mode. |
 | `BAP-783` | Enterprise CI/CD Pipeline & Cross-Platform Release Hardening | **DONE** | GitHub Actions CI/release workflows enforcing stripped enterprise binaries while retaining dev overrides for local workstation use. |
+| `BAP-791`–`BAP-795` | Enterprise Device Enrollment, Workstation Identity, & Remote Containment | **DONE** | RFC 8628 Device Authorization, multi-IdP federation (Google/GitHub/OIDC), user-space supervisor daemon, remote freeze/quarantine, and centralized logout/deregistration. |
+| `BAP-801`–`BAP-805` | Workstation Master Anchor Registration & Ephemeral Session SVIDs | **DONE** | 1 master card per physical machine (`s.agents`), dynamic subagent tracking (`master.Subagents`), child session SVIDs (`spiffe://<td/workstation/<inst>/session/<sess>`), unified `credentials.json` across Edge & Python SDK, and zero agent sprawl verified by `tests/test_workstation_session_svid.py`. |
 | `BAP-784` | Windows CI Process Decoupling & Test Concurrency Isolation | **DONE** | `isTestEnv()` execution guards in `watch.go` and `mcp_enroll.go` preventing detached daemon spawning and Windows file locks during tests. |
 
 ### MVP exit sequence
@@ -3699,3 +3701,67 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 - **Implementation Evidence**:
   - Implemented in `bap-edge/cmd/logout.go`, `bap-edge/cmd/daemon.go`, `bap-edge/cmd/exec.go`, `bap-edge/cmd/cli_tools.go`, `bap-controlplane/internal/api/handlers.go`, and `bap-controlplane/internal/registry/agent.go`.
   - Verified in `bap-edge/cmd/logout_test.go` and `tests/test_v3_ui_live.py`.
+
+
+---
+
+### Epic 43: Workstation Master Anchor Registration & Ephemeral Session SVIDs (BAP-EPIC-43 / BAP-800)
+**Summary**: Establish an enterprise identity model where 1 physical workstation/developer laptop maintains exactly 1 master anchor registration in the control plane registry, and every running AI agent (Claude Code, Antigravity IDE, GitHub Copilot, custom Python SDK) executes as an ephemeral child session bound to a cryptographically verifiable Session SVID (`spiffe://<trust_domain>/workstation/<instance_id>/session/<session_id>`), eliminating agent sprawl and enabling granular session-level audit and containment.
+
+#### Story BAP-801: Master Workstation Enrollment & Zero-Sprawl Agent Registry
+- **Type**: Story | **Points**: 8 | **Priority**: P0 - Blocker | **Status**: `DONE`
+- **Description**: Refactor `EnsureSessionAgent` in `bap-controlplane/internal/registry/agent.go` to match incoming agent sessions against existing workstation master records by `InstanceID == instanceID || AgentID == instanceID`, as well as hostname and user email. Append active client runtime tools into `master.Subagents` rather than minting duplicate agent entries in `s.agents`.
+- **Security Rationale**: Ad-hoc TOFU agent minting causes fleet registry sprawl, where 1 developer running 3 tools creates 30+ orphaned agent cards over time. Anchoring to a single workstation master maintains strict inventory hygiene and audit clarity.
+- **Acceptance Criteria**:
+  - `Given` a workstation enrolled with `instance_id` (e.g. `inst-ws-7a8b9c`),
+  - `When` multiple AI tools (Claude Code, Python SDK, Antigravity) start sessions from that machine,
+  - `Then` `s.agents` maintains exactly 1 master card for the machine, `master.Subagents` dynamically lists `["claude-code", "python-agent"]`, and active tools are tracked in `s.sessions`.
+- **Implementation Evidence**:
+  - Implemented in `bap-controlplane/internal/registry/agent.go` lines 270-340.
+  - Verified in `tests/test_workstation_session_svid.py`.
+
+#### Story BAP-802: Hierarchical Session SVID Derivation & Cryptographic Session Attestation
+- **Type**: Story | **Points**: 8 | **Priority**: P0 - Blocker | **Status**: `DONE`
+- **Description**: Extend `Session` and `SessionStartRequest` domain models in `bap-controlplane/internal/session/store.go` and `handlers.go` with `ResourceID`, `WorkstationSPIFFEID`, and `SessionSVID`. Enforce standard hierarchical SPIFFE naming: `spiffe://<trust_domain>/workstation/<instance_id>/session/<session_id>`.
+- **Security Rationale**: Provides end-to-end cryptographic proof linking ephemeral AI tool actions directly to the enrolled physical endpoint, enabling SOC analysts and Cedar policies to verify device provenance without conflating sessions.
+- **Acceptance Criteria**:
+  - `Given` a session startup request with workstation credentials,
+  - `When` processed by `/api/v1/sessions/start`,
+  - `Then` the session record stores `ResourceID`, `WorkstationSPIFFEID`, and `SessionSVID`, exposing them via inspector and session telemetry endpoints.
+- **Implementation Evidence**:
+  - Implemented in `bap-controlplane/internal/session/store.go` lines 42-60 and `handlers.go` lines 1835-1895.
+  - Formally specified in `docs/adr/ADR-005-Unified-Workstation-Registration-And-Session-SVIDs.md`.
+
+#### Story BAP-803: Unified Workstation Credentials Propagation (Edge Broker & Python SDK)
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**: Update BAP Edge launcher (`watch.go`), identity resolver (`identity.go`), and Python SDK (`bap_sdk/client.py`) to automatically read `~/.bapstate/credentials.json`. Propagate the master workstation's `instance_id`, `spiffe_id`, and `user_email` into all agent sessions and execution receipts.
+- **Security Rationale**: Guarantees consistent enterprise identity propagation across all agent SDKs and CLI wrappers without requiring developers to manually configure redundant environment variables per tool.
+- **Acceptance Criteria**:
+  - `Given` enrolled workstation credentials in `~/.bapstate/credentials.json`,
+  - `When` `bap-edge watch` or `BAPSession.start()` is called,
+  - `Then` the client reads workstation credentials, derives the child session SVID, and passes `resource_id`, `workstation_spiffe_id`, and `session_svid` in the startup payload.
+- **Implementation Evidence**:
+  - Implemented in `bap-edge/cmd/watch.go` lines 274-320, `bap-edge/cmd/identity.go` lines 34-48, and `python-agent/bap_sdk/client.py` lines 45-85.
+
+#### Story BAP-804: Multi-Agent Session Interoperability & Tool-Agnostic Decision Normalization
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**: Normalize lifecycle hook response schemas across heterogeneous agent tools. Support Anthropic Claude Code legacy top-level `decision: "approve" | "block"` alongside generic tools expecting `decision: "allow" | "deny"`. Support variant binary/alias detection across `claude`, `claude-code`, `claudecode`, and wrapper starter scripts.
+- **Security Rationale**: Prevents hook validation failures from rejecting valid agent commands when different developer tools adhere to divergent JSON output schemas or alternative executable naming conventions.
+- **Acceptance Criteria**:
+  - `Given` hook execution under Claude Code CLI, Claude IDE plugin, or generic shell tools,
+  - `When` policy evaluation completes,
+  - `Then` `interceptor` and `cchook-interceptor` emit strictly valid schema decisions matching the calling client, eliminating `Hook JSON output validation failed` errors.
+- **Implementation Evidence**:
+  - Implemented in `bap-edge/cmd/interceptor.go`, `bap-edge/cmd/watch.go`, and `bap-edge/cmd/exec.go`.
+
+#### Story BAP-805: End-to-End Workstation Session SVID & Subagent Verification Test Suite
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**: Implement dedicated automated integration test suite `tests/test_workstation_session_svid.py` validating master workstation enrollment, Claude Code session attachment, Python SDK session attachment with session SVID, zero agent sprawl in `s.agents`, and clean session termination. Align Go binary build scripts with dynamic SemVer injection from `pyproject.toml`.
+- **Security Rationale**: Continuous integration verification ensures that identity deduplication, session SVID formatting, and version compatibility never regress across releases.
+- **Acceptance Criteria**:
+  - `Given` a live control plane,
+  - `When` `tests/test_workstation_session_svid.py` and the full suite are executed,
+  - `Then` all 261 integration tests pass with 0 failures, verifying master workstation enrollment, Subagents tracking, and version parity.
+- **Implementation Evidence**:
+  - Implemented in `tests/test_workstation_session_svid.py` and `scripts/build_binaries.ps1`.
+  - Verified: `Ran 261 tests in 223.743s — OK`.

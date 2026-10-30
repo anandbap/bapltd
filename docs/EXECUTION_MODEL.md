@@ -98,6 +98,13 @@ flowchart TD
 - Programmatic Python/Node agents invoke `bap.exec()` via the BAP SDK.
 - The SDK executes `bapedge exec` directly.
 
+### 2.5 Workstation Master Anchor & Ephemeral Session SVIDs (BAP-800)
+- **1 Enrolled Machine = 1 Master Authority Card**: Developer workstations enroll once via `bap login` (RFC 8628 device flow), minting machine-level credentials saved to `~/.bapstate/credentials.json`.
+- **Hierarchical SVID Lineage**: Every running agent workload (Claude Code, Antigravity, Copilot, Python SDK) inherits the host workstation's anchor and generates a cryptographically verifiable Session SVID:
+  `spiffe://<trust_domain>/workstation/<instance_id>/session/<session_id>`
+- **Zero Fleet Sprawl**: The Control Plane maintains a single master identity card in `s.agents` per physical machine, tracking active tools in `master.Subagents` (e.g. `["claude-code", "python-agent"]`) and recording ephemeral runtime execution in `s.sessions`.
+- **Multi-Schema Interoperability**: `interceptor` and `cchook-interceptor` dynamically normalize output schemas (legacy `decision: "approve" | "block"` for Claude Code vs `decision: "allow" | "deny"` for generic CLIs) and resolve binary aliases (`claude`, `claude-code`, `claudecode`).
+
 ---
 
 ## 3. Tool Semantics & Execution Matrix

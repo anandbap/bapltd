@@ -1152,6 +1152,73 @@ Process lifecycle management avoids external shell dependencies and platform-spe
 ### 14.4. Interactive Terminal Guard on BAP MCP
 Running `bapmcp` or `bapedge mcp` in an interactive console without stdin redirection detects terminal mode via `isTerminal(os.Stdin)` and outputs an onboarding guide with instructions for Claude Code (`~/.claude/settings.json`), Google Antigravity (`~/.gemini/antigravity/mcp/bap-zero-trust/`), and Cursor IDE (`~/.cursor/mcp.json`). When spawned by an agent host with piped stdio or passed `--stdio`, it immediately engages the JSON-RPC 2.0 message loop.
 
+---
+
+## 15. Unified Workstation Registration, Child Session SVIDs & Subagent Architecture (Epic 43 — `BAP-800`)
+
+### 15.1. The Workstation Anchor vs Child Session SVID Model
+Enterprise fleet governance requires physical host accountability. Rather than permitting each ephemeral AI process to register an independent agent identity (which causes fleet sprawl and breaks device-level attestation), BAP implements a **Workstation Authority Anchor**:
+- **Physical Workstation (Master Anchor)**: A single developer laptop, desktop, or CI build runner enrolls via `bap login`, minting a persistent machine credential anchored in `~/.bapstate/credentials.json`.
+- **Workstation SPIFFE ID**: `spiffe://<trust_domain>/workstation/<instance_id>` (or `spiffe://<trust_domain>/app/<app_id>/instance/<instance_id>`).
+- **Child Workload Session SVID**: Every tool running on the workstation (Claude Code CLI, Claude IDE, Antigravity, GitHub Copilot, custom Python SDK agents) executes as an ephemeral child session bound to a hierarchical Session SVID:
+  $$\text{Session SVID} = \text{spiffe://} + \text{TrustDomain} + \text{/workstation/} + \text{InstanceID} + \text{/session/} + \text{SessionID}$$
+
+### 15.2. Hierarchical Identity Topology
+
+```mermaid
+flowchart TD
+    subgraph CorporateIdP ["Enterprise IdP (RFC 8628 Device Flow)"]
+        IdP["Okta / Microsoft Entra ID / Google Identity"]
+    end
+
+    subgraph Host ["Physical Workstation / Laptop"]
+        Creds["~/.bapstate/credentials.json<br/>- Instance ID: inst-ws-7a8b9c<br/>- Workstation SPIFFE ID: spiffe://bap.internal/workstation/inst-ws-7a8b9c<br/>- User: engineer@enterprise.internal"]
+        
+        subgraph ChildAgents ["Ephemeral AI Agent Workloads"]
+            Claude["Claude Code CLI / IDE<br/>Session: sess-claude-91823<br/>SVID: .../workstation/inst-ws-7a8b9c/session/sess-claude-91823"]
+            PySDK["Python SDK Agent<br/>Session: sess-py-48201<br/>SVID: .../workstation/inst-ws-7a8b9c/session/sess-py-48201"]
+            AG["Google Antigravity<br/>Session: sess-ag-31940<br/>SVID: .../workstation/inst-ws-7a8b9c/session/sess-ag-31940"]
+        end
+    end
+
+    subgraph ControlPlane ["BAP Control Plane"]
+        Registry["Master Registry (s.agents)<br/>1 Card: Workstation inst-ws-7a8b9c<br/>Subagents: ['claude-code', 'python-agent', 'antigravity']"]
+        Sessions["Active Telemetry (s.sessions)<br/>sess-claude-91823 (Active)<br/>sess-py-48201 (Active)<br/>sess-ag-31940 (Active)"]
+    end
+
+    IdP -->|bap login| Creds
+    Creds -.->|Inherit Workstation Anchor| Claude
+    Creds -.->|Inherit Workstation Anchor| PySDK
+    Creds -.->|Inherit Workstation Anchor| AG
+    
+    Claude -->|POST /api/v1/sessions/start| Registry
+    PySDK -->|POST /api/v1/sessions/start| Registry
+    AG -->|POST /api/v1/sessions/start| Registry
+
+    Registry --> Sessions
+```
+
+### 15.3. Control Plane Registry Deduplication (`EnsureSessionAgent`)
+To prevent agent sprawl, `EnsureSessionAgent` matches incoming sessions against existing records in `s.agents`:
+1. **Instance & Agent Matching**: Checks if `a.InstanceID == instanceID || a.AgentID == instanceID`.
+2. **Host & User Matching**: Checks if `a.Hostname == hostname && a.UserEmail == email`.
+3. **Subagent Dynamic Append**: When a match is found, appends the tool name (`app_id`) to `master.Subagents` (preventing duplicates), updates `a.LastHeartbeatAt`, and returns the master card without minting a new agent entry in `s.agents`.
+4. **Session Isolation**: Ephemeral tool activity is recorded in `s.sessions`, ensuring granular start, prompt, execution receipts, and termination tracking without polluting the master agent inventory.
+
+### 15.4. Unified Workstation Credentials Distribution
+All client runtimes resolve the workstation authority anchor via standard path discovery:
+- **`bap-edge watch`**: Reads `~/.bapstate/credentials.json`, extracts `user_email` and `spiffe_id`, sets `resource_id`, `workstation_spiffe_id`, and `session_svid` in `startPayload`.
+- **`bap-edge identity`**: Prioritizes `credentials.json` in Stage 2 of `resolveLocalIdentity()`, eliminating `"NA"` identity degradations.
+- **`python-agent/bap_sdk`**: Automatically loads `credentials.json`, deriving `self.instance_id`, `self.workstation_spiffe_id`, and `self.session_svid` directly on session instantiation.
+- **Daemon Route Isolation**: `bapedge exec` validates `serverMatches` before delegating audit telemetry to local daemons, ensuring events are never routed to dead or mismatched test/production endpoints.
+
+### 15.5. Tool-Agnostic Decision Normalization
+Developer tooling utilizes divergent JSON output schemas:
+- **Anthropic Claude Code**: Strict legacy schema requiring top-level `decision: "approve" | "block"`.
+- **Generic CLI & IDE Agents**: Standard schema expecting `decision: "allow" | "deny"`.
+- **Interceptors (`interceptor.exe`, `cchook-interceptor.exe`)**: Automatically detect caller binary variants (`claude`, `claude-code`, `claudecode`, wrapper batch files) and synthesize exact matching response schemas, preventing `Hook JSON output validation failed` errors while preserving invariant Cedar policy enforcement.
+
+
 
 
 
