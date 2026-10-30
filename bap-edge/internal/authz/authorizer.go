@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -290,7 +291,8 @@ func (a *Authorizer) evaluateAtomicNode(executable, fullCommand, args, workspace
 			cleanExec = cleanExec[:idx]
 		}
 	}
-	normalizedExec := strings.ToLower(cleanExec)
+	normExec := strings.ReplaceAll(cleanExec, "\\", "/")
+	normalizedExec := strings.ToLower(path.Base(strings.TrimSuffix(normExec, ".exe")))
 	if strings.HasPrefix(normalizedExec, "---") || strings.HasPrefix(normalizedExec, "===") ||
 		strings.HasPrefix(normalizedExec, "***") || strings.HasPrefix(normalizedExec, "###") ||
 		strings.Contains(normalizedExec, " ") {

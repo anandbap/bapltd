@@ -1,6 +1,7 @@
 package authz
 
 import (
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -22,7 +23,8 @@ func Decompose(executable, fullCommand, args string) DecomposedAction {
 			cleanExec = cleanExec[:idx]
 		}
 	}
-	exec := strings.ToLower(filepath.Base(strings.TrimSuffix(cleanExec, ".exe")))
+	normExec := strings.ReplaceAll(cleanExec, "\\", "/")
+	exec := strings.ToLower(path.Base(strings.TrimSuffix(normExec, ".exe")))
 	if strings.HasPrefix(exec, "---") || strings.HasPrefix(exec, "===") ||
 		strings.HasPrefix(exec, "***") || strings.HasPrefix(exec, "###") ||
 		strings.HasPrefix(exec, "#") || strings.HasPrefix(exec, "//") ||

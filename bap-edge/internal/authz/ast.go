@@ -1,7 +1,7 @@
 package authz
 
 import (
-	"path/filepath"
+	"path"
 	"strings"
 	"unicode"
 )
@@ -80,11 +80,12 @@ func ParseAST(fullCommand string) (*ASTPipeline, error) {
 					cleanArg = cleanArg[:idx]
 				}
 			}
+			target := rawArg
 			if cleanArg != "" {
-				exec = filepath.Base(strings.TrimSuffix(cleanArg, ".exe"))
-			} else {
-				exec = filepath.Base(strings.TrimSuffix(rawArg, ".exe"))
+				target = cleanArg
 			}
+			normPath := strings.ReplaceAll(target, "\\", "/")
+			exec = path.Base(strings.TrimSuffix(normPath, ".exe"))
 			fullCmd = strings.Join(args, " ")
 
 			// Recognize PowerShell / script string literal expressions or decorative banners
