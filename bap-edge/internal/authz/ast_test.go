@@ -1,6 +1,7 @@
 package authz
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -151,3 +152,120 @@ func TestParseAST_DescriptorRedirections(t *testing.T) {
 		t.Errorf("node 1 exec mismatch: got %q, want 'Select-Object'", n1.Executable)
 	}
 }
+
+func TestParseAST_PowerShellCalculatedProperties(t *testing.T) {
+	cmd := `Get-ChildItem -Filter *.exe | Select-Object Name, @{n="Size"; e={[math]::Round($_.Length/1MB,2)}}`
+	pipe, err := ParseAST(cmd)
+	if err != nil {
+		t.Fatalf("unexpected error parsing calculated property AST: %v", err)
+	}
+	if len(pipe.Nodes) != 2 {
+		t.Fatalf("expected 2 nodes (Get-ChildItem piped to Select-Object), got %d nodes", len(pipe.Nodes))
+	}
+	if pipe.Nodes[0].Executable != "Get-ChildItem" {
+		t.Errorf("expected node 0 exec 'Get-ChildItem', got %q", pipe.Nodes[0].Executable)
+	}
+	if pipe.Nodes[0].Operator != "|" {
+		t.Errorf("expected node 0 operator '|', got %q", pipe.Nodes[0].Operator)
+	}
+	if pipe.Nodes[1].Executable != "Select-Object" {
+		t.Errorf("expected node 1 exec 'Select-Object', got %q", pipe.Nodes[1].Executable)
+	}
+	fullArgs := strings.Join(pipe.Nodes[1].Args, " ")
+	if !strings.Contains(fullArgs, "@{n=\"Size\"; e={[math]::Round($_.Length/1MB,2)}}") &&
+		!strings.Contains(fullArgs, `@{n="Size"; e={[math]::Round($_.Length/1MB,2)}}`) {
+		t.Errorf("expected calculated property hash table preserved in args, got: %v", pipe.Nodes[1].Args)
+	}
+}
+
+func TestParseAST_MultipleCalculatedProperties(t *testing.T) {
+	cmd := `Get-ChildItem | Select-Object Name, @{n="Size"; e={[math]::Round($_.Length/1MB,2)}}, @{n="Time"; e={$_.LastWriteTime}}`
+	pipe, err := ParseAST(cmd)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pipe.Nodes) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(pipe.Nodes))
+	}
+	if pipe.Nodes[1].Executable != "Select-Object" {
+		t.Errorf("expected node 1 exec 'Select-Object', got %q", pipe.Nodes[1].Executable)
+	}
+}
+
+func TestParseAST_NestedCalculatedPropertiesWithSemicolon(t *testing.T) {
+	cmd := `Get-Process | Select-Object Name, @{n="Details"; e={@{Raw=$_.WS; MB=[math]::Round($_.WS/1MB, 2)}}} ; Get-ChildItem`
+	pipe, err := ParseAST(cmd)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pipe.Nodes) != 3 {
+		t.Fatalf("expected 3 nodes (Get-Process | Select-Object ; Get-ChildItem), got %d: %+v", len(pipe.Nodes), pipe.Nodes)
+	}
+	if pipe.Nodes[0].Executable != "Get-Process" {
+		t.Errorf("node 0 exec mismatch: got %q, want 'Get-Process'", pipe.Nodes[0].Executable)
+	}
+	if pipe.Nodes[0].Operator != "|" {
+		t.Errorf("node 0 operator mismatch: got %q, want '|'", pipe.Nodes[0].Operator)
+	}
+	if pipe.Nodes[1].Executable != "Select-Object" {
+		t.Errorf("node 1 exec mismatch: got %q, want 'Select-Object'", pipe.Nodes[1].Executable)
+	}
+	if pipe.Nodes[1].Operator != ";" {
+		t.Errorf("node 1 operator mismatch: got %q, want ';'", pipe.Nodes[1].Operator)
+	}
+	if pipe.Nodes[2].Executable != "Get-ChildItem" {
+		t.Errorf("node 2 exec mismatch: got %q, want 'Get-ChildItem'", pipe.Nodes[2].Executable)
+	}
+}
+
+func TestParseAST_BareStringBanners(t *testing.T) {
+	banners := []string{
+		"--- EXEs (recursive) ---; Get-ChildItem -Filter *.exe",
+		"=== Process List ===; Get-Process",
+		"*** Directory Audit ***; dir",
+		"[Diagnostic Banner]; git status",
+	}
+
+	for _, bCmd := range banners {
+		pipe, err := ParseAST(bCmd)
+		if err != nil {
+			t.Fatalf("unexpected error for banner %q: %v", bCmd, err)
+		}
+		if len(pipe.Nodes) != 2 {
+			t.Fatalf("expected 2 nodes for %q, got %d", bCmd, len(pipe.Nodes))
+		}
+		if pipe.Nodes[0].Executable != "write-output" {
+			t.Errorf("expected banner node 0 to normalize to 'write-output', got %q", pipe.Nodes[0].Executable)
+		}
+		if pipe.Nodes[0].Operator != ";" {
+			t.Errorf("expected operator ';', got %q", pipe.Nodes[0].Operator)
+		}
+	}
+}
+
+func TestParseAST_DotVersionedExecutablePaths(t *testing.T) {
+	paths := []struct {
+		cmd          string
+		expectedExec string
+	}{
+		{`"C:\hostedtoolcache\windows\Python\3.11.9\x64\python.exe" -m pytest`, "python"},
+		{`C:\hostedtoolcache\windows\Python\3.11.9\x64\python.exe -V`, "python"},
+		{`"C:\Users\remote\.pyenv\pyenv-win\versions\3.12.1\python.exe" -c "print(1)"`, "python"},
+		{`/opt/hostedtoolcache/python/3.11.9/x64/bin/python3 -m unittest`, "python3"},
+		{`"D:\tools.v2.0\node.exe" index.js`, "node"},
+	}
+
+	for _, tc := range paths {
+		pipe, err := ParseAST(tc.cmd)
+		if err != nil {
+			t.Fatalf("unexpected error for %q: %v", tc.cmd, err)
+		}
+		if len(pipe.Nodes) == 0 {
+			t.Fatalf("expected nodes for %q", tc.cmd)
+		}
+		if pipe.Nodes[0].Executable != tc.expectedExec {
+			t.Errorf("for command %q, expected executable %q, got %q", tc.cmd, tc.expectedExec, pipe.Nodes[0].Executable)
+		}
+	}
+}
+

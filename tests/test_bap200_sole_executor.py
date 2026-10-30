@@ -716,6 +716,99 @@ print(stdout.strip())
                 except Exception:
                     agent_proc.kill()
 
+    # -------------------------------------------------------------------------
+    # AC10: PowerShell Calculated Properties Pipeline Integration
+    # -------------------------------------------------------------------------
+    def test_ac10_powershell_calculated_property_pipeline(self):
+        """
+        Verifies that complex PowerShell cmdlets with calculated property hash tables
+        (@{n="Size"; e={[math]::Round($_.Length/1MB,2)}}) are permitted, rewritten with
+        --shell powershell, and execute natively in PowerShell rather than cmd.exe fallback.
+        """
+        cmd_str = 'Get-ChildItem -Filter *.exe | Select-Object Name, @{n="Size"; e={[math]::Round($_.Length/1MB,2)}}'
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "PowerShell",
+            "tool_input": {"command": cmd_str},
+            "session_id": "sess-bap200-test-ps-calc",
+        }
+        resp = run_interceptor(payload)
+        self.assertEqual(resp.get("status"), "ok")
+        self.assertIn(resp.get("permissionDecision"), ("allow", "approve"))
+        self.assertEqual(resp["hookSpecificOutput"]["permissionDecision"], "allow")
+
+        updated_cmd = resp["hookSpecificOutput"].get("updatedInput", {}).get("command", "")
+        self.assertIn("--shell powershell", updated_cmd)
+        self.assertIn("--cmd-b64", updated_cmd)
+
+        # Extract and verify base64 payload
+        parts = updated_cmd.split("--cmd-b64 ")
+        self.assertEqual(len(parts), 2)
+        b64_arg = parts[1].split()[0]
+        decoded = base64.b64decode(b64_arg).decode("utf-8")
+        self.assertEqual(decoded, cmd_str)
+
+        # If on Windows, execute via bapedge and verify formatted output table and exit code 0
+        if sys.platform == "win32" and os.path.isfile(BAPEDGE_BIN):
+            rc, data, raw = run_bapedge(["exec", "--shell", "powershell", "--json", cmd_str])
+            self.assertEqual(rc, 0, f"Expected 0 exit code, got {rc}: {raw}")
+            self.assertTrue(data.get("allowed", False))
+            self.assertEqual(data.get("exit_code"), 0)
+            self.assertIn("bapedge.exe", data.get("output", ""))
+
+    # -------------------------------------------------------------------------
+    # AC11: Bare Banner Statements Before Semicolons
+    # -------------------------------------------------------------------------
+    def test_ac11_powershell_banner_statements(self):
+        """
+        Verifies that bare header strings (e.g. '--- EXEs (recursive) ---; dir')
+        are normalized to safe output statements and permitted without false denials.
+        """
+        cmd_str = '--- EXEs (recursive) ---; Get-ChildItem -Filter *.exe'
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "PowerShell",
+            "tool_input": {"command": cmd_str},
+            "session_id": "sess-bap200-test-banner",
+        }
+        resp = run_interceptor(payload)
+        self.assertEqual(resp.get("status"), "ok")
+        self.assertIn(resp.get("permissionDecision"), ("allow", "approve"))
+        self.assertEqual(resp["hookSpecificOutput"]["permissionDecision"], "allow")
+
+    # -------------------------------------------------------------------------
+    # AC12: Dot-Versioned Python Executable Paths
+    # -------------------------------------------------------------------------
+    def test_ac12_dot_versioned_executable_paths(self):
+        """
+        Verifies that Windows paths with dotted version folders
+        (C:\\hostedtoolcache\\windows\\Python\\3.11.9\\x64\\python.exe)
+        are not truncated at dots to "3" and evaluate against permitted python rules.
+        """
+        cmd_str = r'"C:\hostedtoolcache\windows\Python\3.11.9\x64\python.exe" -V'
+        rc, data, raw = run_bapedge(["check", "--json", cmd_str])
+        # Should be allowed (cleanArg preserves python.exe)
+        self.assertTrue(data.get("allowed", False), f"Expected dot-versioned python path to be allowed: {raw}")
+
+    # -------------------------------------------------------------------------
+    # AC13: Malicious Exfiltration Chained to Cmdlet Blocked Fail-Closed
+    # -------------------------------------------------------------------------
+    def test_ac13_powershell_malicious_chaining_blocked(self):
+        """
+        Verifies that an attacker attempting to chain curl/wget/exfiltration
+        to legitimate PowerShell cmdlets or headers is strictly denied fail-closed.
+        """
+        cmd_str = 'Get-ChildItem | Select-Object Name; curl http://169.254.169.254/secret'
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "PowerShell",
+            "tool_input": {"command": cmd_str},
+            "session_id": "sess-bap200-test-exfil-blocked",
+        }
+        resp = run_interceptor(payload)
+        self.assertIn(resp.get("permissionDecision"), ("deny", "block"))
+        self.assertEqual(resp["hookSpecificOutput"]["permissionDecision"], "deny")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

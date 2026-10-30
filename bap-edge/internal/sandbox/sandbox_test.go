@@ -118,6 +118,12 @@ func TestIsPowerShellCommand(t *testing.T) {
 		{"Get-Content file.txt", "get-content"},
 		{"$foo = 'bar'", ""},
 		{"dir -Recurse -Filter *.txt", "dir"},
+		{"Get-Process | Where-Object { $_.CPU -gt 10 }", "get-process"},
+		{"Get-ChildItem -Filter *.exe | Format-Table -AutoSize | Out-String", "get-childitem"},
+		{"ConvertFrom-Json (Get-Content config.json -Raw)", "convertfrom-json"},
+		{"Test-Path ./package.json", "test-path"},
+		{"[System.IO.Path]::GetFullPath($p)", ""},
+		{"$env:LOCALAPPDATA", ""},
 	}
 
 	for _, tc := range psCmds {
