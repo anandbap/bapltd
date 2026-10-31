@@ -41,7 +41,9 @@ GW_URL = f"http://127.0.0.1:{GW_PORT}"
 
 def http_req(url, method="GET", data=None, headers=None):
     """Helper to perform HTTP requests and return (status, body_dict, raw_bytes)."""
-    hdrs = headers or {}
+    hdrs = dict(headers or {})
+    if method == "POST" and url.startswith(CP_URL + "/api/v1/sessions/"):
+        hdrs.setdefault("X-BAP-Admin-Token", TEST_ADMIN_TOKEN)
     body_bytes = None
     if data is not None:
         if isinstance(data, dict):
@@ -176,6 +178,7 @@ class TestBoundedAuthorityMatrix(unittest.TestCase):
         # Register edge
         reg_payload = {
             "one_time_code": otc,
+            "instance_id": "matrix-test-workstation",
             "agent_name": "MatrixTestAgent",
             "hostname": "matrix-test-box",
             "binary_hash": cls.binary_hash,
@@ -190,6 +193,10 @@ class TestBoundedAuthorityMatrix(unittest.TestCase):
         if status != 200:
             raise RuntimeError(f"Edge registration failed: {resp}")
         cls.session_token = resp["session_token"]
+        cls.credentials_path = os.path.join(cls.tmp_dir, "workstation.json")
+        with open(cls.credentials_path, "w", encoding="utf-8") as handle:
+            json.dump({"server_url": CP_URL, "session_token": cls.session_token,
+                       "instance_id": "matrix-test-workstation", "agent_id": cls.agent_id}, handle)
 
     @classmethod
     def tearDownClass(cls):
@@ -401,6 +408,7 @@ class TestBoundedAuthorityMatrix(unittest.TestCase):
             "session_id": sess_id,
             "agent_name": "MatrixAgent",
             "app_id": "claude-code",
+            "instance_id": "matrix-test-workstation",
         }
         status, _, _ = http_req(f"{CP_URL}/api/v1/sessions/start", method="POST", data=start_payload)
         self.assertEqual(status, 200)
@@ -409,6 +417,7 @@ class TestBoundedAuthorityMatrix(unittest.TestCase):
         env = os.environ.copy()
         env["BAP_SESSION_ID"] = sess_id
         env["BAP_SERVER_URL"] = CP_URL
+        env["BAP_CREDENTIALS"] = self.credentials_path
         proc = subprocess.Popen(
             [INTERCEPTOR_BIN],
             stdin=subprocess.PIPE,

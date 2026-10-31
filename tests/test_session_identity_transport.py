@@ -1,6 +1,8 @@
 import importlib.util
 import pathlib
+import os
 import time
+from types import SimpleNamespace
 import unittest
 import urllib.request
 from unittest import mock
@@ -9,6 +11,23 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class SessionIdentityTransportTests(unittest.TestCase):
+    def test_demo_subprocess_receives_only_workstation_proof(self):
+        spec = importlib.util.spec_from_file_location("executive_identity_fixture", ROOT / "demo_executive.py")
+        demo = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(demo)
+        agent = SimpleNamespace(session_id="fixture-session", credentials_path="fixture-workstation.json")
+        child = mock.Mock(returncode=0)
+        child.communicate.return_value = ('{"allowed": true}', '')
+        with mock.patch.dict(os.environ, {"BAP_ADMIN_TOKEN": "synthetic-admin", "BAP_SECRET_KEY": "synthetic-key", "BAP_TELEMETRY_TOKEN": "synthetic-collector"}), mock.patch.object(demo, "_ALL_AGENTS", [agent]), mock.patch.object(demo.subprocess, "Popen", return_value=child) as spawn:
+            demo.run_bapedge_exec("fixture-session", "fixture-source", "git --version", "https://control.test")
+        environment = spawn.call_args.kwargs["env"]
+        self.assertEqual(environment["BAP_CREDENTIALS"], agent.credentials_path)
+        for secret in ("BAP_ADMIN_TOKEN", "BAP_SECRET_KEY", "BAP_TELEMETRY_TOKEN"):
+            self.assertNotIn(secret, environment)
+        request = urllib.request.Request("https://control.test/api/v1/sessions/start", headers={"Authorization": "Bearer fixture-proof"})
+        with self.assertRaises(demo.urllib.error.HTTPError):
+            demo.IdentityRedirect().redirect_request(request, None, 302, "redirect", {}, "https://other.test/collect")
+
     def test_sdk_origin_binding_and_redirects(self):
         for relative in ("python-agent/bap_sdk.py", "python-agent/bap_sdk/client.py"):
             with self.subTest(module=relative):

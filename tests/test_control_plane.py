@@ -26,7 +26,7 @@ TEST_ADMIN_TOKEN = "test-admin-secret-token-12345"
 
 def http_post_json(url, data, headers=None):
     hdrs = {"Content-Type": "application/json"}
-    if url.endswith(("/agents/pre-register", "/grants/acquire")):
+    if url.endswith(("/agents/pre-register", "/grants/acquire", "/audit/ingest")) or "/api/v1/sessions/" in url:
         hdrs["X-BAP-Admin-Token"] = TEST_ADMIN_TOKEN
     if headers:
         hdrs.update(headers)

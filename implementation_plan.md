@@ -24,6 +24,15 @@ Fix UI v3 governance controls and decision reporting; bind authenticated worksta
 
 Validation: control-plane API/authz/registry/session/audit/dashboard tests, real edge-to-control-plane delivery/state-loss E2E tests, targeted edge and interceptor tests, gateway regression tests, Python origin/redirect tests, distributed-copy checks and PowerShell syntax checks passed locally. The E2E harness uses fresh server state behind a stable local URL and a real edge child test process; it does not deploy or benchmark Render.
 
+CI compatibility follow-up:
+
+- [x] Authenticate operator-seeded Python integration telemetry using each isolated test server's synthetic admin credential. Keep unauthenticated denial tests unchanged.
+- [x] Enroll executive-demo workstations and pass their individual proof to lifecycle requests and edge audit senders; fail the demo when enrollment or session start fails.
+- [x] Supply the workstation SDK fixture with the proof returned by its enrollment, and isolate executive tests from local credential files and existing control-plane processes.
+- [x] Isolate state-path tests from inherited credential-path overrides.
+
+CI repair verification: 83 relevant Python tests passed across the affected lifecycle, executive demo, activity, prompt-defense, discovery, authority, policy, notarization and transport suites. Full `go test ./...` passed for edge and control plane. Full Python discovery exceeded the local broker's 120-second process quota, so relevant suites were run in smaller groups. Local `-race` execution is unavailable without a CGO compiler; hosted CI must verify the race matrix.
+
 Latest local durable SQLite benchmarks, with authenticated requests (20 iterations; fixture results, not a production SLA):
 
 | Path | Fixture size | Mean request time |

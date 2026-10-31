@@ -16,6 +16,8 @@ import json
 import urllib.request
 import ssl
 import subprocess
+import importlib
+from unittest import mock
 
 WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(WORKSPACE_ROOT, "python-agent"))
@@ -174,7 +176,14 @@ class TestWorkstationSessionSVID(unittest.TestCase):
         # 3. Start Workload 2: Python SDK Session on the same workstation
         py_sess_id = f"sess-python-analyst-{int(time.time())}"
         session_svid_py = f"spiffe://bap.internal/workstation/{workstation_inst_id}/session/{py_sess_id}"
-        with BAPSession(
+        sdk = importlib.import_module(BAPSession.__module__)
+        proof = token_resp["session_token"]
+        def workstation_headers(url):
+            if url.startswith(self.server_url + "/api/v1/sessions/"):
+                return {"Authorization": f"Bearer {proof}"}
+            return {}
+        # Use the proof returned by this test's enrollment, without reading local credentials.
+        with mock.patch.object(sdk, "_workstation_headers", side_effect=workstation_headers), BAPSession(
             app_id="python-agent",
             instance_id=workstation_inst_id,
             session_id=py_sess_id,

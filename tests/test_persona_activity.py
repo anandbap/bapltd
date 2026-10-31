@@ -30,6 +30,8 @@ TEST_ADMIN_TOKEN = "persona-activity-test-admin-token-12345"
 
 def http_req(url, method="GET", data=None, headers=None, retries=2):
     hdrs = dict(headers or {})
+    if method == "POST" and url in (CP_URL + "/api/activity/ingest", CP_URL + "/api/v1/activity/ingest"):
+        hdrs.setdefault("X-BAP-Admin-Token", TEST_ADMIN_TOKEN)
     if "Connection" not in hdrs:
         hdrs["Connection"] = "close"
     body_bytes = None

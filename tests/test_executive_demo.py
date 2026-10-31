@@ -18,6 +18,8 @@ import sys
 import time
 import unittest
 import urllib.request
+import urllib.parse
+import socket
 
 WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(WORKSPACE_ROOT, "python-agent"))
@@ -28,20 +30,18 @@ ssl_ctx.verify_mode = ssl.CERT_NONE
 
 
 def read_admin_token() -> str:
-    token_file = os.path.join(WORKSPACE_ROOT, ".bap-admin-token")
-    if os.path.isfile(token_file):
-        try:
-            with open(token_file, "r", encoding="utf-8") as f:
-                return f.read().strip()
-        except Exception:
-            pass
+    # Local integration fixtures must never depend on a developer's secret file.
+    if os.getenv("BAP_TEST_REMOTE_CP") != "1":
+        return "executive-demo-test-admin-token-12345"
     return os.getenv("BAP_ADMIN_TOKEN", "")
 
 
 def get_control_plane_url() -> str:
     # In automated integration tests, bind to the local demo-mode control plane
     if os.getenv("BAP_TEST_REMOTE_CP") != "1":
-        return "https://localhost:8443"
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            return f"https://127.0.0.1:{listener.getsockname()[1]}"
     try:
         from bap_sdk import resolve_endpoints
         ep = resolve_endpoints()
@@ -103,13 +103,6 @@ class TestExecutiveDemo(unittest.TestCase):
                 healthy = False
 
         if not healthy:
-            # Terminate any lingering/orphaned controlplane server on the port so we can bind with fresh credentials
-            if sys.platform == "win32":
-                subprocess.run(["taskkill", "/F", "/IM", "bapcontrolplane.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            else:
-                subprocess.run(["pkill", "-9", "-f", "bapcontrolplane"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(0.5)
-
             cp_candidates = [
                 os.path.join(WORKSPACE_ROOT, "bapcontrolplane.exe"),
                 os.path.join(WORKSPACE_ROOT, "dist", "windows-amd64", "bapcontrolplane.exe"),
@@ -120,7 +113,7 @@ class TestExecutiveDemo(unittest.TestCase):
                 raise unittest.SkipTest(f"bapcontrolplane.exe not found at {cp_candidates[0]}")
 
             cmd = [
-                cp_bin, "-port", "8443", "-https", "-allow-remote-admin", "-demo-mode",
+                cp_bin, "-port", str(urllib.parse.urlsplit(cls.server_url).port), "-https", "-allow-remote-admin", "-demo-mode",
                 "-db", "memory",
                 "-policy", os.path.join(WORKSPACE_ROOT, "policy.cedar"),
                 "-schema", os.path.join(WORKSPACE_ROOT, "schema.json"),

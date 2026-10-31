@@ -38,7 +38,9 @@ import atexit
 import argparse
 import threading
 import hashlib
+import tempfile
 import urllib.request
+from urllib.parse import urlsplit
 import subprocess
 from typing import Dict, Any, Optional
 
@@ -57,11 +59,28 @@ ssl_ctx = ssl.create_default_context()
 ssl_ctx.check_hostname = False
 ssl_ctx.verify_mode = ssl.CERT_NONE
 
-BAPEDGE_BIN = os.path.join(WORKSPACE_ROOT, "bapedge.exe")
+class IdentityRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        old, new = urlsplit(req.full_url), urlsplit(newurl)
+        if req.has_header("Authorization") and (old.scheme, old.netloc) != (new.scheme, new.netloc):
+            raise urllib.error.HTTPError(newurl, code, "Authenticated cross-origin redirect refused", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+def open_control_plane(req):
+    local = urlsplit(req.full_url).hostname in ("localhost", "127.0.0.1", "::1")
+    if req.has_header("Authorization") and not local and urlsplit(req.full_url).scheme != "https":
+        raise ValueError("Authenticated control-plane traffic requires HTTPS")
+    context = ssl_ctx if local else ssl.create_default_context()
+    opener = urllib.request.build_opener(IdentityRedirect(), urllib.request.HTTPSHandler(context=context))
+    return opener.open(req, timeout=5)
+
+BAPEDGE_BIN = os.getenv("BAPEDGE_BIN", os.path.join(WORKSPACE_ROOT, "bapedge.exe"))
 
 
 def read_admin_token() -> str:
     """Reads administrative bearer token from .bap-admin-token if present."""
+    if os.getenv("BAP_ADMIN_TOKEN"):
+        return os.environ["BAP_ADMIN_TOKEN"]
     token_file = os.path.join(WORKSPACE_ROOT, ".bap-admin-token")
     if os.path.isfile(token_file):
         try:
@@ -102,7 +121,7 @@ def api_post(server_url: str, endpoint: str, payload: dict, admin_token: str = "
     if admin_token:
         req.add_header("Authorization", f"Bearer {admin_token}")
     try:
-        with urllib.request.urlopen(req, context=ssl_ctx, timeout=5) as resp:
+        with open_control_plane(req) as resp:
             resp_data = {}
             body = resp.read().decode("utf-8")
             if body.strip().startswith("{"):
@@ -127,7 +146,7 @@ def api_get(server_url: str, endpoint: str, admin_token: str = "") -> tuple[int,
     if admin_token:
         req.add_header("Authorization", f"Bearer {admin_token}")
     try:
-        with urllib.request.urlopen(req, context=ssl_ctx, timeout=5) as resp:
+        with open_control_plane(req) as resp:
             resp_data = {}
             body = resp.read().decode("utf-8")
             if body.strip().startswith("{"):
@@ -154,7 +173,12 @@ def run_bapedge_exec(session_id: str, source: str, cmd_text: str, server_url: st
     if server_url:
         args.extend(["--server", server_url])
     test_env = os.environ.copy()
+    for name in ("BAP_ADMIN_TOKEN", "BAP_SECRET_KEY", "BAP_TELEMETRY_TOKEN"):
+        test_env.pop(name, None)
     test_env["BAP_WORKSPACE_ROOT"] = WORKSPACE_ROOT
+    agent = next((a for a in _ALL_AGENTS if a.session_id == session_id), None)
+    if agent is not None and agent.credentials_path:
+        test_env["BAP_CREDENTIALS"] = agent.credentials_path
 
     proc = subprocess.Popen(
         args,
@@ -176,7 +200,7 @@ def run_bapedge_exec(session_id: str, source: str, cmd_text: str, server_url: st
 
 class ManagedAgent:
     """Represents a governed agent with background heartbeat and session tracking."""
-    def __init__(self, session_id: str, agent_name: str, app_id: str, owner: str, email: str, prompt: str, server_url: str):
+    def __init__(self, session_id: str, agent_name: str, app_id: str, owner: str, email: str, prompt: str, server_url: str, admin_token: str = ""):
         self.session_id = session_id
         self.agent_name = agent_name
         self.app_id = app_id
@@ -184,6 +208,10 @@ class ManagedAgent:
         self.email = email
         self.prompt = prompt
         self.server_url = server_url
+        self.admin_token = admin_token
+        self.session_token = ""
+        self.credentials_path = ""
+        self._credential_dir = None
         self.is_alive = False
         self._hb_stop = threading.Event()
         self._hb_thread: Optional[threading.Thread] = None
@@ -215,9 +243,37 @@ class ManagedAgent:
             "prompt_capture_enabled": True,
             "intent": self.intent
         }
-        return api_post(self.server_url, "/api/v1/sessions/prompt", payload)
+        return api_post(self.server_url, "/api/v1/sessions/prompt", payload, self.session_token)
 
     def start(self):
+        # Obtain real workstation proof for lifecycle and the broker's audit sender.
+        # Never borrow the operator's enrollment file or give its admin token to edge.
+        status, registration = api_post(self.server_url, "/api/v1/agents/pre-register", {
+            "app_id": self.app_id, "owner_email": self.email,
+            "agent_name": self.agent_name, "env_profile": "development",
+            "permitted_scopes": ["cli:exec"],
+        }, self.admin_token)
+        if status not in (200, 201):
+            raise RuntimeError(f"Demo pre-registration failed (HTTP {status})")
+        digest = hashlib.sha256()
+        with open(BAPEDGE_BIN, "rb") as binary:
+            for chunk in iter(lambda: binary.read(1024 * 1024), b""):
+                digest.update(chunk)
+        binary_hash = digest.hexdigest()
+        status, enrollment = api_post(self.server_url, "/api/v1/agents/register-edge", {
+            "one_time_code": registration["one_time_code"],
+            "agent_name": self.agent_name, "instance_id": self.session_id,
+            "hostname": os.getenv("COMPUTERNAME", "DEVHOST-EXEC"),
+            "binary_hash": binary_hash, "public_key": "executive-demo-workstation",
+        })
+        if status != 200 or not enrollment.get("session_token"):
+            raise RuntimeError(f"Demo workstation enrollment failed (HTTP {status})")
+        self.session_token = enrollment["session_token"]
+        self._credential_dir = tempfile.TemporaryDirectory(prefix="bap-executive-identity-")
+        self.credentials_path = os.path.join(self._credential_dir.name, "workstation.json")
+        with open(self.credentials_path, "w", encoding="utf-8") as handle:
+            json.dump({"server_url": self.server_url, "session_token": self.session_token,
+                       "instance_id": self.session_id, "agent_id": registration["agent_id"]}, handle)
         payload = {
             "session_id": self.session_id,
             "agent_name": self.agent_name,
@@ -231,7 +287,9 @@ class ManagedAgent:
             "user_prompt": self.prompt,
             "intent": self.intent,
         }
-        status, _ = api_post(self.server_url, "/api/v1/sessions/start", payload)
+        status, _ = api_post(self.server_url, "/api/v1/sessions/start", payload, self.session_token)
+        if status != 200:
+            raise RuntimeError(f"Demo session start failed (HTTP {status})")
         self.is_alive = (status == 200)
 
         # Start heartbeat worker
@@ -244,7 +302,7 @@ class ManagedAgent:
                     "app_id": self.app_id,
                     "agent_id": self.session_id
                 }
-                st, resp = api_post(self.server_url, "/api/v1/sessions/heartbeat", hb_payload)
+                st, resp = api_post(self.server_url, "/api/v1/sessions/heartbeat", hb_payload, self.session_token)
                 if st == 403:
                     # Session or user revoked by administrator
                     pass
@@ -259,7 +317,10 @@ class ManagedAgent:
             "session_id": self.session_id,
             "reason": "scenario_complete"
         }
-        api_post(self.server_url, "/api/v1/sessions/end", end_payload)
+        api_post(self.server_url, "/api/v1/sessions/end", end_payload, self.session_token)
+        if self._credential_dir:
+            self._credential_dir.cleanup()
+            self._credential_dir = None
 
 
 _ALL_AGENTS: list[ManagedAgent] = []
@@ -352,6 +413,7 @@ def run_scenario(server_url: str, admin_token: str, delay: float = 0.8, interact
 
     _ALL_AGENTS.extend([carol, bob, eve])
     for ag in [carol, bob, eve]:
+        ag.admin_token = admin_token
         ag.start()
         print(f"  [+] Enrolled: {ag.agent_name:<28} (Operator: {ag.owner}, Session: {ag.session_id})")
 

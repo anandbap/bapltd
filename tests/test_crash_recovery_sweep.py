@@ -29,6 +29,8 @@ TEST_ADMIN_TOKEN = "crash-sweep-admin-token-998877"
 
 def http_req(url, method="GET", data=None, headers=None, retries=2):
     hdrs = dict(headers or {})
+    if method == "POST" and url.startswith(CP_URL + "/api/v1/sessions/"):
+        hdrs.setdefault("X-BAP-Admin-Token", TEST_ADMIN_TOKEN)
     if "Connection" not in hdrs:
         hdrs["Connection"] = "close"
     body_bytes = None

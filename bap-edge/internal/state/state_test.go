@@ -7,6 +7,7 @@ import (
 )
 
 func TestStateDirResolution(t *testing.T) {
+	t.Setenv("BAP_CREDENTIALS", "")
 	tempBase := t.TempDir()
 	customDir := filepath.Join(tempBase, "custom_bapstate")
 

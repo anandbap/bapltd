@@ -44,6 +44,8 @@ CP_URL = f"http://127.0.0.1:{CP_PORT}"
 
 def http_req(url, method="GET", data=None, headers=None, retries=2):
     hdrs = dict(headers or {})
+    if method == "POST" and url == CP_URL + "/api/v1/audit/ingest":
+        hdrs.setdefault("X-BAP-Admin-Token", TEST_ADMIN_TOKEN)
     if "Connection" not in hdrs:
         hdrs["Connection"] = "close"
     body_bytes = None

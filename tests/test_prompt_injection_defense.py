@@ -31,7 +31,12 @@ CP_URL = f"http://127.0.0.1:{CP_PORT}"
 
 
 def http_req(url, method="GET", data=None, headers=None):
-    hdrs = headers or {}
+    hdrs = dict(headers or {})
+    # This suite acts as an explicitly authorized operator when seeding telemetry.
+    if method == "POST" and url.startswith(CP_URL + "/api/v1/") and (
+        "/sessions/" in url or url.endswith("/audit/ingest")
+    ):
+        hdrs.setdefault("X-BAP-Admin-Token", TEST_ADMIN_TOKEN)
     body_bytes = None
     if data is not None:
         if isinstance(data, (dict, list)):
