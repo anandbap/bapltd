@@ -16,6 +16,8 @@ import shutil
 import unittest
 import subprocess
 import urllib.request
+import hashlib
+import tempfile
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BAPEDGE_BIN = os.path.join(REPO_ROOT, "dist", "windows-amd64", "bapedge.exe")
@@ -29,14 +31,18 @@ class TestMultiLayerDefense(unittest.TestCase):
     def setUpClass(cls):
         cls.cp_port = 8089
         cls.server_url = f"http://localhost:{cls.cp_port}"
-        # Clean any stale cached policy state from prior test suites
-        for p in [
-            os.path.join(REPO_ROOT, ".bapstate", "policy"),
-            os.path.join(REPO_ROOT, ".bap"),
-            os.path.expanduser("~/.bapstate/policy"),
-        ]:
-            if os.path.exists(p):
-                shutil.rmtree(p, ignore_errors=True)
+        # Windows may retain a directory handle briefly in a detached watcher.
+        cls.fixture_dir = tempfile.TemporaryDirectory(prefix="bap-multilayer-", ignore_cleanup_errors=True)
+        cls.workspace = cls.fixture_dir.name
+        for name in ("policy.cedar", "schema.json", "bap-config.json"):
+            shutil.copy2(os.path.join(REPO_ROOT, name), cls.workspace)
+        subprocess.run(["git", "init", "--quiet", cls.workspace], check=True)
+        cls.env = os.environ.copy()
+        cls.env["BAP_WORKSPACE_ROOT"] = cls.workspace
+        cls.env["BAP_STATE_DIR"] = os.path.join(cls.workspace, "state")
+        cls.env["BAP_CREDENTIALS"] = os.path.join(cls.workspace, "workstation.json")
+        cls.env["USERPROFILE"] = os.path.join(cls.workspace, "home")
+        os.makedirs(cls.env["USERPROFILE"])
 
         # Start isolated control plane with admin token and explicit baseline policy
         cls.cp_proc = subprocess.Popen(
@@ -51,7 +57,8 @@ class TestMultiLayerDefense(unittest.TestCase):
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            cwd=REPO_ROOT
+            cwd=cls.workspace,
+            env=cls.env,
         )
         # Wait for control plane to become healthy
         healthy = False
@@ -66,23 +73,39 @@ class TestMultiLayerDefense(unittest.TestCase):
         if not healthy:
             raise RuntimeError("Failed to start test control plane on port %d" % cls.cp_port)
 
+        def post(path, payload, admin=False):
+            headers = {"Content-Type": "application/json"}
+            if admin:
+                headers["X-BAP-Admin-Token"] = TEST_ADMIN_TOKEN
+            req = urllib.request.Request(cls.server_url + path, data=json.dumps(payload).encode(), headers=headers)
+            with urllib.request.urlopen(req, timeout=5) as response:
+                return json.load(response)
+        registration = post("/api/v1/agents/pre-register", {
+            "app_id": "multilayer-workstation", "owner_email": "layer4@test.internal",
+            "agent_name": "Layer4Fixture", "env_profile": "development", "permitted_scopes": ["cli:exec"],
+        }, admin=True)
+        with open(BAPEDGE_BIN, "rb") as binary:
+            binary_hash = hashlib.sha256(binary.read()).hexdigest()
+        enrollment = post("/api/v1/agents/register-edge", {
+            "one_time_code": registration["one_time_code"], "instance_id": "multilayer-test-workstation",
+            "agent_name": "Layer4Fixture", "hostname": "ci-fixture", "binary_hash": binary_hash,
+            "public_key": "multilayer-test-public-key",
+        })
+        with open(cls.env["BAP_CREDENTIALS"], "w", encoding="utf-8") as handle:
+            json.dump({"server_url": cls.server_url, "session_token": enrollment["session_token"],
+                       "agent_id": registration["agent_id"], "instance_id": "multilayer-test-workstation"}, handle)
+
     @classmethod
     def tearDownClass(cls):
         if cls.cp_proc:
             cls.cp_proc.terminate()
             cls.cp_proc.wait()
-        for p in [
-            os.path.join(REPO_ROOT, ".bapstate", "policy"),
-            os.path.join(REPO_ROOT, ".bap"),
-            os.path.expanduser("~/.bapstate/policy"),
-        ]:
-            if os.path.exists(p):
-                shutil.rmtree(p, ignore_errors=True)
+        cls.fixture_dir.cleanup()
 
     def test_01_layer2_mcp_defense(self):
         """Verify Layer 2 (MCP): bapmcp allows permitted tools and blocks forbidden resources."""
         session_id = "sess-mcp-test-01"
-        env = os.environ.copy()
+        env = self.env.copy()
         env["LTD_SOURCE"] = "antigravity"
         env["BAP_SESSION_ID"] = session_id
 
@@ -92,7 +115,7 @@ class TestMultiLayerDefense(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=env,
-            cwd=REPO_ROOT,
+            cwd=self.workspace,
             text=True,
             bufsize=1
         )
@@ -181,7 +204,7 @@ class TestMultiLayerDefense(unittest.TestCase):
     def test_02_layer3_tool_call_shims(self):
         """Verify Layer 3: Tool shims intercept commands and route through bapedge exec."""
         session_id = "sess-layer3-test-02"
-        shim_dir = os.path.join(REPO_ROOT, ".bapstate", f"shims-{session_id}")
+        shim_dir = os.path.join(self.workspace, ".bapstate", f"shims-{session_id}")
         os.makedirs(shim_dir, exist_ok=True)
         try:
             # Create git shim
@@ -197,7 +220,7 @@ exit /b %ERRORLEVEL%
             with open(os.path.join(shim_dir, "git.cmd"), "w") as f:
                 f.write(git_shim_content)
 
-            env = os.environ.copy()
+            env = self.env.copy()
             env["PATH"] = shim_dir + os.pathsep + env.get("PATH", "")
             env["LTD_SOURCE"] = "antigravity"
             env["BAP_SESSION_ID"] = session_id
@@ -209,7 +232,7 @@ exit /b %ERRORLEVEL%
                 capture_output=True,
                 text=True,
                 env=env,
-                cwd=REPO_ROOT
+                cwd=self.workspace
             )
             self.assertEqual(res.returncode, 0, f"Shim execution failed: {res.stderr}")
             self.assertIn("git version", res.stdout)
@@ -228,11 +251,13 @@ exit /b %ERRORLEVEL%
                 "--server", self.server_url,
                 "--session-id", session_id,
                 "--app-id", "antigravity",
+                "--pid", str(self.cp_proc.pid),
                 "--prompt", test_prompt
             ],
             capture_output=True,
             text=True,
-            cwd=REPO_ROOT
+            env=self.env,
+            cwd=self.workspace
         )
         self.assertEqual(res.returncode, 0, f"session-start failed: {res.stderr}")
 
@@ -258,9 +283,14 @@ exit /b %ERRORLEVEL%
             ],
             capture_output=True,
             text=True,
-            cwd=REPO_ROOT
+            env=self.env,
+            cwd=self.workspace
         )
         self.assertEqual(res_exec.returncode, 0, f"bapedge exec failed: {res_exec.stderr}")
+        with urllib.request.urlopen(req_obj, timeout=2.0) as resp:
+            reported = json.load(resp)
+        self.assertGreaterEqual(reported.get("allowed_count", 0), 1,
+                                "Authenticated edge audit must reach the control plane")
 
         # End session cleanly
         res_end = subprocess.run(
@@ -271,14 +301,18 @@ exit /b %ERRORLEVEL%
             ],
             capture_output=True,
             text=True,
-            cwd=REPO_ROOT
+            env=self.env,
+            cwd=self.workspace
         )
         self.assertEqual(res_end.returncode, 0)
+        with urllib.request.urlopen(req_obj, timeout=2.0) as resp:
+            ended = json.load(resp)
+        self.assertEqual(ended.get("status"), "closed")
 
     def test_04_layer4_credential_shielding_and_output_redaction(self):
         """Verify Layer 4 (Broker): Strips ambient secrets and redacts sensitive tokens in output."""
         session_id = f"sess-mld-shield-{os.getpid()}"
-        env = os.environ.copy()
+        env = self.env.copy()
         env["AWS_SECRET_ACCESS_KEY"] = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
         env["BAP_SESSION_ID"] = session_id
         env["BAP_TEST_MODE"] = "1"
@@ -296,7 +330,7 @@ exit /b %ERRORLEVEL%
             capture_output=True,
             text=True,
             env=env,
-            cwd=REPO_ROOT
+            cwd=self.workspace
         )
         try:
             res_json = json.loads(res_env.stdout)
@@ -316,7 +350,8 @@ exit /b %ERRORLEVEL%
             ],
             capture_output=True,
             text=True,
-            cwd=REPO_ROOT
+            env=self.env,
+            cwd=self.workspace
         )
         self.assertEqual(res_redact.returncode, 0)
         data = json.loads(res_redact.stdout)
@@ -338,7 +373,8 @@ exit /b %ERRORLEVEL%
             ],
             capture_output=True,
             text=True,
-            cwd=REPO_ROOT
+            env=self.env,
+            cwd=self.workspace
         )
         self.assertEqual(res_proc.returncode, 0)
         receipt = json.loads(res_proc.stdout).get("receipt", {})
@@ -346,7 +382,7 @@ exit /b %ERRORLEVEL%
         self.assertGreaterEqual(len(tree), 3)
 
         # 2. Checkpoint and Rollback
-        scratch_dir = os.path.join(REPO_ROOT, "scratch", f"mld_snap_{os.getpid()}")
+        scratch_dir = os.path.join(self.workspace, "scratch", f"mld_snap_{os.getpid()}")
         os.makedirs(scratch_dir, exist_ok=True)
         try:
             target = os.path.join(scratch_dir, "mld_target.txt")
@@ -365,7 +401,8 @@ exit /b %ERRORLEVEL%
                 ],
                 capture_output=True,
                 text=True,
-                cwd=REPO_ROOT
+                env=self.env,
+                cwd=self.workspace
             )
             self.assertEqual(res_mut.returncode, 0)
 
@@ -379,7 +416,8 @@ exit /b %ERRORLEVEL%
                 ],
                 capture_output=True,
                 text=True,
-                cwd=REPO_ROOT
+                env=self.env,
+                cwd=self.workspace
             )
             self.assertEqual(res_rb.returncode, 0)
             rb_json = json.loads(res_rb.stdout)

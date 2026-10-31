@@ -81,6 +81,7 @@ Version-2 audit hashes bind session ID, instance ID, SPIFFE ID and user identity
 - Go, hook and Python transports send enrollment proof only to the configured origin, require verified HTTPS remotely, and refuse authenticated cross-origin redirects. Loopback HTTP remains supported for isolated local testing.
 - PowerShell launchers and the Python harness delegate lifecycle telemetry to `bapedge session-telemetry`, passing JSON through stdin. Tokens are not placed in command arguments or query strings. Prompt delivery failures are retained for retry.
 - Configure the scoped gateway collector secret if gateway-to-control-plane audit collection is used. Missing collector configuration does not permit anonymous ingestion; gateway evidence remains local.
+- `BAP_TELEMETRY_TOKEN` is optional when no gateway collector is used. When collection is enabled, configure the same independently generated value (at least 32 characters) on the gateway and control-plane service, including Render. It is distinct from `BAP_SECRET_KEY`, is never required on edge clients, and is not a prerequisite for workstation heartbeat/session reporting.
 - Control-plane persistence, shared multi-replica identity/grant state, and production capacity/p95/p99 testing remain separate deployment work. Process-local stores and restoration receipts are not a distributed authority database.
 
 ## Verification

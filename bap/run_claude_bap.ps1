@@ -124,6 +124,21 @@ else {
 }
 $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
+# A version query does not start a workload or take custody of workspace settings.
+if ($Mode -eq 'Launcher' -and $ClaudeArgs.Count -eq 1 -and $ClaudeArgs[0] -eq '--version') {
+    Write-Host 'CLAUDE CODE - BAP GOVERNANCE LAUNCHER'
+    foreach ($candidate in @('claude-code.cmd', 'claude.cmd', 'claude.exe', 'claude')) {
+        $versionCommand = Get-Command $candidate -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -ne $versionCommand) {
+            & $candidate --version
+            if ($null -eq $LASTEXITCODE) { exit 0 }
+            exit $LASTEXITCODE
+        }
+    }
+    Write-Error 'Claude Code executable was not found.'
+    exit 11
+}
+
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------

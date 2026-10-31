@@ -33,6 +33,13 @@ CI compatibility follow-up:
 
 CI repair verification: 83 relevant Python tests passed across the affected lifecycle, executive demo, activity, prompt-defense, discovery, authority, policy, notarization and transport suites. Full `go test ./...` passed for edge and control plane. Full Python discovery exceeded the local broker's 120-second process quota, so relevant suites were run in smaller groups. Local `-race` execution is unavailable without a CGO compiler; hosted CI must verify the race matrix.
 
+CI run #167 follow-up (October 31, 2026):
+
+- [x] Enroll the multi-layer defense fixture before exercising `session-start`, execution and `session-end`; assert centrally reported allowed events and final closed status.
+- [x] Isolate the fixture's workspace, identity, state and child-process profile; remove cleanup of shared developer policy directories.
+- [x] Handle the exact Claude `--version` query before workload enrollment/settings custody in both distributed PowerShell launcher copies. Add a regression test requiring success without credentials, a control plane, or workspace settings changes.
+- [x] Verify the five multi-layer defense cases, launcher version regression, and five executive-demo cases locally with the CI production edge build flags. Hosted CI rerun remains outstanding.
+
 Latest local durable SQLite benchmarks, with authenticated requests (20 iterations; fixture results, not a production SLA):
 
 | Path | Fixture size | Mean request time |
