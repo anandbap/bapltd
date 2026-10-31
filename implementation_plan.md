@@ -40,6 +40,13 @@ CI run #167 follow-up (October 31, 2026):
 - [x] Handle the exact Claude `--version` query before workload enrollment/settings custody in both distributed PowerShell launcher copies. Add a regression test requiring success without credentials, a control plane, or workspace settings changes.
 - [x] Verify the five multi-layer defense cases, launcher version regression, and five executive-demo cases locally with the CI production edge build flags. Hosted CI rerun remains outstanding.
 
+CI run #168 follow-up:
+
+- [x] Synchronize repository-root Claude launchers with the packaged copies. Wheel staging reads root launchers first and had overwritten the preceding fix before CI tested it.
+- [x] Handle exact CLI `--version` requests in the shared engine before session state, local control-plane startup or watchdogs. This removes the Antigravity CMD version-query timeout.
+- [x] Run actual wheel asset staging into an isolated package and test staged Claude PowerShell and Antigravity CMD launchers. Assert version output and absence of workspace governance mutations. Include root launchers in distributed-copy checks.
+- [x] Local staged-launcher regressions and identity/copy checks passed. Hosted CI must run the new commit after push. The repeated 404 traceback referenced the older test source, not the test at `3ed2aec`.
+
 Latest local durable SQLite benchmarks, with authenticated requests (20 iterations; fixture results, not a production SLA):
 
 | Path | Fixture size | Mean request time |

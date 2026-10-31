@@ -49,8 +49,8 @@ class SessionIdentityTransportTests(unittest.TestCase):
     def test_distributed_launcher_copies_match(self):
         groups = (
             ("bap/launchers/bap_launcher_engine.ps1", "bap/bap_launcher_engine.ps1", "scripts/bap_launcher_engine.ps1"),
-            ("bap/launchers/run_claude_bap.ps1", "bap/run_claude_bap.ps1"),
-            ("bap/launchers/run_claude_bap.bat", "bap/run_claude_bap.bat"),
+            ("run_claude_bap.ps1", "bap/launchers/run_claude_bap.ps1", "bap/run_claude_bap.ps1"),
+            ("run_claude_bap.bat", "bap/launchers/run_claude_bap.bat", "bap/run_claude_bap.bat"),
             ("bap/bap_harness.py", "scripts/bap_harness.py"),
         )
         for group in groups:

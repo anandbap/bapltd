@@ -721,6 +721,20 @@ function Invoke-BapGovernedSession {
         $ForwardArgs += $a
     }
 
+    # Metadata inspection must not create a workload, watchdog, or control plane.
+    if ($Mode -eq 'Launcher' -and $AgentMode -eq 'cli' -and $ForwardArgs.Count -eq 1 -and $ForwardArgs[0] -eq '--version') {
+        Write-Host "BOUNDED AUTHORITY PLANE (BAP) - $DisplayName ($AgentId)"
+        foreach ($candidate in $CandidateExecutables) {
+            $versionCommand = Get-Command $candidate -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($null -ne $versionCommand) {
+                & $candidate --version
+                if ($null -eq $LASTEXITCODE) { exit 0 }
+                exit $LASTEXITCODE
+            }
+        }
+        throw "Executable for $DisplayName was not found."
+    }
+
     # Watchdog child execution
     if ($Mode -eq 'Watchdog') {
         Run-WatchdogLoop -ManifestPath $ManifestArg -MutexName $MutexArg -ParentPid $ParentPidArg -ParentTicks $ParentTicksArg

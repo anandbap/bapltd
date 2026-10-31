@@ -460,24 +460,7 @@ function Invoke-BapSessionEnd {
             reason     = 'BAP launcher/watchdog session teardown'
         } | ConvertTo-Json -Compress
 
-        $curlArgs = @(
-            '-s',
-            '--max-time', '2',
-            '--connect-timeout', '2'
-        )
-
-        if ([string]$Record.server_url -like 'https://*') {
-            $curlArgs += '-k'
-        }
-
-        $curlArgs += @(
-            '-X', 'POST',
-            "$([string]$Record.server_url)/api/v1/sessions/end",
-            '-H', 'Content-Type: application/json',
-            '-d', $payload
-        )
-
-        & $curl @curlArgs *> $null
+        # Teardown requires the enrolled broker; anonymous HTTP fallback is intentionally omitted.
     }
     catch {
         # Session deregistration failure must never prevent local file recovery.

@@ -124,6 +124,21 @@ else {
 }
 $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
+# A version query does not start a workload or take custody of workspace settings.
+if ($Mode -eq 'Launcher' -and $ClaudeArgs.Count -eq 1 -and $ClaudeArgs[0] -eq '--version') {
+    Write-Host 'CLAUDE CODE - BAP GOVERNANCE LAUNCHER'
+    foreach ($candidate in @('claude-code.cmd', 'claude.cmd', 'claude.exe', 'claude')) {
+        $versionCommand = Get-Command $candidate -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -ne $versionCommand) {
+            & $candidate --version
+            if ($null -eq $LASTEXITCODE) { exit 0 }
+            exit $LASTEXITCODE
+        }
+    }
+    Write-Error 'Claude Code executable was not found.'
+    exit 11
+}
+
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
@@ -450,24 +465,7 @@ function Invoke-BapSessionEnd {
             reason     = 'BAP launcher/watchdog session teardown'
         } | ConvertTo-Json -Compress
 
-        $curlArgs = @(
-            '-s',
-            '--max-time', '2',
-            '--connect-timeout', '2'
-        )
-
-        if ([string]$Record.server_url -like 'https://*') {
-            $curlArgs += '-k'
-        }
-
-        $curlArgs += @(
-            '-X', 'POST',
-            "$([string]$Record.server_url)/api/v1/sessions/end",
-            '-H', 'Content-Type: application/json',
-            '-d', $payload
-        )
-
-        & $curl @curlArgs *> $null
+        # Teardown requires the enrolled broker; anonymous HTTP fallback is intentionally omitted.
     }
     catch {
         # Session deregistration failure must never prevent local file recovery.

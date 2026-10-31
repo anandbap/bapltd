@@ -4,6 +4,8 @@ This document specifies the technical architecture, security model, component de
 
 ### Authenticated lifecycle and restart recovery
 
+Launcher distribution is part of the tested lifecycle contract: wheel staging selects repository-root launchers and copies them into package and `launchers/` paths. Regression checks exercise those staged artifacts, including the shared engine. Exact CLI version queries return metadata without creating sessions or changing workspace settings; normal workload startup retains its governance preflight.
+
 The implemented lifecycle/identity contract is defined in [ADR-006](docs/adr/ADR-006-Authenticated-Lifecycle-And-Recovery.md) and the [session recovery design](docs/SESSION_IDENTITY_AND_RECOVERY.md). HTTPS alone does not authenticate a workstation. Lifecycle and telemetry writes validate enrolled proof and stored session ownership; hostnames, email addresses and session IDs cannot establish ownership. Gateway collection uses a separate ingestion-only identity.
 
 Deployment recovery re-announces live sessions under their original IDs. It restores reporting metadata without issuing execution grants, clearing cached denials, or reopening ended/revoked sessions. Reconstructed registry records are reporting-only; old bounded grants cannot survive loss of the in-memory authority epoch/usage ledger. Local enforcement remains independent of reporting availability.

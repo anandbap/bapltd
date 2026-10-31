@@ -76,6 +76,8 @@ Version-2 audit hashes bind session ID, instance ID, SPIFFE ID and user identity
 
 ## Client and rollout requirements
 
+Launcher verification covers repository-root scripts and artifacts produced by the wheel builder's `copy_installer_script()`. Staging chooses root launchers before distribution fallbacks and writes both package-level and `launchers/` copies; copy checks include those root sources. An exact CLI `--version` request reports metadata before enrollment, workspace custody or background service startup. Workload launches retain the authenticated lifecycle.
+
 - Update `bapedge`, the Claude interceptor, packaged launcher copies, and Python SDK together with the server. Old anonymous senders will receive 401; there is no anonymous fallback.
 - Keep `BAP_SECRET_KEY` stable in the deployment secret manager. Planned signing-key rotation invalidates old enrollment proof and requires a separate renewal/rotation procedure.
 - Go, hook and Python transports send enrollment proof only to the configured origin, require verified HTTPS remotely, and refuse authenticated cross-origin redirects. Loopback HTTP remains supported for isolated local testing.
