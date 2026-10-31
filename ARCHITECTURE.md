@@ -2,6 +2,14 @@
 
 This document specifies the technical architecture, security model, component design, cryptographic protocols, and operational state machines of the **Bounded Authority Plane (BAP)**.
 
+### Workstation enrollment and independent reporting
+
+`bap install` provisions the workstation and daemon; `bap login` establishes its shared identity and control-plane destination. Enrollment is the master destination for edge telemetry and native-hook lifecycle reporting, subject to administrator endpoint locks. Conflicting managed configuration queues evidence until enrollment is corrected. A repository setting or unapproved hook must not redirect or disable the other reporting paths.
+
+The implemented contract and boundary matrix are in [Independent Layer Reporting](docs/INDEPENDENT_LAYER_REPORTING.md). Hooks, MCP, terminal shims, broker and gateway report their own available evidence; prompt text is optional. Passive named-process observation adds reporting-only presence on Windows/Linux, with installation/PID/birth-bound fallback IDs. Observation never becomes an execution grant. Each enforcing boundary must actually receive the operation; no serial hook-to-kernel fallback or universal interception is implied.
+
+The dashboard separates evidence coverage from liveness. Elevated privilege alone no longer claims an installed kernel sensor or packet filter. Eight bounded daemon delivery workers and a persistent spool decouple uploads from command execution; existing heartbeat/recovery authorization and cached restrictions remain in force. New central audit links bind reporting-layer metadata using hash version 3 without rewriting legacy links.
+
 ### Authenticated lifecycle and restart recovery
 
 Launcher distribution is part of the tested lifecycle contract: wheel staging selects repository-root launchers and copies them into package and `launchers/` paths. Regression checks exercise those staged artifacts, including the shared engine. Exact CLI version queries return metadata without creating sessions or changing workspace settings; normal workload startup retains its governance preflight.

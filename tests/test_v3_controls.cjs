@@ -24,6 +24,16 @@ async function main() {
   ctx.getJSON = async url => fixtures[url] || {};
   vm.runInContext(section('  function loadLive(force)', '  function startLive()'), ctx);
   await ctx.loadLive();
+  assert.equal(ctx.S.coverage[0].protect, 'Coverage unknown');
+  assert.doesNotMatch(ctx.S.coverage[0].means, /Every action/);
+  fixtures['/api/v1/sessions'].sessions[0].reporting_layers = ['discovery'];
+  await ctx.loadLive();
+  assert.equal(ctx.S.coverage[0].protect, 'Discovered');
+  assert.match(ctx.S.coverage[0].means, /Prompt text not reported/);
+  fixtures['/api/v1/sessions'].sessions[0].reporting_layers.push('broker');
+  await ctx.loadLive();
+  assert.equal(ctx.S.coverage[0].protect, 'Evidence received');
+  assert.match(ctx.S.coverage[0].means, /discovery, broker/);
   assert.match(ctx.S.coverage[0].actionHtml, /Freeze session/);
   assert.doesNotMatch(ctx.S.coverage[0].surfaceHtml, /data-session-freeze/);
   assert.doesNotMatch(ctx.S.coverage[0].actionHtml, / disabled/);

@@ -3,6 +3,7 @@ package config
 import (
 	"bap-edge/internal/state"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -148,8 +149,48 @@ func ResolveEndpoints() EndpointsConfig {
 	if cfg.EnforcementMode == "" {
 		cfg.EnforcementMode = "enforce"
 	}
+	// Login enrollment is the workstation-wide reporting authority. A stale
+	// repository file or shell environment must not redirect an enrolled device.
+	if enrolled := EnrolledControlPlaneURL(); enrolled != "" {
+		cfg.ControlPlaneURL = enrolled
+		cfg.ConfigSource = "workstation_enrollment"
+	}
 
 	return cfg
+}
+
+// EnrolledControlPlaneURL returns only enrollment metadata, never the proof.
+func EnrolledControlPlaneURL() string {
+	data, err := os.ReadFile(state.CredentialsPath())
+	if err != nil {
+		return ""
+	}
+	var creds struct {
+		ServerURL    string `json:"server_url"`
+		SessionToken string `json:"session_token"`
+		InstanceID   string `json:"instance_id"`
+	}
+	if json.Unmarshal(data, &creds) != nil || creds.SessionToken == "" || creds.InstanceID == "" {
+		return ""
+	}
+	return strings.TrimRight(creds.ServerURL, "/")
+}
+
+// ReportingEndpoint preserves isolated pre-enrollment development overrides;
+// enrolled or managed workstations always use their master destination.
+func ReportingEndpoint(requested string) string {
+	cfg := ResolveEndpoints()
+	if cfg.Locked || cfg.ConfigSource == "workstation_enrollment" {
+		return cfg.ControlPlaneURL
+	}
+	return requested
+}
+
+func CheckReportingEnrollment(destination string) error {
+	if enrolled := EnrolledControlPlaneURL(); enrolled != "" && strings.TrimRight(destination, "/") != enrolled {
+		return fmt.Errorf("reporting destination conflicts with workstation enrollment; re-authenticate against the managed control plane")
+	}
+	return nil
 }
 
 func getFirstEnv(keys ...string) string {

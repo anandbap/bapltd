@@ -459,15 +459,16 @@ func writeSessionMarker(sessionID, serverURL, appID, username, hostname, initial
 		instID = instanceIDOpt[0]
 	}
 	marker := map[string]any{
-		"session_id":  sessionID,
-		"instance_id": instID,
-		"server_url":  serverURL,
-		"pid":         watchPID,
-		"app_id":      appID,
-		"user":        username,
-		"hostname":    hostname,
-		"user_prompt": initialPrompt,
-		"started_at":  time.Now().UTC(),
+		"process_birth": processBirth(watchPID),
+		"session_id":    sessionID,
+		"instance_id":   instID,
+		"server_url":    serverURL,
+		"pid":           watchPID,
+		"app_id":        appID,
+		"user":          username,
+		"hostname":      hostname,
+		"user_prompt":   initialPrompt,
+		"started_at":    time.Now().UTC(),
 	}
 	if data, err := json.MarshalIndent(marker, "", "  "); err == nil {
 		// 1. Write per-session isolated marker

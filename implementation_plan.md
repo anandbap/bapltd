@@ -1,10 +1,37 @@
 # UI v3, authenticated identity, and deployment recovery implementation plan
 
-Updated: October 30, 2026
+Updated: October 31, 2026
 
 ## Objective
 
 Fix UI v3 governance controls and decision reporting; bind authenticated workstation identity to session lifecycle and telemetry; recover reporting and edge evidence after deployment without restoring lost execution authority.
+
+## Independent reporting and master workstation enrollment
+
+Design: [Independent Layer Reporting](docs/INDEPENDENT_LAYER_REPORTING.md). These identifiers are implementation-plan tracking items, not external Jira stories.
+
+- [x] **OBS-01 — Master enrollment:** treat `bap install`/`bap login` as workstation provisioning and identity. Prefer enrollment over project/environment reporting destinations; preserve administrator endpoint locks. Retain queued evidence on a managed/enrollment destination conflict. Keep gateway service identity separate. Restart a daemon targeting the previous server after login.
+- [x] **OBS-02 — Hook-independent presence:** observe exact named Windows/Linux agent processes without reading prompts, environments or transcripts. Attribute fallback broker callers through bounded process ancestry. Bind fallback session IDs to installation/PID/process birth, retain explicit session IDs, stop stale PID-reuse heartbeats and correlate native watcher markers.
+- [x] **OBS-03 — Independent layer evidence:** tag hook, MCP, shim, broker and gateway records. Preserve tags across immediate/batch sends and journal replay. Accept command-only and process-only evidence; do not make lower layers wait for hooks or prompt capture.
+- [x] **OBS-04 — Codex hook compatibility:** emit Codex-native PreToolUse responses without unsupported legacy fields; accept authenticated `codex-lifecycle-hook` prompt submissions, including policy-disabled text capture. Preserve the hook approval boundary.
+- [x] **OBS-05 — Direct file-hook reporting:** atomically spool native file-hook verdicts locally without a network wait. Promote bounded batches to the shared journal; synchronize before removing producer records and preserve failed handoffs for retry.
+- [x] **OBS-06 — Honest coverage:** display received layers and missing/disabled prompt text separately from Live/Offline/Frozen. Process discovery does not increment operation/allow/deny counts or grant execution authority. Remove unconditional kernel-capability claims based on elevation and unconditional MCP coverage claims.
+- [x] **OBS-07 — Bounded live uploads:** persist before enqueue, use eight daemon delivery workers with a 256-event queue, and fall back to the existing spool on saturation. Discovery/retry stay off command execution; central session coverage updates use a bounded layer set without history scans.
+- [x] **OBS-08 — Evidence integrity:** bind reporting-layer metadata in central version-3 hashes and preserve legacy verification. Persist session layer summaries through the optional existing SQLite store. Reporting must never clear session/workstation freeze state.
+- [x] **OBS-09 — Verification:** full edge and control-plane Go suites, full interceptor suite, both real edge/control-plane delivery and restart E2E harnesses, UI controls/coverage tests, five Python launcher/transport tests, matching launcher-engine copies and PowerShell parsing passed locally. Hosted CI and real Render acceptance remain separate.
+- [ ] **OBS-10 — Deployment acceptance:** upgrade matching server, edge, interceptor and launcher artifacts, restart the installed daemon, leave native hooks unapproved and confirm discovered presence plus independent broker/MCP/shim evidence. Then approve a supported hook and confirm prompts/capture policy. Exercise freeze and outage/reconnect. Repository changes do not upgrade this laptop's installed binaries.
+
+Latency contract: local policy evaluation remains independent of control-plane availability. Process observation runs initially/every 10 seconds; heartbeats remain every 4 seconds; direct file-hook promotion/offline retry uses the 5-second spool cadence. Available live broker/discovery events enter the bounded upload queue immediately. These cadences do not claim zero-lag or millisecond end-to-end Render reporting.
+
+October 31 local authenticated SQLite fixture, 20 iterations with broker-tagged Codex evidence and version-3 hashes: heartbeat mean **0.35 ms at 1,000 stations / 0.30 ms at 10,000**; single-event ingest **1.27 ms at 1,000 retained events / 2.13 ms at 10,000**. Fifty-event batches took **50.85 / 48.72 ms** respectively (about 1 ms per event). These are local means, not production p95/p99 or network latency guarantees. First cold compilation exceeded the broker's 120-second quota; cached/split verification completed successfully.
+
+Explicit deferred stories:
+
+- [ ] **OBS-D01 — Authoritative central persistence:** durable identity, policy/security actions, audit, grant/consumption and revocation state; edge recovery journals remain necessary until central acknowledgements are durable.
+- [ ] **OBS-D02 — Mandatory OS boundary:** implement and attest platform-wide execution/file/network controls and managed hook policy. User-space discovery observes presence; cooperative rules, MCP and PATH shims cannot intercept arbitrary bypasses or unmediated IDE tools.
+- [ ] **OBS-D03 — Remaining discovery adapters:** native macOS process identity and integrations for agents hidden behind generic host/helper processes. Do not guess identity from command-line text or claim missing prompts were captured.
+- [ ] **OBS-D04 — Durable service operation:** per-platform startup after reboot/logoff, supervisor recovery and managed repair of disabled components. Current install/login starts the user-space daemon; this is not proof of an installed persistent OS service.
+- [ ] **OBS-D05 — Production performance and retention:** concurrent p95/p99 measurements, representative disk contention and outage/backfill volume; bounded retention/compaction and per-layer freshness diagnostics. No new production latency guarantee is inferred from functional tests.
 
 ## Authenticated lifecycle and recovery follow-up
 

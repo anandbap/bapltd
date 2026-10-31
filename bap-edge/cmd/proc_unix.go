@@ -10,6 +10,60 @@ import (
 	"syscall"
 )
 
+func listAgentProcesses() ([]agentProcess, error) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil, err
+	}
+	boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return nil, err
+	}
+	var result []agentProcess
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil || pid <= 0 {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "stat"))
+		if err != nil {
+			continue
+		}
+		stat := string(data)
+		left, right := strings.Index(stat, "("), strings.LastIndex(stat, ")")
+		if left < 0 || right <= left {
+			continue
+		}
+		fields := strings.Fields(stat[right+1:])
+		if len(fields) < 20 {
+			continue
+		}
+		parent, _ := strconv.Atoi(fields[1])
+		result = append(result, agentProcess{PID: pid, ParentPID: parent, Name: stat[left+1 : right], Birth: strings.TrimSpace(string(boot)) + ":" + fields[19]})
+	}
+	return result, nil
+}
+
+func processBirth(pid int) string {
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+	if err != nil {
+		return ""
+	}
+	right := strings.LastIndex(string(data), ")")
+	if right < 0 {
+		return ""
+	}
+	fields := strings.Fields(string(data)[right+1:])
+	if len(fields) < 20 {
+		return ""
+	}
+	boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(boot)) + ":" + fields[19]
+}
+
 func isProcessAlive(pid int) bool {
 	if pid <= 0 {
 		return false

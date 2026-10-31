@@ -12,6 +12,7 @@ import (
 
 type Event struct {
 	HashVersion         int      `json:"hash_version,omitempty"`
+	ReportingLayer      string   `json:"reporting_layer,omitempty"`
 	InstanceID          string   `json:"instance_id,omitempty"`
 	EventID             string   `json:"event_id"`
 	AgentID             string   `json:"agent_id,omitempty"`
@@ -133,6 +134,9 @@ func (s *Store) IngestAccepted(incoming []Event) ([]Event, error) {
 
 		ev.PreviousHash = s.lastHash
 		ev.HashVersion = 2
+		if ev.ReportingLayer != "" {
+			ev.HashVersion = 3
+		}
 
 		h := sha256.New()
 		h.Write([]byte(ev.PreviousHash))
@@ -235,4 +239,9 @@ func writeEventIdentity(h hash.Hash, ev Event) {
 	identity, _ := json.Marshal([]string{ev.SessionID, ev.InstanceID, ev.SPIFFEID, ev.UserID, ev.UserEmail})
 	h.Write([]byte("\x00bap-audit-identity-v2\x00"))
 	h.Write(identity)
+	if ev.HashVersion >= 3 {
+		layer, _ := json.Marshal(ev.ReportingLayer)
+		h.Write([]byte("\x00bap-reporting-layer-v3\x00"))
+		h.Write(layer)
+	}
 }

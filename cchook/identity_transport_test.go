@@ -26,6 +26,12 @@ func TestHookIdentityBoundToOrigin(t *testing.T) {
 		})}
 		req, _ := http.NewRequest("POST", target, nil)
 		resp, err := transport.RoundTrip(req)
+		if req.URL.Host != "control.test" {
+			if err == nil {
+				t.Fatal("enrolled hook sent evidence to a different destination")
+			}
+			continue
+		}
 		if err != nil {
 			t.Fatal(err)
 		}

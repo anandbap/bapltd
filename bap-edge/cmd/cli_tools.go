@@ -454,17 +454,6 @@ func RunStatus(args []string) error {
 		}
 	}
 
-	kernelTech := "Windows Job Objects & Restricted Tokens"
-	if runtime.GOOS == "linux" {
-		kernelTech = "Landlock LSM & eBPF bprm_check_security"
-	} else if runtime.GOOS == "darwin" {
-		kernelTech = "macOS Endpoint Security AUTH_EXEC & sandbox-exec"
-	}
-	layer4Desc := kernelTech + " + Gateway PEP perimeter backstop active"
-	if daemonActive {
-		layer4Desc = kernelTech + " + bap-daemon kernel trace & Gateway PEP egress pinning"
-	}
-
 	// JSON output mode
 	if *jsonFlag {
 		statusOutput := map[string]any{
@@ -535,32 +524,32 @@ func RunStatus(args []string) error {
 					{
 						"layer":       "Layer 1",
 						"name":        "Process Interception Hooks",
-						"status":      "COMPLIANT",
-						"description": "bapedge exec PreToolUse hook wired & prompt classification",
+						"status":      "NOT_OBSERVED",
+						"description": "Hook configuration and trust do not prove callback execution",
 					},
 					{
 						"layer":       "Layer 2",
 						"name":        "Model Context Protocol (MCP)",
-						"status":      "COMPLIANT",
-						"description": "bapmcp server mounted with Cedar policy gate",
+						"status":      "NOT_OBSERVED",
+						"description": "Requires evidence from calls routed through the BAP MCP server",
 					},
 					{
 						"layer":       "Layer 3",
 						"name":        "Terminal Interceptor Shims",
-						"status":      "COMPLIANT",
-						"description": "PATH shims active for unmediated subshells (.bapstate/shims-*)",
+						"status":      "NOT_OBSERVED",
+						"description": "Requires evidence that command resolution used a BAP shim",
 					},
 					{
 						"layer":       "Layer 4",
 						"name":        "OS Kernel Boundary Sandbox & Broker",
-						"status":      "COMPLIANT",
-						"description": layer4Desc,
+						"status":      "AVAILABLE",
+						"description": "Local broker available; OS-wide enforcement is not attested by this status query",
 					},
 					{
 						"layer":       "Layer 5",
 						"name":        "Authoritative Network Gateway PEP",
-						"status":      "COMPLIANT",
-						"description": "Gateway PEP perimeter backstop active, ZSP single-use grant burning & tenant egress pinning",
+						"status":      "NOT_OBSERVED",
+						"description": "Requires evidence from the protected resource gateway",
 					},
 				},
 			},
@@ -632,11 +621,11 @@ func RunStatus(args []string) error {
 
 	// 3. Inspect 5-Layer Defense-in-Depth Compliance
 	fmt.Println("\n  5-LAYER DEFENSE-IN-DEPTH COMPLIANCE STATUS:")
-	fmt.Println("    • Layer 1 (Process Interception Hooks):       COMPLIANT (bapedge exec PreToolUse hook wired)")
-	fmt.Println("    • Layer 2 (Model Context Protocol MCP):       COMPLIANT (bapmcp server mounted with Cedar policy gate)")
-	fmt.Println("    • Layer 3 (Terminal Interceptor Shims):       COMPLIANT (PATH shims active for unmediated subshells)")
-	fmt.Printf("    • Layer 4 (OS Kernel Boundary Sandbox):       COMPLIANT (%s)\n", layer4Desc)
-	fmt.Println("    • Layer 5 (Network Perimeter Gateway PEP):    COMPLIANT (Authoritative Gateway PEP perimeter backstop active)")
+	fmt.Println("    Layer 1 (Native Hooks): NOT_OBSERVED - verify approval and received callbacks")
+	fmt.Println("    Layer 2 (BAP MCP): NOT_OBSERVED - verify calls routed through BAP tools")
+	fmt.Println("    Layer 3 (Terminal Shims): NOT_OBSERVED - verify actual shim-routed commands")
+	fmt.Println("    Layer 4 (Broker): AVAILABLE - OS-wide enforcement is not attested here")
+	fmt.Println("    Layer 5 (Gateway PEP): NOT_OBSERVED - verify protected resource events")
 
 	// 4. Telemetry & Offline Spool
 	fmt.Println("\n  TELEMETRY & OFFLINE RESILIENCE:")
@@ -866,12 +855,12 @@ func RunWhy(args []string) error {
 // SweepResult contains summary statistics from a clean sweep operation.
 type SweepResult struct {
 	LocalSweptSessions  int   `json:"local_swept_sessions"`
-	FlushedAuditCount    int   `json:"flushed_audit_count"`
-	ServerSweptSessions  int   `json:"server_swept_sessions"`
-	ReconciledGrants     int   `json:"reconciled_grants"`
-	SweptDeadPIDFiles    int   `json:"swept_dead_pid_files"`
-	SweptTempFiles       int   `json:"swept_temp_files"`
-	ControlPlaneError    error `json:"-"`
+	FlushedAuditCount   int   `json:"flushed_audit_count"`
+	ServerSweptSessions int   `json:"server_swept_sessions"`
+	ReconciledGrants    int   `json:"reconciled_grants"`
+	SweptDeadPIDFiles   int   `json:"swept_dead_pid_files"`
+	SweptTempFiles      int   `json:"swept_temp_files"`
+	ControlPlaneError   error `json:"-"`
 }
 
 // PerformSweep reconciles orphaned local sessions, purges stale session markers,
@@ -1012,9 +1001,9 @@ func RunSweep(args []string) error {
 				_ = resp.Body.Close()
 			}
 			fallbacks := []string{
-			"https://localhost:8443", "https://127.0.0.1:8443",
-			"http://localhost:8080", "http://127.0.0.1:8080",
-		}
+				"https://localhost:8443", "https://127.0.0.1:8443",
+				"http://localhost:8080", "http://127.0.0.1:8080",
+			}
 			for _, fb := range fallbacks {
 				if strings.TrimRight(serverURL, "/") == fb {
 					continue

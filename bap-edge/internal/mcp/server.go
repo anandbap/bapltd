@@ -283,20 +283,21 @@ func executeCommand(fullCommand string, authorizer *authz.Authorizer, cfg Server
 		}
 
 		auditEntry := audit.AuditEntry{
-			SessionID:   sessionID,
-			UserID:      uID,
-			UserEmail:   uEmail,
-			SPIFFEID:    spiffeID,
-			Timestamp:   startTime.UTC(),
-			Source:      "mcp-agent",
-			ClientPID:   os.Getpid(),
-			Executable:  executable,
-			Arguments:   cmdArguments,
-			FullCommand: cleaned,
-			Decision:    decision,
-			Reason:      reason,
-			DurationMs:  durationMs,
-			ExitCode:    1,
+			ReportingLayer: "mcp",
+			SessionID:      sessionID,
+			UserID:         uID,
+			UserEmail:      uEmail,
+			SPIFFEID:       spiffeID,
+			Timestamp:      startTime.UTC(),
+			Source:         "mcp-agent",
+			ClientPID:      os.Getpid(),
+			Executable:     executable,
+			Arguments:      cmdArguments,
+			FullCommand:    cleaned,
+			Decision:       decision,
+			Reason:         reason,
+			DurationMs:     durationMs,
+			ExitCode:       1,
 		}
 		if isAudit {
 			auditEntry.ExitCode = 0
@@ -331,19 +332,20 @@ func executeCommand(fullCommand string, authorizer *authz.Authorizer, cfg Server
 	}
 
 	auditEntry := audit.AuditEntry{
-		SessionID:   sessionID,
-		UserID:      uID,
-		UserEmail:   uEmail,
-		SPIFFEID:    spiffeID,
-		Timestamp:   startTime.UTC(),
-		Source:      "mcp-agent",
-		ClientPID:   os.Getpid(),
-		Executable:  executable,
-		Arguments:   cmdArguments,
-		FullCommand: cleaned,
-		Decision:    "allow",
-		DurationMs:  durationMs,
-		ExitCode:    exitCode,
+		ReportingLayer: "mcp",
+		SessionID:      sessionID,
+		UserID:         uID,
+		UserEmail:      uEmail,
+		SPIFFEID:       spiffeID,
+		Timestamp:      startTime.UTC(),
+		Source:         "mcp-agent",
+		ClientPID:      os.Getpid(),
+		Executable:     executable,
+		Arguments:      cmdArguments,
+		FullCommand:    cleaned,
+		Decision:       "allow",
+		DurationMs:     durationMs,
+		ExitCode:       exitCode,
 	}
 	_ = audit.Log(&auditEntry, cfg.AuditLogPath)
 	_, _, _ = audit.Transmit(auditEntry, cfg.ServerURL, cfg.AuditLogPath)
@@ -431,11 +433,11 @@ func getStatus(cfg ServerConfig) CallToolResult {
 		"defense_layers": map[string]interface{}{
 			"architecture": "5-Layer Defense-in-Depth",
 			"layers": []map[string]interface{}{
-				{"layer": "Layer 1", "name": "Process Interception Hooks", "status": "COMPLIANT", "description": "PreToolUse hooks wired & workspace rules enforced"},
-				{"layer": "Layer 2", "name": "Model Context Protocol (MCP)", "status": "COMPLIANT", "description": "bapmcp server mounted with Cedar policy gate"},
-				{"layer": "Layer 3", "name": "Terminal Interceptor Shims", "status": "COMPLIANT", "description": "PATH shims active for unmediated subshells"},
-				{"layer": "Layer 4", "name": "OS Kernel Boundary & Broker", "status": "COMPLIANT", "description": "Kernel sandbox & in-process Cedar broker active"},
-				{"layer": "Layer 5", "name": "Authoritative Network Gateway PEP", "status": "COMPLIANT", "description": "Gateway PEP perimeter backstop active, ZSP single-use grant burning & tenant egress pinning"},
+				{"layer": "Layer 1", "name": "Process Interception Hooks", "status": "NOT_OBSERVED", "description": "Native hook approval and execution must be verified independently"},
+				{"layer": "Layer 2", "name": "Model Context Protocol (MCP)", "status": "AVAILABLE", "description": "This MCP server evaluates and reports calls routed through its tools"},
+				{"layer": "Layer 3", "name": "Terminal Interceptor Shims", "status": "NOT_OBSERVED", "description": "Requires commands to resolve through the installed PATH shims"},
+				{"layer": "Layer 4", "name": "OS Kernel Boundary & Broker", "status": "NOT_OBSERVED", "description": "Broker execution and OS-wide containment require separate runtime evidence"},
+				{"layer": "Layer 5", "name": "Authoritative Network Gateway PEP", "status": "NOT_OBSERVED", "description": "Gateway reports protected resource operations using its own service identity"},
 			},
 		},
 		"endpoints": map[string]string{

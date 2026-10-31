@@ -41,7 +41,7 @@ func TestAuditDeliveryEndToEnd(t *testing.T) {
 	if err := os.WriteFile(policyPath, []byte("// isolated E2E policy location"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	entry := AuditEntry{EventID: "telemetry-e2e-event", SessionID: "telemetry-e2e", Source: "claude-code", Decision: "deny", FullCommand: "blocked-e2e-operation", Timestamp: time.Now().UTC()}
+	entry := AuditEntry{EventID: "telemetry-e2e-event", SessionID: "telemetry-e2e", Source: "codex", ReportingLayer: "broker", Decision: "deny", FullCommand: "blocked-e2e-operation", Timestamp: time.Now().UTC()}
 	if err := Log(&entry, logPath); err != nil {
 		t.Fatal(err)
 	}

@@ -3,12 +3,54 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"unsafe"
 )
+
+func listAgentProcesses() ([]agentProcess, error) {
+	snapshot, err := syscall.CreateToolhelp32Snapshot(syscall.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer syscall.CloseHandle(snapshot)
+	var entry syscall.ProcessEntry32
+	entry.Size = uint32(unsafe.Sizeof(entry))
+	if err := syscall.Process32First(snapshot, &entry); err != nil {
+		return nil, err
+	}
+	var result []agentProcess
+	for {
+		name := syscall.UTF16ToString(entry.ExeFile[:])
+		p := agentProcess{PID: int(entry.ProcessID), ParentPID: int(entry.ParentProcessID), Name: name}
+		// Retain parent links for caller attribution; inspect birth only for agents.
+		if agentApp(name) != "" {
+			p.Birth = processBirth(p.PID)
+		}
+		result = append(result, p)
+		if syscall.Process32Next(snapshot, &entry) != nil {
+			break
+		}
+	}
+	return result, nil
+}
+
+func processBirth(pid int) string {
+	h, _, _ := procOpenProcess.Call(uintptr(processQueryLimitedInformation), 0, uintptr(pid))
+	if h == 0 {
+		return ""
+	}
+	defer procCloseHandle.Call(h)
+	var birth, exit, kernel, user syscall.Filetime
+	ok, _, _ := kernel32.NewProc("GetProcessTimes").Call(h, uintptr(unsafe.Pointer(&birth)), uintptr(unsafe.Pointer(&exit)), uintptr(unsafe.Pointer(&kernel)), uintptr(unsafe.Pointer(&user)))
+	if ok == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%08x%08x", birth.HighDateTime, birth.LowDateTime)
+}
 
 const (
 	processQueryLimitedInformation = 0x1000

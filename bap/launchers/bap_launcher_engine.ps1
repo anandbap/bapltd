@@ -588,7 +588,7 @@ function Initialize-BapShims {
         $shimContent = @"
 @echo off
 if "%BAP_IN_BROKER%"=="1" goto REAL_RUN
-"$BapEdgeBin" exec --source %LTD_SOURCE% --session-id %BAP_SESSION_ID% --raw "%~n0 %*"
+"$BapEdgeBin" exec --source %LTD_SOURCE% --session-id %BAP_SESSION_ID% --reporting-layer shim --raw "%~n0 %*"
 exit /b %ERRORLEVEL%
 
 :REAL_RUN

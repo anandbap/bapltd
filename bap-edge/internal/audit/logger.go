@@ -16,20 +16,21 @@ import (
 
 // AuditEntry represents a structured, tamper-evident log record for an execution request.
 type AuditEntry struct {
-	EventID      string    `json:"event_id,omitempty"`
-	SessionID    string    `json:"session_id,omitempty"`
-	UserPrompt   string    `json:"user_prompt,omitempty"`
-	UserID       string    `json:"user_id,omitempty"`
-	UserEmail    string    `json:"user_email,omitempty"`
-	SPIFFEID     string    `json:"spiffe_id,omitempty"`
-	Timestamp    time.Time `json:"timestamp"`
-	Source       string    `json:"source"`
-	ClientPID    int       `json:"client_pid"`
-	Executable   string    `json:"executable"`
-	Arguments    string    `json:"arguments,omitempty"`
-	FullCommand  string    `json:"full_command"`
-	Decision     string    `json:"decision"` // "allow" or "deny"
-	Reason       string    `json:"reason,omitempty"`
+	EventID           string    `json:"event_id,omitempty"`
+	ReportingLayer    string    `json:"reporting_layer,omitempty"`
+	SessionID         string    `json:"session_id,omitempty"`
+	UserPrompt        string    `json:"user_prompt,omitempty"`
+	UserID            string    `json:"user_id,omitempty"`
+	UserEmail         string    `json:"user_email,omitempty"`
+	SPIFFEID          string    `json:"spiffe_id,omitempty"`
+	Timestamp         time.Time `json:"timestamp"`
+	Source            string    `json:"source"`
+	ClientPID         int       `json:"client_pid"`
+	Executable        string    `json:"executable"`
+	Arguments         string    `json:"arguments,omitempty"`
+	FullCommand       string    `json:"full_command"`
+	Decision          string    `json:"decision"` // "allow" or "deny"
+	Reason            string    `json:"reason,omitempty"`
 	DurationMs        int64     `json:"duration_ms"`
 	ExitCode          int       `json:"exit_code"`
 	Error             string    `json:"error,omitempty"`
@@ -37,25 +38,40 @@ type AuditEntry struct {
 	CanonicalResource string    `json:"canonical_resource,omitempty"`
 	ContentHash       string    `json:"content_hash,omitempty"`
 	// Delegation Lineage & Attenuation (BAP-532)
-	Lineage       []string  `json:"lineage,omitempty"`
-	LineageTree   string    `json:"lineage_tree,omitempty"`
-	RootAgentID   string    `json:"root_agent_id,omitempty"`
-	ParentGrantID string    `json:"parent_grant_id,omitempty"`
-	GrantID       string    `json:"grant_id,omitempty"`
+	Lineage       []string `json:"lineage,omitempty"`
+	LineageTree   string   `json:"lineage_tree,omitempty"`
+	RootAgentID   string   `json:"root_agent_id,omitempty"`
+	ParentGrantID string   `json:"parent_grant_id,omitempty"`
+	GrantID       string   `json:"grant_id,omitempty"`
 	// Identity-Aware Egress Control (BAP-530)
-	DestinationTenantID string    `json:"destination_tenant_id,omitempty"`
+	DestinationTenantID string `json:"destination_tenant_id,omitempty"`
 	// Process-Level Supervision & Child Ancestry Tracking (BAP-534)
-	ProcessTree   []string  `json:"process_tree,omitempty"`
-	ParentPID     int       `json:"parent_pid,omitempty"`
-	ProcessPID    int       `json:"process_pid,omitempty"`
+	ProcessTree []string `json:"process_tree,omitempty"`
+	ParentPID   int      `json:"parent_pid,omitempty"`
+	ProcessPID  int      `json:"process_pid,omitempty"`
 	// Caller Lineage & Workload Attestation
-	CallerBinary  string    `json:"caller_binary,omitempty"`
-	CallerHash    string    `json:"caller_hash,omitempty"`
-	PreviousHash  string    `json:"previous_hash,omitempty"`
-	EntryHash     string    `json:"entry_hash,omitempty"`
+	CallerBinary string `json:"caller_binary,omitempty"`
+	CallerHash   string `json:"caller_hash,omitempty"`
+	PreviousHash string `json:"previous_hash,omitempty"`
+	EntryHash    string `json:"entry_hash,omitempty"`
 }
 
 var mu sync.Mutex
+
+// SyncLog is used before deleting an independent producer's source record.
+func SyncLog(path string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	if path == "" {
+		path = DefaultLogPath()
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
+}
 
 // DefaultLogPath returns the default audit log file location in .bapstate/audit.jsonl.
 // Precedence: BAP_AUDIT_LOG -> LTD_AUDIT_LOG -> <.bapstate>/audit.jsonl
@@ -76,6 +92,9 @@ func ComputeEntryHash(entry AuditEntry, prevHash string) string {
 	h.Write([]byte(entry.FullCommand))
 	h.Write([]byte(entry.Decision))
 	h.Write([]byte(strconv.Itoa(entry.ExitCode)))
+	if entry.ReportingLayer != "" {
+		h.Write([]byte("\x00bap-reporting-layer\x00" + entry.ReportingLayer))
+	}
 	if entry.ContentHash != "" {
 		h.Write([]byte(entry.ContentHash))
 	}
@@ -389,4 +408,3 @@ func ReadEntries(logPath string) ([]AuditEntry, error) {
 	}
 	return entries, nil
 }
-

@@ -43,16 +43,16 @@ type oidcDeviceCodeResponse struct {
 }
 
 type oidcDeviceTokenResponse struct {
-	Status       string    `json:"status"`
-	Error        string    `json:"error,omitempty"`
-	UserEmail    string    `json:"user_email"`
-	Department   string    `json:"department"`
-	Groups       []string  `json:"groups"`
-	AgentID      string    `json:"agent_id"`
-	AppID        string    `json:"app_id"`
-	InstanceID   string    `json:"instance_id"`
-	SessionToken string    `json:"session_token"`
-	Provider     string    `json:"provider"`
+	Status       string   `json:"status"`
+	Error        string   `json:"error,omitempty"`
+	UserEmail    string   `json:"user_email"`
+	Department   string   `json:"department"`
+	Groups       []string `json:"groups"`
+	AgentID      string   `json:"agent_id"`
+	AppID        string   `json:"app_id"`
+	InstanceID   string   `json:"instance_id"`
+	SessionToken string   `json:"session_token"`
+	Provider     string   `json:"provider"`
 }
 
 // RunLogin executes the RFC 8628 OAuth 2.0 / OIDC Device Authorization Flow
@@ -340,11 +340,11 @@ func RunLogin(args []string) error {
 			}
 		}
 		verifyBody, _ := json.Marshal(map[string]interface{}{
-			"user_code":   codeResp.UserCode,
-			"user_email":  email,
-			"department":  *deptFlag,
-			"groups":      groupsList,
-			"provider":    provider,
+			"user_code":  codeResp.UserCode,
+			"user_email": email,
+			"department": *deptFlag,
+			"groups":     groupsList,
+			"provider":   provider,
 		})
 		vResp, vErr := httpClient.Post(verifyURL, "application/json", bytes.NewReader(verifyBody))
 		if vErr == nil {
@@ -458,10 +458,31 @@ func RunLogin(args []string) error {
 		os.Getenv("BAP_TEST_MODE") == "1" ||
 		os.Getenv("BAP_ENV") == "test" ||
 		os.Getenv("LTD_TEST") == "1"
-	if !*noDaemonFlag && !isDaemonRunning() && !isTestRunner {
-		_ = runDaemonStart([]string{"-server", *serverURL})
+	if !*noDaemonFlag && !isTestRunner {
+		if existing, err := ReadDaemonState(); err == nil && strings.TrimRight(existing.ServerURL, "/") != strings.TrimRight(*serverURL, "/") {
+			if err := runDaemonStop(nil); err != nil {
+				return fmt.Errorf("identity saved, but previous reporting daemon could not stop: %w", err)
+			}
+			deadline := time.Now().Add(3 * time.Second)
+			for isDaemonRunning() && time.Now().Before(deadline) {
+				time.Sleep(50 * time.Millisecond)
+			}
+			if isDaemonRunning() {
+				return fmt.Errorf("identity saved, but previous reporting daemon is still running; restart it to use the enrolled control plane")
+			}
+		}
+		if err := runDaemonStart([]string{"-server", *serverURL}); err != nil {
+			return fmt.Errorf("identity saved, but background reporting failed to start: %w", err)
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for !isDaemonRunning() && time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+		}
+		if !isDaemonRunning() {
+			return fmt.Errorf("identity saved, but reporting daemon did not become ready; run 'bapedge daemon start' and inspect 'bapedge daemon status'")
+		}
 		if isDaemonRunning() {
-			fmt.Println("[✓] Background supervisor daemon launched. Workstation is actively monitored in V3 Dashboard.")
+			fmt.Println("[✓] Background reporting daemon running. Use 'bapedge daemon status' to verify delivery.")
 		}
 	}
 	return nil
@@ -488,4 +509,3 @@ func isTokenExpired(tokenStr string) bool {
 	}
 	return false
 }
-

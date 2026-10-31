@@ -2339,18 +2339,17 @@ func (s *Server) handleAuditIngest(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.isAdminCaller(r) && !serviceCaller {
 		for i := range events {
-			if events[i].SessionID != "" {
-				if existing, err := s.sessionStore.GetSummary(events[i].SessionID); err == nil && existing.InstanceID != enrolled.InstanceID {
-					writeError(w, 403, "Audit session belongs to another workstation")
-					return
-				}
-			}
 			events[i].InstanceID, events[i].UserID, events[i].UserEmail, events[i].SPIFFEID = enrolled.InstanceID, enrolled.Sub, enrolled.UserEmail, enrolled.SPIFFEID
+		}
+		if err := s.sessionStore.ReserveReportingSessions(events, func(id string) string { return s.recoveredSessionSVID(enrolled.InstanceID, enrolled.SPIFFEID, id) }); err != nil {
+			writeError(w, 403, err.Error())
+			return
 		}
 	}
 	if serviceCaller {
 		for i := range events {
 			events[i].Source = "bap-gateway-pep"
+			events[i].ReportingLayer = "gateway"
 			events[i].InstanceID, events[i].UserID, events[i].UserEmail, events[i].SPIFFEID = "", "", "", ""
 		}
 	}
@@ -2371,6 +2370,12 @@ func (s *Server) handleAuditIngest(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				s.sessionStore.RecordEvent(ev.SessionID, ev)
+				if enrolled != nil && s.registry != nil {
+					// Reconstruct the master using verified enrollment identity first;
+					// the producer's app label is only a subagent observation.
+					s.registry.EnsureSessionAgent(enrolled.AppID, enrolled.InstanceID, enrolled.SPIFFEID, enrolled.UserEmail, "", enrolled.AgentName)
+					s.registry.EnsureSessionAgent(ev.Source, enrolled.InstanceID, enrolled.SPIFFEID, enrolled.UserEmail, "")
+				}
 			}
 		}
 	}
@@ -3017,6 +3022,7 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 	}
 	validProducers := map[string]bool{
 		"claude-lifecycle-hook": true,
+		"codex-lifecycle-hook":  true,
 		"bap-python-sdk":        true,
 		"demo-executive":        true,
 		"bap-agent":             true,
@@ -3097,12 +3103,18 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	isDuplicatePrompt := prevHash != "" && req.PromptHash != "" && prevHash == req.PromptHash
+	layer := "sdk"
+	if strings.HasSuffix(req.Producer, "hook") {
+		layer = "hook"
+	}
+	s.sessionStore.RecordReportingLayer(req.SessionID, layer)
 	// Always log the normalized intent for newly observed prompts. Skip duplicate audit event if identical prompt was already ingested.
 	if s.auditStore != nil && !isDuplicatePrompt {
 		_, _ = s.auditStore.Ingest([]audit.Event{{
 			EventID:          fmt.Sprintf("ev-prompt-%d", time.Now().UnixNano()),
 			SessionID:        req.SessionID,
 			Source:           sess.AppID,
+			ReportingLayer:   layer,
 			Executable:       "user_prompt",
 			FullCommand:      "USER_PROMPT_SUBMITTED",
 			Decision:         "intent",

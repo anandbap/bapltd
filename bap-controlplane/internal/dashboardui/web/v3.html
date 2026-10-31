@@ -1407,6 +1407,9 @@
             user: s.user_email || s.user_id || '',
             status: (s.status || 'active').toLowerCase(),
             close_reason: s.close_reason || '',
+            reporting_layers: s.reporting_layers || [],
+            prompt_available: !!s.user_prompt,
+            prompt_capture_disabled: !!(s.intent && s.intent.prompt_hash && !s.intent.prompt_captured),
             _t: t
           };
         });
@@ -1498,17 +1501,19 @@
             var reportText = sessionFrozen ? 'Frozen' : (isLive ? 'Live' : 'Offline');
             var reportClass = isLive ? 'g' : 'off';
             var reasonClean = s.close_reason ? ('Session ' + s.close_reason) : 'Session ended';
-            var means = isLive
-              ? 'Every action is checked and recorded in real time.'
-              : (reasonClean + '; workstation policies remain enforced on ' + esc(host) + '.');
+            var layers = s.reporting_layers || [];
+            var toolEvidence = layers.some(function (layer) { return /^(broker|mcp|shim|hook)$/.test(layer); });
+            var means = (layers.length ? 'Reported layers: ' + layers.map(esc).join(', ') + '. ' : 'Reporting coverage has not been confirmed. ') +
+              (s.prompt_available ? 'Prompt text reported.' : (s.prompt_capture_disabled ? 'Prompt capture disabled by policy.' : 'Prompt text not reported.'));
+            if (!isLive) means += ' ' + esc(reasonClean) + '.';
 
             return {
               surfaceHtml: surfaceHtml,
               actionHtml: actionHtml,
               surface: appPretty,
               detail: s.session_id + ' on ' + host,
-              protect: 'Governed',
-              pc: 'g',
+              protect: toolEvidence ? 'Evidence received' : (layers.indexOf('discovery') !== -1 ? 'Discovered' : 'Coverage unknown'),
+              pc: toolEvidence ? 'g' : 'off',
               report: reportText,
               rc: reportClass,
               means: means,
@@ -1521,7 +1526,7 @@
 
         S.covNote = down
           ? 'The control plane is not reachable, so this screen cannot list what is protected. Governed machines are designed to keep enforcing their last saved policy and to queue records locally, but that cannot be confirmed from here until the connection returns.'
-          : 'Only agent sessions that have reported in are listed. When an agent session exits, its reporting status changes to Offline while host workstation policies remain enforced.' +
+          : 'Sessions are listed from received evidence. Live status confirms recent reporting; it does not prove that every action is intercepted. Missing prompt text does not prevent reporting.' +
             (S.simHidden ? ' ' + S.simHidden + ' simulated demo session' + (S.simHidden > 1 ? 's are' : ' is') + ' hidden from this view.' : '');
         var counts = {};
         agents.forEach(function (a) {

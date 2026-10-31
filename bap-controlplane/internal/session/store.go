@@ -18,6 +18,7 @@ import (
 
 // Session represents an active or historical agent execution session (e.g., a Claude Code or Copilot run).
 type Session struct {
+	ReportingLayers     []string      `json:"reporting_layers,omitempty"`
 	SessionID           string        `json:"session_id"`
 	AppID               string        `json:"app_id"`
 	InstanceID          string        `json:"instance_id,omitempty"`
@@ -77,6 +78,7 @@ type IntentContext struct {
 
 // SessionStartRequest contains fields to initiate a session.
 type SessionStartRequest struct {
+	ReportingLayer      string        `json:"reporting_layer,omitempty"`
 	SessionID           string        `json:"session_id,omitempty"`
 	AppID               string        `json:"app_id"`
 	InstanceID          string        `json:"instance_id,omitempty"`
@@ -225,6 +227,7 @@ func NewStoreWithDB(dbPath string) (*Store, error) {
 	_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN intent_json TEXT`)
 	_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN user_prompt TEXT`)
 	_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN agent_name TEXT`)
+	_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN reporting_json TEXT`)
 
 	store := &Store{
 		sessions:     make(map[string]*Session),
@@ -334,6 +337,7 @@ func (s *Store) Start(req SessionStartRequest) (*Session, error) {
 		if existing.Status == "revoked" {
 			return nil, fmt.Errorf("session is revoked; administrator restore required")
 		}
+		addReportingLayer(existing, req.ReportingLayer)
 		if req.AgentName != "" {
 			existing.AgentName = req.AgentName
 		}
@@ -491,6 +495,7 @@ func (s *Store) Start(req SessionStartRequest) (*Session, error) {
 
 	s.sessions[sessionID] = sess
 	s.order = append(s.order, sessionID)
+	addReportingLayer(sess, req.ReportingLayer)
 	s.saveSessionToDB(sess)
 	return sess, nil
 }
@@ -828,7 +833,10 @@ func (s *Store) RecordEvent(sessionID string, ev audit.Event) {
 	if eventTime.After(sess.LastActiveAt) {
 		sess.LastActiveAt = eventTime
 	}
-	sess.TotalEvents++
+	addReportingLayer(sess, ev.ReportingLayer)
+	if ev.Decision != "observed" {
+		sess.TotalEvents++
+	}
 	dLower := strings.ToLower(ev.Decision)
 	if strings.Contains(dLower, "allow") || strings.Contains(dLower, "approve") {
 		sess.AllowedCount++
@@ -1166,7 +1174,7 @@ func (s *Store) loadFromDB() error {
 	if s.db == nil {
 		return nil
 	}
-	rows, err := s.db.Query(`SELECT session_id, app_id, instance_id, user_id, user_email, spiffe_id, status, started_at, ended_at, last_active_at, client_pid, hostname, total_events, allowed_count, denied_count, close_reason, intent_json, user_prompt, agent_name FROM sessions ORDER BY started_at ASC`)
+	rows, err := s.db.Query(`SELECT session_id, app_id, instance_id, user_id, user_email, spiffe_id, status, started_at, ended_at, last_active_at, client_pid, hostname, total_events, allowed_count, denied_count, close_reason, intent_json, user_prompt, agent_name, reporting_json FROM sessions ORDER BY started_at ASC`)
 	if err != nil {
 		return err
 	}
@@ -1174,10 +1182,10 @@ func (s *Store) loadFromDB() error {
 
 	for rows.Next() {
 		var (
-			sessID, appID, instID, uID, uEmail, spiffeID, status, startedAtStr, endedAtStr, lastActiveStr, hostname, closeReason, intentJSON, userPrompt, agentName sql.NullString
-			clientPID, totalEv, allowCnt, denyCnt                                                                                                                   sql.NullInt64
+			sessID, appID, instID, uID, uEmail, spiffeID, status, startedAtStr, endedAtStr, lastActiveStr, hostname, closeReason, intentJSON, userPrompt, agentName, reportingJSON sql.NullString
+			clientPID, totalEv, allowCnt, denyCnt                                                                                                                                  sql.NullInt64
 		)
-		if err := rows.Scan(&sessID, &appID, &instID, &uID, &uEmail, &spiffeID, &status, &startedAtStr, &endedAtStr, &lastActiveStr, &clientPID, &hostname, &totalEv, &allowCnt, &denyCnt, &closeReason, &intentJSON, &userPrompt, &agentName); err != nil {
+		if err := rows.Scan(&sessID, &appID, &instID, &uID, &uEmail, &spiffeID, &status, &startedAtStr, &endedAtStr, &lastActiveStr, &clientPID, &hostname, &totalEv, &allowCnt, &denyCnt, &closeReason, &intentJSON, &userPrompt, &agentName, &reportingJSON); err != nil {
 			continue
 		}
 		startedAt, _ := time.Parse(time.RFC3339, startedAtStr.String)
@@ -1214,6 +1222,11 @@ func (s *Store) loadFromDB() error {
 			UserPrompt:   CleanUserPrompt(userPrompt.String),
 			AgentName:    agentName.String,
 			Events:       make([]audit.Event, 0),
+		}
+		var layers []string
+		_ = json.Unmarshal([]byte(reportingJSON.String), &layers)
+		for _, layer := range layers {
+			addReportingLayer(sess, layer)
 		}
 
 		// Architectural fix: reap stale active sessions from crashed/prior runs upon startup
@@ -1300,9 +1313,10 @@ func (s *Store) saveSessionToDB(sess *Session) {
 		endedAtStr = sess.EndedAt.UTC().Format(time.RFC3339)
 	}
 	intentJSON, _ := json.Marshal(normalizeIntent(sess.Intent))
+	reportingJSON, _ := json.Marshal(sess.ReportingLayers)
 	query := `
-	INSERT INTO sessions (session_id, app_id, instance_id, user_id, user_email, spiffe_id, status, started_at, ended_at, last_active_at, client_pid, hostname, total_events, allowed_count, denied_count, close_reason, intent_json, user_prompt, agent_name)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO sessions (session_id, app_id, instance_id, user_id, user_email, spiffe_id, status, started_at, ended_at, last_active_at, client_pid, hostname, total_events, allowed_count, denied_count, close_reason, intent_json, user_prompt, agent_name, reporting_json)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(session_id) DO UPDATE SET
 		status = excluded.status,
 		ended_at = excluded.ended_at,
@@ -1313,7 +1327,8 @@ func (s *Store) saveSessionToDB(sess *Session) {
 		close_reason = excluded.close_reason,
 		intent_json = excluded.intent_json,
 		user_prompt = excluded.user_prompt,
-		agent_name = excluded.agent_name;`
+		agent_name = excluded.agent_name,
+		reporting_json = excluded.reporting_json;`
 	_, _ = s.db.Exec(query,
 		sess.SessionID,
 		sess.AppID,
@@ -1334,6 +1349,7 @@ func (s *Store) saveSessionToDB(sess *Session) {
 		string(intentJSON),
 		sess.UserPrompt,
 		sess.AgentName,
+		string(reportingJSON),
 	)
 }
 

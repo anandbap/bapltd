@@ -35,6 +35,9 @@ func (s *Server) workstationIdentity(r *http.Request) (*authz.GrantClaims, error
 	if s.registry.WorkstationBlocked(claims.InstanceID, claims.AppID, false) {
 		return nil, errWorkstationProof
 	}
+	if claims.SPIFFEID == "" {
+		claims.SPIFFEID = "spiffe://" + s.registry.TrustDomain() + "/workstation/" + url.PathEscape(claims.InstanceID)
+	}
 	return claims, nil
 }
 

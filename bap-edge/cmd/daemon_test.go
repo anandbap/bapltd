@@ -10,7 +10,27 @@ import (
 	"time"
 
 	"bap-edge/internal/audit"
+	"bap-edge/internal/state"
 )
+
+func TestDaemonStopFailurePreservesConnectionState(t *testing.T) {
+	t.Setenv("BAP_STATE_DIR", t.TempDir())
+	state.ResetForTesting()
+	t.Cleanup(state.ResetForTesting)
+	failed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "refused", http.StatusServiceUnavailable) }))
+	defer failed.Close()
+	ds := DaemonState{PID: os.Getpid(), URL: failed.URL}
+	data, _ := json.Marshal(ds)
+	if err := os.WriteFile(DaemonConfigPath(), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runDaemonStop(nil); err == nil {
+		t.Fatal("stop refusal was hidden")
+	}
+	if current, err := ReadDaemonState(); err != nil || current.PID != os.Getpid() {
+		t.Fatal("failed stop erased the running daemon's connection state")
+	}
+}
 
 func TestDaemonPrivilegeAndModeDetection(t *testing.T) {
 	server, err := NewDaemonServer("http://localhost:8080", 0)
@@ -23,11 +43,8 @@ func TestDaemonPrivilegeAndModeDetection(t *testing.T) {
 		if server.state.Privilege != "ELEVATED_ADMIN" {
 			t.Errorf("expected ELEVATED_ADMIN, got %s", server.state.Privilege)
 		}
-		if server.state.OperatingMode != "OPTIMAL" {
-			t.Errorf("expected OPTIMAL, got %s", server.state.OperatingMode)
-		}
-		if !server.state.Capabilities.KernelEBPFETW {
-			t.Errorf("expected KernelEBPFETW true when elevated")
+		if server.state.OperatingMode != "DEGRADED" || server.state.Capabilities.KernelEBPFETW || server.state.Capabilities.KernelPacketFilter {
+			t.Error("elevation alone must not claim an installed kernel sensor or filter")
 		}
 	} else {
 		if server.state.Privilege != "STANDARD_USER" {

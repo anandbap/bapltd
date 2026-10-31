@@ -1033,6 +1033,12 @@ func unwrapBrokerCommand(command, expectedSessionID string) (string, bool, error
 }
 
 func resolveServerURL() string {
+	if endpoint, locked := managedHookEndpoint(); locked {
+		return endpoint
+	}
+	if enrolled := hookEnrollment(); enrolled.Token != "" && enrolled.ServerURL != "" {
+		return strings.TrimRight(enrolled.ServerURL, "/")
+	}
 	if s := os.Getenv("BAP_SERVER_URL"); s != "" {
 		return strings.TrimRight(s, "/")
 	}
@@ -2032,13 +2038,14 @@ func handleSessionStartHook(payload HookPayload) {
 		username = os.Getenv("USER")
 	}
 	startPayload := map[string]any{
-		"session_id":  sessionID,
-		"app_id":      appID,
-		"caller_path": caller.BinaryPath,
-		"caller_hash": caller.BinaryHash,
-		"user_id":     username,
-		"hostname":    hostname,
-		"client_pid":  targetPID,
+		"reporting_layer": "hook",
+		"session_id":      sessionID,
+		"app_id":          appID,
+		"caller_path":     caller.BinaryPath,
+		"caller_hash":     caller.BinaryHash,
+		"user_id":         username,
+		"hostname":        hostname,
+		"client_pid":      targetPID,
 	}
 	if !launcherOwnsWatcher {
 		if body, err := json.Marshal(startPayload); err == nil {
@@ -2625,6 +2632,8 @@ func main() {
 	if sessionID == "" {
 		sessionID = fmt.Sprintf("sess-%s-pid-%d", caller.AppID, targetPID)
 	}
+	prepareHookEvidence(payload, sessionID, activeCallerAppID)
+	fileHookEvidence.PID = targetPID
 	if revoked, reason := isSessionRevoked(resolveServerURL(), sessionID); revoked {
 		outputDecision("deny", reason, "This session cannot perform further governed tool actions.")
 		return
@@ -2863,6 +2872,7 @@ func main() {
 	if sessionID != "" {
 		execArgs = []string{"check", "--source", callerSource, "--session-id", sessionID, "--json", "--cmd-b64", cmdB64}
 	}
+	execArgs = append(execArgs, "--reporting-layer", "hook")
 	if caller.BinaryPath != "" {
 		execArgs = append(execArgs, "--caller-binary", caller.BinaryPath)
 	}
@@ -3049,6 +3059,9 @@ func findBinary(name string) string {
 // outputDecisionWithUpdatedInput prints formatted JSON response to stdout matching Claude Code PreToolUse schema,
 // or generic tool runner schema depending on caller identity and requested decision style.
 func outputDecisionWithUpdatedInput(decision, reason, context string, updatedInput *ToolInput) {
+	if err := spoolFileHookDecision(decision, reason); err != nil {
+		fmt.Fprintln(os.Stderr, "[BAP TELEMETRY] Unable to retain file-hook evidence:", err)
+	}
 	// If updatedInput has command, mirror across alternate tool input aliases
 	if updatedInput != nil {
 		if updatedInput.Command != "" {
@@ -3134,8 +3147,24 @@ func outputDecisionWithUpdatedInput(decision, reason, context string, updatedInp
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	_ = enc.Encode(resp)
+	_ = enc.Encode(preToolResponseForCaller(resp, activeCallerAppID, style))
 	os.Exit(0)
+}
+
+// Codex rejects unsupported legacy fields (including continue and stopReason).
+// A malformed denial can therefore allow the tool to continue. Keep its native
+// PreToolUse envelope separate from the legacy multi-client response contract.
+func preToolResponseForCaller(resp HookResponse, caller, style string) any {
+	if strings.EqualFold(caller, "codex") || strings.EqualFold(style, "codex") {
+		specific := resp.HookSpecificOutput
+		if specific.UpdatedInput != nil && specific.UpdatedInput.Command != "" {
+			specific.UpdatedInput = &ToolInput{Command: specific.UpdatedInput.Command}
+		}
+		return struct {
+			HookSpecificOutput HookSpecificOutput `json:"hookSpecificOutput"`
+		}{specific}
+	}
+	return resp
 }
 
 // outputDecision prints formatted JSON response to stdout without mutating input.

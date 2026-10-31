@@ -1,8 +1,8 @@
 package cmd
 
 import (
-	"bytes"
 	"bap-edge/internal/httptransport"
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -49,6 +49,8 @@ type execContext struct {
 	contentHash     string
 	stepUpDecision  string
 	parentPID       int
+	workloadPID     int
+	reportingLayer  string
 	processPID      int
 	processTree     []string
 	callerBinary    string
@@ -749,6 +751,7 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 	}
 
 	entry := audit.AuditEntry{
+		ReportingLayer:    "broker",
 		SessionID:         ec.sessionID,
 		UserPrompt:        uPrompt,
 		UserID:            uID,
@@ -777,6 +780,12 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 		ProcessPID:        resp.Receipt.ProcessPID,
 		CallerBinary:      ec.callerBinary,
 		CallerHash:        ec.callerHash,
+	}
+	if ec.workloadPID > 0 {
+		entry.ClientPID = ec.workloadPID
+	}
+	if ec.reportingLayer != "" {
+		entry.ReportingLayer = ec.reportingLayer
 	}
 	if ec.shadowDenied && entry.Reason == "" {
 		entry.Reason = fmt.Sprintf("[AUDIT MODE VIOLATION] %s", ec.shadowReason)
@@ -824,6 +833,7 @@ func RunExec(args []string) {
 		defaultSource = "cli"
 	}
 	sourceFlag := fs.String("source", defaultSource, "Identifier of agent invoking command (e.g. claude-code, copilot, cli)")
+	reportingLayer := fs.String("reporting-layer", "broker", "Evidence producer: broker, hook, or shim (not an authority claim)")
 	auditLogFlag := fs.String("audit-log", "", "Path to audit log file in JSON lines (defaults to .bapstate/audit.jsonl or LTD_AUDIT_LOG, 'off' to disable)")
 
 	defaultSession := os.Getenv("BAP_SESSION_ID")
@@ -859,6 +869,10 @@ func RunExec(args []string) {
 		fmt.Fprintf(os.Stderr, "Error parsing arguments: %v\n", err)
 		os.Exit(1)
 	}
+	if *reportingLayer != "broker" && *reportingLayer != "hook" && *reportingLayer != "shim" {
+		fmt.Fprintln(os.Stderr, "Invalid reporting layer")
+		os.Exit(1)
+	}
 
 	callerBin := *callerBinaryFlag
 	callerHash := *callerHashFlag
@@ -870,7 +884,16 @@ func RunExec(args []string) {
 	}
 
 	ppid := os.Getppid()
+	var observed agentProcess
+	if *sessionFlag == "" {
+		if processes, err := listAgentProcesses(); err == nil {
+			observed, _ = observedCaller(ppid, processes)
+		}
+	}
 	discoveredBin, discoveredHash, discoveredAppID := resolveCallerLineage(ppid)
+	if observed.PID > 0 {
+		discoveredAppID = agentApp(observed.Name)
+	}
 	if callerBin == "" {
 		callerBin = discoveredBin
 	}
@@ -880,7 +903,7 @@ func RunExec(args []string) {
 	if isClaudeSource(*sourceFlag) {
 		*sourceFlag = "claude-code"
 	}
-	if (*sourceFlag == "cli" || *sourceFlag == "") && (isClaudeSource(discoveredAppID) || discoveredAppID == "antigravity" || discoveredAppID == "copilot" || discoveredAppID == "cursor") {
+	if (*sourceFlag == "cli" || *sourceFlag == "") && discoveredAppID != "" {
 		if isClaudeSource(discoveredAppID) {
 			*sourceFlag = "claude-code"
 		} else {
@@ -894,6 +917,9 @@ func RunExec(args []string) {
 			prefix = "cli"
 		}
 		*sessionFlag = fmt.Sprintf("sess-%s-%d", prefix, os.Getpid())
+		if observed.PID > 0 {
+			*sessionFlag = observedSessionID(observationHost(), observed)
+		}
 	}
 
 	if *stepUpFlag != "" {
@@ -915,6 +941,8 @@ func RunExec(args []string) {
 			forceJSON:       *jsonFlag,
 			forceRaw:        *rawFlag,
 			parentPID:       ppid,
+			workloadPID:     observed.PID,
+			reportingLayer:  *reportingLayer,
 			callerBinary:    callerBin,
 			callerHash:      callerHash,
 		}
@@ -943,6 +971,8 @@ func RunExec(args []string) {
 		userPrompt:      *promptFlag,
 		skillName:       *skillFlag,
 		parentPID:       ppid,
+		workloadPID:     observed.PID,
+		reportingLayer:  *reportingLayer,
 		callerBinary:    callerBin,
 		callerHash:      callerHash,
 	}
@@ -1460,7 +1490,7 @@ func syncRevocationsFast(serverURL, policyPath string) {
 		_ = os.Remove("policy-state.json")
 	}
 
-	_ = writeRevocationCache(statePath,data,targets)
+	_ = writeRevocationCache(statePath, data, targets)
 }
 
 func checkContentPinning(ec *execContext, skillName string) (string, error) {
@@ -1571,6 +1601,8 @@ func resolveCallerLineage(parentPID int) (binaryPath, binaryHash, appID string) 
 			appID = "copilot"
 		case strings.Contains(baseLower, "cursor"):
 			appID = "cursor"
+		case agentApp(baseLower) != "":
+			appID = agentApp(baseLower)
 		default:
 			appID = ""
 		}

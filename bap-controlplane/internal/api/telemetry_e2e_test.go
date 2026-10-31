@@ -25,13 +25,21 @@ func TestTelemetryDeliveryEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proof:=recoveryProof(t,s,"e2e-machine")
-	var active atomic.Pointer[Server];active.Store(s)
+	proof := recoveryProof(t, s, "e2e-machine")
+	var active atomic.Pointer[Server]
+	active.Store(s)
 	var attempts atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path=="/e2e/restart" {
-			if r.Header.Get("Authorization")!="Bearer "+proof{w.WriteHeader(401);return}
-			fresh:=setupTestServer();fresh.SetAdminSecurity("e2e-admin",true);active.Store(fresh);w.WriteHeader(200);return
+		if r.URL.Path == "/e2e/restart" {
+			if r.Header.Get("Authorization") != "Bearer "+proof {
+				w.WriteHeader(401)
+				return
+			}
+			fresh := setupTestServer()
+			fresh.SetAdminSecurity("e2e-admin", true)
+			active.Store(fresh)
+			w.WriteHeader(200)
+			return
 		}
 		if r.URL.Path == "/api/v1/audit/ingest" && attempts.Add(1) == 1 {
 			http.Error(w, "temporary ingest failure", http.StatusServiceUnavailable)
@@ -50,12 +58,15 @@ func TestTelemetryDeliveryEndToEnd(t *testing.T) {
 		t.Fatalf("edge-to-control-plane test failed: %v\n%s", err, output)
 	}
 	t.Logf("real edge sender: %s", output)
-	s=active.Load()
+	s = active.Load()
 	sess, err := s.sessionStore.Get("telemetry-e2e")
 	if err != nil || sess.TotalEvents != 1 || sess.DeniedCount != 1 || sess.Status != "active" {
 		t.Fatalf("incorrect final session: %+v %v", sess, err)
 	}
 	if valid, err := s.auditStore.VerifyChain(); !valid || err != nil {
 		t.Fatalf("end-to-end chain invalid: %v", err)
+	}
+	if sess.UserPrompt != "" || len(sess.ReportingLayers) != 1 || sess.ReportingLayers[0] != "broker" {
+		t.Fatalf("independent command reporting lost across retry/restart: %+v", sess)
 	}
 }

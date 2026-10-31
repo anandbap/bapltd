@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"bap-edge/internal/config"
 	"bap-edge/internal/httptransport"
 )
 
@@ -22,6 +23,10 @@ func RunSessionTelemetry(args []string) error {
 	server := fs.String("server", "", "Control-plane URL")
 	kind := fs.String("kind", "", "start, heartbeat, prompt, response or end")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	*server = config.ReportingEndpoint(*server)
+	if err := config.CheckReportingEnrollment(*server); err != nil {
 		return err
 	}
 	switch *kind {

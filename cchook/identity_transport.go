@@ -38,6 +38,9 @@ func (t *hookIdentityTransport) RoundTrip(req *http.Request) (*http.Response, er
 	if strings.HasPrefix(req.URL.Path, "/api/v1/sessions/") && req.Header.Get("Authorization") == "" {
 		credential := hookEnrollment()
 		origin, err := url.Parse(credential.ServerURL)
+		if credential.Token != "" && (err != nil || origin.Scheme != req.URL.Scheme || origin.Host != req.URL.Host || strings.TrimRight(origin.Path, "/") != "") {
+			return nil, fmt.Errorf("lifecycle destination conflicts with workstation enrollment")
+		}
 		if err == nil && credential.Token != "" && origin.Scheme == req.URL.Scheme && origin.Host == req.URL.Host && strings.TrimRight(origin.Path, "/") == "" {
 			local := req.URL.Hostname() == "localhost" || req.URL.Hostname() == "127.0.0.1" || req.URL.Hostname() == "::1"
 			if req.URL.Scheme != "https" && !local {

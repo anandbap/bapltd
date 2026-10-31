@@ -37,7 +37,7 @@ func BenchmarkTelemetryIngest(b *testing.B) {
 				for i := 0; i < b.N; i++ {
 					events := make([]audit.Event, batch)
 					for j := range events {
-						events[j] = audit.Event{EventID: fmt.Sprintf("delivery-%d-%d", i, j), SessionID: fmt.Sprintf("session-%d", (i*batch+j)%100), Source: "claude-code", Decision: "allow", Timestamp: time.Now().UTC().Format(time.RFC3339Nano)}
+						events[j] = audit.Event{EventID: fmt.Sprintf("delivery-%d-%d", i, j), SessionID: fmt.Sprintf("session-%d", (i*batch+j)%100), Source: "codex", ReportingLayer: "broker", Decision: "allow", Timestamp: time.Now().UTC().Format(time.RFC3339Nano)}
 					}
 					body, _ := json.Marshal(events)
 					w := httptest.NewRecorder()

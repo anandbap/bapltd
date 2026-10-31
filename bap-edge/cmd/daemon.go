@@ -51,10 +51,11 @@ type DaemonCapabilities struct {
 
 // AttachedSession represents an active AI agent session managed through this daemon.
 type AttachedSession struct {
-	SessionID  string    `json:"session_id"`
-	AppID      string    `json:"app_id"`
-	PID        int       `json:"pid"`
-	AttachedAt time.Time `json:"attached_at"`
+	SessionID      string    `json:"session_id"`
+	AppID          string    `json:"app_id"`
+	PID            int       `json:"pid"`
+	AttachedAt     time.Time `json:"attached_at"`
+	ReportingLayer string    `json:"reporting_layer,omitempty"`
 }
 
 // DaemonServer coordinates local IPC, background heartbeat, and spool flushing.
@@ -72,6 +73,7 @@ type DaemonServer struct {
 	heartbeatSuccess int64
 	heartbeatFailed  int64
 	stopCh           chan struct{}
+	eventQueue       chan audit.AuditEntry
 }
 
 func DaemonConfigPath() string {
@@ -102,6 +104,7 @@ func ReadDaemonState() (*DaemonState, error) {
 
 // NewDaemonServer initializes the server state and capability matrix.
 func NewDaemonServer(serverURL string, port int) (*DaemonServer, error) {
+	serverURL = config.ReportingEndpoint(serverURL)
 	elevated := isElevated()
 	privilege := "STANDARD_USER"
 	operatingMode := "DEGRADED"
@@ -115,9 +118,8 @@ func NewDaemonServer(serverURL string, port int) (*DaemonServer, error) {
 
 	if elevated {
 		privilege = "ELEVATED_ADMIN"
-		operatingMode = "OPTIMAL"
-		caps.KernelEBPFETW = true
-		caps.KernelPacketFilter = true
+		// Elevation alone does not prove a kernel sensor or packet filter is
+		// installed. Advertise them only after a real adapter can attest them.
 	}
 
 	tokenBytes := make([]byte, 16)
@@ -136,9 +138,10 @@ func NewDaemonServer(serverURL string, port int) (*DaemonServer, error) {
 	}
 
 	return &DaemonServer{
-		state:    ds,
-		sessions: make(map[string]AttachedSession),
-		stopCh:   make(chan struct{}),
+		state:      ds,
+		sessions:   make(map[string]AttachedSession),
+		stopCh:     make(chan struct{}),
+		eventQueue: make(chan audit.AuditEntry, 256),
 	}, nil
 }
 
@@ -184,6 +187,10 @@ func (s *DaemonServer) Start() error {
 	go s.runSessionHeartbeatWorker(ctx)
 	go s.runSpoolWorker(ctx)
 	go s.runSessionReconcileWorker(ctx)
+	go s.runProcessObservationWorker(ctx)
+	for i := 0; i < 8; i++ {
+		go s.runEventDeliveryWorker(ctx)
+	}
 
 	go func() {
 		<-s.stopCh
@@ -259,6 +266,7 @@ func (s *DaemonServer) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var entry audit.AuditEntry
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -270,16 +278,10 @@ func (s *DaemonServer) handleEvent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unable to persist telemetry for retry", http.StatusServiceUnavailable)
 		return
 	}
+	s.attachReportedWorkload(entry)
 
-	// Async transmit to central control plane
-	go func(ent audit.AuditEntry) {
-		ok, _, err := audit.Transmit(ent, s.state.ServerURL, audit.DefaultLogPath())
-		if ok && err == nil {
-			atomic.AddInt64(&s.transSuccess, 1)
-		} else {
-			atomic.AddInt64(&s.transFailed, 1)
-		}
-	}(entry)
+	// Bounded live delivery; the persistent spool covers queue saturation.
+	s.enqueueTelemetry(entry)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -431,6 +433,9 @@ func (s *DaemonServer) runSpoolWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if _, err := collectHookEvidence(); err != nil {
+				atomic.AddInt64(&s.transFailed, 1)
+			}
 			if s.state.ServerURL == "" {
 				continue
 			}
@@ -709,11 +714,26 @@ func runDaemonStop(args []string) error {
 	}
 
 	client := httptransport.New(2 * time.Second)
-	_, _ = client.Post(ds.URL+"/api/v1/daemon/stop", "application/json", strings.NewReader("{}"))
-	time.Sleep(300 * time.Millisecond)
-
-	_ = os.Remove(DaemonConfigPath())
-	_ = os.Remove(DaemonPidPath())
+	resp, err := client.Post(ds.URL+"/api/v1/daemon/stop", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		return fmt.Errorf("daemon stop request failed: %w", err)
+	}
+	closeHeartbeatResponse(resp)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("daemon refused stop: HTTP %d", resp.StatusCode)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for isProcessAlive(ds.PID) && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if isProcessAlive(ds.PID) {
+		return fmt.Errorf("daemon PID %d has not stopped; connection state preserved", ds.PID)
+	}
+	// The daemon normally removes its own state after shutdown. Do not erase
+	// the state of a replacement daemon that may have started concurrently.
+	if current, err := ReadDaemonState(); err == nil && current != nil && current.PID != ds.PID {
+		return nil
+	}
 	fmt.Printf("✅ BAP Daemon (PID %d) stopped successfully.\n", ds.PID)
 	return nil
 }

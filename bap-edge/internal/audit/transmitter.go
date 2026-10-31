@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"bap-edge/internal/config"
 	"bap-edge/internal/httptransport"
 	"bytes"
 	"crypto/rand"
@@ -54,6 +55,10 @@ func GenerateEventID() string {
 // the transmitted entry is safely removed locally from logPath, eliminating edge storage burden.
 // If the server is offline or fails the handshake, the entry is safely preserved in logPath.
 func Transmit(entry AuditEntry, serverURL string, logPath string) (bool, string, error) {
+	serverURL = config.ReportingEndpoint(serverURL)
+	if err := config.CheckReportingEnrollment(serverURL); err != nil {
+		return false, "enrollment_destination_mismatch", err
+	}
 	if serverURL == "" || serverURL == "off" || serverURL == "none" {
 		return false, "", nil
 	}
@@ -82,25 +87,26 @@ func Transmit(entry AuditEntry, serverURL string, logPath string) (bool, string,
 	// Payload expected by /api/v1/audit/ingest:
 	payload := []map[string]any{
 		{
-			"event_id":      entry.EventID,
-			"session_id":    entry.SessionID,
-			"user_id":       entry.UserID,
-			"user_email":    entry.UserEmail,
-			"spiffe_id":     entry.SPIFFEID,
-			"timestamp":     entry.Timestamp.UTC().Format(time.RFC3339Nano),
-			"source":        entry.Source,
-			"user_prompt":   defangWAF(entry.UserPrompt),
-			"client_pid":    entry.ClientPID,
-			"executable":    entry.Executable,
-			"arguments":     defangWAF(entry.Arguments),
-			"full_command":  defangWAF(entry.FullCommand),
-			"decision":      entry.Decision,
-			"reason":        entry.Reason,
-			"duration_ms":   entry.DurationMs,
-			"exit_code":     entry.ExitCode,
-			"content_hash":  entry.ContentHash,
-			"previous_hash": entry.PreviousHash,
-			"entry_hash":    entry.EntryHash,
+			"event_id":        entry.EventID,
+			"reporting_layer": entry.ReportingLayer,
+			"session_id":      entry.SessionID,
+			"user_id":         entry.UserID,
+			"user_email":      entry.UserEmail,
+			"spiffe_id":       entry.SPIFFEID,
+			"timestamp":       entry.Timestamp.UTC().Format(time.RFC3339Nano),
+			"source":          entry.Source,
+			"user_prompt":     defangWAF(entry.UserPrompt),
+			"client_pid":      entry.ClientPID,
+			"executable":      entry.Executable,
+			"arguments":       defangWAF(entry.Arguments),
+			"full_command":    defangWAF(entry.FullCommand),
+			"decision":        entry.Decision,
+			"reason":          entry.Reason,
+			"duration_ms":     entry.DurationMs,
+			"exit_code":       entry.ExitCode,
+			"content_hash":    entry.ContentHash,
+			"previous_hash":   entry.PreviousHash,
+			"entry_hash":      entry.EntryHash,
 		},
 	}
 
@@ -151,6 +157,10 @@ func Transmit(entry AuditEntry, serverURL string, logPath string) (bool, string,
 // FlushOfflineAudit reads un-ingested local audit entries and flushes them to the central control plane in batches.
 // Returns the count of successfully flushed entries.
 func FlushOfflineAudit(serverURL string, logPath string) (int, error) {
+	serverURL = config.ReportingEndpoint(serverURL)
+	if err := config.CheckReportingEnrollment(serverURL); err != nil {
+		return 0, err
+	}
 	if serverURL == "" || serverURL == "off" || serverURL == "none" {
 		return 0, nil
 	}
@@ -208,25 +218,26 @@ func FlushOfflineAudit(serverURL string, logPath string) (int, error) {
 			}
 			batchIDs[entry.EventID] = struct{}{}
 			payload = append(payload, map[string]any{
-				"event_id":      entry.EventID,
-				"session_id":    entry.SessionID,
-				"user_id":       entry.UserID,
-				"user_email":    entry.UserEmail,
-				"spiffe_id":     entry.SPIFFEID,
-				"timestamp":     entry.Timestamp.UTC().Format(time.RFC3339Nano),
-				"source":        entry.Source,
-				"user_prompt":   defangWAF(entry.UserPrompt),
-				"client_pid":    entry.ClientPID,
-				"executable":    entry.Executable,
-				"arguments":     defangWAF(entry.Arguments),
-				"full_command":  defangWAF(entry.FullCommand),
-				"decision":      entry.Decision,
-				"reason":        entry.Reason,
-				"duration_ms":   entry.DurationMs,
-				"exit_code":     entry.ExitCode,
-				"content_hash":  entry.ContentHash,
-				"previous_hash": entry.PreviousHash,
-				"entry_hash":    entry.EntryHash,
+				"event_id":        entry.EventID,
+				"reporting_layer": entry.ReportingLayer,
+				"session_id":      entry.SessionID,
+				"user_id":         entry.UserID,
+				"user_email":      entry.UserEmail,
+				"spiffe_id":       entry.SPIFFEID,
+				"timestamp":       entry.Timestamp.UTC().Format(time.RFC3339Nano),
+				"source":          entry.Source,
+				"user_prompt":     defangWAF(entry.UserPrompt),
+				"client_pid":      entry.ClientPID,
+				"executable":      entry.Executable,
+				"arguments":       defangWAF(entry.Arguments),
+				"full_command":    defangWAF(entry.FullCommand),
+				"decision":        entry.Decision,
+				"reason":          entry.Reason,
+				"duration_ms":     entry.DurationMs,
+				"exit_code":       entry.ExitCode,
+				"content_hash":    entry.ContentHash,
+				"previous_hash":   entry.PreviousHash,
+				"entry_hash":      entry.EntryHash,
 			})
 		}
 
