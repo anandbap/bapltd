@@ -10,6 +10,7 @@ Validates BAP-470, BAP-471, BAP-472, and BAP-473:
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -167,11 +168,34 @@ class TestCrashRecoverySweep(unittest.TestCase):
         self.assertIn("Edge Workstation Status & Compliance Inspection", out)
         self.assertIn("POLICY BUNDLE & ZERO-TRUST CACHE", out)
         self.assertIn("5-LAYER DEFENSE-IN-DEPTH COMPLIANCE STATUS", out)
-        self.assertIn("Layer 1 (Process Interception Hooks):       COMPLIANT", out)
-        self.assertIn("Layer 2 (Model Context Protocol MCP):       COMPLIANT", out)
-        self.assertIn("Layer 3 (Terminal Interceptor Shims):       COMPLIANT", out)
-        self.assertIn("Layer 4 (OS Kernel Boundary Sandbox):       COMPLIANT", out)
-        self.assertIn("Layer 5 (Network Perimeter Gateway PEP):    COMPLIANT", out)
+        # Configuration/status inspection does not prove that hooks, shims,
+        # MCP or the gateway actually intercepted any operation.
+        expected_layers = {
+            "Layer 1 (Native Hooks)": "NOT_OBSERVED",
+            "Layer 2 (BAP MCP)": "NOT_OBSERVED",
+            "Layer 3 (Terminal Shims)": "NOT_OBSERVED",
+            "Layer 4 (Broker)": "AVAILABLE",
+            "Layer 5 (Gateway PEP)": "NOT_OBSERVED",
+        }
+        for label, status in expected_layers.items():
+            with self.subTest(layer=label, format="terminal"):
+                self.assertRegex(out, re.escape(label) + r":\s+" + status)
+        self.assertNotRegex(out, r"Layer [1-5].*COMPLIANT")
+
+        res_json = subprocess.run(
+            [BAPEDGE_BIN, "status", "--server", CP_URL, "--json"],
+            cwd=WORKSPACE_ROOT, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=15,
+        )
+        self.assertEqual(res_json.returncode, 0, res_json.stderr)
+        layers = json.loads(res_json.stdout)["defense_layers"]["layers"]
+        self.assertEqual(len(layers), 5)
+        actual = {layer["layer"]: layer["status"] for layer in layers}
+        self.assertEqual(actual, {
+            "Layer 1": "NOT_OBSERVED", "Layer 2": "NOT_OBSERVED",
+            "Layer 3": "NOT_OBSERVED", "Layer 4": "AVAILABLE",
+            "Layer 5": "NOT_OBSERVED",
+        })
 
     def test_bap_472_why_explanation(self):
         """BAP-472: Test in-terminal policy explanation for benign and destructive actions."""

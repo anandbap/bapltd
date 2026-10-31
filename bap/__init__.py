@@ -5,5 +5,5 @@ Governs autonomous coding agents (Claude Code, Google Antigravity, GitHub Copilo
 with in-process Cedar authorization, cryptographic Merkle audit ledger, and user-space sandboxing.
 """
 
-__version__ = "1.9.14"
+__version__ = "1.9.15"
 __author__ = "BAP Security Architecture Team"

@@ -8,6 +8,10 @@ Fix UI v3 governance controls and decision reporting; bind authenticated worksta
 
 ## Independent reporting and master workstation enrollment
 
+Operator acceptance assets: [fresh-install runbook](docs/FRESH_INSTALL_ACCEPTANCE.md) and [installed-client smoke script](scripts/Test-BapFreshInstall.ps1). Automated smoke verifies local decisions and exact-session authenticated reporting; hook/UI/scope/outage/gateway acceptance remains explicit in the runbook.
+
+Acceptance-script validation: PowerShell parsing and six isolated fixture paths passed (success, missing enrollment, wrong destination, failed policy denial, rejected reporting identity, snapshot-only). The fixture also exercises a binary path with spaces and clearing an inherited prompt from child processes. This validates the script, not a fresh installation or a live Render deployment.
+
 Design: [Independent Layer Reporting](docs/INDEPENDENT_LAYER_REPORTING.md). These identifiers are implementation-plan tracking items, not external Jira stories.
 
 - [x] **OBS-01 — Master enrollment:** treat `bap install`/`bap login` as workstation provisioning and identity. Prefer enrollment over project/environment reporting destinations; preserve administrator endpoint locks. Retain queued evidence on a managed/enrollment destination conflict. Keep gateway service identity separate. Restart a daemon targeting the previous server after login.
@@ -34,6 +38,8 @@ Explicit deferred stories:
 - [ ] **OBS-D05 — Production performance and retention:** concurrent p95/p99 measurements, representative disk contention and outage/backfill volume; bounded retention/compaction and per-layer freshness diagnostics. No new production latency guarantee is inferred from functional tests.
 
 ## Authenticated lifecycle and recovery follow-up
+
+CI status-contract repair (October 31): updated `test_bap_472_status_inspection` to require evidence-based terminal and JSON statuses (`NOT_OBSERVED` for unobserved layers; `AVAILABLE` for the local broker), and reject blanket layer `COMPLIANT` claims. All five crash-recovery/sweep integration tests passed locally with freshly built binaries and edge developer overrides disabled, matching CI. Runtime status behavior is unchanged.
 
 - [x] Require verified workstation proof and session ownership on start, heartbeat, end, prompt, response and activity writes. Protect heartbeat aliases consistently, including the previously missing daemon `/api/v1/control/heartbeat` route.
 - [x] Distinguish enrollment credentials from execution grants. Add explicit credential purpose and agent identity claims; preserve the explicit legacy one-year enrollment shape. Reject execution grants as lifecycle credentials and enrollment credentials as execution grants.

@@ -3,7 +3,7 @@
 set -e
 
 ARCH="${1:-arm64}"
-VERSION="${2:-1.9.14}"
+VERSION="${2:-1.9.15}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BUILD_DIR="$ROOT_DIR/dist/darwin-$ARCH"

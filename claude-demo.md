@@ -9,6 +9,7 @@ A presenter runbook and acceptance checklist for UI v3, authenticated sessions, 
 **Format:** a 12-minute executive story; 30–45 minutes with technical proofs.
 
 **Remote cockpit:** [BAP Control Plane](https://bap-controlplane.onrender.com/dashboard/).
+**Fresh-install acceptance:** use the [operator runbook](docs/FRESH_INSTALL_ACCEPTANCE.md) and [installed-client smoke script](scripts/Test-BapFreshInstall.ps1) before this showcase. They include the unapproved-hook reporting case and explicit pass/fail evidence.
 **Release requirement:** matching control-plane, edge, interceptor, SDK, and launcher artifacts containing the fixes. Record commit/build metadata: several changes shared a release number, so a version string alone is insufficient.
 
 **12-minute route:** Acts I–IV, then the Layer 5 single-use/race results. Add the technical interlude and recovery finale for the longer session. Rehearse the full proof pack beforehand so service startup and compilation do not consume presentation time.
