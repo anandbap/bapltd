@@ -2294,6 +2294,7 @@ func (s *Server) handlePolicySync(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAuditIngest(w http.ResponseWriter, r *http.Request) {
+	receivedAt := time.Now().UTC()
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
@@ -2315,7 +2316,7 @@ func (s *Server) handleAuditIngest(w http.ResponseWriter, r *http.Request) {
 		events = []audit.Event{single}
 	}
 
-	ingested, err := s.auditStore.Ingest(events)
+	accepted, err := s.auditStore.IngestAccepted(events)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to ingest audit events: "+err.Error())
 		return
@@ -2323,16 +2324,25 @@ func (s *Server) handleAuditIngest(w http.ResponseWriter, r *http.Request) {
 
 	// Link events to sessions
 	if s.sessionStore != nil {
-		for _, ev := range events {
+		for _, ev := range accepted {
 			if ev.SessionID != "" {
 				s.sessionStore.RecordEvent(ev.SessionID, ev)
 			}
 		}
 	}
 
-	valid, _ := s.auditStore.VerifyChain()
+	valid, _ := s.auditStore.VerifyAppend()
+	var maxEventAgeMs int64
+	for _, ev := range accepted {
+		if produced, err := time.Parse(time.RFC3339Nano, ev.Timestamp); err == nil {
+			if age := receivedAt.Sub(produced).Milliseconds(); age > maxEventAgeMs { maxEventAgeMs = age }
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ingested":     ingested,
+		"ingested":     len(accepted),
+		"received_at": receivedAt.Format(time.RFC3339Nano),
+		"processing_ms": time.Since(receivedAt).Milliseconds(),
+		"max_event_age_ms": maxEventAgeMs,
 		"chain_valid":  valid,
 		"receipt_hash": s.auditStore.LastHash(),
 		"status":       "acknowledged",
@@ -3110,6 +3120,7 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	s.writeTelemetry(w, r, map[string]any{
 		"sessions": sessions,
 		"total":    len(sessions),
+		"server_time": time.Now().UTC().Format(time.RFC3339Nano),
 	})
 }
 

@@ -794,7 +794,7 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 			client := httptransport.New(200 * time.Millisecond)
 			body, _ := json.Marshal(entry)
 			if r, err := client.Post(ds.URL+"/api/v1/daemon/event", "application/json", bytes.NewReader(body)); err == nil {
-				daemonNotified = true
+				daemonNotified = r.StatusCode >= 200 && r.StatusCode < 300
 				_ = r.Body.Close()
 			}
 		}

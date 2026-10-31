@@ -796,9 +796,12 @@ func pulseHeartbeat(serverURL, sessionID string) (string, string, int64) {
 	var resp *http.Response
 	for attempt := 0; attempt < 2; attempt++ {
 		r, err := client.Post(serverURL+"/api/v1/sessions/heartbeat", "application/json", bytes.NewReader(body))
-		if err == nil {
+		if err == nil && r.StatusCode == http.StatusOK {
 			resp = r
 			break
+		}
+		if r != nil {
+			closeHeartbeatResponse(r)
 		}
 		if attempt == 0 {
 			time.Sleep(150 * time.Millisecond)
@@ -824,9 +827,12 @@ func pulseHeartbeat(serverURL, sessionID string) (string, string, int64) {
 		if res.Status == "quarantined" || res.Action == "quarantine" {
 			return "quarantined", res.Reason, res.ScanEpoch
 		}
-		return "ok", "", res.ScanEpoch
+		if res.Status == "alive" || res.Status == "ok" || res.Status == "active" {
+			return "ok", "", res.ScanEpoch
+		}
+		return "", res.Reason, res.ScanEpoch
 	}
-	return "ok", "", 0
+	return "", "", 0
 }
 
 func postJSONQuick(url string, payload any) error {
@@ -969,9 +975,9 @@ func performLocalClientShadowScan(serverURL, sessionID, appID, hostname string) 
 
 	if len(findings) > 0 {
 		payload := map[string]any{
-			"agent_id":         sessionID,
-			"hostname":         hostname,
-			"workspace_root":   cwd,
+			"agent_id":        sessionID,
+			"hostname":        hostname,
+			"workspace_root":  cwd,
 			"client_findings": findings,
 		}
 		_ = postJSONQuick(serverURL+"/api/v1/discovery/shadow-it/scan", payload)

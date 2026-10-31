@@ -763,11 +763,16 @@ func (s *Store) RecordEvent(sessionID string, ev audit.Event) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	receivedAt := time.Now().UTC()
+	eventTime, err := time.Parse(time.RFC3339Nano, ev.Timestamp)
+	if err != nil || eventTime.After(receivedAt) {
+		eventTime = receivedAt
+	}
 
 	sess, found := s.sessions[sessionID]
 	if !found {
 		// Auto-instantiate session if it does not yet exist
-		now := time.Now().UTC()
+		now := eventTime
 		appID := ev.Source
 		if appID == "" {
 			appID = "agent"
@@ -792,7 +797,7 @@ func (s *Store) RecordEvent(sessionID string, ev audit.Event) {
 	}
 
 	// Re-activate session on new activity only if it was closed due to idle timeout; NEVER if revoked!
-	if sess.Status != "active" && sess.Status != "revoked" {
+	if sess.Status == "closed" && sess.CloseReason == "idle_timeout" && eventTime.After(sess.LastActiveAt) && receivedAt.Sub(eventTime) <= 45*time.Second {
 		sess.Status = "active"
 		sess.EndedAt = nil
 		sess.CloseReason = ""
@@ -819,7 +824,9 @@ func (s *Store) RecordEvent(sessionID string, ev audit.Event) {
 		}
 	}
 
-	sess.LastActiveAt = time.Now().UTC()
+	if eventTime.After(sess.LastActiveAt) {
+		sess.LastActiveAt = eventTime
+	}
 	sess.TotalEvents++
 	dLower := strings.ToLower(ev.Decision)
 	if strings.Contains(dLower, "allow") || strings.Contains(dLower, "approve") {

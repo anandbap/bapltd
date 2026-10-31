@@ -33,7 +33,7 @@ type DaemonState struct {
 	Port          int                `json:"port"`
 	URL           string             `json:"url"`
 	ServerURL     string             `json:"server_url"`
-	Privilege     string             `json:"privilege"`     // "STANDARD_USER" or "ELEVATED_ADMIN"
+	Privilege     string             `json:"privilege"`      // "STANDARD_USER" or "ELEVATED_ADMIN"
 	OperatingMode string             `json:"operating_mode"` // "DEGRADED" or "OPTIMAL"
 	Capabilities  DaemonCapabilities `json:"capabilities"`
 	StartedAt     time.Time          `json:"started_at"`
@@ -59,17 +59,19 @@ type AttachedSession struct {
 
 // DaemonServer coordinates local IPC, background heartbeat, and spool flushing.
 type DaemonServer struct {
-	state        DaemonState
-	mu           sync.RWMutex
-	sessions     map[string]AttachedSession
-	listener     net.Listener
-	httpServer   *http.Server
-	cpConnected  bool
-	cpLatencyMs  int64
-	messagesRecv int64
-	transSuccess int64
-	transFailed  int64
-	stopCh       chan struct{}
+	state            DaemonState
+	mu               sync.RWMutex
+	sessions         map[string]AttachedSession
+	listener         net.Listener
+	httpServer       *http.Server
+	cpConnected      bool
+	cpLatencyMs      int64
+	messagesRecv     int64
+	transSuccess     int64
+	transFailed      int64
+	heartbeatSuccess int64
+	heartbeatFailed  int64
+	stopCh           chan struct{}
 }
 
 func DaemonConfigPath() string {
@@ -179,6 +181,7 @@ func (s *DaemonServer) Start() error {
 	// Start background workers
 	ctx, cancel := context.WithCancel(context.Background())
 	go s.runHeartbeatWorker(ctx)
+	go s.runSessionHeartbeatWorker(ctx)
 	go s.runSpoolWorker(ctx)
 	go s.runSessionReconcileWorker(ctx)
 
@@ -204,12 +207,13 @@ func (s *DaemonServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (s *DaemonServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 
 	var sessionList []string
 	for sid := range s.sessions {
 		sessionList = append(sessionList, sid)
 	}
+	connected, latencyMs := s.cpConnected, s.cpLatencyMs
+	s.mu.RUnlock()
 
 	auditLogPath := audit.DefaultLogPath()
 	offlineEntries, _ := audit.ReadEntries(auditLogPath)
@@ -227,18 +231,20 @@ func (s *DaemonServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 		},
 		"control_plane": map[string]any{
 			"url":        s.state.ServerURL,
-			"connected":  s.cpConnected,
-			"latency_ms": s.cpLatencyMs,
+			"connected":  connected,
+			"latency_ms": latencyMs,
 		},
 		"agents_attached": map[string]any{
-			"count":    len(s.sessions),
+			"count":    len(sessionList),
 			"sessions": sessionList,
 		},
 		"telemetry": map[string]any{
-			"messages_received":   atomic.LoadInt64(&s.messagesRecv),
-			"transmitted_success": atomic.LoadInt64(&s.transSuccess),
+			"messages_received":    atomic.LoadInt64(&s.messagesRecv),
+			"transmitted_success":  atomic.LoadInt64(&s.transSuccess),
 			"transmissions_failed": atomic.LoadInt64(&s.transFailed),
-			"spool_backlog":       len(offlineEntries),
+			"spool_backlog":        len(offlineEntries),
+			"heartbeat_success":    atomic.LoadInt64(&s.heartbeatSuccess),
+			"heartbeat_failed":     atomic.LoadInt64(&s.heartbeatFailed),
 		},
 	}
 
@@ -259,11 +265,14 @@ func (s *DaemonServer) handleEvent(w http.ResponseWriter, r *http.Request) {
 	atomic.AddInt64(&s.messagesRecv, 1)
 
 	// Log locally to durable audit log
-	_ = audit.Log(&entry, "")
+	if err := audit.Log(&entry, ""); err != nil {
+		http.Error(w, "Unable to persist telemetry for retry", http.StatusServiceUnavailable)
+		return
+	}
 
 	// Async transmit to central control plane
 	go func(ent audit.AuditEntry) {
-		ok, _, err := audit.Transmit(ent, s.state.ServerURL, "")
+		ok, _, err := audit.Transmit(ent, s.state.ServerURL, audit.DefaultLogPath())
 		if ok && err == nil {
 			atomic.AddInt64(&s.transSuccess, 1)
 		} else {
@@ -354,7 +363,7 @@ func (s *DaemonServer) runHeartbeatWorker(ctx context.Context) {
 				s.cpConnected = (resp.StatusCode == http.StatusOK)
 				s.cpLatencyMs = time.Since(start).Milliseconds()
 				s.mu.Unlock()
-				_ = resp.Body.Close()
+				closeHeartbeatResponse(resp)
 			} else {
 				s.mu.Lock()
 				s.cpConnected = false
@@ -362,83 +371,74 @@ func (s *DaemonServer) runHeartbeatWorker(ctx context.Context) {
 				s.mu.Unlock()
 			}
 
-			// Pulse active sessions
-			s.mu.RLock()
-			for _, sess := range s.sessions {
-				pulsePayload := map[string]any{
-					"session_id": sess.SessionID,
-					"app_id":     sess.AppID,
-					"pid":        sess.PID,
-				}
-				body, _ := json.Marshal(pulsePayload)
-				_, _ = client.Post(strings.TrimRight(s.state.ServerURL, "/")+"/api/v1/sessions/heartbeat", "application/json", bytes.NewReader(body))
-			}
-			s.mu.RUnlock()
-
 			// Pulse registered agent identity & sync revocations
 			if credsData, err := os.ReadFile(state.CredentialsPath()); err == nil {
 				var creds StoredCredentials
 				if json.Unmarshal(credsData, &creds) == nil && creds.AgentID != "" {
 					agentHeartbeat := map[string]any{
-						"id":         creds.AgentID,
-						"agent_id":   creds.AgentID,
+						"id":          creds.AgentID,
+						"agent_id":    creds.AgentID,
 						"instance_id": creds.InstanceID,
 					}
 					body, _ := json.Marshal(agentHeartbeat)
-					_, _ = client.Post(strings.TrimRight(s.state.ServerURL, "/")+"/api/v1/control/heartbeat", "application/json", bytes.NewReader(body))
+					if response, err := client.Post(strings.TrimRight(s.state.ServerURL, "/")+"/api/v1/control/heartbeat", "application/json", bytes.NewReader(body)); err == nil {
+						closeHeartbeatResponse(response)
+					}
 
 					// Sync remote revocations
-					if rResp, rErr := client.Get(strings.TrimRight(s.state.ServerURL, "/") + "/api/v1/control/revocations"); rErr == nil && rResp.StatusCode == http.StatusOK {
-						var rData struct {
-							KillSwitch         bool     `json:"kill_switch"`
-							RevokedSessions    []string `json:"revoked_sessions"`
-							DeregisteredAgents []string `json:"deregistered_agents"`
-							QuarantinedAgents  []string `json:"quarantined_agents"`
-						}
-						if json.NewDecoder(rResp.Body).Decode(&rData) == nil {
-							targets := []string{creds.AgentID, creds.InstanceID, creds.UserEmail}
-							isDereg := false
-							isFrozen := false
-							for _, t := range targets {
-								if t == "" {
-									continue
-								}
-								for _, d := range rData.DeregisteredAgents {
-									if strings.EqualFold(d, t) {
-										isDereg = true
-										break
+					if rResp, rErr := client.Get(strings.TrimRight(s.state.ServerURL, "/") + "/api/v1/control/revocations"); rErr == nil {
+						if rResp.StatusCode == http.StatusOK {
+							var rData struct {
+								KillSwitch         bool     `json:"kill_switch"`
+								RevokedSessions    []string `json:"revoked_sessions"`
+								DeregisteredAgents []string `json:"deregistered_agents"`
+								QuarantinedAgents  []string `json:"quarantined_agents"`
+							}
+							if json.NewDecoder(rResp.Body).Decode(&rData) == nil {
+								targets := []string{creds.AgentID, creds.InstanceID, creds.UserEmail}
+								isDereg := false
+								isFrozen := false
+								for _, t := range targets {
+									if t == "" {
+										continue
+									}
+									for _, d := range rData.DeregisteredAgents {
+										if strings.EqualFold(d, t) {
+											isDereg = true
+											break
+										}
+									}
+									for _, q := range rData.QuarantinedAgents {
+										if strings.EqualFold(q, t) {
+											isFrozen = true
+											break
+										}
 									}
 								}
-								for _, q := range rData.QuarantinedAgents {
-									if strings.EqualFold(q, t) {
-										isFrozen = true
-										break
-									}
+								if isDereg {
+									_ = os.Remove(state.CredentialsPath())
+									fmt.Println("[!] NOTICE: This workstation was deregistered by central administrator. Local credentials cleared and session terminated.")
+								}
+								// Update cached policy state
+								_ = os.MkdirAll(".bap", 0700)
+								statePath := filepath.Join(".bap", "policy-state.json")
+								var existing map[string]any
+								if content, err := os.ReadFile(statePath); err == nil {
+									_ = json.Unmarshal(content, &existing)
+								}
+								if existing == nil {
+									existing = make(map[string]any)
+								}
+								existing["kill_switch"] = rData.KillSwitch
+								existing["frozen"] = isFrozen
+								existing["revoked_sessions"] = rData.RevokedSessions
+								existing["last_sync"] = time.Now().UTC()
+								if updated, err := json.MarshalIndent(existing, "", "  "); err == nil {
+									_ = os.WriteFile(statePath, updated, 0600)
 								}
 							}
-							if isDereg {
-								_ = os.Remove(state.CredentialsPath())
-								fmt.Println("[!] NOTICE: This workstation was deregistered by central administrator. Local credentials cleared and session terminated.")
-							}
-							// Update cached policy state
-							_ = os.MkdirAll(".bap", 0700)
-							statePath := filepath.Join(".bap", "policy-state.json")
-							var existing map[string]any
-							if content, err := os.ReadFile(statePath); err == nil {
-								_ = json.Unmarshal(content, &existing)
-							}
-							if existing == nil {
-								existing = make(map[string]any)
-							}
-							existing["kill_switch"] = rData.KillSwitch
-							existing["frozen"] = isFrozen
-							existing["revoked_sessions"] = rData.RevokedSessions
-							existing["last_sync"] = time.Now().UTC()
-							if updated, err := json.MarshalIndent(existing, "", "  "); err == nil {
-								_ = os.WriteFile(statePath, updated, 0600)
-							}
 						}
-						rResp.Body.Close()
+						closeHeartbeatResponse(rResp)
 					}
 				}
 			}
@@ -455,12 +455,14 @@ func (s *DaemonServer) runSpoolWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if !s.cpConnected || s.state.ServerURL == "" {
+			if s.state.ServerURL == "" {
 				continue
 			}
 			n, err := audit.FlushOfflineAudit(s.state.ServerURL, "")
 			if err == nil && n > 0 {
 				atomic.AddInt64(&s.transSuccess, int64(n))
+			} else if err != nil {
+				atomic.AddInt64(&s.transFailed, 1)
 			}
 		}
 	}

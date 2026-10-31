@@ -85,7 +85,7 @@ func Transmit(entry AuditEntry, serverURL string, logPath string) (bool, string,
 			"user_id":       entry.UserID,
 			"user_email":    entry.UserEmail,
 			"spiffe_id":     entry.SPIFFEID,
-			"timestamp":     entry.Timestamp.UTC().Format(time.RFC3339),
+			"timestamp":     entry.Timestamp.UTC().Format(time.RFC3339Nano),
 			"source":        entry.Source,
 			"user_prompt":   defangWAF(entry.UserPrompt),
 			"client_pid":    entry.ClientPID,
@@ -129,7 +129,7 @@ func Transmit(entry AuditEntry, serverURL string, logPath string) (bool, string,
 		return false, "invalid_handshake", err
 	}
 
-	if ack.Ingested <= 0 || !ack.ChainValid {
+	if !ack.ChainValid || (ack.Ingested <= 0 && ack.Status != "acknowledged") {
 		return false, "unverified_handshake", fmt.Errorf("server handshake failed: ingested=%d, chain_valid=%v", ack.Ingested, ack.ChainValid)
 	}
 
@@ -206,7 +206,7 @@ func FlushOfflineAudit(serverURL string, logPath string) (int, error) {
 				"user_id":       entry.UserID,
 				"user_email":    entry.UserEmail,
 				"spiffe_id":     entry.SPIFFEID,
-				"timestamp":     entry.Timestamp.UTC().Format(time.RFC3339),
+				"timestamp":     entry.Timestamp.UTC().Format(time.RFC3339Nano),
 				"source":        entry.Source,
 				"user_prompt":   defangWAF(entry.UserPrompt),
 				"client_pid":    entry.ClientPID,
@@ -236,7 +236,7 @@ func FlushOfflineAudit(serverURL string, logPath string) (int, error) {
 		resp, err := httpClient.Do(req)
 		if err != nil {
 			// Network error or timeout: fail-secure, stop batching and keep remaining entries
-			return totalFlushed, nil
+			return totalFlushed, fmt.Errorf("audit upload failed: %w", err)
 		}
 
 		if resp.StatusCode == http.StatusOK {
@@ -248,23 +248,14 @@ func FlushOfflineAudit(serverURL string, logPath string) (int, error) {
 			}
 
 			// Acknowledged by central control plane (either newly ingested or duplicate reconciled)
-			if ack.ChainValid || ack.Status == "acknowledged" || ack.Ingested > 0 {
+			if ack.ChainValid && (ack.Status == "acknowledged" || ack.Ingested > 0) {
 				totalFlushed += len(batchIDs)
 				if os.Getenv("BAP_RETAIN_LOCAL") != "1" {
 					_ = RemoveEntries(batchIDs, logPath)
 				}
 			} else {
-				// Chain error reported
-				break
+				return totalFlushed, fmt.Errorf("unverified audit acknowledgement: chain_valid=%v", ack.ChainValid)
 			}
-		} else if resp.StatusCode == http.StatusForbidden {
-			resp.Body.Close()
-			// Edge WAF or upstream proxy rejected batch with 403:
-			// Fallback: prune permanently unsendable blocked probe entries so they don't block the spool forever
-			if os.Getenv("BAP_RETAIN_LOCAL") != "1" {
-				_ = RemoveEntries(batchIDs, logPath)
-			}
-			totalFlushed += len(batchIDs)
 		} else {
 			resp.Body.Close()
 			return totalFlushed, fmt.Errorf("ingest endpoint returned HTTP %d", resp.StatusCode)

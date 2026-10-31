@@ -452,7 +452,7 @@
         <h2 id="covH">Where agent sessions are protected</h2>
         <p class="cov-note" id="covNote"></p>
         <table class="cov">
-          <thead><tr><th>Agent Session &amp; Workstation</th><th>Protection</th><th>Reporting to you</th><th>What it means</th><th class="session-actions" data-admin-control hidden>Session control</th></tr></thead>
+          <thead><tr><th>Agent Session &amp; Workstation</th><th>Protection</th><th>Status</th><th>What it means</th><th class="session-actions" data-admin-control hidden>Session control</th></tr></thead>
           <tbody id="covBody"></tbody>
         </table>
       </section>
@@ -646,10 +646,12 @@
     });
   }
   function getJSON(u) {
-    return apiFetch(u).then(function (r) {
+    var controller = new AbortController();
+    var timeout = setTimeout(function () { controller.abort(); }, 5000);
+    return apiFetch(u, { signal: controller.signal, cache: 'no-store' }).then(function (r) {
       if (!r.ok) throw new Error(r.status);
       return r.json();
-    });
+    }).finally(function () { clearTimeout(timeout); });
   }
   function verifyAdminToken(candidateToken) {
     if (!candidateToken) return Promise.resolve(false);
@@ -709,7 +711,7 @@
       loadConvo(S.activeSessionId);
     }
     if (S.mode === 'live') {
-      loadLive();
+      loadLive(true);
     }
   }
 
@@ -726,7 +728,7 @@
       loadConvo(S.activeSessionId);
     }
     if (S.mode === 'live') {
-      loadLive();
+      loadLive(true);
     }
   }
 
@@ -1310,6 +1312,7 @@
   document.addEventListener('click', function (e) {
     var btn = e.target.closest('[data-session-freeze]');
     if (!btn) return;
+    if (btn.disabled) return;
     if (!S.adminActive) { openAdminPopover(); return; }
     var action = btn.getAttribute('data-session-freeze');
     var target = btn.getAttribute('data-session-id');
@@ -1322,15 +1325,18 @@
         btn.setAttribute('data-session-freeze', result.status === 'revoked' ? 'unfreeze' : 'freeze');
         btn.textContent = result.status === 'revoked' ? 'Unfreeze session' : 'Freeze session';
         btn.disabled = false;
-        loadLive();
+        loadLive(true);
       })
       .catch(function (err) { btn.disabled = false; alert('Session action failed: ' + err.message); });
   });
   var liveTimer = null;
   var liveRequest = 0;
+  var liveInFlight = false;
   var STREAMS = ['Build', 'Operate', 'Analyze', 'Document', 'Support'];
 
-  function loadLive() {
+  function loadLive(force) {
+    if (liveInFlight && !force) return Promise.resolve();
+    liveInFlight = true;
     var request = ++liveRequest;
     return Promise.allSettled([getJSON('/api/activity/summary'), getJSON('/api/activity/live'),
                         getJSON('/api/v1/escalation/requests'), getJSON('/api/v1/control/chain/verify'),
@@ -1373,7 +1379,7 @@
         var isShadow = function (e) { return /audit_permitted|shadow/i.test([e.policy_decision, e.outcome_category, e.action].join(' ')); };
         var real = S.raw.filter(function (e) { return !isSim(e); });
         S.shadow = real.filter(isShadow).length;
-        var nowMs = Date.now(), buckets = [];
+        var nowMs = Date.parse(sessRes && sessRes.server_time) || Date.now(), buckets = [];
         for (var h = 0; h < 24; h++) buckets.push({ total: 0, blocked: 0 });
         real.forEach(function (e) {
           var t = Date.parse(e.timestamp); if (!t) return;
@@ -1415,7 +1421,6 @@
           var isClosedAct = actStatus === 'completed' || actStatus === 'closed' || actStatus === 'ended' || actStatus === 'terminated';
 
           if (sid && sessionMap[sid]) {
-            if (t > sessionMap[sid]._t) sessionMap[sid]._t = t;
             if (!sessionMap[sid].hostname && host) sessionMap[sid].hostname = host;
             if (!sessionMap[sid].user && user) sessionMap[sid].user = user;
             // The session store owns lifecycle state; activity can be older.
@@ -1426,7 +1431,7 @@
               agent_name: a.agent_type || (app === 'claude-code' ? 'Claude Code' : (app === 'antigravity' ? 'Google Antigravity' : app)),
               hostname: host,
               user: user,
-              status: isClosedAct ? 'closed' : 'active',
+              status: /^(offline|revoked|quarantined)$/.test(actStatus) ? actStatus : (isClosedAct ? 'closed' : 'active'),
               close_reason: isClosedAct ? (a.action || 'Exited') : '',
               _t: t
             };
@@ -1435,9 +1440,8 @@
 
         var allSessions = Object.keys(sessionMap).map(function (k) { return sessionMap[k]; });
         allSessions.forEach(function (s) {
-          var isClosed = s.status === 'closed' || s.status === 'revoked' || s.status === 'ended' || s.status === 'offline';
-          var isRecent = (nowMs - s._t) <= 75000;
-          s.isLive = !isClosed && isRecent;
+          var isRecent = s._t > 0 && (nowMs - s._t) <= 45000;
+          s.isLive = s.status === 'active' && isRecent;
         });
 
         var liveSessions = allSessions.filter(function (s) { return s.isLive; });
@@ -1482,9 +1486,10 @@
 
             var sessionFrozen = s.status === 'revoked' && s.close_reason === 'Frozen by administrator';
             var actionHtml = '';
-            if (S.adminActive && !/^\[Protected/i.test(s.session_id) && (s.status === 'active' || s.status === 'offline' || (s.status === 'closed' && s.close_reason === 'idle_timeout') || sessionFrozen)) {
+            if (S.adminActive && !/^\[Protected/i.test(s.session_id)) {
               actionHtml = '<button class="session-freeze-btn" data-admin-control type="button" data-session-id="' + esc(s.session_id) +
-                '" data-session-freeze="' + (sessionFrozen ? 'unfreeze' : 'freeze') + '">' +
+                '" data-session-freeze="' + (sessionFrozen ? 'unfreeze' : 'freeze') + '"' +
+                (!s.isLive && !sessionFrozen ? ' disabled title="Session is offline"' : '') + '>' +
                 (sessionFrozen ? 'Unfreeze session' : 'Freeze session') + '</button>';
             }
 
@@ -1569,7 +1574,7 @@
         else { S.state = 'watch'; S.tag = 'No data'; S.headline = 'Connected, but no data yet.'; S.sub = 'The control plane answered without activity data. Nothing on this screen is estimated or invented.'; }
         if (S.frozen) { S.state = 'frozen'; S.tag = 'Frozen'; S.headline = 'All agents are frozen.'; S.sub = 'Fleet freeze is active. Unfreeze all agents to resume policy enforcement.'; }
         render();
-      });
+      }).finally(function () { if (request === liveRequest) liveInFlight = false; });
   }
   function startLive() {
     stopDemo();
@@ -1584,7 +1589,7 @@
           S.registeredTotal = S.registeredAgents.length;
           S.coverage = []; S.covNote = ''; S.shadow = 0; S.timeline = []; S.updated = null;
     S.state = 'watch'; S.tag = 'Loading'; S.headline = 'Checking the fleet...'; S.sub = ''; render();
-    loadLive(); clearInterval(liveTimer); liveTimer = setInterval(function () { if (!document.hidden) loadLive(); }, 8000);
+    loadLive(true); clearInterval(liveTimer); liveTimer = setInterval(function () { if (!document.hidden) loadLive(); }, 8000);
   }
 
   /* ---------- DEMO walkthrough ---------- */
