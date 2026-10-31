@@ -2,6 +2,14 @@
 
 This document specifies the technical architecture, security model, component design, cryptographic protocols, and operational state machines of the **Bounded Authority Plane (BAP)**.
 
+### Authenticated lifecycle and restart recovery
+
+The implemented lifecycle/identity contract is defined in [ADR-006](docs/adr/ADR-006-Authenticated-Lifecycle-And-Recovery.md) and the [session recovery design](docs/SESSION_IDENTITY_AND_RECOVERY.md). HTTPS alone does not authenticate a workstation. Lifecycle and telemetry writes validate enrolled proof and stored session ownership; hostnames, email addresses and session IDs cannot establish ownership. Gateway collection uses a separate ingestion-only identity.
+
+Deployment recovery re-announces live sessions under their original IDs. It restores reporting metadata without issuing execution grants, clearing cached denials, or reopening ended/revoked sessions. Reconstructed registry records are reporting-only; old bounded grants cannot survive loss of the in-memory authority epoch/usage ledger. Local enforcement remains independent of reporting availability.
+
+Until central audit storage is durable, verified acknowledgements identify the server instance and explicitly report non-durability. The edge retains acknowledged evidence in a synchronized recovery journal and replays after instance changes using a bounded batch and persistent cursor. This protects edge-originated evidence; it does not replace a durable database for central administrative decisions or distributed grant consumption.
+
 ---
 
 ## 1. Executive Architecture & Invariants Core
@@ -42,7 +50,7 @@ graph TD
         MINTER["Cryptographic Grant Minter (HMAC-SHA256)"]
         BUNDLE["Authoritative Cedar Policy Store & Sync"]
         BURNER["Atomic Grant Burner (max_uses=1)"]
-        AUDIT_CHAIN["Tamper-Evident Merkle Hash Chain (SHA-256)"]
+        AUDIT_CHAIN["Tamper-Evident Sequential Hash Chain (SHA-256)"]
         SESS["Session Lifecycle & Live Radar"]
         
         CP --> REG

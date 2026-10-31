@@ -54,19 +54,22 @@ type ConsumeResponse struct {
 }
 
 type TokenClaims struct {
-	GrantID       string   `json:"jti"`
-	Sub           string   `json:"sub"`
-	AppID         string   `json:"app_id"`
-	InstanceID    string   `json:"instance_id,omitempty"`
-	SPIFFEID      string   `json:"spiffe_id,omitempty"`
-	AgentName     string   `json:"agent_name"`
-	EnvProfile    string   `json:"env_profile"`
-	SessionID     string   `json:"session_id,omitempty"`
-	Action        string   `json:"action,omitempty"`
-	Resource      string   `json:"resource,omitempty"`
-	PolicyVersion string   `json:"policy_version,omitempty"`
-	Scopes        []string `json:"scopes"`
-	Exp           int64    `json:"exp"`
+	TokenUse      string          `json:"token_use,omitempty"`
+	Iat           int64           `json:"iat,omitempty"`
+	Constraints   json.RawMessage `json:"constraints,omitempty"`
+	GrantID       string          `json:"jti"`
+	Sub           string          `json:"sub"`
+	AppID         string          `json:"app_id"`
+	InstanceID    string          `json:"instance_id,omitempty"`
+	SPIFFEID      string          `json:"spiffe_id,omitempty"`
+	AgentName     string          `json:"agent_name"`
+	EnvProfile    string          `json:"env_profile"`
+	SessionID     string          `json:"session_id,omitempty"`
+	Action        string          `json:"action,omitempty"`
+	Resource      string          `json:"resource,omitempty"`
+	PolicyVersion string          `json:"policy_version,omitempty"`
+	Scopes        []string        `json:"scopes"`
+	Exp           int64           `json:"exp"`
 	// Delegation Lineage & Attenuation (BAP-532)
 	ParentGrantID string   `json:"parent_grant_id,omitempty"`
 	RootGrantID   string   `json:"root_grant_id,omitempty"`
@@ -694,8 +697,7 @@ func emitGatewayAuditWithTenant(cfg GatewayConfig, sessionID, agentID, appID, pa
 		// 1. Post to Control Plane
 		if cfg.ControlPlane != "" {
 			data, _ := json.Marshal(ev)
-			client := httptransport.New(2 * time.Second)
-			_, _ = client.Post(cfg.ControlPlane+"/api/v1/audit/ingest", "application/json", bytes.NewReader(data))
+			_ = sendPEPTelemetry(cfg.ControlPlane, data)
 		}
 
 		// 2. Append to local .bapstate/audit.jsonl or legacy ltd-audit.jsonl
@@ -781,6 +783,12 @@ func validateGrantWithDetails(cfg GatewayConfig, token, action, resource, sessio
 	var claims TokenClaims
 	if err := json.Unmarshal(claimsBytes, &claims); err != nil {
 		return false, nil, fmt.Errorf("failed to parse claims JSON")
+	}
+	if claims.TokenUse == "workstation" || (claims.TokenUse == "" && claims.Iat > 0 && claims.Exp-claims.Iat >= 300*24*60*60) {
+		return false, nil, fmt.Errorf("workstation identity is not an execution grant")
+	}
+	if len(claims.Constraints) > 0 && string(claims.Constraints) != "null" {
+		return false, nil, fmt.Errorf("constrained grants require central atomic consumption")
 	}
 
 	if time.Now().Unix() >= claims.Exp {

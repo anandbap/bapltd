@@ -1,10 +1,48 @@
-# UI v3 implementation plan
+# UI v3, authenticated identity, and deployment recovery implementation plan
 
 Updated: October 30, 2026
 
 ## Objective
 
-Fix freeze behavior, provide independent workstation and session controls, and show the recorded policy decision for homepage operations.
+Fix UI v3 governance controls and decision reporting; bind authenticated workstation identity to session lifecycle and telemetry; recover reporting and edge evidence after deployment without restoring lost execution authority.
+
+## Authenticated lifecycle and recovery follow-up
+
+- [x] Require verified workstation proof and session ownership on start, heartbeat, end, prompt, response and activity writes. Protect heartbeat aliases consistently, including the previously missing daemon `/api/v1/control/heartbeat` route.
+- [x] Distinguish enrollment credentials from execution grants. Add explicit credential purpose and agent identity claims; preserve the explicit legacy one-year enrollment shape. Reject execution grants as lifecycle credentials and enrollment credentials as execution grants.
+- [x] Derive session owner/SVID and telemetry identity from verified claims. Reject cross-workstation session updates and ID substitution through `agent_id`.
+- [x] Authenticate audit ingestion before parsing large payloads, bind workstation evidence to its owner, and provide a separate ingestion-only gateway service credential. Gateway reporting cannot create unknown live sessions or obtain lifecycle authority.
+- [x] Recover only after an authenticated missing-session response. Preserve stable session IDs, validate the live local process, use signed enrolled identity, apply bounded backoff/jitter, and reconstruct reporting metadata atomically.
+- [x] Preserve cached restrictions across empty recovery-aware revocation snapshots. Require explicit applicable session/workstation/fleet restoration; normal heartbeat never clears quarantine.
+- [x] Mark reconstructed registry records `recovery_only`; do not issue or consume new authority from reporting-only records. Bind central execution grant verification to the issuing authority epoch to prevent reuse after an in-memory usage-state restart. Stable enrollment proof remains usable for reporting recovery.
+- [x] Index registered instance identities and avoid copying event histories on ownership/liveness checks. Do not merge machines by hostname or email, or scan the full fleet on each heartbeat/registration.
+- [x] Update edge/watchers, Claude interceptor, Python SDK variants, harness and distributed launcher copies. Keep proof inside the broker for launcher telemetry, enforce destination/HTTPS binding, and refuse authenticated cross-origin redirects.
+- [x] Retain prompt delivery on missing session or expired identity instead of dropping recovery-pending prompts. Report unreachable control plane, unknown session and rejected identity separately without disabling cached local enforcement.
+- [x] Explicitly mark current central ledger acknowledgements non-durable. Synchronize a retained edge recovery journal before removing acknowledged pending entries; backfill after server-epoch changes using stable event IDs, a persistent cursor and bounded batches. Expose retained recovery bytes in daemon status.
+- [x] Bind authenticated session/workstation/user identity into version-2 audit hashes while retaining legacy chain verification.
+- [x] Update [design](docs/SESSION_IDENTITY_AND_RECOVERY.md), [architecture](ARCHITECTURE.md), [ADR-005](docs/adr/ADR-005-Unified-Workstation-Registration-And-Session-SVIDs.md), and [ADR-006](docs/adr/ADR-006-Authenticated-Lifecycle-And-Recovery.md).
+
+Validation: control-plane API/authz/registry/session/audit/dashboard tests, real edge-to-control-plane delivery/state-loss E2E tests, targeted edge and interceptor tests, gateway regression tests, Python origin/redirect tests, distributed-copy checks and PowerShell syntax checks passed locally. The E2E harness uses fresh server state behind a stable local URL and a real edge child test process; it does not deploy or benchmark Render.
+
+Latest local durable SQLite benchmarks, with authenticated requests (20 iterations; fixture results, not a production SLA):
+
+| Path | Fixture size | Mean request time |
+| --- | --- | --- |
+| Authenticated heartbeat | 1,000 workstation records | 0.38 ms |
+| Authenticated heartbeat | 10,000 workstation records | 0.35 ms |
+| Single-event ingest | 1,000 retained audit records | 1.16 ms |
+| Single-event ingest | 10,000 retained audit records | 1.71 ms |
+
+The historical pre-authentication benchmark below remains historical evidence, not the current implementation's latency claim. Edge journal synchronization adds local storage I/O; historical backfill runs independently of live delivery. Routine heartbeat and dashboard polling rates remain unchanged.
+
+Deployment requirements and deliberate limits:
+
+- [ ] Deploy the matching server, edge, interceptor, launcher and SDK versions; anonymous older senders will receive 401.
+- [ ] Keep `BAP_SECRET_KEY` stable and configure a distinct secret-managed `BAP_TELEMETRY_TOKEN` on gateway and control plane when gateway audit collection is used. No actual deployment credentials were read or changed.
+- [ ] Verify local enforcement, active-session recovery, credential renewal, explicit restoration and retained-event replay against a real Render deployment.
+- [ ] Implement authoritative persistent central identity/security/audit/grant state later. Until then, reporting-only recovery cannot prove unobserved central revocations were absent, central administrative history is not recoverable from edge journals, and new central grants may require verified re-enrollment.
+- [ ] Provision/monitor edge recovery-journal disk space and define retention/compaction after central durability exists. Do not treat a verified in-memory acknowledgement as durable storage.
+- [ ] Measure representative concurrent production load, p95/p99, storage contention and backlog recovery. Stateless offline resource verification cannot provide central epoch/revocation awareness or atomic usage guarantees.
 
 ## Completed locally
 

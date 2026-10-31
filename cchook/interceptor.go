@@ -760,8 +760,9 @@ func getHTTPClient() *http.Client {
 		},
 	}
 	return &http.Client{
-		Timeout:   10 * time.Second,
-		Transport: tr,
+		Timeout:       10 * time.Second,
+		Transport:     &hookIdentityTransport{next: tr},
+		CheckRedirect: hookIdentityRedirect,
 	}
 }
 
@@ -844,7 +845,7 @@ type HookResponse struct {
 	Allowed            *bool              `json:"allowed,omitempty"`            // Universal boolean: true / false
 	PermissionDecision string             `json:"permissionDecision,omitempty"` // Direct flat alias: "allow" / "deny"
 	Reason             string             `json:"reason,omitempty"`
-	UpdatedInput       *ToolInput         `json:"updatedInput,omitempty"`       // Direct flat alias for generic runners
+	UpdatedInput       *ToolInput         `json:"updatedInput,omitempty"` // Direct flat alias for generic runners
 	HookSpecificOutput HookSpecificOutput `json:"hookSpecificOutput"`
 }
 

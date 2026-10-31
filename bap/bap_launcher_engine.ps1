@@ -264,17 +264,7 @@ function Invoke-BapSessionEnd {
             return
         }
 
-        $curl = Resolve-BinaryPath -Paths @() -Commands @('curl.exe')
-        if (-not [string]::IsNullOrWhiteSpace($curl) -and -not [string]::IsNullOrWhiteSpace($sId)) {
-            $payload = @{
-                session_id = $sId
-                reason     = 'BAP session teardown'
-            } | ConvertTo-Json -Compress
-            $curlArgs = @('-s', '--max-time', '2', '--connect-timeout', '2')
-            if ($sUrl -like 'https://*') { $curlArgs += '-k' }
-            $curlArgs += @('-X', 'POST', "$sUrl/api/v1/sessions/end", '-H', 'Content-Type: application/json', '-d', $payload)
-            & $curl @curlArgs *> $null
-        }
+        # Without the broker, retain local recovery state; never send an anonymous teardown.
     }
     catch { }
 }
@@ -973,12 +963,8 @@ function Invoke-BapGovernedSession {
                     }
                 } | ConvertTo-Json -Compress
 
-                $curl = Resolve-BinaryPath -Paths @() -Commands @('curl.exe')
-                if (-not [string]::IsNullOrWhiteSpace($curl)) {
-                    $curlArgs = @('-s', '--max-time', '2', '--connect-timeout', '1')
-                    if ($ServerUrl -like 'https://*') { $curlArgs += '-k' }
-                    $curlArgs += @('-X', 'POST', "$ServerUrl/api/v1/sessions/prompt", '-H', 'Content-Type: application/json', '-d', $promptPayload)
-                    & $curl @curlArgs *> $null
+                if (-not [string]::IsNullOrWhiteSpace($BapEdgeBin)) {
+                    $promptPayload | & $BapEdgeBin session-telemetry --server $ServerUrl --kind prompt *> $null
                 }
             } catch { }
         }
@@ -1034,7 +1020,7 @@ function Invoke-BapGovernedSession {
         $transcriptJob = $null
         if ($AgentId -eq 'antigravity' -and -not [string]::IsNullOrWhiteSpace($ServerUrl)) {
             $transcriptJob = Start-Job -ScriptBlock {
-                param($SessionId, $ServerUrl)
+                param($SessionId, $ServerUrl, $BapEdgeBin)
                 $searchRoots = @(
                     (Join-Path $env:USERPROFILE ".gemini\antigravity-cli\brain"),
                     (Join-Path $env:USERPROFILE ".gemini\antigravity\brain")
@@ -1092,8 +1078,7 @@ function Invoke-BapGovernedSession {
                                                     }
                                                 } | ConvertTo-Json -Compress
                                                 $curl = 'curl.exe'
-                                                $cArgs = @('-s', '--max-time', '2', '-X', 'POST', "$ServerUrl/api/v1/sessions/prompt", '-H', 'Content-Type: application/json', '-d', $payload)
-                                                & $curl @cArgs *> $null
+                                                $payload | & $BapEdgeBin session-telemetry --server $ServerUrl --kind prompt *> $null
                                             }
                                         }
                                     }
@@ -1102,13 +1087,13 @@ function Invoke-BapGovernedSession {
                         }
                     } catch { }
                 }
-            } -ArgumentList $SessionId, $ServerUrl
+            } -ArgumentList $SessionId, $ServerUrl, $BapEdgeBin
         }
 
         # For Copilot sessions, start background tail to capture prompts, outputs, and token usage
         if ($AgentId -eq 'copilot' -and -not [string]::IsNullOrWhiteSpace($ServerUrl)) {
             $transcriptJob = Start-Job -ScriptBlock {
-                param($SessionId, $ServerUrl)
+                param($SessionId, $ServerUrl, $BapEdgeBin)
                 $copilotDir = Join-Path $env:USERPROFILE ".copilot\session-state"
                 $seenHashes = @{}
                 $sha = [System.Security.Cryptography.SHA256]::Create()
@@ -1157,8 +1142,7 @@ function Invoke-BapGovernedSession {
                                                         source             = "copilot-events-tail"
                                                     }
                                                 } | ConvertTo-Json -Compress
-                                                $cArgs = @('-s', '--max-time', '2', '-X', 'POST', "$ServerUrl/api/v1/sessions/prompt", '-H', 'Content-Type: application/json', '-d', $promptPayload)
-                                                & $curl @cArgs *> $null
+                                                $promptPayload | & $BapEdgeBin session-telemetry --server $ServerUrl --kind prompt *> $null
                                             }
                                         }
 
@@ -1209,7 +1193,7 @@ function Invoke-BapGovernedSession {
                         }
                     } catch { }
                 }
-            } -ArgumentList $SessionId, $ServerUrl
+            } -ArgumentList $SessionId, $ServerUrl, $BapEdgeBin
         }
 
         # 9. Launch Target Process
@@ -1361,32 +1345,7 @@ function Invoke-BapGovernedSession {
             & $BapEdgeBin session-end --server $ServerUrl --session-id $SessionId 2>$null
         }
 
-        # Direct HTTP fallback to ensure controlplane marks session closed even if CLI broker was interrupted
-        if (-not [string]::IsNullOrWhiteSpace($ServerUrl) -and -not [string]::IsNullOrWhiteSpace($SessionId)) {
-            try {
-                $endBody = @{ session_id = $SessionId; reason = "user_exit" } | ConvertTo-Json -Compress
-                [System.Net.HttpWebRequest]$req = [System.Net.WebRequest]::Create("$ServerUrl/api/v1/sessions/end")
-                $req.Method = "POST"
-                $req.ContentType = "application/json"
-                $req.Timeout = 2000
-                $bytes = [System.Text.Encoding]::UTF8.GetBytes($endBody)
-                $req.ContentLength = $bytes.Length
-                $stream = $req.GetRequestStream()
-                try {
-                    $stream.Write($bytes, 0, $bytes.Length)
-                } finally {
-                    $stream.Dispose()
-                }
-                $resp = $req.GetResponse()
-                if ($null -ne $resp) {
-                    $resp.Dispose()
-                }
-            } catch {
-                # Best-effort teardown notification
-            }
-        }
-
-        # Restore PATH and clean up Layer 3 shims
+        # Session teardown above uses the authenticated broker transport.        # Restore PATH and clean up Layer 3 shims
         if (-not [string]::IsNullOrWhiteSpace($origPath)) {
             $env:PATH = $origPath
         }

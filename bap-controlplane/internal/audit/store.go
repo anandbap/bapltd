@@ -3,12 +3,16 @@ package audit
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"hash"
 	"sync"
 	"time"
 )
 
 type Event struct {
+	HashVersion         int      `json:"hash_version,omitempty"`
+	InstanceID          string   `json:"instance_id,omitempty"`
 	EventID             string   `json:"event_id"`
 	AgentID             string   `json:"agent_id,omitempty"`
 	SessionID           string   `json:"session_id,omitempty"`
@@ -80,6 +84,7 @@ func (s *Store) VerifyAppend() (bool, error) {
 		h.Write([]byte(ev.PrimaryIntent))
 		h.Write([]byte(ev.IntentClassifier))
 		h.Write([]byte(ev.PromptHash))
+		writeEventIdentity(h, ev)
 		if hex.EncodeToString(h.Sum(nil)) != ev.EventHash {
 			return false, fmt.Errorf("append hash mismatch")
 		}
@@ -127,6 +132,7 @@ func (s *Store) IngestAccepted(incoming []Event) ([]Event, error) {
 		}
 
 		ev.PreviousHash = s.lastHash
+		ev.HashVersion = 2
 
 		h := sha256.New()
 		h.Write([]byte(ev.PreviousHash))
@@ -138,6 +144,7 @@ func (s *Store) IngestAccepted(incoming []Event) ([]Event, error) {
 		h.Write([]byte(ev.PrimaryIntent))
 		h.Write([]byte(ev.IntentClassifier))
 		h.Write([]byte(ev.PromptHash))
+		writeEventIdentity(h, ev)
 		ev.EventHash = hex.EncodeToString(h.Sum(nil))
 
 		s.lastHash = ev.EventHash
@@ -202,6 +209,7 @@ func (s *Store) VerifyChain() (valid bool, err error) {
 		h.Write([]byte(ev.PrimaryIntent))
 		h.Write([]byte(ev.IntentClassifier))
 		h.Write([]byte(ev.PromptHash))
+		writeEventIdentity(h, ev)
 		computed := hex.EncodeToString(h.Sum(nil))
 
 		if ev.EventHash != computed {
@@ -217,4 +225,14 @@ func (s *Store) LastHash() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.lastHash
+}
+
+// Version 2 binds authenticated ownership without rewriting legacy chain links.
+func writeEventIdentity(h hash.Hash, ev Event) {
+	if ev.HashVersion < 2 {
+		return
+	}
+	identity, _ := json.Marshal([]string{ev.SessionID, ev.InstanceID, ev.SPIFFEID, ev.UserID, ev.UserEmail})
+	h.Write([]byte("\x00bap-audit-identity-v2\x00"))
+	h.Write(identity)
 }

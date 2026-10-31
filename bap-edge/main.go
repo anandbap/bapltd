@@ -262,6 +262,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error starting session: %v\n", err)
 			os.Exit(1)
 		}
+	case "session-telemetry":
+		if err := cmd.RunSessionTelemetry(args); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	case "session-end":
 		if err := cmd.RunSessionEnd(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error ending session: %v\n", err)

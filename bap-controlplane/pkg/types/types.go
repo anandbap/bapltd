@@ -41,6 +41,7 @@ func SanitizeInstanceID(s string) string {
 }
 
 type RegisteredAgent struct {
+	RecoveryOnly bool `json:"recovery_only,omitempty"`
 	AgentID             string      `json:"agent_id"`
 	AppID               string      `json:"app_id"`
 	InstanceID          string      `json:"instance_id,omitempty"`

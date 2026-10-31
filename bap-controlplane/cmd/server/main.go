@@ -345,6 +345,9 @@ func runStart(args []string) {
 	}
 
 	server := api.NewServer(regStore, otcStore, minter, policyStore, auditStore, sessionStore)
+	if err := server.SetTelemetrySecurity(os.Getenv("BAP_TELEMETRY_TOKEN")); err != nil {
+		log.Fatal(err)
+	}
 	server.SetAdminSecurity(*adminToken, *allowRemoteAdmin)
 	server.SetDemoMode(*demoMode)
 	server.SetEnvironmentMode(*mode)

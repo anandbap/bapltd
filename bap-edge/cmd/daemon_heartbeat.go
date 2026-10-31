@@ -67,6 +67,16 @@ func (s *DaemonServer) pulseAttachedSessions(ctx context.Context, client *http.C
 					atomic.AddInt64(&s.heartbeatFailed, 1)
 					continue
 				}
+				if resp.StatusCode == http.StatusNotFound {
+					closeHeartbeatResponse(resp)
+					status, _ := recoverMissingSession(ctx, client, s.state.ServerURL, sess.SessionID, sess.AppID, sess.PID)
+					if status == "ok" || status == "revoked" {
+						atomic.AddInt64(&s.heartbeatSuccess, 1)
+					} else {
+						atomic.AddInt64(&s.heartbeatFailed, 1)
+					}
+					continue
+				}
 				var ack struct {
 					Status string `json:"status"`
 				}

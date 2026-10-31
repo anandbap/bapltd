@@ -88,6 +88,7 @@ func TestActivityEndpoints(t *testing.T) {
 
 	// 3. Test POST /api/activity/ingest populates live data dynamically
 	t.Run("LiveIngestAndDynamicAggregation", func(t *testing.T) {
+		s.SetAdminSecurity("test-admin", true)
 		ev := types.AgentActivityEvent{
 			Timestamp:          time.Now().UTC().Format(time.RFC3339),
 			SessionID:          "sess-test-ingest-01",
@@ -114,6 +115,7 @@ func TestActivityEndpoints(t *testing.T) {
 
 		body, _ := json.Marshal(ev)
 		req := httptest.NewRequest(http.MethodPost, "/api/activity/ingest", bytes.NewReader(body))
+		req.Header.Set("X-BAP-Admin-Token", "test-admin")
 		rec := httptest.NewRecorder()
 		s.mux.ServeHTTP(rec, req)
 

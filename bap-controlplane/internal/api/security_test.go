@@ -108,7 +108,7 @@ func TestAgentTargetRevokesLinkedSession(t *testing.T) {
 
 func TestPromptTelemetryAcceptsOnlyLifecycleHookProducer(t *testing.T) {
 	s := setupTestServer()
-	_, err := s.sessionStore.Start(session.SessionStartRequest{SessionID: "sess-prompt", AppID: "claude-code"})
+	_, err := s.sessionStore.Start(session.SessionStartRequest{SessionID: "sess-prompt", AppID: "claude-code",InstanceID:"prompt-machine"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,6 +120,7 @@ func TestPromptTelemetryAcceptsOnlyLifecycleHookProducer(t *testing.T) {
 		{`{"session_id":"sess-prompt","user_prompt":"hello","producer":"claude-lifecycle-hook","prompt_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","prompt_capture_enabled":true,"intent":{"primary":"UNKNOWN","confidence":0,"classifier_version":"bap-intent-rules-v1","source":"claude-user-prompt-submit","evidence":["no-rule-match"]}}`, http.StatusOK},
 	} {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/prompt", strings.NewReader(tc.body))
+		r.Header.Set("Authorization","Bearer "+recoveryProof(t,s,"prompt-machine"))
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, r)
 		if w.Code != tc.want {
@@ -134,12 +135,13 @@ func TestPromptTelemetryAcceptsOnlyLifecycleHookProducer(t *testing.T) {
 
 func TestPromptTelemetryAllowsIntentWithoutRawPrompt(t *testing.T) {
 	s := setupTestServer()
-	_, err := s.sessionStore.Start(session.SessionStartRequest{SessionID: "sess-private-intent", AppID: "claude-code"})
+	_, err := s.sessionStore.Start(session.SessionStartRequest{SessionID: "sess-private-intent", AppID: "claude-code",InstanceID:"prompt-machine"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := `{"session_id":"sess-private-intent","producer":"claude-lifecycle-hook","prompt_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","prompt_capture_enabled":false,"intent":{"primary":"BUG_FIX","secondary":["DATABASE_CHANGE"],"tags":["DATABASE"],"confidence":0.98,"classifier_version":"bap-intent-rules-v1","source":"claude-user-prompt-submit"}}`
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/prompt", strings.NewReader(body))
+	r.Header.Set("Authorization","Bearer "+recoveryProof(t,s,"prompt-machine"))
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 	if w.Code != http.StatusOK {

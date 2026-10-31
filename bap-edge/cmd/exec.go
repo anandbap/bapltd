@@ -1420,23 +1420,17 @@ func syncRevocationsFast(serverURL, policyPath string) {
 	}
 	defer resp.Body.Close()
 
-	var data struct {
-		KillSwitch         bool     `json:"kill_switch"`
-		RevokedSessions    []string `json:"revoked_sessions"`
-		DeregisteredAgents []string `json:"deregistered_agents"`
-		QuarantinedAgents  []string `json:"quarantined_agents"`
-		RevokedAgents      []string `json:"revoked_agents"`
-	}
+	var data remoteRevocations
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		return
 	}
 
 	isDereg := false
-	isFrozen := false
+	var targets []string
 	if credsData, err := os.ReadFile(state.CredentialsPath()); err == nil {
 		var creds StoredCredentials
 		if json.Unmarshal(credsData, &creds) == nil && creds.AgentID != "" {
-			targets := []string{creds.AgentID, creds.InstanceID, creds.UserEmail}
+			targets = []string{creds.AgentID, creds.InstanceID, creds.UserEmail}
 			for _, t := range targets {
 				if t == "" {
 					continue
@@ -1444,12 +1438,6 @@ func syncRevocationsFast(serverURL, policyPath string) {
 				for _, d := range data.DeregisteredAgents {
 					if strings.EqualFold(d, t) {
 						isDereg = true
-						break
-					}
-				}
-				for _, q := range data.QuarantinedAgents {
-					if strings.EqualFold(q, t) {
-						isFrozen = true
 						break
 					}
 				}
@@ -1472,20 +1460,7 @@ func syncRevocationsFast(serverURL, policyPath string) {
 		_ = os.Remove("policy-state.json")
 	}
 
-	var existing map[string]any
-	if content, err := os.ReadFile(statePath); err == nil {
-		_ = json.Unmarshal(content, &existing)
-	}
-	if existing == nil {
-		existing = make(map[string]any)
-	}
-	existing["kill_switch"] = data.KillSwitch
-	existing["frozen"] = isFrozen
-	existing["revoked_sessions"] = data.RevokedSessions
-	existing["last_sync"] = time.Now().UTC()
-	if updated, err := json.MarshalIndent(existing, "", "  "); err == nil {
-		_ = os.WriteFile(statePath, updated, 0600)
-	}
+	_ = writeRevocationCache(statePath,data,targets)
 }
 
 func checkContentPinning(ec *execContext, skillName string) (string, error) {

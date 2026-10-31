@@ -20,6 +20,7 @@ func BenchmarkTelemetryIngest(b *testing.B) {
 		for _, batch := range []int{1, 50} {
 			b.Run(fmt.Sprintf("history%d/batch%d", history, batch), func(b *testing.B) {
 				s := setupTestServer()
+				proof := recoveryProof(b, s, "benchmark-machine")
 				store, err := session.NewStoreWithDB(filepath.Join(b.TempDir(), "sessions.db"))
 				if err != nil {
 					b.Fatal(err)
@@ -40,7 +41,9 @@ func BenchmarkTelemetryIngest(b *testing.B) {
 					}
 					body, _ := json.Marshal(events)
 					w := httptest.NewRecorder()
-					s.Handler().ServeHTTP(w, httptest.NewRequest("POST", "/api/v1/audit/ingest", bytes.NewReader(body)))
+					r := httptest.NewRequest("POST", "/api/v1/audit/ingest", bytes.NewReader(body))
+					r.Header.Set("Authorization", "Bearer "+proof)
+					s.Handler().ServeHTTP(w, r)
 					if w.Code != 200 {
 						b.Fatalf("ingest %d: %s", w.Code, w.Body.String())
 					}

@@ -88,6 +88,10 @@ type Server struct {
 	escalationMgr    *hitl.EscalationManager
 	jwsTrustStore    *notary.JWSTrustStore
 	siemExporter     *audit.SIEMExporter
+	recoveryMu       sync.Mutex
+	recoveryRestores map[string]bool
+	serverEpoch      string
+	telemetryToken   string
 }
 
 type deviceAuthSession struct {
@@ -161,7 +165,8 @@ func NewServer(reg *registry.Store, otcStore *otc.Store, minter *authz.TokenMint
 			ClaimGroups:     "groups",
 			ClaimEmail:      "email",
 		},
-		mux:             http.NewServeMux(),
+		mux:         http.NewServeMux(),
+		serverEpoch: session.GenerateSessionID("cp"),
 	}
 	s.initActivityEngine()
 	s.registerRoutes()
@@ -262,6 +267,7 @@ func (s *Server) SetAllowedOrigins(origins []string) error {
 
 func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-BAP-Server-Epoch", s.serverEpoch)
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
@@ -308,17 +314,19 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/grants/delegate", s.handleDelegateGrant)
 	s.mux.HandleFunc("/api/v1/grants/consume", s.handleConsumeGrant)
 	s.mux.HandleFunc("/api/v1/grants/revoke", s.requireAdminAuth(s.handleRevokeGrant))
-	s.mux.HandleFunc("/api/v1/instances/heartbeat", s.handleHeartbeat)
+	s.mux.HandleFunc("/api/v1/instances/heartbeat", s.requireSessionIdentity(s.handleHeartbeat))
+	s.mux.HandleFunc("/api/v1/control/heartbeat", s.requireSessionIdentity(s.handleHeartbeat))
 	s.mux.HandleFunc("/api/v1/agents", s.handleListAgents)
 	s.mux.HandleFunc("/api/v1/policy/bundle", s.handleGetPolicyBundle)
 	s.mux.HandleFunc("/api/v1/policy/sync", s.handlePolicySync)
 	s.mux.HandleFunc("/api/v1/audit/ingest", s.handleAuditIngest)
 	s.mux.HandleFunc("/api/v1/audit/events", s.handleListAuditEvents)
-	s.mux.HandleFunc("/api/v1/sessions/start", s.handleSessionStart)
-	s.mux.HandleFunc("/api/v1/sessions/heartbeat", s.handleHeartbeat)
-	s.mux.HandleFunc("/api/v1/sessions/end", s.handleSessionEnd)
-	s.mux.HandleFunc("/api/v1/sessions/prompt", s.handleSessionPrompt)
-	s.mux.HandleFunc("/api/v1/sessions/response", s.handleSessionResponse)
+	s.mux.HandleFunc("/api/v1/sessions/start", s.requireSessionIdentity(s.handleSessionStart))
+	s.mux.HandleFunc("/api/v1/sessions/resume", s.handleSessionResume)
+	s.mux.HandleFunc("/api/v1/sessions/heartbeat", s.requireSessionIdentity(s.handleHeartbeat))
+	s.mux.HandleFunc("/api/v1/sessions/end", s.requireSessionIdentity(s.handleSessionEnd))
+	s.mux.HandleFunc("/api/v1/sessions/prompt", s.requireSessionIdentity(s.handleSessionPrompt))
+	s.mux.HandleFunc("/api/v1/sessions/response", s.requireSessionIdentity(s.handleSessionResponse))
 	s.mux.HandleFunc("/api/v1/sessions/transcript", s.handleSessionTranscript)
 	s.mux.HandleFunc("/api/v1/sessions", s.handleListSessions)
 	s.mux.HandleFunc("/api/v1/sessions/", s.handleGetSession)
@@ -430,7 +438,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/activity/business-units", s.handleActivityBusinessUnits)
 	s.mux.HandleFunc("/api/activity/topology", s.handleActivityTopology)
 	s.mux.HandleFunc("/api/activity/stream", s.handleActivityStream)
-	s.mux.HandleFunc("/api/activity/ingest", s.handleActivityIngest)
+	s.mux.HandleFunc("/api/activity/ingest", s.requireSessionIdentity(s.handleActivityIngest))
 	s.mux.HandleFunc("/api/activity/deviation", s.handleActivityDeviation)
 	s.mux.HandleFunc("/api/activity/categories", s.handleActivityCategories)
 	s.mux.HandleFunc("/api/activity/lineage", s.handleActivityLineage)
@@ -441,7 +449,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/activity/business-units", s.handleActivityBusinessUnits)
 	s.mux.HandleFunc("/api/v1/activity/topology", s.handleActivityTopology)
 	s.mux.HandleFunc("/api/v1/activity/stream", s.handleActivityStream)
-	s.mux.HandleFunc("/api/v1/activity/ingest", s.handleActivityIngest)
+	s.mux.HandleFunc("/api/v1/activity/ingest", s.requireSessionIdentity(s.handleActivityIngest))
 	s.mux.HandleFunc("/api/v1/activity/deviation", s.handleActivityDeviation)
 	s.mux.HandleFunc("/api/v1/activity/categories", s.handleActivityCategories)
 	s.mux.HandleFunc("/api/v1/activity/lineage", s.handleActivityLineage)
@@ -460,9 +468,9 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]string{
-		"status":   "ok",
-		"service":  "ltd-service-control-plane",
-		"version":  version.Version,
+		"status":  "ok",
+		"service": "ltd-service-control-plane",
+		"version": version.Version,
 	}
 	if s.minEdgeVersion != "" {
 		resp["min_edge_version"] = s.minEdgeVersion
@@ -1705,6 +1713,10 @@ func (s *Server) handleAcquireGrant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "EndpointQuarantined: device quarantined due to missing heartbeats or hook tampering")
 		return
 	}
+	if agent.RecoveryOnly {
+		writeError(w, http.StatusForbidden, "Reporting identity recovered; re-enroll before acquiring execution authority")
+		return
+	}
 	if agent.Status != types.StatusActive {
 		writeError(w, http.StatusForbidden, fmt.Sprintf("Agent is not active (current status: %s)", agent.Status))
 		return
@@ -1718,7 +1730,7 @@ func (s *Server) handleAcquireGrant(w http.ResponseWriter, r *http.Request) {
 		if agent.SPIFFEID != "" {
 			subject = agent.SPIFFEID
 		}
-		if err != nil || claims.Sub != subject || claims.AppID != agent.AppID || claims.InstanceID != agent.InstanceID {
+		if err != nil || !authz.IsWorkstationCredential(claims) || claims.TokenUse != "workstation" || claims.Sub != subject || claims.AppID != agent.AppID || claims.InstanceID != agent.InstanceID {
 			writeError(w, http.StatusUnauthorized, "Enrolled agent bearer credential required")
 			return
 		}
@@ -2299,6 +2311,16 @@ func (s *Server) handleAuditIngest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
+	serviceCaller := !s.isAdminCaller(r) && s.isTelemetryCaller(r)
+	var enrolled *authz.GrantClaims
+	if !s.isAdminCaller(r) && !serviceCaller {
+		var err error
+		enrolled, err = s.workstationIdentity(r)
+		if err != nil {
+			writeError(w, 401, "Valid enrolled workstation credential required")
+			return
+		}
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10MB limit for batch audit logs
 	var payload json.RawMessage
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -2315,6 +2337,23 @@ func (s *Server) handleAuditIngest(w http.ResponseWriter, r *http.Request) {
 		}
 		events = []audit.Event{single}
 	}
+	if !s.isAdminCaller(r) && !serviceCaller {
+		for i := range events {
+			if events[i].SessionID != "" {
+				if existing, err := s.sessionStore.GetSummary(events[i].SessionID); err == nil && existing.InstanceID != enrolled.InstanceID {
+					writeError(w, 403, "Audit session belongs to another workstation")
+					return
+				}
+			}
+			events[i].InstanceID, events[i].UserID, events[i].UserEmail, events[i].SPIFFEID = enrolled.InstanceID, enrolled.Sub, enrolled.UserEmail, enrolled.SPIFFEID
+		}
+	}
+	if serviceCaller {
+		for i := range events {
+			events[i].Source = "bap-gateway-pep"
+			events[i].InstanceID, events[i].UserID, events[i].UserEmail, events[i].SPIFFEID = "", "", "", ""
+		}
+	}
 
 	accepted, err := s.auditStore.IngestAccepted(events)
 	if err != nil {
@@ -2326,6 +2365,11 @@ func (s *Server) handleAuditIngest(w http.ResponseWriter, r *http.Request) {
 	if s.sessionStore != nil {
 		for _, ev := range accepted {
 			if ev.SessionID != "" {
+				// A collector's session correlation is not workstation proof and
+				// must never refresh presence or mutate an owner's session counters.
+				if serviceCaller {
+					continue
+				}
 				s.sessionStore.RecordEvent(ev.SessionID, ev)
 			}
 		}
@@ -2335,17 +2379,21 @@ func (s *Server) handleAuditIngest(w http.ResponseWriter, r *http.Request) {
 	var maxEventAgeMs int64
 	for _, ev := range accepted {
 		if produced, err := time.Parse(time.RFC3339Nano, ev.Timestamp); err == nil {
-			if age := receivedAt.Sub(produced).Milliseconds(); age > maxEventAgeMs { maxEventAgeMs = age }
+			if age := receivedAt.Sub(produced).Milliseconds(); age > maxEventAgeMs {
+				maxEventAgeMs = age
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ingested":     len(accepted),
-		"received_at": receivedAt.Format(time.RFC3339Nano),
-		"processing_ms": time.Since(receivedAt).Milliseconds(),
+		"ingested":         len(accepted),
+		"durable":          false,
+		"server_epoch":     s.serverEpoch,
+		"received_at":      receivedAt.Format(time.RFC3339Nano),
+		"processing_ms":    time.Since(receivedAt).Milliseconds(),
 		"max_event_age_ms": maxEventAgeMs,
-		"chain_valid":  valid,
-		"receipt_hash": s.auditStore.LastHash(),
-		"status":       "acknowledged",
+		"chain_valid":      valid,
+		"receipt_hash":     s.auditStore.LastHash(),
+		"status":           "acknowledged",
 	})
 }
 
@@ -2440,7 +2488,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		if sess, err := s.sessionStore.Get(id); err == nil {
+		if sess, err := s.sessionStore.GetSummary(id); err == nil {
 			parentRevoked := false
 			if sess.ParentSessionID != "" && s.sessionStore.IsRevoked(sess.ParentSessionID) {
 				parentRevoked = true
@@ -2758,14 +2806,19 @@ func (s *Server) handleGetRevocations(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	restoredSessions, restoredAgents, fleetRestored := s.recoveryRestorations()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"kill_switch":         bundle.KillSwitch,
-		"revoked_sessions":    revokedSessions,
-		"revoked_users":       revokedUsers,
-		"deregistered_agents": deregisteredAgents,
-		"quarantined_agents":  quarantinedAgents,
-		"revoked_agents":      revokedAgents,
-		"updated_at":          time.Now().UTC(),
+		"kill_switch":             bundle.KillSwitch,
+		"recovery_protocol":       1,
+		"restored_sessions":       restoredSessions,
+		"restored_agents":         restoredAgents,
+		"fleet_restore_confirmed": fleetRestored,
+		"revoked_sessions":        revokedSessions,
+		"revoked_users":           revokedUsers,
+		"deregistered_agents":     deregisteredAgents,
+		"quarantined_agents":      quarantinedAgents,
+		"revoked_agents":          revokedAgents,
+		"updated_at":              time.Now().UTC(),
 	})
 }
 
@@ -2982,13 +3035,13 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 		req.Intent.Tags[i] = strings.ToUpper(strings.TrimSpace(req.Intent.Tags[i]))
 	}
 	validSources := map[string]bool{
-		"claude-user-prompt-submit": true,
-		"bap-python-sdk":            true,
-		"demo-executive":            true,
-		"bap-agent":                 true,
-		"bap-server-classifier":     true,
-		"antigravity-hook":          true,
-		"antigravity-cli":           true,
+		"claude-user-prompt-submit":   true,
+		"bap-python-sdk":              true,
+		"demo-executive":              true,
+		"bap-agent":                   true,
+		"bap-server-classifier":       true,
+		"antigravity-hook":            true,
+		"antigravity-cli":             true,
 		"antigravity-transcript-tail": true,
 	}
 	if !validIntentCategory(req.Intent.Primary) || req.Intent.ClassifierVersion == "" || !validSources[req.Intent.Source] {
@@ -3118,8 +3171,8 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	sessions := s.sessionStore.List(100)
 	s.writeTelemetry(w, r, map[string]any{
-		"sessions": sessions,
-		"total":    len(sessions),
+		"sessions":    sessions,
+		"total":       len(sessions),
 		"server_time": time.Now().UTC().Format(time.RFC3339Nano),
 	})
 }
@@ -3297,6 +3350,7 @@ func (s *Server) handleKillSwitch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.policyStore.SetKillSwitch(*req.Enabled)
+	s.recordRecoveryRestore("fleet", "", !*req.Enabled)
 
 	decision := "FROZEN"
 	reason := "GLOBAL EMERGENCY KILL-SWITCH ENGAGED by CISO Override. All agent workloads locked."
@@ -3674,6 +3728,7 @@ func (s *Server) handleTargetedKillAgent(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
+		s.recordRecoveryRestore("session", target, action == "unfreeze")
 		s.auditStore.Ingest([]audit.Event{{Source: "bap-controlplane", SessionID: target,
 			Executable: "bapcontrolplane", FullCommand: strings.ToUpper(action) + "_SESSION target=" + target,
 			Decision: "allow", Reason: "Administrator session " + action, Timestamp: time.Now().UTC().Format(time.RFC3339)}})
@@ -3954,6 +4009,8 @@ func (s *Server) handleTargetedKillAgent(w http.ResponseWriter, r *http.Request)
 		if s.registry != nil && agentTarget != "" {
 			_, _ = s.registry.RestoreTarget(agentTarget)
 		}
+		s.recordRecoveryRestore("session", sessionTarget, true)
+		s.recordRecoveryRestore("agent", agentTarget, true)
 
 		_ = os.Remove(".bap-revoked")
 		_ = os.Remove("../.bap-revoked")
@@ -4316,6 +4373,9 @@ func (s *Server) consumeActiveGrantWithDetails(token, action, resource, sessionI
 			subject = agent.SPIFFEID
 		}
 		if subject == claims.Sub && agent.AppID == claims.AppID && (agent.InstanceID == "" || claims.InstanceID == "" || agent.InstanceID == claims.InstanceID) {
+			if agent.RecoveryOnly {
+				return nil, fmt.Errorf("reporting-only identity cannot authorize execution")
+			}
 			if agent.Status != types.StatusActive {
 				return nil, fmt.Errorf("agent is not active")
 			}
@@ -5212,6 +5272,8 @@ func (s *Server) handleControlQuarantine(w http.ResponseWriter, r *http.Request)
 				writeError(w, http.StatusNotFound, err.Error())
 				return
 			}
+			s.recordRecoveryRestore("agent", agent.AgentID, true)
+			s.recordRecoveryRestore("agent", agent.InstanceID, true)
 			writeJSON(w, http.StatusOK, map[string]any{
 				"status":  "restored",
 				"target":  req.Target,
@@ -5230,6 +5292,8 @@ func (s *Server) handleControlQuarantine(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
+		s.recordRecoveryRestore("agent", agent.AgentID, false)
+		s.recordRecoveryRestore("agent", agent.InstanceID, false)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":  "quarantined",
 			"target":  req.Target,

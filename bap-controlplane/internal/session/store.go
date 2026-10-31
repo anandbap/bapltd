@@ -25,36 +25,36 @@ type Session struct {
 	WorkstationSPIFFEID string        `json:"workstation_spiffe_id,omitempty"`
 	SessionSVID         string        `json:"session_svid,omitempty"`
 	AgentName           string        `json:"agent_name,omitempty"`
-	UserID        string        `json:"user_id,omitempty"`
-	UserEmail     string        `json:"user_email,omitempty"`
-	SPIFFEID      string        `json:"spiffe_id,omitempty"`
-	Status        string        `json:"status"` // "active", "closed", or "revoked"
-	StartedAt     time.Time     `json:"started_at"`
-	EndedAt       *time.Time    `json:"ended_at,omitempty"`
-	LastActiveAt  time.Time     `json:"last_active_at"`
-	ClientPID     int           `json:"client_pid,omitempty"`
-	Hostname      string        `json:"hostname,omitempty"`
-	TotalEvents   int           `json:"total_events"`
-	AllowedCount  int           `json:"allowed_count"`
-	DeniedCount      int           `json:"denied_count"`
-	CloseReason      string        `json:"close_reason,omitempty"`
-	UserPrompt       string        `json:"user_prompt,omitempty"`
-	PromptRiskScore  float64       `json:"prompt_risk_score,omitempty"`
-	PromptRiskLevel  string        `json:"prompt_risk_level,omitempty"`
-	InjectionSignals []string      `json:"injection_signals,omitempty"`
-	IsHighRisk       bool          `json:"is_high_risk,omitempty"`
-	Intent           IntentContext `json:"intent"`
-	IntentHistory    []string      `json:"intent_history,omitempty"`
-	PromptCount      int           `json:"prompt_count,omitempty"`
-	Events           []audit.Event `json:"events,omitempty"`
+	UserID              string        `json:"user_id,omitempty"`
+	UserEmail           string        `json:"user_email,omitempty"`
+	SPIFFEID            string        `json:"spiffe_id,omitempty"`
+	Status              string        `json:"status"` // "active", "closed", or "revoked"
+	StartedAt           time.Time     `json:"started_at"`
+	EndedAt             *time.Time    `json:"ended_at,omitempty"`
+	LastActiveAt        time.Time     `json:"last_active_at"`
+	ClientPID           int           `json:"client_pid,omitempty"`
+	Hostname            string        `json:"hostname,omitempty"`
+	TotalEvents         int           `json:"total_events"`
+	AllowedCount        int           `json:"allowed_count"`
+	DeniedCount         int           `json:"denied_count"`
+	CloseReason         string        `json:"close_reason,omitempty"`
+	UserPrompt          string        `json:"user_prompt,omitempty"`
+	PromptRiskScore     float64       `json:"prompt_risk_score,omitempty"`
+	PromptRiskLevel     string        `json:"prompt_risk_level,omitempty"`
+	InjectionSignals    []string      `json:"injection_signals,omitempty"`
+	IsHighRisk          bool          `json:"is_high_risk,omitempty"`
+	Intent              IntentContext `json:"intent"`
+	IntentHistory       []string      `json:"intent_history,omitempty"`
+	PromptCount         int           `json:"prompt_count,omitempty"`
+	Events              []audit.Event `json:"events,omitempty"`
 	// Delegation Lineage (BAP-532)
-	ParentSessionID  string        `json:"parent_session_id,omitempty"`
-	ParentAgentID    string        `json:"parent_agent_id,omitempty"`
-	ParentGrantID    string        `json:"parent_grant_id,omitempty"`
-	RootAgentID      string        `json:"root_agent_id,omitempty"`
-	GrantID          string        `json:"grant_id,omitempty"`
-	Lineage          []string      `json:"lineage,omitempty"`
-	LineageTree      string        `json:"lineage_tree,omitempty"`
+	ParentSessionID string   `json:"parent_session_id,omitempty"`
+	ParentAgentID   string   `json:"parent_agent_id,omitempty"`
+	ParentGrantID   string   `json:"parent_grant_id,omitempty"`
+	RootAgentID     string   `json:"root_agent_id,omitempty"`
+	GrantID         string   `json:"grant_id,omitempty"`
+	Lineage         []string `json:"lineage,omitempty"`
+	LineageTree     string   `json:"lineage_tree,omitempty"`
 }
 
 // IntentContext is mission context produced deterministically at BAP Edge.
@@ -84,20 +84,20 @@ type SessionStartRequest struct {
 	WorkstationSPIFFEID string        `json:"workstation_spiffe_id,omitempty"`
 	SessionSVID         string        `json:"session_svid,omitempty"`
 	AgentName           string        `json:"agent_name,omitempty"`
-	UserID          string        `json:"user_id,omitempty"`
-	UserEmail       string        `json:"user_email,omitempty"`
-	SPIFFEID        string        `json:"spiffe_id,omitempty"`
-	ClientPID       int           `json:"client_pid,omitempty"`
-	Hostname        string        `json:"hostname,omitempty"`
-	UserPrompt      string        `json:"user_prompt,omitempty"`
-	Intent          IntentContext `json:"intent,omitempty"`
-	ParentSessionID string        `json:"parent_session_id,omitempty"`
-	ParentAgentID   string        `json:"parent_agent_id,omitempty"`
-	ParentGrantID   string        `json:"parent_grant_id,omitempty"`
-	RootAgentID     string        `json:"root_agent_id,omitempty"`
-	GrantID         string        `json:"grant_id,omitempty"`
-	Lineage         []string      `json:"lineage,omitempty"`
-	LineageTree     string        `json:"lineage_tree,omitempty"`
+	UserID              string        `json:"user_id,omitempty"`
+	UserEmail           string        `json:"user_email,omitempty"`
+	SPIFFEID            string        `json:"spiffe_id,omitempty"`
+	ClientPID           int           `json:"client_pid,omitempty"`
+	Hostname            string        `json:"hostname,omitempty"`
+	UserPrompt          string        `json:"user_prompt,omitempty"`
+	Intent              IntentContext `json:"intent,omitempty"`
+	ParentSessionID     string        `json:"parent_session_id,omitempty"`
+	ParentAgentID       string        `json:"parent_agent_id,omitempty"`
+	ParentGrantID       string        `json:"parent_grant_id,omitempty"`
+	RootAgentID         string        `json:"root_agent_id,omitempty"`
+	GrantID             string        `json:"grant_id,omitempty"`
+	Lineage             []string      `json:"lineage,omitempty"`
+	LineageTree         string        `json:"lineage_tree,omitempty"`
 }
 
 // CanonicalIntentCategories lists all recognized mission categories.
@@ -460,33 +460,33 @@ func (s *Store) Start(req SessionStartRequest) (*Session, error) {
 		WorkstationSPIFFEID: req.WorkstationSPIFFEID,
 		SessionSVID:         req.SessionSVID,
 		AgentName:           agentName,
-		UserID:           userID,
-		UserEmail:        userEmail,
-		SPIFFEID:         spiffeID,
-		Status:           "active",
-		StartedAt:        now,
-		LastActiveAt:     now,
-		ClientPID:        req.ClientPID,
-		Hostname:         req.Hostname,
-		TotalEvents:      0,
-		AllowedCount:     0,
-		DeniedCount:      0,
-		Events:           make([]audit.Event, 0),
-		UserPrompt:       req.UserPrompt,
-		PromptRiskScore:  normIntent.PromptRiskScore,
-		PromptRiskLevel:  normIntent.PromptRiskLevel,
-		InjectionSignals: normIntent.InjectionSignals,
-		IsHighRisk:       normIntent.IsHighRisk,
-		Intent:           normIntent,
-		IntentHistory:    hist,
-		PromptCount:      promptCount,
-		ParentSessionID:  req.ParentSessionID,
-		ParentAgentID:    req.ParentAgentID,
-		ParentGrantID:    req.ParentGrantID,
-		RootAgentID:      req.RootAgentID,
-		GrantID:          req.GrantID,
-		Lineage:          req.Lineage,
-		LineageTree:      lineageTree,
+		UserID:              userID,
+		UserEmail:           userEmail,
+		SPIFFEID:            spiffeID,
+		Status:              "active",
+		StartedAt:           now,
+		LastActiveAt:        now,
+		ClientPID:           req.ClientPID,
+		Hostname:            req.Hostname,
+		TotalEvents:         0,
+		AllowedCount:        0,
+		DeniedCount:         0,
+		Events:              make([]audit.Event, 0),
+		UserPrompt:          req.UserPrompt,
+		PromptRiskScore:     normIntent.PromptRiskScore,
+		PromptRiskLevel:     normIntent.PromptRiskLevel,
+		InjectionSignals:    normIntent.InjectionSignals,
+		IsHighRisk:          normIntent.IsHighRisk,
+		Intent:              normIntent,
+		IntentHistory:       hist,
+		PromptCount:         promptCount,
+		ParentSessionID:     req.ParentSessionID,
+		ParentAgentID:       req.ParentAgentID,
+		ParentGrantID:       req.ParentGrantID,
+		RootAgentID:         req.RootAgentID,
+		GrantID:             req.GrantID,
+		Lineage:             req.Lineage,
+		LineageTree:         lineageTree,
 	}
 
 	s.sessions[sessionID] = sess
@@ -779,6 +779,7 @@ func (s *Store) RecordEvent(sessionID string, ev audit.Event) {
 		}
 		sess = &Session{
 			SessionID:    sessionID,
+			InstanceID:   ev.InstanceID,
 			AppID:        appID,
 			UserID:       ev.UserID,
 			UserEmail:    ev.UserEmail,
@@ -1174,7 +1175,7 @@ func (s *Store) loadFromDB() error {
 	for rows.Next() {
 		var (
 			sessID, appID, instID, uID, uEmail, spiffeID, status, startedAtStr, endedAtStr, lastActiveStr, hostname, closeReason, intentJSON, userPrompt, agentName sql.NullString
-			clientPID, totalEv, allowCnt, denyCnt                                                                                                                    sql.NullInt64
+			clientPID, totalEv, allowCnt, denyCnt                                                                                                                   sql.NullInt64
 		)
 		if err := rows.Scan(&sessID, &appID, &instID, &uID, &uEmail, &spiffeID, &status, &startedAtStr, &endedAtStr, &lastActiveStr, &clientPID, &hostname, &totalEv, &allowCnt, &denyCnt, &closeReason, &intentJSON, &userPrompt, &agentName); err != nil {
 			continue

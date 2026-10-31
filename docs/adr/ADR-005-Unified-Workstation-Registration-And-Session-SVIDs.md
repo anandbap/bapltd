@@ -72,11 +72,19 @@ When an agent session initiates (e.g. Claude Code via `bap-edge watch` or Python
 2. Resolves `resource_id = creds.instance_id` and `workstation_spiffe_id = creds.spiffe_id`.
 3. Derives `session_svid = f"spiffe://{trust_domain}/workstation/{creds.instance_id}/session/{session_id}"`.
 4. Transmits session payload to `POST /api/v1/sessions/start`.
-5. Control plane `EnsureSessionAgent` finds the existing workstation record by `instance_id` or `hostname + email`, appends the tool name (`app_id`) to `master.Subagents`, and binds the session without creating a new agent card.
+5. Control plane validates the enrolled credential and binds the session to its verified `instance_id`. `EnsureSessionAgent` uses that instance identity, appends the tool name (`app_id`) to `master.Subagents`, and does not merge machines based on hostname or email.
+
+#### 4.3 Authenticated lifecycle and recovery clarification
+
+[ADR-006](ADR-006-Authenticated-Lifecycle-And-Recovery.md) supplies the enforced lifecycle and restart protocol. Every lifecycle write requires authenticated ownership. A hierarchical Session SVID is a derived identity label; the string itself is not cryptographic proof. Signed enrolled identity proves the workstation, and bounded execution grants independently authorize operations.
+
+Re-announcing an existing live process after deployment restores reporting only. It never resets an administrative freeze, revocation, or consumed grant. Central persistence remains required for durable administrative history and distributed authority state.
 
 ---
 
 ### 5. Verification Matrix
+
+The matrix below records historical onboarding checks. Current authenticated lifecycle and restart coverage is documented in ADR-006 and `implementation_plan.md`; this historical matrix does not assert that the entire legacy Python integration suite was re-run after authentication enforcement.
 
 | Verification Dimension | Test Target | Result | Evidence |
 |---|---|---|---|

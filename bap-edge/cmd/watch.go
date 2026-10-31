@@ -3,6 +3,7 @@ package cmd
 import (
 	"bap-edge/internal/httptransport"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"flag"
@@ -433,10 +434,8 @@ func flushPromptSpool(serverURL, sessionID string) {
 		switch {
 		case status >= 200 && status < 300:
 			_ = os.Remove(p)
-		case status == http.StatusNotFound:
-			if fi, err := e.Info(); err == nil && time.Since(fi.ModTime()) > 10*time.Minute {
-				_ = os.Remove(p)
-			}
+		case status == http.StatusNotFound || status == http.StatusUnauthorized:
+			// Enrollment/recovery or credential renewal can happen later. Retain.
 		case status >= 500:
 			return
 		default:
@@ -607,6 +606,7 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string, instanceIDOp
 	sessionFile := sessionMarkerPath(sessionID)
 	var lastScannedEpoch int64
 	heartbeatCounter := 0
+	lastReportingStatus := "starting"
 
 	for range ticker.C {
 		touchWatcherLiveness(livenessPath, watchPID)
@@ -664,6 +664,20 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string, instanceIDOp
 
 		// Keep alive & pulse heartbeat continuously
 		statusHB, reasonHB, scanEpoch := pulseHeartbeat(serverURL, sessionID)
+		if statusHB == "missing" {
+			statusHB, reasonHB = recoverMissingSession(context.Background(), httptransport.New(2*time.Second), serverURL, sessionID, appID, watchPID)
+		}
+		if statusHB != lastReportingStatus {
+			switch statusHB {
+			case "":
+				fmt.Fprintln(os.Stderr, "[bapedge watch] Control plane unavailable; local enforcement continues.")
+			case "missing":
+				fmt.Fprintln(os.Stderr, "[bapedge watch] Session reporting recovery pending; local enforcement continues.")
+			case "unauthenticated":
+				fmt.Fprintln(os.Stderr, "[bapedge watch] Control plane rejected workstation identity; renew enrollment to restore reporting.")
+			}
+			lastReportingStatus = statusHB
+		}
 		if statusHB == "ok" {
 			// Replay prompts the hook could not deliver (first on a fresh session, then
 			// every few ticks) in the background so the heartbeat loop never stalls.
@@ -796,6 +810,14 @@ func pulseHeartbeat(serverURL, sessionID string) (string, string, int64) {
 	var resp *http.Response
 	for attempt := 0; attempt < 2; attempt++ {
 		r, err := client.Post(serverURL+"/api/v1/sessions/heartbeat", "application/json", bytes.NewReader(body))
+		if err == nil && (r.StatusCode == http.StatusUnauthorized || r.StatusCode == http.StatusForbidden) {
+			closeHeartbeatResponse(r)
+			return "unauthenticated", "Workstation identity rejected", 0
+		}
+		if err == nil && r.StatusCode == http.StatusNotFound {
+			closeHeartbeatResponse(r)
+			return "missing", "Control plane no longer recognizes session", 0
+		}
 		if err == nil && r.StatusCode == http.StatusOK {
 			resp = r
 			break

@@ -33,6 +33,8 @@ func TestOverlappingSessionsHaveIndependentPresence(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("POST", path, strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")
+		var identity struct { SessionID string `json:"session_id"` };_=json.Unmarshal([]byte(body),&identity)
+		r.Header.Set("Authorization","Bearer "+recoveryProof(t,s,identity.SessionID))
 		s.Handler().ServeHTTP(w, r)
 		return w
 	}
@@ -88,6 +90,7 @@ func TestHeartbeatRehydratesRegistryAfterRestart(t *testing.T) {
 	s := setupTestServer()
 	if _, err := s.sessionStore.Start(session.SessionStartRequest{
 		SessionID: "surviving-session",
+		InstanceID: "surviving-session",
 		AppID:     "claude-code",
 		Hostname:  "developer-host",
 	}); err != nil {
@@ -100,6 +103,7 @@ func TestHeartbeatRehydratesRegistryAfterRestart(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/v1/sessions/heartbeat", strings.NewReader(`{"session_id":"surviving-session"}`))
 	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Authorization","Bearer "+recoveryProof(t,s,"surviving-session"))
 	s.Handler().ServeHTTP(w, r)
 	if w.Code != 200 {
 		t.Fatalf("heartbeat after restart: %d %s", w.Code, w.Body.String())
@@ -116,6 +120,7 @@ func TestRevokedSessionHeartbeatAndPromptBlock(t *testing.T) {
 	// 1. Start session
 	if _, err := s.sessionStore.Start(session.SessionStartRequest{
 		SessionID: "sess-rev-test",
+		InstanceID: "sess-rev-test",
 		AppID:     "claude-code",
 		Hostname:  "test-host",
 	}); err != nil {
@@ -125,6 +130,7 @@ func TestRevokedSessionHeartbeatAndPromptBlock(t *testing.T) {
 	// 2. Active heartbeat should succeed with status alive
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/v1/sessions/heartbeat", strings.NewReader(`{"session_id":"sess-rev-test"}`))
+	r.Header.Set("Authorization","Bearer "+recoveryProof(t,s,"sess-rev-test"))
 	r.Header.Set("Content-Type", "application/json")
 	s.Handler().ServeHTTP(w, r)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"status":"alive"`) {
@@ -139,6 +145,7 @@ func TestRevokedSessionHeartbeatAndPromptBlock(t *testing.T) {
 	// 4. Heartbeat should now report status revoked and action terminate
 	wRev := httptest.NewRecorder()
 	rRev := httptest.NewRequest("POST", "/api/v1/sessions/heartbeat", strings.NewReader(`{"session_id":"sess-rev-test"}`))
+	rRev.Header.Set("Authorization","Bearer "+recoveryProof(t,s,"sess-rev-test"))
 	rRev.Header.Set("Content-Type", "application/json")
 	s.Handler().ServeHTTP(wRev, rRev)
 	if wRev.Code != 200 || !strings.Contains(wRev.Body.String(), `"status":"revoked"`) || !strings.Contains(wRev.Body.String(), `"action":"terminate"`) {
@@ -149,6 +156,7 @@ func TestRevokedSessionHeartbeatAndPromptBlock(t *testing.T) {
 	wPrompt := httptest.NewRecorder()
 	rPrompt := httptest.NewRequest("POST", "/api/v1/sessions/prompt", strings.NewReader(`{"session_id":"sess-rev-test","user_prompt":"run unauthorized task","producer":"claude-lifecycle-hook","prompt_hash":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","prompt_capture_enabled":true,"intent":{"primary":"UNKNOWN","confidence":0,"classifier_version":"bap-intent-rules-v1","source":"claude-user-prompt-submit"}}`))
 	rPrompt.Header.Set("Content-Type", "application/json")
+	rPrompt.Header.Set("Authorization","Bearer "+recoveryProof(t,s,"sess-rev-test"))
 	s.Handler().ServeHTTP(wPrompt, rPrompt)
 	if wPrompt.Code != 403 {
 		t.Fatalf("expected HTTP 403 Forbidden for revoked prompt, got: %d %s", wPrompt.Code, wPrompt.Body.String())

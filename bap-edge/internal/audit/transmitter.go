@@ -34,6 +34,8 @@ func defangWAF(s string) string {
 
 // HandshakeAck models the cryptographic acknowledgement returned by bapcontrolplane.
 type HandshakeAck struct {
+	Durable     bool   `json:"durable"`
+	ServerEpoch string `json:"server_epoch"`
 	Ingested    int    `json:"ingested"`
 	ChainValid  bool   `json:"chain_valid"`
 	ReceiptHash string `json:"receipt_hash,omitempty"`
@@ -135,6 +137,11 @@ func Transmit(entry AuditEntry, serverURL string, logPath string) (bool, string,
 
 	// 3. Remove transmitted entry locally after clean handshake (unless explicit retention is requested)
 	if os.Getenv("BAP_RETAIN_LOCAL") != "1" && logPath != "" && logPath != "off" && logPath != "none" {
+		if !ack.Durable {
+			if err := archiveAcknowledged(serverURL, logPath, []AuditEntry{entry}, ack.ServerEpoch); err != nil {
+				return false, "local_recovery_failed", err
+			}
+		}
 		_ = RemoveEntry(entry.EventID, logPath)
 	}
 
@@ -177,7 +184,7 @@ func FlushOfflineAudit(serverURL string, logPath string) (int, error) {
 	}
 
 	if len(toSend) == 0 {
-		return 0, nil
+		return replayRecoveryArchive(serverURL, logPath)
 	}
 
 	serverURL = strings.TrimRight(serverURL, "/")
@@ -251,6 +258,11 @@ func FlushOfflineAudit(serverURL string, logPath string) (int, error) {
 			if ack.ChainValid && (ack.Status == "acknowledged" || ack.Ingested > 0) {
 				totalFlushed += len(batchIDs)
 				if os.Getenv("BAP_RETAIN_LOCAL") != "1" {
+					if !ack.Durable {
+						if err := archiveAcknowledged(serverURL, logPath, batch, ack.ServerEpoch); err != nil {
+							return totalFlushed, err
+						}
+					}
 					_ = RemoveEntries(batchIDs, logPath)
 				}
 			} else {
@@ -262,5 +274,6 @@ func FlushOfflineAudit(serverURL string, logPath string) (int, error) {
 		}
 	}
 
-	return totalFlushed, nil
+	replayed, err := replayRecoveryArchive(serverURL, logPath)
+	return totalFlushed + replayed, err
 }

@@ -20,9 +20,9 @@ var MockTransport http.RoundTripper
 // It loads optional embedded certificates, system certificates, environment PEM secrets, and runtime paths.
 func New(timeout time.Duration) *http.Client {
 	if MockTransport != nil {
-		return &http.Client{Timeout: timeout, Transport: MockTransport}
+		return &http.Client{Timeout: timeout, Transport: &identityTransport{next: MockTransport}, CheckRedirect: identityRedirect}
 	}
-	return &http.Client{Timeout: timeout, Transport: &caTransport{}}
+	return &http.Client{Timeout: timeout, Transport: &identityTransport{next: &caTransport{}}, CheckRedirect: identityRedirect}
 }
 
 type caTransport struct {

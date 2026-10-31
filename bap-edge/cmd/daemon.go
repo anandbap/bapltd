@@ -239,12 +239,13 @@ func (s *DaemonServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"sessions": sessionList,
 		},
 		"telemetry": map[string]any{
-			"messages_received":    atomic.LoadInt64(&s.messagesRecv),
-			"transmitted_success":  atomic.LoadInt64(&s.transSuccess),
-			"transmissions_failed": atomic.LoadInt64(&s.transFailed),
-			"spool_backlog":        len(offlineEntries),
-			"heartbeat_success":    atomic.LoadInt64(&s.heartbeatSuccess),
-			"heartbeat_failed":     atomic.LoadInt64(&s.heartbeatFailed),
+			"messages_received":       atomic.LoadInt64(&s.messagesRecv),
+			"transmitted_success":     atomic.LoadInt64(&s.transSuccess),
+			"transmissions_failed":    atomic.LoadInt64(&s.transFailed),
+			"spool_backlog":           len(offlineEntries),
+			"retained_recovery_bytes": audit.RecoveryArchiveBytes(s.state.ServerURL, auditLogPath),
+			"heartbeat_success":       atomic.LoadInt64(&s.heartbeatSuccess),
+			"heartbeat_failed":        atomic.LoadInt64(&s.heartbeatFailed),
 		},
 	}
 
@@ -388,16 +389,10 @@ func (s *DaemonServer) runHeartbeatWorker(ctx context.Context) {
 					// Sync remote revocations
 					if rResp, rErr := client.Get(strings.TrimRight(s.state.ServerURL, "/") + "/api/v1/control/revocations"); rErr == nil {
 						if rResp.StatusCode == http.StatusOK {
-							var rData struct {
-								KillSwitch         bool     `json:"kill_switch"`
-								RevokedSessions    []string `json:"revoked_sessions"`
-								DeregisteredAgents []string `json:"deregistered_agents"`
-								QuarantinedAgents  []string `json:"quarantined_agents"`
-							}
+							var rData remoteRevocations
 							if json.NewDecoder(rResp.Body).Decode(&rData) == nil {
 								targets := []string{creds.AgentID, creds.InstanceID, creds.UserEmail}
 								isDereg := false
-								isFrozen := false
 								for _, t := range targets {
 									if t == "" {
 										continue
@@ -405,12 +400,6 @@ func (s *DaemonServer) runHeartbeatWorker(ctx context.Context) {
 									for _, d := range rData.DeregisteredAgents {
 										if strings.EqualFold(d, t) {
 											isDereg = true
-											break
-										}
-									}
-									for _, q := range rData.QuarantinedAgents {
-										if strings.EqualFold(q, t) {
-											isFrozen = true
 											break
 										}
 									}
@@ -422,20 +411,7 @@ func (s *DaemonServer) runHeartbeatWorker(ctx context.Context) {
 								// Update cached policy state
 								_ = os.MkdirAll(".bap", 0700)
 								statePath := filepath.Join(".bap", "policy-state.json")
-								var existing map[string]any
-								if content, err := os.ReadFile(statePath); err == nil {
-									_ = json.Unmarshal(content, &existing)
-								}
-								if existing == nil {
-									existing = make(map[string]any)
-								}
-								existing["kill_switch"] = rData.KillSwitch
-								existing["frozen"] = isFrozen
-								existing["revoked_sessions"] = rData.RevokedSessions
-								existing["last_sync"] = time.Now().UTC()
-								if updated, err := json.MarshalIndent(existing, "", "  "); err == nil {
-									_ = os.WriteFile(statePath, updated, 0600)
-								}
+								_ = writeRevocationCache(statePath, rData, targets)
 							}
 						}
 						closeHeartbeatResponse(rResp)

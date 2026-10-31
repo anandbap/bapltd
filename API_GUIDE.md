@@ -2,7 +2,18 @@
 
 This document is the complete REST API specification for **`bapcontrolplane`**, the central Bounded Authority Plane governance service.
 
-`bapcontrolplane` is **strictly API-based (no UI)**. All endpoints accept and return JSON. The registration flow is designed for frictionless self-service onboarding: app owners can pre-register unauthenticated or with standard service tokens, receive a single-use high-entropy One-Time Code (OTC), and edge brokers (**`bapedge`**, the Local Trusted Daemon) authenticate and enroll by consuming the OTC alongside cryptographic binary attestation.
+`bapcontrolplane` hosts JSON APIs and the embedded `/dashboard/` UI. Administrative pre-registration requires administrative authentication. Edge brokers enroll through the configured OTC/identity flow and use signed workstation proof for lifecycle and telemetry reporting.
+
+## Authenticated lifecycle and deployment recovery
+
+The current contract is specified in [session identity and recovery](docs/SESSION_IDENTITY_AND_RECOVERY.md) and [ADR-006](docs/adr/ADR-006-Authenticated-Lifecycle-And-Recovery.md). These requirements supersede anonymous lifecycle examples in older integrations.
+
+- Session start, heartbeat, end, prompt and response writes require `Authorization: Bearer <enrolled-workstation-proof>` and ownership of the session's verified instance. Explicit administrative callers retain operator authority.
+- `POST /api/v1/sessions/resume` reconstructs missing reporting metadata using the same signed owner and stable session ID. It never reopens a closed/revoked session or issues execution grants. Recovered registry records are reporting-only until verified re-enrollment or future authoritative store restoration.
+- The heartbeat aliases `/api/v1/instances/heartbeat` and `/api/v1/control/heartbeat` enforce the same identity checks. Missing proof returns 401, ownership mismatch returns 403, and an authenticated missing session returns 404 so the edge can initiate recovery.
+- Audit ingestion requires workstation proof, explicit administrative authority, or the ingestion-only gateway collector credential. Activity ingestion requires authenticated session ownership. Enrollment proof is not an execution grant.
+- Audit acknowledgements include `server_epoch`, `chain_valid`, and `durable`. The current in-memory audit ledger returns `durable=false`; edge recovery copies must be retained even after successful verification.
+- Deploy matching clients and server with a stable `BAP_SECRET_KEY`. If gateway audit collection is used, provision a distinct secret-managed `BAP_TELEMETRY_TOKEN` on both services. Tokens are not URL parameters or process arguments.
 
 ---
 
@@ -11,21 +22,23 @@ This document is the complete REST API specification for **`bapcontrolplane`**, 
 | Method | Endpoint | Description | Auth Required |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/api/v1/health` | Service liveness & health check | None |
-| `POST` | `/api/v1/agents/pre-register` | Pre-register agent/fleet & mint OTC or fleet token | None (Self-Service) |
+| `POST` | `/api/v1/agents/pre-register` | Pre-register agent/fleet & mint OTC or fleet token | Administrative credential |
 | `POST` | `/api/v1/agents/register` | Edge LTD enrollment, binary attestation & SPIFFE SVID | One-Time Code / Fleet Token |
 | `GET` | `/api/v1/agents` | List all registered agents and attestation status | None |
 | `POST` | `/api/v1/grants/acquire` | Mint short-lived OBO JWT authority grants (with SPIFFE ID) | Attested Agent ID |
 | `POST` | `/api/v1/grants/consume` | Downstream PEP atomic grant consumption | Bearer Token |
 | `GET` | `/api/v1/policy/bundle` | Get current authoritative Cedar policy & schema | None |
 | `POST` | `/api/v1/policy/sync` | Edge LTD policy synchronization & directives | None |
-| `POST` | `/api/v1/audit/ingest` | Central ingestion for edge audit logs | None |
+| `POST` | `/api/v1/audit/ingest` | Central ingestion for edge audit logs | Workstation, scoped collector, or administrative credential |
 | `GET` | `/api/v1/audit/events` | Inspect central tamper-evident audit chain | None |
 | `POST` | `/api/v1/agents/revoke` | Emergency kill-switch revoking a specific agent instance | None |
 | `POST` | `/api/v1/apps/revoke` | Emergency kill-switch revoking an entire fleet/app | None |
-| `POST` | `/api/v1/instances/heartbeat`| Edge agent instance liveness heartbeat | Agent ID |
-| `POST` | `/api/v1/sessions/start` | Start an agent execution session (Claude Code, Copilot, CLI) | None |
-| `POST` | `/api/v1/sessions/prompt` | Submit locally classified Claude mission context; raw prompt optional | Prototype hook contract |
-| `POST` | `/api/v1/sessions/end` | Record conclusion or shutdown of an agent session | None |
+| `POST` | `/api/v1/instances/heartbeat`| Edge agent instance liveness heartbeat | Enrolled proof and ownership |
+| `POST` | `/api/v1/sessions/heartbeat` | Session liveness | Enrolled proof and ownership |
+| `POST` | `/api/v1/sessions/start` | Start an agent execution session (Claude Code, Copilot, CLI) | Enrolled proof and ownership |
+| `POST` | `/api/v1/sessions/resume` | Recover missing reporting metadata | Enrolled proof and matching instance |
+| `POST` | `/api/v1/sessions/prompt` | Submit locally classified mission context; raw prompt optional | Enrolled proof and ownership |
+| `POST` | `/api/v1/sessions/end` | Record conclusion or shutdown of an agent session | Enrolled proof and ownership |
 | `GET` | `/api/v1/sessions` | List recent agent execution sessions with stats | None |
 | `GET` | `/api/v1/sessions/{id}` | Retrieve details and stats for a specific session | None |
 | `GET` | `/api/v1/inspector/data` | Unified polling endpoint for Inspector UI | None |
@@ -492,6 +505,7 @@ Immediately revokes **all** active agent instances belonging to a target applica
 Edge agent instances periodically send liveness heartbeats to maintain active status and update `last_heartbeat_at`.
 - **Method**: `POST`
 - **Path**: `/api/v1/instances/heartbeat`
+- **Authentication**: Enrolled workstation bearer proof; the target must belong to the verified instance.
 - **Request Body**:
   ```json
   {
@@ -513,6 +527,7 @@ The Session Engine tracks discrete agent execution sessions (Claude Code interac
 #### Start Session
 - **Method**: `POST`
 - **Path**: `/api/v1/sessions/start`
+- **Authentication**: Enrolled workstation bearer proof; owner and SVID are bound to verified identity.
 - **Request Body**:
   ```json
   {
@@ -545,6 +560,7 @@ The Session Engine tracks discrete agent execution sessions (Claude Code interac
 
 - **Method**: `POST`
 - **Path**: `/api/v1/sessions/prompt`
+- **Authentication**: Enrolled workstation bearer proof and ownership of the referenced session, in addition to the producer contract.
 - **Producer**: the managed Claude Code `UserPromptSubmit` hook through BAP Edge
 - **Request Body**:
   ```json
@@ -573,6 +589,7 @@ The current repository validates the hook contract but does not yet cryptographi
 #### End Session
 - **Method**: `POST`
 - **Path**: `/api/v1/sessions/end`
+- **Authentication**: Enrolled workstation bearer proof and ownership of the referenced session.
 - **Request Body**:
   ```json
   {

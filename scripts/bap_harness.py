@@ -87,6 +87,18 @@ def is_pid_alive(pid: int) -> bool:
 
 def http_post(url: str, payload: dict, timeout: float = 0.4) -> tuple:
     try:
+        # Keep enrollment proof inside bapedge; no anonymous lifecycle writes.
+        if "/api/v1/sessions/" in url:
+            server, kind = url.rsplit("/api/v1/sessions/", 1)
+            result = subprocess.run(
+                [get_binary_path("bapedge"), "session-telemetry", "--server", server, "--kind", kind],
+                input=json.dumps(payload), capture_output=True, text=True,
+                timeout=max(timeout, 4),
+            )
+            if result.returncode:
+                return 0, "Authenticated session telemetry unavailable"
+            envelope = json.loads(result.stdout)
+            return envelope["status_code"], envelope["body"]
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:

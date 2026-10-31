@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -20,6 +21,7 @@ type grantUsage struct {
 }
 
 type TokenMinter struct {
+	authorityEpoch string
 	signingKey     []byte
 	defaultTTL     time.Duration
 	mu             sync.Mutex
@@ -43,6 +45,11 @@ func NewTokenMinter(secretKey string, defaultTTL time.Duration) *TokenMinter {
 		grantParent:    make(map[string]string),
 		grantRoot:      make(map[string]string),
 	}
+	epoch := make([]byte, 16)
+	if _, err := rand.Read(epoch); err != nil {
+		panic("cannot initialize authority epoch")
+	}
+	tm.authorityEpoch = hex.EncodeToString(epoch)
 	go tm.cleanupLoop()
 	return tm
 }
@@ -63,39 +70,42 @@ func (tm *TokenMinter) cleanupLoop() {
 }
 
 type GrantClaims struct {
-	GrantID       string                  `json:"jti"`
-	Sub           string                  `json:"sub"`
-	AppID         string                  `json:"app_id"`
-	InstanceID    string                  `json:"instance_id,omitempty"`
-	SPIFFEID      string                  `json:"spiffe_id,omitempty"`
-	AgentName     string                  `json:"agent_name"`
-	EnvProfile    string                  `json:"env_profile"`
-	BinaryHash    string                  `json:"binary_hash"`
-	SessionID     string                  `json:"session_id,omitempty"`
-	Action        string                  `json:"action,omitempty"`
-	Resource      string                  `json:"resource,omitempty"`
-	Constraints   *types.GrantConstraints `json:"constraints,omitempty"`
-	PolicyVersion string                  `json:"policy_version,omitempty"`
-	Scopes        []string                `json:"scopes"`
-	UserEmail     string                  `json:"user_email,omitempty"`
-	Department    string                  `json:"department,omitempty"`
-	Groups        []string                `json:"groups,omitempty"`
-	AuthMode      string                  `json:"auth_mode,omitempty"`
-	IdPProvider   string                  `json:"idp_provider,omitempty"`
+	TokenUse       string                  `json:"token_use,omitempty"`
+	AuthorityEpoch string                  `json:"authority_epoch,omitempty"`
+	AgentID        string                  `json:"agent_id,omitempty"`
+	GrantID        string                  `json:"jti"`
+	Sub            string                  `json:"sub"`
+	AppID          string                  `json:"app_id"`
+	InstanceID     string                  `json:"instance_id,omitempty"`
+	SPIFFEID       string                  `json:"spiffe_id,omitempty"`
+	AgentName      string                  `json:"agent_name"`
+	EnvProfile     string                  `json:"env_profile"`
+	BinaryHash     string                  `json:"binary_hash"`
+	SessionID      string                  `json:"session_id,omitempty"`
+	Action         string                  `json:"action,omitempty"`
+	Resource       string                  `json:"resource,omitempty"`
+	Constraints    *types.GrantConstraints `json:"constraints,omitempty"`
+	PolicyVersion  string                  `json:"policy_version,omitempty"`
+	Scopes         []string                `json:"scopes"`
+	UserEmail      string                  `json:"user_email,omitempty"`
+	Department     string                  `json:"department,omitempty"`
+	Groups         []string                `json:"groups,omitempty"`
+	AuthMode       string                  `json:"auth_mode,omitempty"`
+	IdPProvider    string                  `json:"idp_provider,omitempty"`
 	// Delegation Lineage & Attenuation (BAP-532)
-	ParentGrantID   string                  `json:"parent_grant_id,omitempty"`
-	ParentSessionID string                  `json:"parent_session_id,omitempty"`
-	RootGrantID     string                  `json:"root_grant_id,omitempty"`
-	RootAgentID     string                  `json:"root_agent_id,omitempty"`
-	ParentAgentID string                  `json:"parent_agent_id,omitempty"`
-	Lineage       []string                `json:"lineage,omitempty"`
-	LineageTree   string                  `json:"lineage_tree,omitempty"`
-	Caveats       []string                `json:"caveats,omitempty"`
-	Depth         int                     `json:"depth,omitempty"`
-	Iss           string                  `json:"iss"`
-	Aud           string                  `json:"aud"`
-	Iat           int64                   `json:"iat"`
-	Exp           int64                   `json:"exp"`
+	ParentGrantID   string   `json:"parent_grant_id,omitempty"`
+	ParentSessionID string   `json:"parent_session_id,omitempty"`
+	RootGrantID     string   `json:"root_grant_id,omitempty"`
+	RootAgentID     string   `json:"root_agent_id,omitempty"`
+	ParentAgentID   string   `json:"parent_agent_id,omitempty"`
+	Lineage         []string `json:"lineage,omitempty"`
+	LineageTree     string   `json:"lineage_tree,omitempty"`
+	Caveats         []string `json:"caveats,omitempty"`
+	Depth           int      `json:"depth,omitempty"`
+	Iss             string   `json:"iss"`
+	Aud             string   `json:"aud"`
+	Iat             int64    `json:"iat"`
+	Exp             int64    `json:"exp"`
 }
 
 // Mint maintains backward compatibility with legacy calls.
@@ -113,7 +123,7 @@ func (tm *TokenMinter) Mint(agent *types.RegisteredAgent, candidateHash string, 
 func (tm *TokenMinter) MintWorkstationSession(agent *types.RegisteredAgent, candidateHash string) (string, time.Time, error) {
 	now := time.Now()
 	expiresAt := now.Add(365 * 24 * time.Hour)
-	token, exp, _, err := tm.mintWithCustomTTL(agent, candidateHash, agent.PermittedScopes, "", "", "", nil, "", expiresAt)
+	token, exp, _, err := tm.mintWithCustomTTL(agent, candidateHash, agent.PermittedScopes, "", "", "", nil, "", expiresAt, "workstation")
 	return token, exp, err
 }
 
@@ -130,7 +140,7 @@ func (tm *TokenMinter) MintWithDetails(
 ) (string, time.Time, string, error) {
 	now := time.Now()
 	expiresAt := now.Add(tm.defaultTTL)
-	return tm.mintWithCustomTTL(agent, candidateHash, requestedScopes, sessionID, action, resource, constraints, policyVersion, expiresAt)
+	return tm.mintWithCustomTTL(agent, candidateHash, requestedScopes, sessionID, action, resource, constraints, policyVersion, expiresAt, "grant")
 }
 
 func (tm *TokenMinter) mintWithCustomTTL(
@@ -143,7 +153,11 @@ func (tm *TokenMinter) mintWithCustomTTL(
 	constraints *types.GrantConstraints,
 	policyVersion string,
 	expiresAt time.Time,
+	tokenUse string,
 ) (string, time.Time, string, error) {
+	if agent.RecoveryOnly {
+		return "", time.Time{}, "", fmt.Errorf("recovered reporting identity must re-enroll before receiving authority")
+	}
 	now := time.Now()
 
 	scopes := agent.PermittedScopes
@@ -185,29 +199,32 @@ func (tm *TokenMinter) mintWithCustomTTL(
 	}
 
 	claims := GrantClaims{
-		GrantID:       grantID,
-		Sub:           sub,
-		AppID:         agent.AppID,
-		InstanceID:    agent.InstanceID,
-		SPIFFEID:      agent.SPIFFEID,
-		AgentName:     agent.AgentName,
-		EnvProfile:    string(agent.EnvProfile),
-		BinaryHash:    candidateHash,
-		SessionID:     sessionID,
-		Action:        action,
-		Resource:      resource,
-		Constraints:   constraints,
-		PolicyVersion: policyVersion,
-		Scopes:        scopes,
-		UserEmail:     agent.UserEmail,
-		Department:    agent.Department,
-		Groups:        agent.Groups,
-		AuthMode:      agent.AuthMode,
-		IdPProvider:   agent.IdPProvider,
-		Iss:           "bap-controlplane",
-		Aud:           "bap-edge-broker",
-		Iat:           now.Unix(),
-		Exp:           expiresAt.Unix(),
+		TokenUse:       tokenUse,
+		AuthorityEpoch: tm.authorityEpoch,
+		AgentID:        agent.AgentID,
+		GrantID:        grantID,
+		Sub:            sub,
+		AppID:          agent.AppID,
+		InstanceID:     agent.InstanceID,
+		SPIFFEID:       agent.SPIFFEID,
+		AgentName:      agent.AgentName,
+		EnvProfile:     string(agent.EnvProfile),
+		BinaryHash:     candidateHash,
+		SessionID:      sessionID,
+		Action:         action,
+		Resource:       resource,
+		Constraints:    constraints,
+		PolicyVersion:  policyVersion,
+		Scopes:         scopes,
+		UserEmail:      agent.UserEmail,
+		Department:     agent.Department,
+		Groups:         agent.Groups,
+		AuthMode:       agent.AuthMode,
+		IdPProvider:    agent.IdPProvider,
+		Iss:            "bap-controlplane",
+		Aud:            "bap-edge-broker",
+		Iat:            now.Unix(),
+		Exp:            expiresAt.Unix(),
 	}
 	claimsJSON, _ := json.Marshal(claims)
 	claimsB64 := base64.RawURLEncoding.EncodeToString(claimsJSON)
@@ -250,6 +267,9 @@ func (tm *TokenMinter) Verify(tokenStr string) (*GrantClaims, error) {
 	if claims.Exp > 0 && time.Now().Unix() >= claims.Exp {
 		return nil, fmt.Errorf("token has expired")
 	}
+	if !IsWorkstationCredential(&claims) && claims.AuthorityEpoch != tm.authorityEpoch {
+		return nil, fmt.Errorf("execution authority belongs to a previous control-plane instance; acquire a new grant")
+	}
 
 	// Check if this grant or its parent/root has been revoked (BAP-532)
 	if isRevoked, reason := tm.IsGrantRevoked(claims.GrantID); isRevoked {
@@ -280,6 +300,9 @@ func (tm *TokenMinter) ConsumeWithDetails(tokenStr, action, resource, sessionID 
 	claims, err := tm.Verify(tokenStr)
 	if err != nil {
 		return nil, err
+	}
+	if IsWorkstationCredential(claims) {
+		return nil, fmt.Errorf("workstation identity is not an execution grant")
 	}
 
 	tm.mu.Lock()
@@ -600,25 +623,26 @@ func (tm *TokenMinter) DelegateAttenuatedChild(
 	}
 
 	claims := GrantClaims{
-		GrantID:       childGrantID,
-		Sub:           sub,
-		AppID:         childAgent.AppID,
-		InstanceID:    childAgent.InstanceID,
-		SPIFFEID:      childAgent.SPIFFEID,
-		AgentName:     childAgent.AgentName,
-		EnvProfile:    string(childAgent.EnvProfile),
-		BinaryHash:    childAgent.EnrolledBinaryHash,
-		SessionID:     sessionID,
-		Action:        childAction,
-		Resource:      childResource,
-		Constraints:   constraints,
-		PolicyVersion: parentClaims.PolicyVersion,
-		Scopes:        childScopes,
-		UserEmail:     parentClaims.UserEmail,
-		Department:    parentClaims.Department,
-		Groups:        parentClaims.Groups,
-		AuthMode:      parentClaims.AuthMode,
-		IdPProvider:   parentClaims.IdPProvider,
+		GrantID:  childGrantID,
+		TokenUse: "grant", AuthorityEpoch: tm.authorityEpoch,
+		Sub:             sub,
+		AppID:           childAgent.AppID,
+		InstanceID:      childAgent.InstanceID,
+		SPIFFEID:        childAgent.SPIFFEID,
+		AgentName:       childAgent.AgentName,
+		EnvProfile:      string(childAgent.EnvProfile),
+		BinaryHash:      childAgent.EnrolledBinaryHash,
+		SessionID:       sessionID,
+		Action:          childAction,
+		Resource:        childResource,
+		Constraints:     constraints,
+		PolicyVersion:   parentClaims.PolicyVersion,
+		Scopes:          childScopes,
+		UserEmail:       parentClaims.UserEmail,
+		Department:      parentClaims.Department,
+		Groups:          parentClaims.Groups,
+		AuthMode:        parentClaims.AuthMode,
+		IdPProvider:     parentClaims.IdPProvider,
 		ParentGrantID:   parentClaims.GrantID,
 		ParentSessionID: parentClaims.SessionID,
 		RootGrantID:     rootGrantID,
@@ -630,8 +654,8 @@ func (tm *TokenMinter) DelegateAttenuatedChild(
 		Depth:           parentClaims.Depth + 1,
 		Iss:             "bap-controlplane",
 		Aud:             "bap-edge-broker",
-		Iat:           now.Unix(),
-		Exp:           expiresAt.Unix(),
+		Iat:             now.Unix(),
+		Exp:             expiresAt.Unix(),
 	}
 
 	header := map[string]string{
@@ -660,4 +684,3 @@ func (tm *TokenMinter) DelegateAttenuatedChild(
 
 	return jwtToken, expiresAt, childGrantID, &claims, nil
 }
-

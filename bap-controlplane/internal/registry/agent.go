@@ -2,6 +2,7 @@ package registry
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -12,9 +13,10 @@ import (
 )
 
 type Store struct {
-	mu          sync.RWMutex
-	trustDomain string
-	agents      map[string]*types.RegisteredAgent
+	mu            sync.RWMutex
+	trustDomain   string
+	agents        map[string]*types.RegisteredAgent
+	identityIndex map[string][]*types.RegisteredAgent
 }
 
 func NewStore(trustDomain string) *Store {
@@ -56,6 +58,7 @@ func (s *Store) PreRegister(req types.PreRegisterRequest) (*types.RegisteredAgen
 	}
 
 	s.agents[agentID] = agent
+	s.indexIdentityLocked(agent)
 	return agent, nil
 }
 
@@ -120,7 +123,9 @@ func (s *Store) EnrollWithVersion(agentID string, binaryHash, pubKey, hostname, 
 	if parentAgent.Status == types.StatusPendingEnrollment || parentAgent.Status == types.StatusDeregistered || isSameWorkstation {
 		parentAgent.Status = types.StatusActive
 		parentAgent.RevokedAt = nil
+		s.removeIdentityLocked(parentAgent)
 		parentAgent.InstanceID = instanceID
+		s.indexIdentityLocked(parentAgent)
 		parentAgent.SPIFFEID = spiffeID
 		parentAgent.TrustDomain = s.trustDomain
 		parentAgent.EnrolledBinaryHash = binaryHash
@@ -171,6 +176,7 @@ func (s *Store) EnrollWithVersion(agentID string, binaryHash, pubKey, hostname, 
 		PermittedScopes:     parentAgent.PermittedScopes,
 	}
 	s.agents[instanceAgentID] = agentInstance
+	s.indexIdentityLocked(agentInstance)
 	return agentInstance, nil
 }
 
@@ -288,7 +294,6 @@ func (s *Store) RestoreTarget(target string) (*types.RegisteredAgent, error) {
 	}
 	return nil, fmt.Errorf("no agent found matching %q", target)
 }
-
 
 // Deregister marks an agent or instance as deregistered (e.g. via 'bap logout').
 func (s *Store) Deregister(target string) (*types.RegisteredAgent, error) {
@@ -516,11 +521,10 @@ func (s *Store) EnsureSessionAgent(appID, instanceID, spiffeID, userEmail, hostn
 	}
 
 	// If a workstation agent exists for this machine resource, record appID as a subagent under that 1 master agent
-	for _, a := range s.agents {
+	s.buildIdentityIndexLocked()
+	for _, a := range s.identityIndex["instance\x00"+instanceID] {
 		matchInstance := instanceID != "" && (a.InstanceID == instanceID || a.AgentID == instanceID)
-		matchHost := hostname != "" && a.Hostname != "" && strings.EqualFold(a.Hostname, hostname)
-		matchEmail := userEmail != "" && userEmail != "NA" && ((a.OwnerEmail != "" && strings.EqualFold(a.OwnerEmail, userEmail)) || (a.UserEmail != "" && strings.EqualFold(a.UserEmail, userEmail)))
-		if matchInstance || matchHost || matchEmail {
+		if matchInstance {
 			sub := appID
 			if customName != "" {
 				sub = customName
@@ -544,11 +548,8 @@ func (s *Store) EnsureSessionAgent(appID, instanceID, spiffeID, userEmail, hostn
 	}
 
 	agentID := fmt.Sprintf("agent-%s-%s", strings.ToLower(appID), instanceID)
-	for _, enrolled := range s.agents {
-		if strings.EqualFold(enrolled.AppID, appID) && (enrolled.InstanceID == instanceID || enrolled.AgentID == agentID) {
-			agentID = enrolled.AgentID
-			break
-		}
+	if previous, ok := s.agents[agentID]; ok && previous.InstanceID != instanceID {
+		agentID = fmt.Sprintf("agent-session-%x", sha256.Sum256([]byte(appID+"\x00"+instanceID)))
 	}
 	if existing, found := s.agents[agentID]; found {
 		if existing.Status == types.StatusRevoked {
@@ -579,6 +580,7 @@ func (s *Store) EnsureSessionAgent(appID, instanceID, spiffeID, userEmail, hostn
 	agent := &types.RegisteredAgent{
 		AgentID:         agentID,
 		AppID:           appID,
+		RecoveryOnly:    true,
 		InstanceID:      instanceID,
 		SPIFFEID:        spiffeID,
 		TrustDomain:     s.trustDomain,
@@ -592,6 +594,7 @@ func (s *Store) EnsureSessionAgent(appID, instanceID, spiffeID, userEmail, hostn
 		LastHeartbeatAt: &now,
 	}
 	s.agents[agentID] = agent
+	s.indexIdentityLocked(agent)
 	return agent
 }
 
@@ -605,10 +608,11 @@ func (s *Store) HeartbeatInstance(appID, instanceID string) error {
 		return fmt.Errorf("app_id and instance_id are required")
 	}
 	now := time.Now()
-	for _, a := range s.agents {
-		if strings.EqualFold(a.AppID, appID) && (a.InstanceID == instanceID || a.AgentID == instanceID) {
-			if a.Status == types.StatusRevoked {
-				return fmt.Errorf("agent %q is revoked", a.AgentID)
+	s.buildIdentityIndexLocked()
+	for _, a := range s.identityIndex["instance\x00"+instanceID] {
+		if a.InstanceID == instanceID || a.AgentID == instanceID {
+			if a.Status == types.StatusRevoked || a.Status == types.StatusQuarantined || a.Status == types.StatusDeregistered {
+				return fmt.Errorf("agent %q is administratively blocked", a.AgentID)
 			}
 			a.Status = types.StatusActive
 			a.LastHeartbeatAt = &now

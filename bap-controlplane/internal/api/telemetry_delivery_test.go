@@ -12,11 +12,14 @@ import (
 
 func TestAuditRetryDoesNotInflateSessionCounts(t *testing.T) {
 	s := setupTestServer()
+	proof := recoveryProof(t, s, "machine")
 	stamp := time.Now().UTC().Add(-time.Second)
 	payload, _ := json.Marshal([]audit.Event{{EventID: "delivery-retry", SessionID: "claude", Timestamp: stamp.Format(time.RFC3339Nano), Decision: "deny"}})
 	for i := 0; i < 2; i++ {
 		w := httptest.NewRecorder()
-		s.Handler().ServeHTTP(w, httptest.NewRequest("POST", "/api/v1/audit/ingest", bytes.NewReader(payload)))
+		r := httptest.NewRequest("POST", "/api/v1/audit/ingest", bytes.NewReader(payload))
+		r.Header.Set("Authorization", "Bearer "+proof)
+		s.Handler().ServeHTTP(w, r)
 		if w.Code != 200 {
 			t.Fatalf("ingest: %d %s", w.Code, w.Body.String())
 		}

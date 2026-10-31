@@ -173,6 +173,9 @@ func TestAPIRootRevocation_CascadesToDescendants(t *testing.T) {
 	}
 	hbBody, _ := json.Marshal(hbReq)
 	rHB := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/heartbeat", bytes.NewReader(hbBody))
+	// This test exercises administrative cascade inspection; heartbeat spoofing
+	// and workstation ownership are covered separately.
+	rHB.Header.Set("X-BAP-Admin-Token","test-admin")
 	wHB := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(wHB, rHB)
 

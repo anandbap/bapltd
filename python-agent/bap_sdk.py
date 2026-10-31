@@ -13,10 +13,49 @@ import sys
 import time
 import urllib.request
 import urllib.error
+import urllib.parse
 from typing import Optional, Dict, Any, List
 
 
+_identity_cache = {"path": None, "until": 0, "value": {}}
+
+def _workstation_headers(url):
+    target = urllib.parse.urlsplit(url)
+    if not target.path.startswith("/api/v1/sessions/"):
+        return {}
+    path = get_bap_credentials_path()
+    if path != _identity_cache["path"] or time.monotonic() >= _identity_cache["until"]:
+        value = {}
+        try:
+            with open(path, encoding="utf-8") as handle:
+                value = json.load(handle)
+        except (OSError, ValueError, TypeError):
+            pass
+        _identity_cache.update(path=path, until=time.monotonic()+1, value=value)
+    value = _identity_cache["value"]
+    origin = urllib.parse.urlsplit(value.get("server_url", ""))
+    if (origin.scheme, origin.netloc) != (target.scheme, target.netloc) or origin.path.rstrip("/"):
+        return {}
+    if target.scheme != "https" and target.hostname not in ("localhost", "127.0.0.1", "::1"):
+        raise ValueError("Workstation identity requires HTTPS")
+    token = value.get("session_token")
+    return {"Authorization": "Bearer " + token} if token else {}
+
+class _IdentityRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        old, new = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
+        if req.has_header("Authorization") and (old.scheme, old.netloc) != (new.scheme, new.netloc):
+            raise urllib.error.HTTPError(newurl, code, "Authenticated cross-origin redirect refused", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
 def _urlopen(request, **kwargs):
+    if isinstance(request, urllib.request.Request) and not request.has_header("Authorization"):
+        for key, value in _workstation_headers(request.full_url).items():
+            request.add_header(key, value)
+    if isinstance(request, urllib.request.Request) and request.has_header("Authorization"):
+        target = urllib.parse.urlsplit(request.full_url)
+        if target.scheme != "https" and target.hostname not in ("localhost", "127.0.0.1", "::1"):
+            raise ValueError("Authenticated traffic requires HTTPS")
     ca = os.getenv("BAP_CA_CERT")
     if not ca:
         for cand in ["bap-root-ca.crt", "../bap-root-ca.crt", "../../bap-root-ca.crt", "controlplane-cert.pem", "../controlplane-cert.pem", "../../controlplane-cert.pem"]:
@@ -31,7 +70,7 @@ def _urlopen(request, **kwargs):
             ctx = None
 
     url = getattr(request, "full_url", str(request))
-    if "localhost" in url or "127.0.0.1" in url or "::1" in url:
+    if urllib.parse.urlsplit(url).hostname in ("localhost", "127.0.0.1", "::1"):
         if ctx is None:
             ctx = ssl.create_default_context()
         ctx.check_hostname = False
@@ -40,6 +79,12 @@ def _urlopen(request, **kwargs):
     if ctx is not None and "context" not in kwargs:
         kwargs["context"] = ctx
 
+    if isinstance(request, urllib.request.Request) and request.has_header("Authorization"):
+        context = kwargs.pop("context", None)
+        handlers = [_IdentityRedirect()]
+        if context is not None:
+            handlers.append(urllib.request.HTTPSHandler(context=context))
+        return urllib.request.build_opener(*handlers).open(request, **kwargs)
     return urllib.request.urlopen(request, **kwargs)
 
 
@@ -203,7 +248,13 @@ class BAPSession:
         self.gateway_url = (gateway_url or ep["gateway_url"]).rstrip("/")
         self.envoy_url = ep["envoy_url"].rstrip("/")
         self.session_id = session_id or f"sess-{app_id}-{int(time.time())}"
-        self.instance_id = instance_id or f"node-{os.getpid()}"
+        enrolled = {}
+        try:
+            with open(get_bap_credentials_path(), encoding="utf-8") as handle:
+                enrolled = json.load(handle)
+        except (OSError, ValueError, TypeError):
+            pass
+        self.instance_id = instance_id or enrolled.get("instance_id") or f"node-{os.getpid()}"
         self.bapedge_path = bapedge_path or self._find_bapedge()
         
         # Identity resolution fallback matching BAP 5-stage pipeline

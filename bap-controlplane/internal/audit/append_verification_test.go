@@ -32,3 +32,12 @@ func TestAppendVerificationRejectsCorruptedNewRecord(t *testing.T) {
 		t.Fatal("append verification missed new-record tampering")
 	}
 }
+
+func TestAuditHashBindsAuthenticatedSessionOwnership(t *testing.T) {
+	s := NewStore()
+	_, _ = s.Ingest([]Event{{EventID: "owner", SessionID: "session-a", InstanceID: "machine-a", Decision: "allow"}})
+	s.events[0].InstanceID = "machine-b"
+	if valid, _ := s.VerifyChain(); valid {
+		t.Fatal("ownership substitution did not invalidate audit hash")
+	}
+}
