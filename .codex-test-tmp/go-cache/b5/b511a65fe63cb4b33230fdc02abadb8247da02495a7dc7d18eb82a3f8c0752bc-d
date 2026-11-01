@@ -1,0 +1,9 @@
+=== RUN   TestDiscoverySyntheticConfigurationPrivacyAndStableKeys
+--- PASS: TestDiscoverySyntheticConfigurationPrivacyAndStableKeys (0.04s)
+=== RUN   TestDiscoveryRejectsSymlinkedConfiguration
+    report_test.go:73: symlinks unavailable: symlink C:\Users\User\pyprj\bapltd\.codex-test-tmp\TestDiscoveryRejectsSymlinkedConfiguration1111589713\001\config C:\Users\User\pyprj\bapltd\.codex-test-tmp\TestDiscoveryRejectsSymlinkedConfiguration1111589713\001\linked-config: A required privilege is not held by the client.
+--- SKIP: TestDiscoveryRejectsSymlinkedConfiguration (0.01s)
+=== RUN   TestDiscoveryQueueAndSafeLabels
+--- PASS: TestDiscoveryQueueAndSafeLabels (0.01s)
+PASS
+ok  	bap-edge/internal/discovery	0.673s

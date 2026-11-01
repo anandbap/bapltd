@@ -10,6 +10,12 @@ import (
 
 func TestDiscoverySyntheticConfigurationPrivacyAndStableKeys(t *testing.T) {
 	root := t.TempDir()
+	// macOS temp paths may traverse /var -> /private/var. Use the real
+	// directory so this parsing test does not exercise symlink rejection.
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(root, ".mcp.json")
 	secret := "SYNTHETIC-DO-NOT-UPLOAD"
 	body := `{"mcpServers":{"filesystem":{"command":"node","args":["` + secret + `"],"env":{"TOKEN":"` + secret + `"}},"database":{"url":"https://example.invalid/?secret=` + secret + `"}}}`
@@ -48,6 +54,31 @@ func TestDiscoverySyntheticConfigurationPrivacyAndStableKeys(t *testing.T) {
 		t.Fatal("VS Code schema not parsed")
 	}
 }
+
+func TestDiscoveryRejectsSymlinkedConfiguration(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, "config")
+	if err := os.Mkdir(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "mcp.json")
+	if err := os.WriteFile(path, []byte(`{"mcpServers":{"local":{"command":"node"}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "linked-config")
+	if err := os.Symlink(directory, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	report := Collect([]ConfigSource{{filepath.Join(link, "mcp.json"), "claude-code"}}, 0)
+	if report.Status != "partial" || len(report.Scopes) != 1 ||
+		report.Scopes[0].Status != "error" || len(report.Observations) != 0 {
+		t.Fatalf("symlinked ancestor was not rejected: %+v", report)
+	}
+}
+
 func TestDiscoveryQueueAndSafeLabels(t *testing.T) {
 	root := t.TempDir()
 	r := Collect([]ConfigSource{{filepath.Join(root, "absent.json"), "claude-code"}}, 0)
