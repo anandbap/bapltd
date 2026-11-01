@@ -41,7 +41,8 @@ func SanitizeInstanceID(s string) string {
 }
 
 type RegisteredAgent struct {
-	RecoveryOnly bool `json:"recovery_only,omitempty"`
+	SupersededBy        string      `json:"superseded_by,omitempty"`
+	RecoveryOnly        bool        `json:"recovery_only,omitempty"`
 	AgentID             string      `json:"agent_id"`
 	AppID               string      `json:"app_id"`
 	InstanceID          string      `json:"instance_id,omitempty"`
@@ -68,7 +69,7 @@ type RegisteredAgent struct {
 	UserEmail           string      `json:"user_email,omitempty"`
 	Department          string      `json:"department,omitempty"`
 	Groups              []string    `json:"groups,omitempty"`
-	AuthMode            string      `json:"auth_mode,omitempty"`   // "otc" or "oidc"
+	AuthMode            string      `json:"auth_mode,omitempty"`    // "otc" or "oidc"
 	IdPProvider         string      `json:"idp_provider,omitempty"` // "entra", "okta", "generic"
 	AgentVersion        string      `json:"agent_version,omitempty"`
 	ProtocolVersion     int         `json:"protocol_version,omitempty"`
@@ -174,22 +175,22 @@ type DelegateGrantRequest struct {
 
 // DelegateGrantResponse returns the attenuated child grant and delegation lineage (BAP-532).
 type DelegateGrantResponse struct {
-	Token         string            `json:"token"`
-	TokenType     string            `json:"token_type"`
-	GrantID       string            `json:"grant_id"`
-	ParentGrantID string            `json:"parent_grant_id"`
-	RootGrantID   string            `json:"root_grant_id"`
-	RootAgentID   string            `json:"root_agent_id"`
-	ParentAgentID string            `json:"parent_agent_id"`
-	Lineage       []string          `json:"lineage"`
-	LineageTree   string            `json:"lineage_tree"`
-	ExpiresAt     time.Time         `json:"expires_at"`
-	TTLSecs       int               `json:"expires_in"`
-	Scopes        []string          `json:"scopes"`
-	SessionID     string            `json:"session_id,omitempty"`
-	Action        string            `json:"action,omitempty"`
-	Resource      string            `json:"resource,omitempty"`
-	Depth         int               `json:"depth"`
+	Token         string    `json:"token"`
+	TokenType     string    `json:"token_type"`
+	GrantID       string    `json:"grant_id"`
+	ParentGrantID string    `json:"parent_grant_id"`
+	RootGrantID   string    `json:"root_grant_id"`
+	RootAgentID   string    `json:"root_agent_id"`
+	ParentAgentID string    `json:"parent_agent_id"`
+	Lineage       []string  `json:"lineage"`
+	LineageTree   string    `json:"lineage_tree"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	TTLSecs       int       `json:"expires_in"`
+	Scopes        []string  `json:"scopes"`
+	SessionID     string    `json:"session_id,omitempty"`
+	Action        string    `json:"action,omitempty"`
+	Resource      string    `json:"resource,omitempty"`
+	Depth         int       `json:"depth"`
 }
 
 // DevOTCRequest allows unauthenticated developers in dev mode to request an instant OTC.
@@ -238,19 +239,19 @@ type OIDCDeviceTokenRequest struct {
 }
 
 type OIDCDeviceTokenResponse struct {
-	Status       string    `json:"status"` // "pending", "authorized", "expired"
-	Error        string    `json:"error,omitempty"`
-	IDToken      string    `json:"id_token,omitempty"`
-	AccessToken  string    `json:"access_token,omitempty"`
-	UserEmail    string    `json:"user_email,omitempty"`
-	Department   string    `json:"department,omitempty"`
-	Groups       []string  `json:"groups,omitempty"`
-	AgentID      string    `json:"agent_id,omitempty"`
-	AppID        string    `json:"app_id,omitempty"`
-	InstanceID   string    `json:"instance_id,omitempty"`
-	SessionToken string    `json:"session_token,omitempty"`
-	ExpiresIn    int       `json:"expires_in,omitempty"`
-	Provider     string    `json:"provider,omitempty"`
+	Status       string   `json:"status"` // "pending", "authorized", "expired"
+	Error        string   `json:"error,omitempty"`
+	IDToken      string   `json:"id_token,omitempty"`
+	AccessToken  string   `json:"access_token,omitempty"`
+	UserEmail    string   `json:"user_email,omitempty"`
+	Department   string   `json:"department,omitempty"`
+	Groups       []string `json:"groups,omitempty"`
+	AgentID      string   `json:"agent_id,omitempty"`
+	AppID        string   `json:"app_id,omitempty"`
+	InstanceID   string   `json:"instance_id,omitempty"`
+	SessionToken string   `json:"session_token,omitempty"`
+	ExpiresIn    int      `json:"expires_in,omitempty"`
+	Provider     string   `json:"provider,omitempty"`
 }
 
 type OIDCDeviceVerifyRequest struct {
@@ -264,19 +265,19 @@ type OIDCDeviceVerifyRequest struct {
 // OIDCConfig defines configurable Enterprise Identity Provider parameters.
 type OIDCConfig struct {
 	Enabled         bool     `json:"enabled"`
-	Provider        string   `json:"provider"`                 // "entra", "okta", "generic"
-	IssuerURL       string   `json:"issuer_url,omitempty"`      // e.g. https://login.microsoftonline.com/{tenant_id}/v2.0
-	ClientID        string   `json:"client_id,omitempty"`       // OAuth2 client_id
-	ClientSecret    string   `json:"client_secret,omitempty"`   // Optional for confidential clients
-	DeviceAuthURL   string   `json:"device_auth_url,omitempty"` // Device Authorization Endpoint
-	TokenURL        string   `json:"token_url,omitempty"`       // Token Endpoint
-	VerificationURI string   `json:"verification_uri,omitempty"`// User verification web page
-	Scopes          []string `json:"scopes,omitempty"`          // e.g. ["openid", "profile", "email", "groups"]
-	TenantID        string   `json:"tenant_id,omitempty"`       // Entra Tenant ID or Okta org
-	AllowedDomains  []string `json:"allowed_domains,omitempty"` // e.g. ["corp.com", "enterprise.org"]
-	ClaimDepartment string   `json:"claim_department,omitempty"`// Claim key for department (default: "department")
-	ClaimGroups     string   `json:"claim_groups,omitempty"`    // Claim key for groups (default: "groups")
-	ClaimEmail      string   `json:"claim_email,omitempty"`     // Claim key for email (default: "email")
+	Provider        string   `json:"provider"`                   // "entra", "okta", "generic"
+	IssuerURL       string   `json:"issuer_url,omitempty"`       // e.g. https://login.microsoftonline.com/{tenant_id}/v2.0
+	ClientID        string   `json:"client_id,omitempty"`        // OAuth2 client_id
+	ClientSecret    string   `json:"client_secret,omitempty"`    // Optional for confidential clients
+	DeviceAuthURL   string   `json:"device_auth_url,omitempty"`  // Device Authorization Endpoint
+	TokenURL        string   `json:"token_url,omitempty"`        // Token Endpoint
+	VerificationURI string   `json:"verification_uri,omitempty"` // User verification web page
+	Scopes          []string `json:"scopes,omitempty"`           // e.g. ["openid", "profile", "email", "groups"]
+	TenantID        string   `json:"tenant_id,omitempty"`        // Entra Tenant ID or Okta org
+	AllowedDomains  []string `json:"allowed_domains,omitempty"`  // e.g. ["corp.com", "enterprise.org"]
+	ClaimDepartment string   `json:"claim_department,omitempty"` // Claim key for department (default: "department")
+	ClaimGroups     string   `json:"claim_groups,omitempty"`     // Claim key for groups (default: "groups")
+	ClaimEmail      string   `json:"claim_email,omitempty"`      // Claim key for email (default: "email")
 }
 
 // SaaS Delegated Token Governance Types (BAP-539)
@@ -341,5 +342,3 @@ type StepUpResolveRequest struct {
 	ReviewerEmail string `json:"reviewer_email,omitempty"`
 	TTLSeconds    int    `json:"ttl_seconds,omitempty"`
 }
-
-

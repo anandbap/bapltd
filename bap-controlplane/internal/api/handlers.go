@@ -931,134 +931,28 @@ func (s *Server) handleOIDCDeviceVerify(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	userCode := strings.ToUpper(strings.TrimSpace(req.UserCode))
-	s.deviceSessionsMu.RLock()
-	session, exists := s.deviceUserCodes[userCode]
-	s.deviceSessionsMu.RUnlock()
-
-	if !exists {
-		writeError(w, http.StatusNotFound, "Unknown or invalid user_code: "+userCode)
-		return
-	}
-
-	if time.Now().After(session.ExpiresAt) {
-		writeError(w, http.StatusBadRequest, "User code has expired")
-		return
-	}
-
 	email := strings.TrimSpace(req.UserEmail)
 	if email == "" {
 		email = "engineer@corp.internal"
 	}
-
-	// Validate against configured AllowedDomains (if specified)
-	allowedDomains := s.GetOIDCConfig().AllowedDomains
-	if len(allowedDomains) > 0 {
-		domainAllowed := false
-		for _, domain := range allowedDomains {
-			if strings.HasSuffix(strings.ToLower(email), "@"+strings.ToLower(domain)) {
-				domainAllowed = true
-				break
-			}
-		}
-		if !domainAllowed {
-			writeError(w, http.StatusForbidden, fmt.Sprintf("Email domain for %q is not authorized by corporate OIDC policy (allowed: %v)", email, allowedDomains))
-			return
-		}
-	}
-
-	dept := strings.TrimSpace(req.Department)
-	if dept == "" {
-		dept = "Engineering"
+	department := strings.TrimSpace(req.Department)
+	if department == "" {
+		department = "Engineering"
 	}
 	groups := req.Groups
 	if len(groups) == 0 {
 		groups = []string{"developers", "ai-assist-users"}
 	}
-	provider := req.Provider
-	if provider == "" {
-		provider = session.Provider
-	}
-
-	appID := session.AppID
-	if appID == "" {
-		appID = "claude-code-workstation"
-	}
-
-	// 1. Locate existing workstation agent for this resource or register a new one
-	agentName := fmt.Sprintf("%s (%s)", email, dept)
-	var agent *types.RegisteredAgent
-	if existing := s.registry.FindWorkstationAgent(appID, email, session.Hostname); existing != nil {
-		agent = existing
-		agent.AgentName = agentName
-		agent.OwnerEmail = email
-		agent.UserEmail = email
-		agent.Department = dept
-		agent.Groups = groups
-		agent.IdPProvider = provider
-		agent.Status = types.StatusActive
-		agent.RevokedAt = nil
-	} else {
-		preReq := types.PreRegisterRequest{
-			AppID:           appID,
-			OwnerEmail:      email,
-			AgentName:       agentName,
-			EnvProfile:      types.ProfileDev,
-			PermittedScopes: []string{"*"},
-			TTLMins:         1440,
-			MaxInstances:    20,
-		}
-		var err error
-		agent, err = s.registry.PreRegister(preReq)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "Failed to register agent identity: "+err.Error())
-			return
-		}
-	}
-
-	// 2. Enroll agent with identity claims
-	enrolled, err := s.registry.EnrollWithClaims(
-		agent.AgentID,
-		session.BinaryHash,
-		"",
-		session.Hostname,
-		"windows",
-		"amd64",
-		"",
-		email,
-		dept,
-		groups,
-		"oidc",
-		provider,
-	)
+	session, err := s.authorizeDeviceSession(req.UserCode, email, department, req.Provider, groups, "*")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Enrollment error: "+err.Error())
+		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
-
-	// 3. Mint session token
-	sessionToken, _, _ := s.minter.Mint(enrolled, session.BinaryHash, nil)
-
-	s.deviceSessionsMu.Lock()
-	session.Status = "authorized"
-	session.UserEmail = email
-	session.Department = dept
-	session.Groups = groups
-	session.AgentID = enrolled.AgentID
-	session.AppID = enrolled.AppID
-	session.InstanceID = enrolled.InstanceID
-	session.SPIFFEID = enrolled.SPIFFEID
-	session.SessionToken = sessionToken
-	s.deviceSessionsMu.Unlock()
-
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":      "authorized",
-		"user_email":  email,
-		"department":  dept,
-		"groups":      groups,
-		"agent_id":    enrolled.AgentID,
-		"instance_id": enrolled.InstanceID,
-		"provider":    provider,
+		"status": "authorized", "user_email": session.UserEmail,
+		"department": session.Department, "groups": session.Groups,
+		"agent_id": session.AgentID, "instance_id": session.InstanceID,
+		"provider": session.Provider,
 	})
 }
 
@@ -1070,9 +964,10 @@ func normalizeUserCode(c string) string {
 }
 
 // authorizeDeviceSession performs the atomic registration and token minting for an approved device code.
-func (s *Server) authorizeDeviceSession(userCode, email, dept, provider string, groups []string) (*deviceAuthSession, error) {
+func (s *Server) authorizeDeviceSession(userCode, email, dept, provider string, groups []string, scopes ...string) (*deviceAuthSession, error) {
 	norm := normalizeUserCode(userCode)
-	s.deviceSessionsMu.RLock()
+	s.deviceSessionsMu.Lock()
+	defer s.deviceSessionsMu.Unlock()
 	session, exists := s.deviceUserCodes[norm]
 	if !exists {
 		// Also try without hyphens
@@ -1085,7 +980,6 @@ func (s *Server) authorizeDeviceSession(userCode, email, dept, provider string, 
 			}
 		}
 	}
-	s.deviceSessionsMu.RUnlock()
 
 	if !exists {
 		return nil, fmt.Errorf("Unknown or invalid user code: %s", userCode)
@@ -1093,6 +987,13 @@ func (s *Server) authorizeDeviceSession(userCode, email, dept, provider string, 
 
 	if time.Now().After(session.ExpiresAt) {
 		return nil, fmt.Errorf("User code %s has expired", userCode)
+	}
+
+	if session.Status == "authorized" {
+		return session, nil
+	}
+	if session.Status != "pending" {
+		return nil, fmt.Errorf("Device authorization is not pending")
 	}
 
 	email = strings.TrimSpace(email)
@@ -1154,71 +1055,30 @@ func (s *Server) authorizeDeviceSession(userCode, email, dept, provider string, 
 	}
 	agentName := fmt.Sprintf("%s @ %s (%s Workstation)", email, hostname, devTitle)
 
-	// Check if a workstation agent already exists for this machine resource
-	var agent *types.RegisteredAgent
-	if existing := s.registry.FindWorkstationAgent(appID, email, hostname); existing != nil {
-		agent = existing
-		agent.AgentName = agentName
-		agent.OwnerEmail = email
-		agent.UserEmail = email
-		agent.Department = dept
-		agent.Groups = groups
-		agent.IdPProvider = provider
-		agent.Status = types.StatusActive
-		agent.RevokedAt = nil
-	} else {
-		preReq := types.PreRegisterRequest{
-			AppID:           appID,
-			OwnerEmail:      email,
-			AgentName:       agentName,
-			EnvProfile:      types.ProfileDev,
-			PermittedScopes: []string{"cli:exec", "mcp:access"},
-		}
-		var err error
-		agent, err = s.registry.PreRegister(preReq)
-		if err != nil {
-			agent, err = s.registry.Get(appID)
-			if err != nil {
-				return nil, fmt.Errorf("Agent registration error: %w", err)
-			}
-		}
+	if len(scopes) == 0 {
+		scopes = []string{"cli:exec", "mcp:access"}
 	}
-
-	osName := session.OS
-	if osName == "" {
-		osName = "windows"
-	}
-	archName := session.Arch
-	if archName == "" {
-		archName = "amd64"
-	}
-
-	enrolled, err := s.registry.EnrollWithClaims(
-		agent.AgentID,
-		session.BinaryHash,
-		"",
-		hostname,
-		osName,
-		archName,
-		"",
-		email,
-		dept,
-		groups,
-		"oidc",
-		provider,
-	)
-	if err == nil && enrolled != nil {
-		enrolled.DeviceType = devType
-		enrolled.IPAddress = session.IPAddress
-		enrolled.AgentName = agentName
-	}
+	enrolled, err := s.registry.EnrollWorkstation(types.RegisteredAgent{
+		AppID: appID, AgentName: agentName, UserEmail: email,
+		Hostname: session.Hostname, OS: session.OS, Arch: session.Arch,
+		DeviceType: devType, IPAddress: session.IPAddress,
+		EnrolledBinaryHash: session.BinaryHash, Department: dept,
+		Groups: groups, IdPProvider: provider, PermittedScopes: scopes,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("Enrollment error: %w", err)
 	}
 
-	sessionToken, _, _ := s.minter.Mint(enrolled, session.BinaryHash, nil)
+	if s.sessionStore != nil {
+		if err := s.sessionStore.ClearWorkstationLogout(enrolled.AgentID, enrolled.InstanceID); err != nil {
+			return nil, fmt.Errorf("Workstation login recovery error: %w", err)
+		}
+	}
+	sessionToken, _, err := s.minter.Mint(enrolled, session.BinaryHash, nil)
+	if err != nil {
+		return nil, fmt.Errorf("Session token error: %w", err)
+	}
 
-	s.deviceSessionsMu.Lock()
 	session.Status = "authorized"
 	session.UserEmail = email
 	session.Department = dept
@@ -1229,7 +1089,6 @@ func (s *Server) authorizeDeviceSession(userCode, email, dept, provider string, 
 	session.SPIFFEID = enrolled.SPIFFEID
 	session.SessionToken = sessionToken
 	session.Provider = provider
-	s.deviceSessionsMu.Unlock()
 
 	return session, nil
 }
@@ -2029,6 +1888,10 @@ func (s *Server) handleDeregisterAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
+	// Serialize logout with device authorization so an in-flight old logout
+	// cannot deregister a workstation after a newer login has completed.
+	s.deviceSessionsMu.Lock()
+	defer s.deviceSessionsMu.Unlock()
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var payload struct {
@@ -2057,17 +1920,36 @@ func (s *Server) handleDeregisterAgent(w http.ResponseWriter, r *http.Request) {
 		token = strings.TrimPrefix(authHeader, "Bearer ")
 	}
 
-	if token != "" && s.minter != nil {
-		if claims, err := s.minter.Verify(token); err == nil {
-			if target == "" {
-				if claims.InstanceID != "" {
-					target = claims.InstanceID
-				} else if claims.Sub != "" {
-					target = claims.Sub
-				}
-			}
-			s.minter.RevokeGrant(claims.GrantID, "Deregistered via logout")
+	if !s.isAdminCaller(r) {
+		if s.minter == nil {
+			writeError(w, http.StatusUnauthorized, "Valid workstation credential required")
+			return
 		}
+		claims, err := s.minter.Verify(token)
+		if err != nil || !authz.IsWorkstationCredential(claims) {
+			writeError(w, http.StatusUnauthorized, "Valid workstation credential required")
+			return
+		}
+		// A delayed logout from a superseded login must not log out the
+		// current session or any other workstation sharing the owner's email.
+		for _, requested := range []string{target, payload.AgentID, payload.InstanceID} {
+			if requested == "" || requested == claims.InstanceID || requested == claims.AgentID || requested == claims.Sub {
+				continue
+			}
+			a, lookupErr := s.registry.Get(requested)
+			if lookupErr != nil || a.InstanceID != claims.InstanceID || a.AppID != claims.AppID || a.SPIFFEID != claims.Sub {
+				writeError(w, http.StatusForbidden, "Workstation identity mismatch")
+				return
+			}
+		}
+		if target == "" {
+			if claims.InstanceID != "" {
+				target = claims.InstanceID
+			} else if claims.Sub != "" {
+				target = claims.Sub
+			}
+		}
+		s.minter.RevokeGrant(claims.GrantID, "Deregistered via logout")
 	}
 
 	if target == "" && !s.isAdminCaller(r) {

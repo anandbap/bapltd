@@ -399,6 +399,9 @@ func (s *Store) List() []*types.RegisteredAgent {
 	now := time.Now()
 	list := make([]*types.RegisteredAgent, 0, len(s.agents))
 	for _, a := range s.agents {
+		if a.SupersededBy != "" {
+			continue
+		}
 		copy := *a
 		copy.AllowedBinaryHashes = append([]string(nil), a.AllowedBinaryHashes...)
 		copy.PermittedScopes = append([]string(nil), a.PermittedScopes...)
@@ -427,6 +430,9 @@ func (s *Store) ListVisible(maxAge time.Duration, isUserRevoked func(string) boo
 	now := time.Now()
 	list := make([]*types.RegisteredAgent, 0, len(s.agents))
 	for _, a := range s.agents {
+		if a.SupersededBy != "" {
+			continue
+		}
 		isRevoked := a.Status == types.StatusRevoked || a.Status == types.StatusQuarantined || (isUserRevoked != nil && isUserRevoked(a.OwnerEmail))
 		if !isRevoked && maxAge > 0 {
 			lastAct := a.CreatedAt

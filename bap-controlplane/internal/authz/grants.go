@@ -21,15 +21,16 @@ type grantUsage struct {
 }
 
 type TokenMinter struct {
-	authorityEpoch string
-	signingKey     []byte
-	defaultTTL     time.Duration
-	mu             sync.Mutex
-	consumedGrants map[string]*grantUsage
-	revokedGrants  map[string]string   // grantID -> reason
-	grantChildren  map[string][]string // parentGrantID -> []childGrantID
-	grantParent    map[string]string   // childGrantID -> parentGrantID
-	grantRoot      map[string]string   // childGrantID -> rootGrantID
+	authorityEpoch    string
+	signingKey        []byte
+	defaultTTL        time.Duration
+	mu                sync.Mutex
+	consumedGrants    map[string]*grantUsage
+	revokedGrants     map[string]string   // grantID -> reason
+	grantChildren     map[string][]string // parentGrantID -> []childGrantID
+	grantParent       map[string]string   // childGrantID -> parentGrantID
+	grantRoot         map[string]string   // childGrantID -> rootGrantID
+	workstationGrants map[string]string   // app/instance -> current login grant
 }
 
 func NewTokenMinter(secretKey string, defaultTTL time.Duration) *TokenMinter {
@@ -37,13 +38,14 @@ func NewTokenMinter(secretKey string, defaultTTL time.Duration) *TokenMinter {
 		defaultTTL = 30 * time.Minute
 	}
 	tm := &TokenMinter{
-		signingKey:     []byte(secretKey),
-		defaultTTL:     defaultTTL,
-		consumedGrants: make(map[string]*grantUsage),
-		revokedGrants:  make(map[string]string),
-		grantChildren:  make(map[string][]string),
-		grantParent:    make(map[string]string),
-		grantRoot:      make(map[string]string),
+		signingKey:        []byte(secretKey),
+		defaultTTL:        defaultTTL,
+		consumedGrants:    make(map[string]*grantUsage),
+		revokedGrants:     make(map[string]string),
+		grantChildren:     make(map[string][]string),
+		grantParent:       make(map[string]string),
+		grantRoot:         make(map[string]string),
+		workstationGrants: make(map[string]string),
 	}
 	epoch := make([]byte, 16)
 	if _, err := rand.Read(epoch); err != nil {
@@ -123,7 +125,16 @@ func (tm *TokenMinter) Mint(agent *types.RegisteredAgent, candidateHash string, 
 func (tm *TokenMinter) MintWorkstationSession(agent *types.RegisteredAgent, candidateHash string) (string, time.Time, error) {
 	now := time.Now()
 	expiresAt := now.Add(365 * 24 * time.Hour)
-	token, exp, _, err := tm.mintWithCustomTTL(agent, candidateHash, agent.PermittedScopes, "", "", "", nil, "", expiresAt, "workstation")
+	token, exp, grantID, err := tm.mintWithCustomTTL(agent, candidateHash, agent.PermittedScopes, "", "", "", nil, "", expiresAt, "workstation")
+	if err == nil && agent.InstanceID != "" {
+		tm.mu.Lock()
+		key := agent.AppID + "\x00" + agent.InstanceID
+		if prior := tm.workstationGrants[key]; prior != "" {
+			tm.revokeGrantLocked(prior, "Superseded by workstation login")
+		}
+		tm.workstationGrants[key] = grantID
+		tm.mu.Unlock()
+	}
 	return token, exp, err
 }
 

@@ -9,6 +9,9 @@ func (s *Store) WorkstationBlocked(instance, app string, includeQuarantine bool)
 	defer s.mu.Unlock()
 	s.buildIdentityIndexLocked()
 	for _, a := range s.identityIndex[instance+"\x00"+app] {
+		if primary := s.agents[a.SupersededBy]; primary != nil && primary.InstanceID == instance && primary.AppID == app {
+			continue
+		}
 		if a.Status == types.StatusRevoked || a.Status == types.StatusDeregistered || (includeQuarantine && a.Status == types.StatusQuarantined) {
 			return true
 		}
