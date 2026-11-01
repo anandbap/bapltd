@@ -97,6 +97,9 @@ func TestGetParentPIDAndInspectCaller(t *testing.T) {
 	if parentPID <= 0 {
 		t.Fatalf("expected valid parent PID for current process, got %d", parentPID)
 	}
+	if parentPID != os.Getppid() {
+		t.Fatalf("expected parent PID %d, got %d", os.Getppid(), parentPID)
+	}
 	info := inspectCallerProcess(myPID)
 	if info.PID != myPID {
 		t.Fatalf("expected info PID %d, got %d", myPID, info.PID)
