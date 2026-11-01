@@ -712,14 +712,15 @@ const VIEWS={};
 VIEWS.pulse = {
   html() {
     const isDemo = new URLSearchParams(window.location.search).get('demo') === 'true';
-    const total = S.actSummary ? (S.actSummary.total_active_agents != null ? S.actSummary.total_active_agents : (S.actSummary.active_agents || 0)) : (isDemo ? 1284 : 0);
-    const governedPct = S.actSummary ? (S.actSummary.governed_percent != null ? S.actSummary.governed_percent : 100.0) : 100.0;
-    const prevented = S.actSummary ? (S.actSummary.high_risk_prevented != null ? S.actSummary.high_risk_prevented : 0) : 0;
-    const buActiveStr = S.actSummary ? (S.actSummary.business_units_active || '0/0') : (isDemo ? '31/34' : '0/0');
-    const workCompleted = S.actSummary ? (S.actSummary.completed_work_count != null ? S.actSummary.completed_work_count : (S.actSummary.work_intents_completed || 0)) : (isDemo ? 17100 : 0);
-    const activeWork = S.actSummary ? (S.actSummary.active_work_count != null ? S.actSummary.active_work_count : total) : total;
-    const assistedHours = S.actSummary ? (S.actSummary.estimated_assisted_hours != null ? S.actSummary.estimated_assisted_hours : Math.round(total * 6.6)) : (isDemo ? 8520 : Math.round(total * 6.6));
-    const assistedFTE = S.actSummary ? (S.actSummary.assisted_fte_equivalent != null ? S.actSummary.assisted_fte_equivalent : Math.round(assistedHours / 8.0)) : (isDemo ? 1065 : Math.round(assistedHours / 8.0));
+    const total = S.actSummary && S.actSummary.total_active_agents != null ? S.actSummary.total_active_agents : (isDemo ? 1284 : 'Unavailable');
+    const measured = (key, demoValue) => S.actSummary && S.actSummary[key] != null ? S.actSummary[key] : (isDemo ? demoValue : 'Unavailable');
+    const governedPct = measured('governed_percent', 98.7);
+    const prevented = measured('high_risk_prevented', 146);
+    const buActiveStr = measured('business_units_active', '31/34');
+    const workCompleted = measured('completed_work_count', 17100);
+    const activeWork = measured('active_work_count', 1284);
+    const assistedHours = measured('estimated_assisted_hours', 8520);
+    const assistedFTE = measured('assisted_fte_equivalent', 1065);
     const activeDrill = S.activeDrillIntent || 'Feature Development / Enhancement';
 
     // Canonical 10 Extensible Categories (BAP-477)
@@ -737,18 +738,7 @@ VIEWS.pulse = {
     ];
 
     const mixData = (S.actSummary && (S.actSummary.category_mix || S.actSummary.intent_mix)) || {};
-    const trendsData = (S.actSummary && S.actSummary.category_trends) || {
-      'Feature Development / Enhancement': 3.4,
-      'Bug Fix': -1.2,
-      'Testing / Quality': 4.1,
-      'Production Operations': -0.8,
-      'Security': 1.5,
-      'Documentation': 0.6,
-      'Data / Analytics': 2.0,
-      'Automation': 5.2,
-      'Research': -0.4,
-      'Other / Unclassified': -1.1
-    };
+    const trendsData = (S.actSummary && S.actSummary.category_trends) || {};
 
     const categories = canonicalCategories.map(c => {
       let pct = mixData[c.name] != null ? mixData[c.name] : 0;
@@ -767,7 +757,7 @@ VIEWS.pulse = {
         };
         pct = demoDefaults[c.name] || 0;
       }
-      const trend = trendsData[c.name] != null ? trendsData[c.name] : 0.0;
+      const trend = trendsData[c.name] != null ? trendsData[c.name] : null;
       const agentCount = total > 0 ? Math.round(total * (pct / 100.0)) : 0;
       return { ...c, pct, trend, agentCount };
     });
@@ -874,13 +864,13 @@ VIEWS.pulse = {
       <div class="pulse-stats">
         <div class="pulse-stat"><b>${activeWork.toLocaleString()}</b><span>ACTIVE WORKSTREAMS</span></div>
         <div class="pulse-stat"><b>${workCompleted.toLocaleString()}</b><span>COMPLETED TASKS</span></div>
-        <div class="pulse-stat"><b>${assistedHours.toLocaleString()} hrs</b><span>ASSISTED CAPACITY</span></div>
-        <div class="pulse-stat"><b>~${assistedFTE.toLocaleString()} FTEs</b><span>EQUIVALENT CAPACITY</span></div>
+        <div class="pulse-stat"><b>${typeof assistedHours === 'number' ? assistedHours.toLocaleString() + ' hrs' : 'Unavailable'}</b><span>ASSISTED CAPACITY</span></div>
+        <div class="pulse-stat"><b>${typeof assistedFTE === 'number' ? '~' + assistedFTE.toLocaleString() + ' FTEs' : 'Unavailable'}</b><span>EQUIVALENT CAPACITY</span></div>
       </div>
     </div>
 
     <div class="grid g-kpi">
-      <div class="kpi good"><small>Governed Ratio</small><strong>${governedPct}%</strong><em>observed actions under policy</em></div>
+      <div class="kpi"><small>Governance Coverage</small><strong>${typeof governedPct === 'number' ? governedPct + '%' : 'Unavailable'}</strong><em>Requires an independently measured denominator</em></div>
       <div class="kpi bad"><small>Risky Prevented</small><strong>${prevented}</strong><em>stopped without blocking work</em></div>
       <div class="kpi"><small>Active Business Units</small><strong>${buActiveStr}</strong><em>active enterprise departments</em></div>
       <div class="kpi"><small>Extensible Categories</small><strong>10 Active</strong><em>dynamic intent inference</em></div>
@@ -911,8 +901,8 @@ VIEWS.pulse = {
             </div>
             <div class="cat-count">
               <span>${c.agentCount > 0 ? c.agentCount.toLocaleString() + ' agents' : 'Active'}</span>
-              <span style="color:${c.trend >= 0 ? 'var(--allow)' : 'var(--deny)'};font-weight:600">
-                ${c.trend >= 0 ? '▲ +' : '▼ '}${c.trend.toFixed(1)}%
+              <span style="color:${c.trend == null ? 'var(--muted)' : (c.trend >= 0 ? 'var(--allow)' : 'var(--deny)')};font-weight:600">
+                ${c.trend == null ? 'Trend unavailable' : (c.trend >= 0 ? '▲ +' : '▼ ') + c.trend.toFixed(1) + '%'}
               </span>
             </div>
             <div class="bar" style="height:6px"><div style="width:${Math.min(100, c.pct * 2.5)}%;background:${c.color}"></div></div>
@@ -923,9 +913,9 @@ VIEWS.pulse = {
       <!-- BAP-477 Dynamic Work Lifecycle Progression -->
       <div style="margin-top:16px">
         <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">
-          Observed Work Lifecycle Progression &bull; Agents Dynamically Shift Categories During Execution
+          Work progression &bull; Demo illustration or independently verified evidence required
         </div>
-        <div class="lifecycle-flow">
+        ${isDemo ? `<div class="lifecycle-flow">
           <div class="flow-step"><span style="color:#4f46e5">Research</span><small style="color:var(--muted);margin-left:4px">2%</small></div>
           <span class="flow-arrow">&rarr;</span>
           <div class="flow-step"><span style="color:#2563eb">Feature Dev</span><small style="color:var(--muted);margin-left:4px">28%</small></div>
@@ -939,7 +929,7 @@ VIEWS.pulse = {
           <div class="flow-step"><span style="color:#ea580c">Production Ops</span><small style="color:var(--muted);margin-left:4px">12%</small></div>
           <span class="flow-arrow">&rarr;</span>
           <div class="flow-step" style="background:var(--accent);color:#fff"><span>Completed Work</span><small style="color:rgba(255,255,255,0.8);margin-left:4px">${workCompleted.toLocaleString()}</small></div>
-        </div>
+        </div>` : '<p>Work progression is unavailable until sessions are linked to independently verified deliverables.</p>'}
       </div>
     </div>
 

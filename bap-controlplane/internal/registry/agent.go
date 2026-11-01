@@ -628,7 +628,6 @@ func (s *Store) EndSessionAgent(appID, instanceID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	now := time.Now()
 	for _, a := range s.agents {
 		if strings.EqualFold(a.AppID, appID) {
 			if a.Status == types.StatusRevoked || a.Status == types.StatusDeregistered {
@@ -641,7 +640,6 @@ func (s *Store) EndSessionAgent(appID, instanceID string) {
 				} else {
 					a.Status = types.StatusDeregistered
 				}
-				a.LastHeartbeatAt = &now
 			}
 		}
 	}
@@ -671,7 +669,6 @@ func (s *Store) PurgeStale(maxIdle time.Duration) int {
 				} else {
 					a.Status = types.StatusDeregistered
 				}
-				a.LastHeartbeatAt = &now
 				count++
 			}
 		}
@@ -684,7 +681,6 @@ func (s *Store) Reset() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	now := time.Now()
 	count := 0
 	for _, a := range s.agents {
 		if a.Status == types.StatusActive {
@@ -692,7 +688,6 @@ func (s *Store) Reset() int {
 				continue
 			}
 			a.Status = "deregistered"
-			a.LastHeartbeatAt = &now
 			count++
 		}
 	}

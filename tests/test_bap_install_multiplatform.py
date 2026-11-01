@@ -264,7 +264,8 @@ class TestBAPInstallMultiPlatform(unittest.TestCase):
             self.assertIn("hooks", json.load(f))
             
         # Run uninstall
-        bap_install.uninstall(self.install_dir, ws)
+        with patch.object(bap_install, "stop_running_bap_processes"), patch("scripts.bap_startup.configure_startup"):
+            bap_install.uninstall(self.install_dir, ws)
         
         # Verify reverted
         with open(claude_settings, "r") as f:

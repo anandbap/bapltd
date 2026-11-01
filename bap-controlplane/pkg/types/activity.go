@@ -4,36 +4,40 @@ import "time"
 
 // AgentActivityEvent is the canonical representation of agent activity across the enterprise (BAP-521).
 type AgentActivityEvent struct {
-	Timestamp          string    `json:"timestamp"`
-	SessionID          string    `json:"session_id"`
-	AgentID            string    `json:"agent_id"`
-	AgentType          string    `json:"agent_type"`
-	RuntimeID          string    `json:"runtime_id"`
-	UserID             string    `json:"user_id"`
-	BusinessUnit       string    `json:"business_unit"`
-	Application        string    `json:"application"`
-	PromptID           string    `json:"prompt_id"`
-	PromptSummary      string    `json:"prompt_summary"`
-	Intent             string    `json:"intent"`
-	IntentCategory     string    `json:"intent_category"`
-	Action             string    `json:"action"`
-	Tool               string    `json:"tool"`
-	TargetResource     string    `json:"target_resource"`
-	DataClassification string    `json:"data_classification"`
-	PolicyDecision     string    `json:"policy_decision"`
-	RiskScore          float64   `json:"risk_score"`
-	GrantID            string    `json:"grant_id"`
-	GrantScope         string    `json:"grant_scope"`
-	GrantTTL           int       `json:"grant_ttl"`
-	ActionStatus       string    `json:"action_status"`    // "working", "waiting", "completed", "denied", "failed"
-	OutcomeCategory    string    `json:"outcome_category"` // "Success", "Blocked", "Exception", "Timeout"
-	TraceID            string    `json:"trace_id"`
-	DeviationLevel     string    `json:"deviation_level,omitempty"`  // "NONE", "LOW", "MEDIUM", "CRITICAL"
-	DeviationReason    string    `json:"deviation_reason,omitempty"`
+	Timestamp          string  `json:"timestamp"`
+	SessionID          string  `json:"session_id"`
+	AgentID            string  `json:"agent_id"`
+	AgentType          string  `json:"agent_type"`
+	RuntimeID          string  `json:"runtime_id"`
+	UserID             string  `json:"user_id"`
+	BusinessUnit       string  `json:"business_unit"`
+	Application        string  `json:"application"`
+	PromptID           string  `json:"prompt_id"`
+	PromptSummary      string  `json:"prompt_summary"`
+	Intent             string  `json:"intent"`
+	IntentCategory     string  `json:"intent_category"`
+	Action             string  `json:"action"`
+	Tool               string  `json:"tool"`
+	TargetResource     string  `json:"target_resource"`
+	DataClassification string  `json:"data_classification"`
+	PolicyDecision     string  `json:"policy_decision"`
+	RiskScore          float64 `json:"risk_score"`
+	GrantID            string  `json:"grant_id"`
+	GrantScope         string  `json:"grant_scope"`
+	GrantTTL           int     `json:"grant_ttl"`
+	ActionStatus       string  `json:"action_status"`    // "working", "waiting", "completed", "denied", "failed"
+	OutcomeCategory    string  `json:"outcome_category"` // "Success", "Blocked", "Exception", "Timeout"
+	TraceID            string  `json:"trace_id"`
+	DeviationLevel     string  `json:"deviation_level,omitempty"` // "NONE", "LOW", "MEDIUM", "CRITICAL"
+	DeviationReason    string  `json:"deviation_reason,omitempty"`
 }
 
-// ActivitySummary contains high-level KPIs for CIO / persona dashboards (BAP-477, BAP-522, BAP-523).
+// ActivitySummary is the legacy/demo fixture model. Live metrics_version=2
+// emits unavailable legacy metrics as JSON null; consumers must preserve that
+// distinction (nullable fields), never treat null as a measured zero.
 type ActivitySummary struct {
+	Mode                   string             `json:"mode"`
+	Simulated              bool               `json:"simulated"`
 	TotalActiveAgents      int                `json:"total_active_agents"`
 	GovernedAgentUsers     int                `json:"governed_agent_users"`
 	WorkIntentsCompleted   int                `json:"work_intents_completed"`

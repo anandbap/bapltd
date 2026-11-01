@@ -1,14 +1,9 @@
-"""
-Shadow IT & Unmanaged Asset Discovery Integration Test Suite.
-=============================================================
-Validates BAP's automated discovery engine for detecting:
-1. Unmanaged local MCP servers (stdio & HTTP) across developer environments.
-2. Unmanaged standing credentials in environment variables (AWS, OpenAI, DB strings).
-3. Exposed or unprotected .env configuration files in workspace directories.
-4. Risk scoring, severity categorization, and remediation recommendations.
-5. Control Plane REST API endpoints (/api/v1/discovery/shadow-it/*).
+"""Authenticated workstation discovery: metadata-only reports, lifecycle and fleet integration.
+No test asks the control plane to inspect its filesystem or credential files.
 """
 
+from datetime import datetime, timezone
+import uuid
 import concurrent.futures
 import json
 import os
@@ -21,7 +16,7 @@ import urllib.error
 import urllib.request
 
 WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-CONTROL_PLANE_BIN = os.path.join(WORKSPACE_ROOT, "dist", "windows-amd64", "bapcontrolplane.exe")
+CONTROL_PLANE_BIN = os.environ.get("BAP_CONTROLPLANE_BIN") or os.path.join(WORKSPACE_ROOT, "dist", "windows-amd64", "bapcontrolplane.exe")
 
 TEST_SECRET = "shadow-it-discovery-test-secret-32b!"
 TEST_ADMIN_TOKEN = "shadow-it-admin-token-123456"
@@ -127,305 +122,113 @@ class TestShadowITDiscovery(unittest.TestCase):
         if os.path.exists(cls.temp_dir):
             shutil.rmtree(cls.temp_dir, ignore_errors=True)
 
-    def test_01_empty_scan_returns_valid_report(self):
-        """Clean scan with no shadow IT assets returns empty findings list."""
-        status, report, _ = http_req(
-            f"{CP_URL}/api/v1/discovery/shadow-it/scan",
-            method="POST",
-            data={"workspace_root": self.temp_dir, "env_map": {}},
-        )
-        self.assertEqual(status, 200)
-        self.assertIn("scan_id", report)
-        self.assertIn("findings", report)
-        self.assertIsInstance(report["findings"], list)
+    def enroll(self, instance):
+        admin = {"X-BAP-Admin-Token": TEST_ADMIN_TOKEN}
+        code, registered, _ = http_req(CP_URL + "/api/v1/agents/pre-register", "POST", {
+            "app_id": "discovery-" + instance, "owner_email": "pilot@example.test",
+            "agent_name": "Discovery test", "env_profile": "dev",
+            "allowed_binary_hashes": ["synthetic-hash"], "permitted_scopes": ["cli:exec"]}, admin)
+        self.assertEqual(code, 201, registered)
+        code, enrolled, _ = http_req(CP_URL + "/api/v1/agents/register", "POST", {
+            "one_time_code": registered["one_time_code"], "binary_hash": "synthetic-hash", "instance_id": instance,
+            "hostname": "synthetic-laptop", "os": "windows", "arch": "amd64"})
+        self.assertEqual(code, 200, enrolled)
+        if not hasattr(self, "enrolled_agents"):
+            self.enrolled_agents = {}
+        self.enrolled_agents[instance] = enrolled["agent_id"]
+        return {"Authorization": "Bearer " + enrolled["session_token"]}
 
-    def test_02_detects_unmanaged_standing_environment_variables(self):
-        """Detects high/critical standing API keys and DB credentials bypassing BAP."""
-        synthetic_env = {
-            "AWS_SECRET_ACCESS_KEY": "AKIAEXAMPLEUNGOVERNEDKEY12345",
-            "OPENAI_API_KEY": "sk-proj-supersecretrawllmkey1234567890",
-            "DATABASE_URL": "postgres://admin:secret@prod-db.internal:5432/finance",
-            "SAFE_PUBLIC_VAR": "production_cluster_east",
-        }
+    def report(self, names=(), status="complete", epoch=0):
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        return {"version": 1, "run_id": uuid.uuid4().hex, "epoch": epoch,
+                "started_at": now, "completed_at": now, "status": status,
+                "scopes": [{"id": "project-mcp", "status": "complete" if status == "complete" else "error"}],
+                "observations": [{"key": "mcp-" + name, "scope": "project-mcp", "kind": "mcp_config",
+                                  "name": name, "client": "claude-code", "evidence": "configured",
+                                  "observed_at": now} for name in names]}
 
-        status, report, _ = http_req(
-            f"{CP_URL}/api/v1/discovery/shadow-it/scan",
-            method="POST",
-            data={"env_map": synthetic_env},
-        )
-        self.assertEqual(status, 200)
-        self.assertGreaterEqual(report["unmanaged_env_var_count"], 3)
-        self.assertGreaterEqual(report["critical_count"], 3)
+    def read(self, suffix):
+        status, result, _ = http_req(CP_URL + "/api/v1/discovery/shadow-it/" + suffix,
+                                    headers={"X-BAP-Admin-Token": TEST_ADMIN_TOKEN})
+        self.assertEqual(status, 200, result)
+        return result
 
-        targets = [f["target"] for f in report["findings"]]
-        self.assertIn("AWS_SECRET_ACCESS_KEY", targets)
-        self.assertIn("OPENAI_API_KEY", targets)
-        self.assertIn("DATABASE_URL", targets)
-        self.assertNotIn("SAFE_PUBLIC_VAR", targets)
+    def test_01_authenticated_clean_completion_and_privacy(self):
+        proof = self.enroll("clean-machine")
+        path = CP_URL + "/api/v1/discovery/shadow-it/scan"
+        report = self.report()
+        self.assertEqual(http_req(path, "POST", report)[0], 401)
+        for forbidden in ({"workspace_root": "C:/"}, {"env_map": {"PRIVATE": "synthetic"}},
+                          {**report, "instance_id": "forged"}, {**report, "config_paths": ["outside"]}):
+            self.assertEqual(http_req(path, "POST", forbidden, proof)[0], 400)
+        code, ack, _ = http_req(path, "POST", report, proof)
+        self.assertEqual(code, 200, ack)
+        self.assertFalse(ack["durable"])
+        self.assertEqual(ack["instance_id"], "clean-machine")
+        reports = self.read("reports")["reports"]
+        self.assertTrue(any(r["instance_id"] == "clean-machine" and r["status"] == "complete" for r in reports))
 
-        # Verify actionable remediation guidance is populated
-        for f in report["findings"]:
-            if f["target"] == "AWS_SECRET_ACCESS_KEY":
-                self.assertEqual(f["risk_level"], "CRITICAL")
-                self.assertIn("BAP Ephemeral Bounded Grants", f["remediation"])
-            elif f["target"] == "OPENAI_API_KEY":
-                self.assertEqual(f["risk_level"], "CRITICAL")
-                self.assertIn("BAP Gateway PEP", f["remediation"])
+    def test_02_multiserver_stability_and_idempotency(self):
+        proof = self.enroll("multiserver")
+        report = self.report(["filesystem", "database"])
+        path = CP_URL + "/api/v1/discovery/shadow-it/scan"
+        self.assertEqual(http_req(path, "POST", report, proof)[0], 200)
+        self.assertTrue(http_req(path, "POST", report, proof)[1]["duplicate"])
+        report["observations"][0]["name"] = "changed"
+        self.assertEqual(http_req(path, "POST", report, proof)[0], 409)
+        findings = self.read("findings?instance_id=multiserver")["findings"]
+        self.assertEqual(len(findings), 2)
+        self.assertEqual(len({a["id"] for a in findings}), 2)
+        self.assertTrue(all(a["mediation"] == "not_observed" for a in findings))
 
-    def test_03_detects_unmanaged_mcp_servers(self):
-        """Detects shadow MCP servers defined in local config files."""
-        # Create a mock claude_desktop_config.json in temp_dir
-        mcp_cfg_path = os.path.join(self.temp_dir, "claude_desktop_config.json")
-        mcp_data = {
-            "mcpServers": {
-                "shadow-filesystem": {
-                    "command": "npx",
-                    "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:\\SensitiveData"],
-                },
-                "rogue-database-mcp": {
-                    "command": "python",
-                    "args": ["-m", "mcp_sql_server", "--conn", "postgres://localhost/shadow"],
-                },
-            }
-        }
-        with open(mcp_cfg_path, "w", encoding="utf-8") as f:
-            json.dump(mcp_data, f)
+    def test_03_partial_scope_cannot_resolve_findings(self):
+        proof = self.enroll("partial-machine")
+        path = CP_URL + "/api/v1/discovery/shadow-it/scan"
+        self.assertEqual(http_req(path, "POST", self.report(["server"]), proof)[0], 200)
+        self.assertEqual(http_req(path, "POST", self.report(status="partial"), proof)[0], 200)
+        findings = self.read("findings?instance_id=partial-machine")["findings"]
+        self.assertEqual(findings[0]["state"], "present")
+        self.assertEqual(http_req(path, "POST", self.report(), proof)[0], 200)
+        self.assertEqual(self.read("findings?instance_id=partial-machine")["findings"][0]["state"], "not_seen")
 
-        status, report, _ = http_req(
-            f"{CP_URL}/api/v1/discovery/shadow-it/scan",
-            method="POST",
-            data={"config_paths": [mcp_cfg_path], "env_map": {}},
-        )
-        self.assertEqual(status, 200)
-        self.assertGreaterEqual(report["unmanaged_mcp_count"], 2)
+    def test_04_operator_only_reads_mutations_and_expiring_exception(self):
+        proof = self.enroll("review-machine")
+        base = CP_URL + "/api/v1/discovery/shadow-it/"
+        for suffix in ("findings", "reports", "summary"):
+            self.assertIn(http_req(base + suffix)[0], (401, 403))
+            self.assertIn(http_req(base + suffix, headers=proof)[0], (401, 403))
+        http_req(base + "scan", "POST", self.report(["review"]), proof)
+        asset = self.read("findings?instance_id=review-machine")["findings"][0]
+        admin = {"X-BAP-Admin-Token": TEST_ADMIN_TOKEN}
+        body = {"id": asset["id"], "state": "exception", "reason": "Pilot review"}
+        self.assertEqual(http_req(base + "disposition", "POST", body, admin)[0], 400)
+        body["state"] = "acknowledged"
+        self.assertEqual(http_req(base + "disposition", "POST", body, admin)[0], 200)
+        self.assertEqual(self.read("findings?instance_id=review-machine")["findings"][0]["disposition"], "acknowledged")
 
-        mcp_findings = [f for f in report["findings"] if f["type"] == "UNMANAGED_LOCAL_MCP_SERVER"]
-        names = [f["name"] for f in mcp_findings]
-        self.assertTrue(any("shadow-filesystem" in n for n in names))
-        self.assertTrue(any("rogue-database-mcp" in n for n in names))
+    def test_05_master_heartbeat_receives_targeted_directive(self):
+        proof = self.enroll("target-machine")
+        base = CP_URL + "/api/v1/discovery/shadow-it/"
+        admin = {"X-BAP-Admin-Token": TEST_ADMIN_TOKEN}
+        self.assertIn(http_req(base + "scan/trigger", "POST", {"scope": "fleet"}, proof)[0], (401, 403))
+        code, queued, _ = http_req(base + "scan/trigger", "POST", {"scope": "selected", "instances": ["target-machine"]}, admin)
+        self.assertEqual(code, 202, queued)
+        code, heartbeat, _ = http_req(CP_URL + "/api/v1/control/heartbeat", "POST", {"agent_id": self.enrolled_agents["target-machine"], "instance_id": "target-machine"}, proof)
+        self.assertEqual(code, 200, heartbeat)
+        self.assertEqual(heartbeat["scan_epoch"], queued["scan_epoch"])
 
-        for f in mcp_findings:
-            self.assertIn(f["risk_level"], ["HIGH", "CRITICAL"])
-            self.assertIn("BAP", f["remediation"])
-            self.assertFalse(f["is_managed_by_bap"])
-
-    def test_04_detects_unprotected_env_files(self):
-        """Detects sensitive .env and credentials files stored in workspaces."""
-        project_dir = os.path.join(self.temp_dir, "agent_project")
-        os.makedirs(project_dir, exist_ok=True)
-
-        env_file = os.path.join(project_dir, ".env")
-        with open(env_file, "w", encoding="utf-8") as f:
-            f.write("PROD_SECRET=unencrypted_standing_key_xyz\nDB_PASS=rawpass123\n")
-
-        status, report, _ = http_req(
-            f"{CP_URL}/api/v1/discovery/shadow-it/scan",
-            method="POST",
-            data={"workspace_root": project_dir, "env_map": {}},
-        )
-        self.assertEqual(status, 200)
-        self.assertGreaterEqual(report["unprotected_file_count"], 1)
-
-        file_findings = [f for f in report["findings"] if f["type"] == "UNPROTECTED_ENV_FILE"]
-        self.assertTrue(any(".env" in f["name"] for f in file_findings))
-
-    def test_05_query_findings_and_historical_reports(self):
-        """Findings and reports are indexed and retrievable via GET endpoints."""
-        status, findings_resp, _ = http_req(f"{CP_URL}/api/v1/discovery/shadow-it/findings")
-        self.assertEqual(status, 200)
-        self.assertIn("findings", findings_resp)
-        self.assertGreater(findings_resp["count"], 0)
-
-        status, reports_resp, _ = http_req(f"{CP_URL}/api/v1/discovery/shadow-it/reports")
-        self.assertEqual(status, 200)
-        self.assertIn("reports", reports_resp)
-        self.assertGreater(reports_resp["count"], 0)
-
-    def test_06_trigger_fleet_scan_advances_epoch(self):
-        """POST /api/v1/discovery/shadow-it/scan/trigger advances the fleet scan epoch."""
-        status1, resp1, _ = http_req(f"{CP_URL}/api/v1/discovery/shadow-it/scan/trigger", method="POST")
-        self.assertEqual(status1, 200)
-        self.assertEqual(resp1["status"], "success")
-        epoch1 = resp1["scan_epoch"]
-        self.assertGreater(epoch1, 0)
-
-        status2, resp2, _ = http_req(f"{CP_URL}/api/v1/discovery/shadow-it/scan/trigger", method="POST")
-        self.assertEqual(status2, 200)
-        epoch2 = resp2["scan_epoch"]
-        self.assertGreater(epoch2, epoch1)
-
-    def test_07_heartbeat_sync_epoch_distribution(self):
-        """Laptops checking in via heartbeat receive updated scan_epoch directives."""
-        session_id = "test-sync-laptop-042"
-        # 1. Start a session
-        start_status, _, _ = http_req(
-            f"{CP_URL}/api/v1/sessions/start",
-            method="POST",
-            data={
-                "session_id": session_id,
-                "app_id": "claude-code",
-                "user_id": "alice-dev",
-                "hostname": "macbook-pro-alice",
-            },
-        )
-        self.assertEqual(start_status, 200)
-
-        # 2. Heartbeat receives initial epoch
-        hb_status1, hb_resp1, _ = http_req(
-            f"{CP_URL}/api/v1/sessions/heartbeat",
-            method="POST",
-            data={"session_id": session_id},
-        )
-        self.assertEqual(hb_status1, 200)
-        self.assertIn("scan_epoch", hb_resp1)
-        initial_epoch = hb_resp1["scan_epoch"]
-
-        # 3. Control Plane triggers a fleet discovery scan
-        trig_status, trig_resp, _ = http_req(
-            f"{CP_URL}/api/v1/discovery/shadow-it/scan/trigger",
-            method="POST",
-        )
-        self.assertEqual(trig_status, 200)
-        new_epoch = trig_resp["scan_epoch"]
-        self.assertGreater(new_epoch, initial_epoch)
-
-        # 4. Next laptop heartbeat immediately picks up the new scan_epoch
-        hb_status2, hb_resp2, _ = http_req(
-            f"{CP_URL}/api/v1/sessions/heartbeat",
-            method="POST",
-            data={"session_id": session_id},
-        )
-        self.assertEqual(hb_status2, 200)
-        self.assertEqual(hb_resp2["scan_epoch"], new_epoch)
-
-    def test_08_multi_agent_fleet_volume_concurrency(self):
-        """Simulates 30 concurrent developer laptops heartbeating and reporting findings under load."""
-        concurrency = 30
-        errors = []
-
-        def simulate_laptop(idx):
-            sid = f"agent-load-{idx}"
-            try:
-                # Start session
-                s_stat, _, _ = http_req(
-                    f"{CP_URL}/api/v1/sessions/start",
-                    method="POST",
-                    data={"session_id": sid, "app_id": "claude-code", "user_id": f"dev-{idx}", "hostname": f"laptop-{idx}"},
-                )
-                if s_stat != 200:
-                    return f"start failed for {sid}: {s_stat}"
-
-                # Heartbeat
-                hb_stat, hb_data, _ = http_req(
-                    f"{CP_URL}/api/v1/sessions/heartbeat",
-                    method="POST",
-                    data={"session_id": sid},
-                )
-                if hb_stat != 200:
-                    return f"heartbeat failed for {sid}: {hb_stat}"
-
-                # Report local findings
-                scan_stat, _, _ = http_req(
-                    f"{CP_URL}/api/v1/discovery/shadow-it/scan",
-                    method="POST",
-                    data={
-                        "agent_id": sid,
-                        "hostname": f"laptop-{idx}",
-                        "client_findings": [
-                            {
-                                "id": f"find-{sid}-env",
-                                "type": "UNMANAGED_ENV_VARIABLE",
-                                "name": "Local AWS Secret",
-                                "target": "AWS_SECRET_ACCESS_KEY",
-                                "risk_level": "CRITICAL",
-                            }
-                        ],
-                    },
-                )
-                if scan_stat != 200:
-                    return f"scan report failed for {sid}: {scan_stat}"
-
-                return None
-            except Exception as e:
-                return f"exception for {sid}: {e}"
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [executor.submit(simulate_laptop, i) for i in range(concurrency)]
-            for fut in concurrent.futures.as_completed(futures):
-                err = fut.result()
-                if err:
-                    errors.append(err)
-
-        self.assertEqual(len(errors), 0, f"Encountered errors during volume concurrency: {errors}")
-
-    def test_09_resilience_to_malformed_and_oversized_payloads(self):
-        """Control plane handles corrupted, empty, and oversized payloads gracefully without crashing."""
-        # Malformed JSON body
-        status1, _, _ = http_req(
-            f"{CP_URL}/api/v1/discovery/shadow-it/scan",
-            method="POST",
-            data="{not_valid_json: 123",
-            headers={"Content-Type": "application/json"},
-        )
-        # Should return 200 (defaults to empty ScanRequest) or 400 without crashing
-        self.assertIn(status1, [200, 400])
-
-        # Huge payload
-        huge_target = "X" * 50000
-        status2, resp2, _ = http_req(
-            f"{CP_URL}/api/v1/discovery/shadow-it/scan",
-            method="POST",
-            data={
-                "agent_id": "resilience-test-agent",
-                "client_findings": [
-                    {
-                        "type": "UNMANAGED_ENV_VARIABLE",
-                        "target": huge_target,
-                        "name": "Huge Payload Key",
-                        "risk_level": "HIGH",
-                    }
-                ],
-            },
-        )
-        self.assertEqual(status2, 200)
-
-        # Verify server remains fully healthy
-        health_status, _, _ = http_req(f"{CP_URL}/health")
-        self.assertEqual(health_status, 200)
-
-    def test_10_durability_and_deduplication(self):
-        """Repeated findings from the same agent/target are deduplicated and updated in place."""
-        dedup_agent = "agent-dedup-verify"
-        for _ in range(5):
-            status, _, _ = http_req(
-                f"{CP_URL}/api/v1/discovery/shadow-it/scan",
-                method="POST",
-                data={
-                    "agent_id": dedup_agent,
-                    "hostname": "workstation-dedup",
-                    "client_findings": [
-                        {
-                            "type": "UNMANAGED_ENV_VARIABLE",
-                            "target": "DEDUP_TEST_KEY",
-                            "name": "Test Key for Dedup",
-                            "risk_level": "CRITICAL",
-                        }
-                    ],
-                },
-            )
-            self.assertEqual(status, 200)
-
-        # Query all findings
-        status, data, _ = http_req(f"{CP_URL}/api/v1/discovery/shadow-it/findings")
-        self.assertEqual(status, 200)
-        matching = [
-            f for f in data.get("findings", [])
-            if f.get("agent_id") == dedup_agent and f.get("target") == "DEDUP_TEST_KEY"
-        ]
-        # Must be exactly 1 finding due to deduplication, NOT 5!
-        self.assertEqual(len(matching), 1, f"Expected exactly 1 deduplicated finding, found {len(matching)}")
+    def test_06_twenty_workstations_concurrent_independent_reports(self):
+        def laptop(index):
+            instance = "fleet-" + str(index)
+            proof = self.enroll(instance)
+            code, result, _ = http_req(CP_URL + "/api/v1/discovery/shadow-it/scan", "POST", self.report(["server-one", "server-two"]), proof)
+            self.assertEqual(code, 200, result)
+            return instance
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+            instances = list(pool.map(laptop, range(20)))
+        for instance in instances:
+            self.assertEqual(self.read("findings?instance_id=" + instance)["count"], 2)
 
 
 if __name__ == "__main__":
     unittest.main()
-

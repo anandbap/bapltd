@@ -59,6 +59,7 @@ Common Flags for 'start' / 'serve':
   --tls, --https             Enable HTTPS/TLS (auto-generates dev cert if none provided)
   --policy <path>            Path to authoritative Cedar policy file
   --schema <path>            Path to authoritative Cedar schema file
+  --pilot-roster <path>      Operator-assigned roster/windows JSON (or $BAP_PILOT_ROSTER)
 
 Examples:
   bapcontrolplane start --port 8080
@@ -158,6 +159,7 @@ func runStart(args []string) {
 	oidcTenantID := fs.String("oidc-tenant-id", "", "Microsoft Entra tenant ID or Okta org")
 	oidcAllowedDomains := fs.String("oidc-allowed-domains", "", "Comma-separated corporate email domains permitted (e.g. corp.com,internal.org)")
 	minEdgeVersion := fs.String("min-edge-version", os.Getenv("BAP_MIN_EDGE_VERSION"), "Minimum supported edge client version (e.g. 1.0.0)")
+	pilotRoster := fs.String("pilot-roster", os.Getenv("BAP_PILOT_ROSTER"), "Operator-assigned pilot roster JSON path (optional; invalid configured roster fails startup)")
 
 	_ = fs.Parse(args)
 
@@ -345,6 +347,18 @@ func runStart(args []string) {
 	}
 
 	server := api.NewServer(regStore, otcStore, minter, policyStore, auditStore, sessionStore)
+	if *pilotRoster != "" {
+		f, err := os.Open(*pilotRoster)
+		if err != nil {
+			log.Fatal("Pilot roster unavailable")
+		}
+		err = server.ConfigurePilotRoster(f)
+		f.Close()
+		if err != nil {
+			log.Fatalf("Invalid pilot roster: %v", err)
+		}
+	}
+	server.SetDiscoveryStorageError(err)
 	if err := server.SetTelemetrySecurity(os.Getenv("BAP_TELEMETRY_TOKEN")); err != nil {
 		log.Fatal(err)
 	}

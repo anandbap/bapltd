@@ -39,6 +39,12 @@ func currentCredential() workstationCredential {
 }
 
 func lifecyclePath(path string) bool {
+	if path == "/api/v1/discovery/shadow-it/scan" {
+		return true
+	}
+	if path == "/api/v1/onboarding/probe" {
+		return true
+	}
 	return strings.HasPrefix(path, "/api/v1/sessions/") || path == "/api/v1/instances/heartbeat" || path == "/api/v1/control/heartbeat" || path == "/api/v1/audit/ingest" || path == "/api/activity/ingest" || path == "/api/v1/activity/ingest"
 }
 

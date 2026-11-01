@@ -68,6 +68,68 @@ class DoctorChecklist:
         print(f"{CYAN}{'=' * 79}{RESET}")
         return 0 if self.failed == 0 else 1
 
+def check_reporting_baseline(bapedge, checklist):
+    """Observe runtime signals; file installation never proves hook approval."""
+    try:
+        result = subprocess.run([bapedge, "daemon", "status", "--json"], capture_output=True, text=True, timeout=4)
+        if result.returncode != 0:
+            checklist.report("Reporting diagnostics", "WARN", "Native status unavailable; inspect matched client build")
+            return
+        status = json.loads(result.stdout)
+        if not isinstance(status, dict):
+            raise ValueError("invalid status shape")
+        if status.get("daemon_running") is False:
+            checklist.report("Reporting daemon", "FAIL", "Not running; start daemon and crash supervisor")
+            return
+        if not isinstance(status.get("daemon"), dict):
+            checklist.report("Reporting diagnostics", "WARN", "Daemon readiness metadata unavailable")
+            return
+        checklist.report("Reporting daemon", "PASS", "Responding; this does not verify native-client callbacks")
+        onboarding = status.get("onboarding", {})
+        if not onboarding:
+            checklist.report("Reporting diagnostics", "WARN", "Client does not expose current onboarding diagnostics")
+            return
+        startup = onboarding.get("startup", {})
+        checklist.report("User logon registration", "PASS" if startup.get("registered") is True else "WARN", str(startup.get("status", "unknown")))
+        supervisor = onboarding.get("supervisor", {})
+        checklist.report("Crash supervisor", "PASS" if supervisor.get("status") == "monitoring" else "WARN", str(supervisor.get("status", "not_running")))
+        connection = status.get("control_plane", {})
+        heartbeat = connection.get("authenticated_heartbeat_status", "not_attempted")
+        checklist.report("Authenticated heartbeat", "PASS" if heartbeat == "acknowledged" else "WARN", str(heartbeat))
+        for event in ("SessionStart", "UserPromptSubmit", "PreToolUse"):
+            callback = onboarding.get("claude_callbacks", {}).get(event, {})
+            observed = callback.get("status", "not_observed")
+            checklist.report("Claude " + event, "PASS" if observed == "observed" else "WARN", str(observed) + "; approval/capture cause is not inferred")
+        build = status.get("daemon", {})
+        commit = build.get("git_commit", "unknown")
+        checklist.report("Runtime build provenance", "WARN" if commit in ("dev", "unknown", "") else "PASS", str(build.get("version", "unknown")) + " / " + str(commit))
+    except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError):
+        checklist.report("Reporting diagnostics", "WARN", "Could not inspect runtime; no reporting readiness claim")
+
+def check_release_integrity(bapedge, checklist):
+    try:
+        try:
+            from . import bap_release
+        except ImportError:
+            import bap_release
+        import platform
+        machine = platform.machine().lower()
+        architecture = "arm64" if machine in ("arm64", "aarch64") else "amd64"
+        system = "windows" if sys.platform == "win32" else ("darwin" if sys.platform == "darwin" else "linux")
+        platform_id = system + "-" + architecture
+        directory = os.path.dirname(os.path.abspath(bapedge))
+        manifest = os.path.join(directory, "bap-release.json")
+        if not os.path.isfile(manifest):
+            checklist.report("Release component integrity", "WARN", "No matched manifest; build provenance is unqualified")
+            return
+        paths = bap_release.component_paths(directory, os.path.dirname(os.path.abspath(__file__)), directory, platform_id)
+        report = bap_release.verify_manifest(manifest, paths, platform_id)
+        checklist.report("Release component integrity", "PASS", "Installed component hashes match release " + report["release_id"][:16])
+        checklist.report("Release source identity", "PASS" if report["source_qualified"] else "WARN", "Manifest build identities consistent" if report["source_qualified"] else "Unknown, dirty or mixed build identities")
+        checklist.report("Publisher authenticity", "WARN", "Manifest is not a signature; verify the approved package trust anchor")
+    except (OSError, ValueError, TypeError):
+        checklist.report("Release component integrity", "FAIL", "Missing, changed or malformed release components; use a matched approved bundle")
+
 def find_binary(name: str, repo_root: str):
     ext = ".exe" if sys.platform == "win32" else ""
     target = name + ext
@@ -304,7 +366,7 @@ def run_doctor():
             res = subprocess.run([bapedge, "exec", "--raw", "git --version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
             dt_ms = round((time.time() - t0) * 1000, 1)
             if res.returncode == 0:
-                checklist.report("Local Policy Evaluation", "PASS", f"Safe command authorized in {dt_ms} ms (< 1.5ms engine latency)")
+                checklist.report("Local Policy Evaluation", "PASS", f"Safe command authorized in {dt_ms} ms end-to-end process wall time")
             else:
                 checklist.report("Local Policy Evaluation", "WARN", f"Evaluator returned code {res.returncode}")
         except Exception as e:
@@ -331,6 +393,9 @@ def run_doctor():
     else:
         checklist.report("Active Session Concurrency", "PASS", "Idle (No lingering transactions or lockouts)")
 
+    if bapedge and os.path.isfile(bapedge):
+        check_reporting_baseline(bapedge, checklist)
+        check_release_integrity(bapedge, checklist)
     return checklist.summary()
 
 if __name__ == "__main__":

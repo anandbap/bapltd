@@ -2,11 +2,52 @@
 
 Updated October 31, 2026. Allow 45-60 minutes, plus the optional isolated outage/redeploy and gateway fixtures.
 
+The new independent discovery checks are in [Discovery acceptance](#discovery-acceptance-hooks-refused-and-mcp-observations) below. They require matching updated edge, interceptor, installer and control-plane artifacts.
+
+## Discovery acceptance: hooks refused and MCP observations
+
+**Additional evidence/metrics check (run after the discovery sequence below):**
+
+Run an already-supported project test command through the broker, such as `bapedge exec "go test ./..."` or `bapedge exec "python -m pytest tests/unit"`, using dependencies already supplied through the approved environment. Record the audit event ID, session ID and actual decision. Confirm it appears centrally; command/source names containing `test` must not hide it. Repeat through the isolated outage/recovery procedure and verify the same event is retained/replayed without duplicate session counters.
+
+In Live v3, check **Denied operation records** against recorded denials. An allowance is not proof of successful execution; a denial is not automatically a high-risk incident. In the summary API/legacy dashboards, completed work, assisted hours/FTE, governance coverage and trends must be **unavailable/null**, not inferred from those test events. Explicit Demo values remain illustrative. See [metric definitions](ACTIVITY_METRICS_CONTRACT.md).
+
+Run after install/login on the dedicated acceptance machine. Keep all agent sessions closed initially. The operator activates Admin in Live v3; use Workstations → View discovery for the test workstation.
+
+1. Create a dedicated synthetic configuration workspace; these definitions must never be launched:
+
+   ```powershell
+   $DiscoveryFixture = Join-Path $AcceptanceRoot 'discovery-fixture'
+   New-Item -ItemType Directory -Force -Path $DiscoveryFixture | Out-Null
+   '{"mcpServers":{"pilot-config-one":{"command":"never-start-this-fixture"},"pilot-config-two":{"url":"https://example.invalid/mcp"}}}' | Set-Content -LiteralPath (Join-Path $DiscoveryFixture '.mcp.json') -Encoding UTF8
+   bap install --dir "$BapBin" --workspace "$DiscoveryFixture" --server "$BapServer" --no-path
+   ```
+
+   UTF8 JSON with or without BOM is supported. No fixture secret, package installation or running MCP server is needed.
+
+2. In the workstation-filtered Discovery tab, Request scan. Expect **queued**, then a later complete/partial report in scan coverage. Two separate `mcp_config` rows appear, with `configured` evidence and `not_observed` mediation. Repeating the scan must preserve their IDs and first-seen times. This must work with no agent sessions/hooks/SDK active.
+3. Open Claude directly, refuse the native hooks, and leave it running. A supported named process can appear as `running` after the inventory scan; native MCP invocation/prompt visibility remains unknown. Interpreted/generic Python or Node processes are not automatically identifiable as agents. Do not mark this case fully governed.
+4. Approve the native hooks and use an **already approved, working test MCP server** to invoke a harmless tool on a synthetic file. Inspect `mcp_call` evidence: native operation ID and actual attempt/outcome, with observation-only mediation. No tool input/result, URL or secret-bearing argument should appear. The successful callback is not a BAP resource authorization receipt. If hooks are refused or the client supplies no operation ID, record invocation evidence as unavailable.
+5. Save malformed JSON in the synthetic `.mcp.json` and request another scan. The configuration scope reports error/partial; the prior rows remain present. Replace it with `{"mcpServers":{}}` and scan again: that completed scope may mark its old rows `not_seen`. This does not prove the tools were uninstalled or prohibited.
+6. Acknowledge a row with a reason, reopen it, then give it a seven-day exception. Refresh and verify the decision and expiry. No action should enroll an agent or mark enforcement layers active. Restart an isolated control plane **with its SQLite file preserved** and verify the disposition survives. If the file is lost on Render, this test fails until P3 persistent storage is provisioned; edge replay cannot reconstruct operator decisions.
+7. Use the isolated outage test from this runbook. Queue a scan while disconnected, restore connectivity and confirm eventual upload/replay with stable IDs. `bapedge daemon status --json` exposes the latest scan epoch/result and discovery delivery state. A non-durable ACK retains recovery reports under the BAP state discovery journal. Do not delete the journal as a troubleshooting step.
+8. Deactivate Admin and switch to Demo: Live discovery rows, coverage details and evidence drawers must clear. Re-enable Admin/Live and refresh. Existing session freeze/unfreeze and activity views must still work.
+
+**Record:** deployment/client commits, test instance ID, scan epoch/run ID, scope status, asset IDs, native operation ID where available, decision/expiry, outage/recovery timestamps and screenshots of partial/clean states. Mark actual native-client callbacks, unavailable sources and cloud durability independently. The automated suite validates synthetic collectors/protocols; it does not certify this installed-client scenario.
+
 This tests the installed release, not just a source checkout. Run it on a fresh Windows VM or a new disposable Windows user, with an approved Git installation and supported agent clients. Use a dedicated test tenant/workstation. Keep the BAP development laptop and unrelated Render sessions out of destructive/restart tests.
 
 **Completion rule:** every applicable row below has evidence and a PASS. An unavailable component is NOT TESTED, not PASS. The automated smoke script does not approve hooks, freeze anything, restart servers, or claim the full runbook passed.
 
 ## 0. Release gate: do this before installing
+
+For a qualified release, add `--require-release-manifest` to the installation command below. Unknown/dirty development artifacts may be used for development without that flag, but do not count as a qualified pilot bundle. `bap doctor` now checks installed component hashes. A hash manifest is not a publisher signature; retain the approved package trust-anchor evidence.
+
+After login, run `bapedge onboarding begin`, start a fresh Claude session in a fixture repository, paste the printed synthetic prompt exactly, use the client's ordinary approval flow and wait for its response. Then run `bapedge onboarding check --require`. This checks correlated **reporting observations**, including an allowed `git status` record; it does not prove successful execution, corporate SSO or full pilot readiness. Missing/foreign/expired/denied evidence stays partial. See [release and native-probe scope](RELEASE_AND_NATIVE_PROBE.md).
+
+For the pilot denominator, configure the server's [expected roster and reporting windows](PILOT_ROSTER_COVERAGE.md). As an authenticated Live admin, inspect V3 Discovery & coverage → Expected pilot workstations. Confirm exact identity/owner and current check-in freshness; missing configuration must show unavailable rather than full coverage. This check is separate from the native probe and does not qualify historical reporting.
+
+P1a adds per-user Windows startup and crash supervision. On the disposable acceptance user, verify `bapedge daemon status --json` and `bap doctor`, then qualify actual logoff/logon/reboot, daemon crash recovery and intentional `daemon stop`/explicit `daemon start`. Review [runtime behavior and remaining gates](STARTUP_AND_ONBOARDING.md). Missing native callbacks remain partial; do not infer hook approval from installed files.
 
 Record these in your test notes:
 

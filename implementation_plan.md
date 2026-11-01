@@ -1,10 +1,57 @@
-# UI v3, authenticated identity, and deployment recovery implementation plan
+# BAP implementation plan: leadership reporting for a 20-person Claude pilot
 
 Updated: October 31, 2026
 
 ## Objective
 
-Fix UI v3 governance controls and decision reporting; bind authenticated workstation identity to session lifecycle and telemetry; recover reporting and edge evidence after deployment without restoring lost execution authority.
+For a named roster of 20 people in a controlled environment, report supported Claude work, observed activity, evidence of progress and verified deliverables, with explicit collection gaps and reproducible history. Preserve the existing authentication, governance controls and offline enforcement. Activity volume is not completed work, productivity or hours saved.
+
+## Current delivery priority: leadership pilot
+
+### Required discovery and v3 coverage work
+
+The clarified product requirement is independent workstation discovery: where SDK/hooks/starters are unused, report supported discovered assets and explicit visibility gaps under the master enrollment. Mandatory workstation/resource enforcement remains a core product workstream; discovery must not be represented as that enforcement.
+
+Exact design, source findings, route contracts, UI placement and acceptance matrix: [Shadow IT/MCP discovery in v3](docs/DISCOVERY_V3_IMPLEMENTATION_PLAN.md).
+
+- [x] **DISC-1:** strict versioned enrolled-workstation reports; operator-only reads/mutations; no public filesystem/environment scanning; metadata-only collector and privacy/auth regressions.
+- [x] **DISC-2:** one daemon startup/periodic/directive worker independent of sessions/hooks; explicit complete/partial scope results; installer-registered workspace roots; atomic local queue, validated ACKs and non-durable recovery retention. Old watcher scanner removed.
+- [x] **DISC-3:** named agent process inventory plus Claude native MCP attempt/success/failure/denial metadata, correlated by native operation ID. Invocation observations do not mint policy grants or imply enforcement.
+- [x] **DISC-4a:** stable assets, distinct servers per file, replay/conflict protection, complete-scope absence checks, persistent latest scans/directives/dispositions through the existing SQLite session pool. Configured DB failures disable discovery ingestion rather than silently accepting into memory.
+- [ ] **DISC-4b / P3 (deferred):** authoritative PostgreSQL migration, deployment-backed durability, immutable operator history and managed retention. SQLite survives only while its configured file survives; `durable:false` keeps edge recovery copies. Lost operator decisions cannot be reconstructed from edge inventory.
+- [x] **DISC-5a:** v3 home summary, workstation discovery links, third Discovery & coverage tab, bounded revision/cursor pages, evidence drawer, targeted/fleet scan requests, acknowledgment and expiring exceptions. Admin-off/Demo clears Live evidence; failures retain explicitly stale data.
+- [ ] **DISC-5b:** full historical scan traversal/export, policy catalogue/receipt correlation, detailed per-workstation KPI columns and richer approval/freshness filters. Current coverage view is the latest 100 scan states; discovery is deliberately not an enrollment or process-kill workflow.
+- [x] **DISC-6a:** automated Go/JS and real HTTP integration coverage, including 20 concurrent enrolled workstations, offline/invalid ACK retry, server-loss replay, SQLite reopen/dispositions, no-session startup scan, partial/clean lifecycle and native MCP metadata privacy. Hook/UI suites added to CI.
+- [ ] **DISC-6b / P5:** installed-client and live 2 → 5 → 20-person pilot qualification, actual refused-hook/agent callback checks, p95/p99 fleet/network benchmarks and prolonged-outage capacity/retention qualification.
+
+The implementation replaces the legacy discovery reporting path; the classic Rollout view remains a legacy simulation. Collection covers known MCP JSON locations in the daemon directory, up to eight installer-registered workspaces, supported user MCP locations, and named agent processes. Generic Python/Node AI attribution, unobserved MCP calls and prompts remain unknown. Validation used synthetic configurations and isolated profiles; no broad scan of this development laptop was performed. See the detailed plan's implementation record and the fresh-install discovery acceptance section.
+
+The detailed [leadership pilot plan](docs/LEADERSHIP_PILOT_PLAN.md) is the controlling scope/order for new work. Earlier completed implementation and validation below remain history; they do not certify the complete leadership capability. Remaining phases are planned, not implemented.
+
+| Priority | Implementation item | Release gate |
+| --- | --- | --- |
+| P0 | Correct live metrics and remove lossy test-command filtering | Real testing activity arrives; no event-derived completion/hours/FTE, fixed live trends, allowance-as-coverage or unsupported compliance claims |
+| P1 | Managed install/login, validated Claude integration, per-user startup/supervision and coverage diagnostics | Clean machines, reboot/logon and daemon crash recover; hook refusal/unsupported clients are visibly partial |
+| P2 | Canonical observations/operations, owner/session/task correlation and gap/retry semantics | One operation across multiple layers counts once; separate attempts/replayed records remain distinguishable |
+| P3 | Durable authoritative PostgreSQL stores, transactional ingestion/acknowledgement and security-state recovery | Deployment/crash cannot lose acknowledged committed history or clear restrictions; no production memory fallback |
+| P4 | Minimal work-item links and evidence milestones using existing TaskID concepts | Trace real code and non-code work through deliverables/review; agent/session completion alone cannot verify business completion |
+| P5 | Reproducible leadership reports, access/retention controls and measured 2 -> 5 -> 20-person rollout | Evidence drill-downs reconcile with totals; five-business-day pilot, controlled restart/outage and defined performance targets pass |
+
+- [x] **P0 implementation:** live metrics v2 separates session counters from the bounded activity feed; unverified work completion/hours/FTE/governance/trends return null with reasons. V3 labels denial records; v1/v2 remove derived capacity, fixed Live trends/topology shares and lifecycle illustrations. Engineering test-command/source filtering and destructive spool cleanup are removed; enrolled/locked hosts ignore test-mode suppression flags. Chain verification no longer claims certification or absolute security. API/UI, immediate/offline, isolation and real restart/replay regressions pass. Contract: [Activity metrics v2](docs/ACTIVITY_METRICS_CONTRACT.md).
+- [x] **P1a:** Windows current-user logon registration, detached crash supervisor with singleton/process-birth/readiness checks, bounded restart backoff, persistent intentional pause, graceful scoped upgrade/uninstall, callback metadata diagnostics and doctor warnings. Native crash/restart/pause/resume test, private registry fixtures and edge/hook/installer regressions pass. Packaged installer/doctor/startup modules are synchronized and staged into wheels. Details: [Startup and onboarding](docs/STARTUP_AND_ONBOARDING.md).
+- [x] **P1b-01:** complete per-platform release manifests, component hashes, embedded build metadata, strict opt-in install preflight/post-copy integrity verification and fresh doctor checks. Packaging includes the release checker. Hash consistency is not a publisher signature; approved distribution trust and clean release qualification remain separate gates.
+- [x] **P1b-02:** 15-minute native reporting probe with per-session opaque references, ordered callback correlation, own-workstation authenticated central evidence and a harmless `git status` policy-record check. Supports the exact public synthetic prompt digest when text capture is disabled. SDK-only/foreign/mixed/expired/denied evidence stays partial. Synthetic real-wire protocol E2E is added to CI.
+- [x] **P1b-03a:** server-configured expected workstation/person/team roster with explicit windows, strict validation, indexed check-in comparison, admin-only snapshot API and V3 coverage rows. Missing configuration stays unknown; cleanup cannot manufacture fresh heartbeat times. Tests cover identity, windows, restrictions, restart and UI privacy. See [Pilot roster coverage](docs/PILOT_ROSTER_COVERAGE.md). This is current check-in coverage, not durable history or complete native reporting.
+- [ ] **P1b-03b/P2:** actual reboot/logon and safe upgrade qualification, corporate SSO, real supported Claude/approval probes, deployment of the actual roster/windows, signed/centrally approved release provenance, durable history and cross-layer operation identity. Qualification tools are documented in [Release integrity and native probe](docs/RELEASE_AND_NATIVE_PROBE.md); local/synthetic tests do not complete these gates.
+- [ ] P3: replace authoritative production in-memory state with transactional durable stores; preserve integrity/ownership/freeze/grant invariants across restart.
+- [ ] P4: add lightweight work association/switching and declared/observed/verified evidence states without building another ticketing product.
+- [ ] P5: deliver roster/work/progress/governance/data-quality reports and execute the pilot acceptance gates in the detailed plan.
+
+P0 corrected the identified summary formulas and lossy engineering-test filters. Observed records are still not unique cross-layer operations or completed work; those require P2/P4 evidence. Session SQLite remains partial persistence; other authoritative stores and the broader DB-error memory fallback remain P3 work. Deployment, private test/production-tenant separation and installed qualification remain release gates.
+
+Scope guard: begin with one validated Claude workflow and the actual pilot roster. Additional platforms/agents, universal OS enforcement, broad integration catalogues, a replacement task manager, speculative productivity scoring and another UI redesign are outside this release. Retain existing client/security regressions. See the detailed plan for proposed, unproven latency targets and specific phase acceptance evidence.
+
+Priority changes: OBS-D01 (central persistence), OBS-D04 (startup/supervision) and the pilot portion of OBS-D05 (performance/retention) are now required before leadership acceptance. Their earlier deferral is superseded by this goal. General OS-wide enforcement and unsupported-platform expansion remain separate.
 
 ## Independent reporting and master workstation enrollment
 

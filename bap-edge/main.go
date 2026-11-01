@@ -45,6 +45,7 @@ Execution & Protocol Integration:
 
 Identity & Central Control Plane:
   setup        1-click workstation onboarding for Claude Code & AI agents (BAP-471)
+  onboarding   Begin/check a correlated native reporting probe (no automated hook approval)
   doctor       Pre-flight environment and diagnostic health check
   dev-override Manage temporary developer override for BAP self-development (on, off, status)
   login        Authenticate developer identity via enterprise OIDC/OAuth2 device flow (Google/GitHub/Okta/Entra)
@@ -178,6 +179,8 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error running daemon: %v\n", err)
 			os.Exit(1)
 		}
+	case "onboarding":
+		if err:=cmd.RunOnboarding(args);err!=nil{fmt.Fprintf(os.Stderr,"Onboarding: %v\n",err);os.Exit(1)}
 	case "pin":
 		if err := cmd.RunPin(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error in pin: %v\n", err)

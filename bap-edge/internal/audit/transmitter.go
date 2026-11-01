@@ -50,6 +50,13 @@ func GenerateEventID() string {
 	return fmt.Sprintf("edge-%d-%s", time.Now().UnixNano(), hex.EncodeToString(b))
 }
 
+// Test-mode environment flags may isolate an unenrolled development fixture.
+// They must not suppress reporting on an enrolled or administrator-locked host.
+func isolatedTestCollection() bool {
+	requested := os.Getenv("BAP_TEST_MODE") == "1" || os.Getenv("LTD_TEST") == "1" || os.Getenv("BAP_ENV") == "test"
+	return requested && config.EnrolledControlPlaneURL() == "" && !config.ResolveEndpoints().Locked
+}
+
 // Transmit sends an AuditEntry to the central control plane with a clean handshake.
 // If the server confirms ingestion (HTTP 200, Ingested > 0, ChainValid == true),
 // the transmitted entry is safely removed locally from logPath, eliminating edge storage burden.
@@ -64,16 +71,8 @@ func Transmit(entry AuditEntry, serverURL string, logPath string) (bool, string,
 	}
 
 	// 1. Filter out self-testing logs: keep them in local ltd-audit.jsonl for assertions, do not pollute central service
-	if os.Getenv("BAP_TEST_MODE") == "1" || os.Getenv("LTD_TEST") == "1" || os.Getenv("BAP_ENV") == "test" {
+	if isolatedTestCollection() {
 		return false, "skipped_test_mode", nil
-	}
-	srcLower := strings.ToLower(entry.Source)
-	if strings.Contains(srcLower, "test") || strings.Contains(srcLower, "pytest") || strings.Contains(srcLower, "selftest") {
-		return false, "skipped_test_source", nil
-	}
-	cmdLower := strings.ToLower(entry.FullCommand)
-	if strings.HasPrefix(cmdLower, "pytest") || strings.Contains(cmdLower, "test_leak.py") || strings.Contains(cmdLower, "go test") {
-		return false, "skipped_test_command", nil
 	}
 
 	// Clean trailing slash
@@ -174,24 +173,13 @@ func FlushOfflineAudit(serverURL string, logPath string) (int, error) {
 		return 0, err
 	}
 
-	// 1. Identify test-mode entries to clean from production spool
-	testEventIDs := make(map[string]struct{})
-	var toSend []AuditEntry
-	for _, entry := range entries {
-		srcLower := strings.ToLower(entry.Source)
-		cmdLower := strings.ToLower(entry.FullCommand)
-		if strings.Contains(srcLower, "test") || strings.Contains(srcLower, "pytest") || strings.Contains(srcLower, "selftest") ||
-			strings.HasPrefix(cmdLower, "pytest") || strings.Contains(cmdLower, "test_leak.py") || strings.Contains(cmdLower, "go test") {
-			testEventIDs[entry.EventID] = struct{}{}
-			continue
-		}
-		toSend = append(toSend, entry)
+	// Explicit test mode isolates a synthetic run; command/source names never
+	// distinguish synthetic activity from real engineering work. Keep all queued
+	// evidence intact until an authenticated, verified acknowledgment.
+	if isolatedTestCollection() {
+		return 0, nil
 	}
-
-	// Clean out test entries so they don't clog edge spool
-	if len(testEventIDs) > 0 && os.Getenv("BAP_RETAIN_LOCAL") != "1" {
-		_ = RemoveEntries(testEventIDs, logPath)
-	}
+	toSend := entries
 
 	if len(toSend) == 0 {
 		return replayRecoveryArchive(serverURL, logPath)

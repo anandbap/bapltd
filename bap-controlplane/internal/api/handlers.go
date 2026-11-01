@@ -29,6 +29,7 @@ import (
 	"bap-controlplane/internal/intent"
 	"bap-controlplane/internal/notary"
 	"bap-controlplane/internal/otc"
+	"bap-controlplane/internal/pilot"
 	"bap-controlplane/internal/policy"
 	"bap-controlplane/internal/registry"
 	"bap-controlplane/internal/sandbox"
@@ -51,30 +52,34 @@ type DemoActionRecord struct {
 const demoIntentClassifierVersion = "bap-intent-rules-v1"
 
 type Server struct {
-	registry         *registry.Store
-	otcStore         *otc.Store
-	minter           *authz.TokenMinter
-	policyStore      *policy.Store
-	auditStore       *audit.Store
-	sessionStore     *session.Store
-	govStore         *governance.Store
-	notaryStore      *notary.Store
-	ebpfProbe        *sandbox.EBPFProbe
-	scanner          *discovery.Scanner
-	endpointMgr      *endpoint.Manager
-	mux              *http.ServeMux
-	allowedOrigins   map[string]bool
-	adminToken       string
-	allowRemoteAdmin bool
-	demoMode         bool
-	lastDemoMu       sync.RWMutex
-	lastDemoAction   *DemoActionRecord
-	envMode          string
-	deviceSessionsMu sync.RWMutex
-	deviceSessions   map[string]*deviceAuthSession
-	deviceUserCodes  map[string]*deviceAuthSession
-	oidcConfigMu     sync.RWMutex
-	oidcConfig       types.OIDCConfig
+	pilotRoster         *pilot.Roster
+	pilotRosterRevision string
+	registry            *registry.Store
+	otcStore            *otc.Store
+	minter              *authz.TokenMinter
+	policyStore         *policy.Store
+	auditStore          *audit.Store
+	sessionStore        *session.Store
+	govStore            *governance.Store
+	notaryStore         *notary.Store
+	ebpfProbe           *sandbox.EBPFProbe
+	scanner             *discovery.Scanner
+	inventory           *discovery.Inventory
+	inventoryErr        error
+	endpointMgr         *endpoint.Manager
+	mux                 *http.ServeMux
+	allowedOrigins      map[string]bool
+	adminToken          string
+	allowRemoteAdmin    bool
+	demoMode            bool
+	lastDemoMu          sync.RWMutex
+	lastDemoAction      *DemoActionRecord
+	envMode             string
+	deviceSessionsMu    sync.RWMutex
+	deviceSessions      map[string]*deviceAuthSession
+	deviceUserCodes     map[string]*deviceAuthSession
+	oidcConfigMu        sync.RWMutex
+	oidcConfig          types.OIDCConfig
 
 	activityMu       sync.RWMutex
 	activities       []*types.AgentActivityEvent
@@ -135,6 +140,7 @@ func NewServer(reg *registry.Store, otcStore *otc.Store, minter *authz.TokenMint
 	notaryStore := notary.NewStore("bap-audit-signing-secret-default", "", auditStore)
 	ebpfProbe := sandbox.NewEBPFProbe()
 	scanner := discovery.NewScanner()
+	inventory, inventoryErr := discovery.NewInventory(sessStore.PersistenceDB())
 	endpointMgr := endpoint.NewManager("bap-endpoint-signing-secret-default")
 	s := &Server{
 		registry:        reg,
@@ -147,6 +153,8 @@ func NewServer(reg *registry.Store, otcStore *otc.Store, minter *authz.TokenMint
 		notaryStore:     notaryStore,
 		ebpfProbe:       ebpfProbe,
 		scanner:         scanner,
+		inventory:       inventory,
+		inventoryErr:    inventoryErr,
 		endpointMgr:     endpointMgr,
 		saasTokenMgr:    authz.NewSaaSTokenManager(),
 		intentMgr:       intent.NewIntentManager(""),
@@ -415,9 +423,13 @@ func (s *Server) registerRoutes() {
 
 	// Shadow IT & Unmanaged Asset Discovery (Rogue MCP Servers & Environment Variables)
 	s.mux.HandleFunc("/api/v1/discovery/shadow-it/scan", s.handleShadowITScan)
-	s.mux.HandleFunc("/api/v1/discovery/shadow-it/scan/trigger", s.handleShadowITScanTrigger)
-	s.mux.HandleFunc("/api/v1/discovery/shadow-it/findings", s.handleShadowITFindings)
-	s.mux.HandleFunc("/api/v1/discovery/shadow-it/reports", s.handleShadowITReports)
+	s.mux.HandleFunc("/api/v1/discovery/shadow-it/scan/trigger", s.requireAdminAuth(s.handleShadowITScanTrigger))
+	s.mux.HandleFunc("/api/v1/discovery/shadow-it/findings", s.requireAdminAuth(s.handleShadowITFindings))
+	s.mux.HandleFunc("/api/v1/discovery/shadow-it/reports", s.requireAdminAuth(s.handleShadowITReports))
+	s.mux.HandleFunc("/api/v1/discovery/shadow-it/summary", s.requireAdminAuth(s.handleDiscoverySummary))
+	s.mux.HandleFunc("/api/v1/discovery/shadow-it/disposition", s.requireAdminAuth(s.handleDiscoveryDisposition))
+	s.mux.HandleFunc("/api/v1/onboarding/probe", s.handleOnboardingProbe)
+	s.mux.HandleFunc("/api/v1/pilot/coverage", s.requireAdminAuth(s.handlePilotCoverage))
 
 	// Gateway PEP: Zero-Trust Resource-Side Policy Enforcement & Anti-Spoofing
 	s.mux.HandleFunc("/api/v1/pep/status", s.handlePEPStatus)
@@ -2612,7 +2624,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		"id":         id,
 		"agent_id":   id,
 		"status":     "alive",
-		"scan_epoch": s.scanner.CurrentEpoch(),
+		"scan_epoch": s.discoveryEpoch(r, id),
 		"time":       time.Now().UTC(),
 		"session":    sessionFound,
 		"agent":      agentFound,
@@ -2664,13 +2676,6 @@ func (s *Server) handleInspectorData(w http.ResponseWriter, r *http.Request) {
 				}
 				var item map[string]any
 				if err := json.Unmarshal([]byte(line), &item); err == nil {
-					cmd, _ := item["full_command"].(string)
-					src, _ := item["source"].(string)
-					cmdLower := strings.ToLower(cmd)
-					srcLower := strings.ToLower(src)
-					if strings.Contains(cmdLower, "pytest") || strings.Contains(cmdLower, "test_leak") || strings.Contains(srcLower, "test") {
-						continue
-					}
 					edgeLogs = append(edgeLogs, item)
 				}
 			}
@@ -3119,7 +3124,7 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 			FullCommand:      "USER_PROMPT_SUBMITTED",
 			Decision:         "intent",
 			Reason:           "User mission classified at BAP Edge",
-			Timestamp:        time.Now().UTC().Format(time.RFC3339),
+			Timestamp:        time.Now().UTC().Format(time.RFC3339Nano),
 			UserPrompt:       req.UserPrompt,
 			PrimaryIntent:    req.Intent.Primary,
 			SecondaryIntents: req.Intent.Secondary,
@@ -3411,12 +3416,14 @@ func (s *Server) handleVerifyChain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"valid":             valid,
-		"error":             errStr,
-		"total_events":      len(s.auditStore.List(10000)),
-		"head_hash":         headHash,
-		"merkle_integrity":  "100% CRYPTOGRAPHICALLY SECURE",
-		"compliance_status": "SOC2_FEDRAMP_ISO27001_COMPLIANT",
+		"valid":                   valid,
+		"error":                   errStr,
+		"total_events":            len(s.auditStore.List(10000)),
+		"head_hash":               headHash,
+		"merkle_integrity":        "not_evaluated",
+		"compliance_status":       "not_assessed",
+		"verification_scope":      "retained_audit_hash_chain_only",
+		"collection_completeness": "unknown",
 	})
 }
 
@@ -4897,59 +4904,18 @@ func (s *Server) handleEBPFExecve(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, disposition)
 }
 
-// handleShadowITScan executes a discovery scan across local MCP configs, .env files, and environment variables.
+// Discovery accepts enrolled metadata reports; it never scans the server filesystem.
 func (s *Server) handleShadowITScan(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-	var req discovery.ScanRequest
-	if r.Body != nil && r.ContentLength > 0 {
-		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req)
-	}
-	report := s.scanner.Scan(req)
-	writeJSON(w, http.StatusOK, report)
+	s.handleDiscoveryReport(w, r)
 }
-
-// handleShadowITScanTrigger advances the fleet scan epoch, broadcasting an on-demand scan directive to all edge agents.
 func (s *Server) handleShadowITScanTrigger(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-	newEpoch := s.scanner.TriggerFleetScan()
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":     "success",
-		"scan_epoch": newEpoch,
-		"message":    "Fleet discovery scan triggered across all connected agents",
-		"timestamp":  time.Now().UTC(),
-	})
+	s.handleDiscoveryTrigger(w, r)
 }
-
-// handleShadowITFindings returns all accumulated findings from shadow IT discovery scans.
 func (s *Server) handleShadowITFindings(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-	findings := s.scanner.GetFindings()
-	writeJSON(w, http.StatusOK, map[string]any{
-		"count":    len(findings),
-		"findings": findings,
-	})
+	s.handleDiscoveryFindings(w, r)
 }
-
-// handleShadowITReports returns historical shadow IT scan reports.
 func (s *Server) handleShadowITReports(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-	reports := s.scanner.GetReports()
-	writeJSON(w, http.StatusOK, map[string]any{
-		"count":   len(reports),
-		"reports": reports,
-	})
+	s.handleDiscoveryReports(w, r)
 }
 
 // handlePEPStatus returns live metadata, protected routes, and enforcement principles of the BAP Gateway PEP.

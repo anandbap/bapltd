@@ -482,6 +482,7 @@ func RunLogin(args []string) error {
 			return fmt.Errorf("identity saved, but reporting daemon did not become ready; run 'bapedge daemon start' and inspect 'bapedge daemon status'")
 		}
 		if isDaemonRunning() {
+			if err:=runDaemonSupervise(nil);err!=nil{return fmt.Errorf("identity saved and daemon running, but crash supervisor unavailable: %w",err)}
 			fmt.Println("[✓] Background reporting daemon running. Use 'bapedge daemon status' to verify delivery.")
 		}
 	}

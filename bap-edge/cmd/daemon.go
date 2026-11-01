@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -23,13 +24,18 @@ import (
 
 	"bap-edge/internal/audit"
 	"bap-edge/internal/config"
+	discoverymeta "bap-edge/internal/discovery"
 	"bap-edge/internal/httptransport"
 	"bap-edge/internal/state"
+	"bap-edge/pkg/version"
 )
 
 // DaemonState stores configuration and live metadata for a running bap-daemon.
 type DaemonState struct {
 	PID           int                `json:"pid"`
+	ProcessBirth  string             `json:"process_birth,omitempty"`
+	Version       string             `json:"version"`
+	Commit        string             `json:"git_commit"`
 	Port          int                `json:"port"`
 	URL           string             `json:"url"`
 	ServerURL     string             `json:"server_url"`
@@ -60,20 +66,28 @@ type AttachedSession struct {
 
 // DaemonServer coordinates local IPC, background heartbeat, and spool flushing.
 type DaemonServer struct {
-	state            DaemonState
-	mu               sync.RWMutex
-	sessions         map[string]AttachedSession
-	listener         net.Listener
-	httpServer       *http.Server
-	cpConnected      bool
-	cpLatencyMs      int64
-	messagesRecv     int64
-	transSuccess     int64
-	transFailed      int64
-	heartbeatSuccess int64
-	heartbeatFailed  int64
-	stopCh           chan struct{}
-	eventQueue       chan audit.AuditEntry
+	state               DaemonState
+	mu                  sync.RWMutex
+	sessions            map[string]AttachedSession
+	listener            net.Listener
+	httpServer          *http.Server
+	cpConnected         bool
+	cpLatencyMs         int64
+	authHeartbeatAt     time.Time
+	authHeartbeatStatus string
+	messagesRecv        int64
+	transSuccess        int64
+	transFailed         int64
+	lastAuditUploadAt   time.Time
+	lastAuditAttemptAt  time.Time
+	lastAuditResult     string
+	heartbeatSuccess    int64
+	heartbeatFailed     int64
+	stopCh              chan struct{}
+	eventQueue          chan audit.AuditEntry
+	discoveryRequests   chan int64
+	discoveryCollect    func(int64) discoverymeta.Report
+	discoveryProgress   map[string]any
 }
 
 func DaemonConfigPath() string {
@@ -95,9 +109,10 @@ func ReadDaemonState() (*DaemonState, error) {
 		return nil, err
 	}
 	if !isProcessAlive(ds.PID) {
-		_ = os.Remove(DaemonConfigPath())
-		_ = os.Remove(DaemonPidPath())
 		return nil, fmt.Errorf("daemon PID %d is not running", ds.PID)
+	}
+	if ds.ProcessBirth != "" && processBirth(ds.PID) != ds.ProcessBirth {
+		return nil, fmt.Errorf("daemon PID identity is stale")
 	}
 	return &ds, nil
 }
@@ -127,7 +142,8 @@ func NewDaemonServer(serverURL string, port int) (*DaemonServer, error) {
 	authToken := hex.EncodeToString(tokenBytes)
 
 	ds := DaemonState{
-		PID:           os.Getpid(),
+		PID:          os.Getpid(),
+		ProcessBirth: processBirth(os.Getpid()), Version: version.Version, Commit: version.GitCommit,
 		Port:          port,
 		ServerURL:     serverURL,
 		Privilege:     privilege,
@@ -138,10 +154,11 @@ func NewDaemonServer(serverURL string, port int) (*DaemonServer, error) {
 	}
 
 	return &DaemonServer{
-		state:      ds,
-		sessions:   make(map[string]AttachedSession),
-		stopCh:     make(chan struct{}),
-		eventQueue: make(chan audit.AuditEntry, 256),
+		state:             ds,
+		sessions:          make(map[string]AttachedSession),
+		stopCh:            make(chan struct{}),
+		eventQueue:        make(chan audit.AuditEntry, 256),
+		discoveryRequests: make(chan int64, 1),
 	}, nil
 }
 
@@ -162,9 +179,14 @@ func (s *DaemonServer) Start() error {
 	s.state.URL = fmt.Sprintf("http://127.0.0.1:%d", s.state.Port)
 
 	// Persist daemon.json and bap-daemon.pid
-	stateBytes, _ := json.MarshalIndent(s.state, "", "  ")
-	_ = os.WriteFile(DaemonConfigPath(), stateBytes, 0600)
-	_ = os.WriteFile(DaemonPidPath(), []byte(strconv.Itoa(s.state.PID)), 0600)
+	if err := writeRuntimeState(DaemonConfigPath(), s.state); err != nil {
+		ln.Close()
+		return fmt.Errorf("persist daemon readiness: %w", err)
+	}
+	if err := os.WriteFile(DaemonPidPath(), []byte(strconv.Itoa(s.state.PID)), 0600); err != nil {
+		ln.Close()
+		return fmt.Errorf("persist daemon PID: %w", err)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
@@ -188,6 +210,7 @@ func (s *DaemonServer) Start() error {
 	go s.runSpoolWorker(ctx)
 	go s.runSessionReconcileWorker(ctx)
 	go s.runProcessObservationWorker(ctx)
+	go s.runDiscoveryWorker(ctx)
 	for i := 0; i < 8; i++ {
 		go s.runEventDeliveryWorker(ctx)
 	}
@@ -206,6 +229,7 @@ func (s *DaemonServer) Start() error {
 func (s *DaemonServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
+		"pid": s.state.PID, "process_birth": s.state.ProcessBirth,
 		"status": "healthy",
 		"mode":   s.state.OperatingMode,
 		"uptime": time.Since(s.state.StartedAt).String(),
@@ -220,13 +244,40 @@ func (s *DaemonServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 		sessionList = append(sessionList, sid)
 	}
 	connected, latencyMs := s.cpConnected, s.cpLatencyMs
+	discoveryProgress := s.discoveryProgress
+	lastUpload, lastAttempt, uploadResult := s.lastAuditUploadAt, s.lastAuditAttemptAt, s.lastAuditResult
+	authAt, authStatus := s.authHeartbeatAt, s.authHeartbeatStatus
+	if authStatus == "" {
+		authStatus = "not_attempted"
+	}
+	if authStatus == "acknowledged" && time.Since(authAt) > 15*time.Second {
+		authStatus = "stale"
+	}
 	s.mu.RUnlock()
 
 	auditLogPath := audit.DefaultLogPath()
 	offlineEntries, _ := audit.ReadEntries(auditLogPath)
+	var oldest *time.Time
+	for _, entry := range offlineEntries {
+		stamp := entry.Timestamp
+		if !stamp.IsZero() && (oldest == nil || stamp.Before(*oldest)) {
+			copy := stamp
+			oldest = &copy
+		}
+	}
+	var oldestAge any
+	if oldest != nil {
+		age := time.Since(*oldest).Milliseconds()
+		if age >= 0 {
+			oldestAge = age
+		}
+	}
 
 	resp := map[string]any{
+		"onboarding": localOnboardingHealth(time.Now().UTC()),
+		"discovery":  discoveryProgress,
 		"daemon": map[string]any{
+			"version": s.state.Version, "git_commit": s.state.Commit, "process_birth": s.state.ProcessBirth,
 			"pid":            s.state.PID,
 			"port":           s.state.Port,
 			"url":            s.state.URL,
@@ -237,6 +288,7 @@ func (s *DaemonServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"capabilities":   s.state.Capabilities,
 		},
 		"control_plane": map[string]any{
+			"last_authenticated_heartbeat_at": authAt, "authenticated_heartbeat_status": authStatus,
 			"url":        s.state.ServerURL,
 			"connected":  connected,
 			"latency_ms": latencyMs,
@@ -246,6 +298,8 @@ func (s *DaemonServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"sessions": sessionList,
 		},
 		"telemetry": map[string]any{
+			"backlog_oldest_event_at": oldest, "backlog_oldest_age_ms": oldestAge,
+			"last_successful_audit_upload_at": lastUpload, "last_audit_attempt_at": lastAttempt, "last_audit_result": uploadResult,
 			"messages_received":       atomic.LoadInt64(&s.messagesRecv),
 			"transmitted_success":     atomic.LoadInt64(&s.transSuccess),
 			"transmissions_failed":    atomic.LoadInt64(&s.transFailed),
@@ -385,6 +439,22 @@ func (s *DaemonServer) runHeartbeatWorker(ctx context.Context) {
 					}
 					body, _ := json.Marshal(agentHeartbeat)
 					if response, err := client.Post(strings.TrimRight(s.state.ServerURL, "/")+"/api/v1/control/heartbeat", "application/json", bytes.NewReader(body)); err == nil {
+						var directive struct {
+							Epoch int64 `json:"scan_epoch"`
+						}
+						s.mu.Lock()
+						s.authHeartbeatStatus = "rejected"
+						if response.StatusCode == 401 || response.StatusCode == 403 {
+							s.authHeartbeatStatus = "authentication_failed"
+						}
+						if response.StatusCode == 200 {
+							s.authHeartbeatAt = time.Now().UTC()
+							s.authHeartbeatStatus = "acknowledged"
+						}
+						s.mu.Unlock()
+						if response.StatusCode == 200 && json.NewDecoder(response.Body).Decode(&directive) == nil {
+							s.requestDiscovery(directive.Epoch)
+						}
 						closeHeartbeatResponse(response)
 					}
 
@@ -441,8 +511,17 @@ func (s *DaemonServer) runSpoolWorker(ctx context.Context) {
 			}
 			n, err := audit.FlushOfflineAudit(s.state.ServerURL, "")
 			if err == nil && n > 0 {
+				s.mu.Lock()
+				s.lastAuditAttemptAt = time.Now().UTC()
+				s.lastAuditUploadAt = s.lastAuditAttemptAt
+				s.lastAuditResult = "acknowledged"
+				s.mu.Unlock()
 				atomic.AddInt64(&s.transSuccess, int64(n))
 			} else if err != nil {
+				s.mu.Lock()
+				s.lastAuditAttemptAt = time.Now().UTC()
+				s.lastAuditResult = "retained_for_retry"
+				s.mu.Unlock()
 				atomic.AddInt64(&s.transFailed, 1)
 			}
 		}
@@ -484,6 +563,8 @@ func RunDaemon(args []string) error {
 		return runDaemonStart(subArgs)
 	case "status":
 		return runDaemonStatus(subArgs)
+	case "supervise":
+		return runDaemonSupervise(subArgs)
 	case "stop":
 		return runDaemonStop(subArgs)
 	default:
@@ -497,6 +578,7 @@ func printDaemonUsage() error {
 	fmt.Println("  start     Start the BAP Edge daemon subsystem")
 	fmt.Println("  status    Query status, capabilities, and telemetry of the active daemon")
 	fmt.Println("  stop      Gracefully shut down the running daemon")
+	fmt.Println("  supervise Start per-user crash supervision; --stop stops the supervisor")
 	return nil
 }
 
@@ -509,9 +591,29 @@ func runDaemonStart(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if !*fgFlag {
+		if err := os.Remove(daemonPausePath()); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	} else {
+		release, err := acquireRuntimeLock("daemon")
+		if errors.Is(err, errRuntimeRunning) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		defer release()
+		if _, err := os.Stat(daemonPausePath()); err == nil {
+			return fmt.Errorf("daemon intentionally paused; use 'daemon start' to resume")
+		}
+	}
 
 	// Check if daemon is already running
 	if existing, err := ReadDaemonState(); err == nil && existing != nil {
+		if !daemonResponsive(existing) {
+			return fmt.Errorf("daemon process exists but readiness failed; inspect 'daemon status' before restarting")
+		}
 		fmt.Printf("⚠️  BAP Daemon is already running (PID: %d, Mode: %s, URL: %s)\n",
 			existing.PID, existing.OperatingMode, existing.URL)
 		return nil
@@ -541,10 +643,17 @@ func runDaemonStart(args []string) error {
 		if err := cmd.Start(); err != nil {
 			return fmt.Errorf("failed to start background daemon: %w", err)
 		}
-		time.Sleep(500 * time.Millisecond)
-		fmt.Printf("✅ BAP Daemon launched in background (PID: %d on port %d)\n", cmd.Process.Pid, *portFlag)
-		fmt.Println("   Run 'bapedge daemon status' to inspect capability matrix.")
-		return nil
+		deadline := time.Now().Add(4 * time.Second)
+		for time.Now().Before(deadline) {
+			if ds, err := ReadDaemonState(); err == nil && daemonResponsive(ds) {
+				fmt.Printf("BAP daemon ready (PID %d)\n", ds.PID)
+				_ = cmd.Process.Release()
+				return nil
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		_ = cmd.Process.Release()
+		return fmt.Errorf("daemon started but did not pass readiness before deadline")
 	}
 
 	server, err := NewDaemonServer(serverURL, *portFlag)
@@ -707,6 +816,9 @@ func formatCap(active bool, note string) string {
 }
 
 func runDaemonStop(args []string) error {
+	if err := writeRuntimeState(daemonPausePath(), map[string]any{"paused_at": time.Now().UTC()}); err != nil {
+		return err
+	}
 	ds, err := ReadDaemonState()
 	if err != nil || ds == nil {
 		fmt.Println("⚠️  BAP Daemon is not running.")

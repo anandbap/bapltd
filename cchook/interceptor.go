@@ -794,6 +794,7 @@ type HookPayload struct {
 	Event              string                 `json:"event,omitempty"`
 	Type               string                 `json:"type,omitempty"`
 	ToolName           string                 `json:"tool_name,omitempty"`
+	ToolUseID          string                 `json:"tool_use_id,omitempty"`
 	ToolNameCamel      string                 `json:"toolName,omitempty"`
 	Tool               string                 `json:"tool,omitempty"`
 	Name               string                 `json:"name,omitempty"`
@@ -2600,6 +2601,13 @@ func main() {
 	}
 
 	// 2. Lifecycle Hook Handling: SessionStart
+	recordNativeCallback(payload)
+	if strings.EqualFold(payload.HookEventName,"PostToolUse") || strings.EqualFold(payload.HookEventName,"PostToolUseFailure") {
+		outcome:="succeeded";if strings.EqualFold(payload.HookEventName,"PostToolUseFailure"){outcome="failed"}
+		_ = spoolMCPObservation(payload,outcome)
+		fmt.Println("{}")
+		return
+	}
 	if strings.EqualFold(payload.HookEventName, "SessionStart") {
 		handleSessionStartHook(payload)
 		return
@@ -2633,6 +2641,8 @@ func main() {
 		sessionID = fmt.Sprintf("sess-%s-pid-%d", caller.AppID, targetPID)
 	}
 	prepareHookEvidence(payload, sessionID, activeCallerAppID)
+	activeMCPPayload = payload
+	_ = spoolMCPObservation(payload,"attempted")
 	fileHookEvidence.PID = targetPID
 	if revoked, reason := isSessionRevoked(resolveServerURL(), sessionID); revoked {
 		outputDecision("deny", reason, "This session cannot perform further governed tool actions.")
@@ -3062,6 +3072,7 @@ func outputDecisionWithUpdatedInput(decision, reason, context string, updatedInp
 	if err := spoolFileHookDecision(decision, reason); err != nil {
 		fmt.Fprintln(os.Stderr, "[BAP TELEMETRY] Unable to retain file-hook evidence:", err)
 	}
+	if strings.EqualFold(decision,"deny") { _ = spoolMCPObservation(activeMCPPayload,"denied") }
 	// If updatedInput has command, mirror across alternate tool input aliases
 	if updatedInput != nil {
 		if updatedInput.Command != "" {

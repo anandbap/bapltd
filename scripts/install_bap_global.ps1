@@ -103,6 +103,8 @@ $claudeSettings = [ordered]@{
         SessionStart     = @(@{ hooks = @(@{ type = "command"; command = (Join-Path $claudeHooksDir "interceptor.exe") }) })
         UserPromptSubmit = @(@{ hooks = @(@{ type = "command"; command = (Join-Path $claudeHooksDir "interceptor.exe") }) })
         PreToolUse       = @(@{ matcher = "*"; hooks = @(@{ type = "command"; command = (Join-Path $claudeHooksDir "interceptor.exe") }) })
+        PostToolUse      = @(@{ matcher = "mcp__.*"; hooks = @(@{ type = "command"; command = (Join-Path $claudeHooksDir "interceptor.exe") }) })
+        PostToolUseFailure = @(@{ matcher = "mcp__.*"; hooks = @(@{ type = "command"; command = (Join-Path $claudeHooksDir "interceptor.exe") }) })
         SessionEnd       = @(@{ hooks = @(@{ type = "command"; command = (Join-Path $claudeHooksDir "interceptor.exe") }) })
     }
 }

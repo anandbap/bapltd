@@ -66,8 +66,8 @@ func TestActivityEndpoints(t *testing.T) {
 		if summary.TotalActiveAgents != 0 {
 			t.Errorf("expected 0 active agents in clean live state, got %d", summary.TotalActiveAgents)
 		}
-		if summary.BusinessUnitsActive != "0/0" {
-			t.Errorf("expected '0/0' in clean live state, got %s", summary.BusinessUnitsActive)
+		if summary.BusinessUnitsActive != "" {
+			t.Errorf("expected unavailable BU coverage in clean live state, got %s", summary.BusinessUnitsActive)
 		}
 
 		// Live topology clean state

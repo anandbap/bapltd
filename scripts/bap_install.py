@@ -243,7 +243,7 @@ def clean_stale_secondary_installations(target_dir: str):
 
 def stop_running_bap_processes(target_dir: str = None):
     """
-    Terminates any running BAP daemon or agent processes (bapedge, bapcontrolplane, etc.)
+    Gracefully stops the selected user's daemon/supervisor through their CLI
     that would prevent binary replacement or uninstallation on Windows and Unix systems.
     """
     # If running inside unit tests, avoid terminating host system processes
@@ -264,46 +264,14 @@ def stop_running_bap_processes(target_dir: str = None):
 
     if bapedge_bin:
         try:
+            subprocess.run([bapedge_bin, "daemon", "supervise", "--stop"], capture_output=True, timeout=6)
             subprocess.run([bapedge_bin, "daemon", "stop"], capture_output=True, timeout=3)
         except Exception:
             pass
 
-    # 2. Check and terminate PID recorded in daemon PID file
-    state_dir = os.path.expanduser("~/.bapstate")
-    pid_file = os.path.join(state_dir, "bap-daemon.pid")
-    if os.path.isfile(pid_file):
-        try:
-            with open(pid_file, "r") as f:
-                daemon_pid = int(f.read().strip())
-            if sys.platform == "win32":
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(daemon_pid)], capture_output=True, timeout=3)
-            else:
-                subprocess.run(["kill", "-9", str(daemon_pid)], capture_output=True, timeout=3)
-        except Exception:
-            pass
-
-    # 3. Forcefully kill lingering BAP processes to release file locks
-    proc_names = [
-        "bapedge", "bapcontrolplane", "bapdashboard", "bapgateway",
-        "interceptor", "cchook-interceptor", "copilot-interceptor", "bapmcp"
-    ]
-    if sys.platform == "win32":
-        for p in proc_names:
-            try:
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/IM", f"{p}.exe"],
-                    capture_output=True,
-                    timeout=5
-                )
-            except Exception:
-                pass
-    else:
-        for p in proc_names:
-            try:
-                subprocess.run(["pkill", "-9", "-f", p], capture_output=True, timeout=5)
-            except Exception:
-                pass
-    time.sleep(0.5)
+    # Never kill by executable name or an unverified PID: another installation,
+    # a developer control plane or an in-flight agent may own that process.
+    # If graceful shutdown cannot release a file, the caller reports the lock.
 
 
 def safe_copy_binary(src: str, dst: str):
@@ -513,6 +481,32 @@ def update_user_path(target_dir: str):
     # Also update current runtime process PATH
     if clean_target.lower() not in [p.lower() for p in os.environ.get("PATH", "").split(os.pathsep)]:
         os.environ["PATH"] = clean_target + os.pathsep + os.environ.get("PATH", "")
+
+
+def inspect_release_sources(require_qualified=False):
+    try:
+        from . import bap_release
+    except ImportError:
+        import bap_release
+    package = os.path.dirname(os.path.abspath(__file__))
+    platform_id = get_platform_id()
+    edge, interceptor = get_source_binary("bapedge"), get_source_binary("interceptor")
+    manifest = os.path.join(os.path.dirname(edge), "bap-release.json")
+    if not os.path.isfile(manifest):
+        if require_qualified:
+            raise ValueError("Matched release manifest required before installing this pilot bundle")
+        return None, {"status": "manifest_missing", "source_qualified": False}
+    paths = bap_release.component_paths(os.path.dirname(edge), package, os.path.join(package, "launchers"), platform_id)
+    paths.update(edge=edge, interceptor=interceptor)
+    for key in tuple(paths):
+        if not key.startswith("claude_") and key != "launcher_engine":
+            continue
+        name = os.path.basename(paths[key])
+        initial = os.path.join(REPO_ROOT, "scripts", name) if key == "launcher_engine" else os.path.join(REPO_ROOT, name)
+        candidates = [initial, os.path.join(REPO_ROOT, "dist", platform_id, "claude-client", name),
+                      os.path.join(package, "launchers", name), os.path.join(package, name)]
+        paths[key] = next((candidate for candidate in candidates if os.path.isfile(candidate)), paths[key])
+    return manifest, bap_release.verify_manifest(manifest, paths, platform_id, require_qualified)
 
 
 def install_core_binaries(target_dir: str):
@@ -775,6 +769,10 @@ def configure_claude_code(claude_dir: str, cchook_bin: str, mcp_bin: str, bapedg
     claude_settings["hooks"]["PreToolUse"] = [
         {"matcher": "*", "hooks": [interceptor_hook]}
     ]
+    for event in ("PostToolUse", "PostToolUseFailure"):
+        claude_settings["hooks"][event] = [
+            {"matcher": "mcp__.*", "hooks": [interceptor_hook]}
+        ]
     claude_settings["hooks"]["Stop"] = [
         {"hooks": [interceptor_hook]}
     ]
@@ -1214,7 +1212,16 @@ def revert_claude_code(claude_dir: str):
 
 
 def uninstall(target_dir: str, workspace_root: str):
-    """Cleanly uninstalls BAP binaries, reverts PATH, and restores agent configurations across Windows, macOS, and Linux."""
+    """Remove the owned installation, startup entry and agent configuration."""
+    # Remove only this installation's owned per-user startup entry.
+    try:
+        from .bap_startup import configure_startup
+    except ImportError:
+        try:
+            from scripts.bap_startup import configure_startup
+        except ImportError:
+            from bap_startup import configure_startup
+    configure_startup(target_dir, enabled=False)
     print("=" * 80)
     print(f"     {TermColor.YELLOW}{TermColor.BOLD}BAP ZERO-TRUST AGENT GOVERNANCE -- UNINSTALLATION{TermColor.RESET}")
     print("=" * 80)
@@ -1494,6 +1501,26 @@ def configure_bap_config(target_dir: str, workspace_root: str, server_url: str, 
         except Exception:
             pass
 
+    # Discovery uses explicit installed workspace roots, independently of agent
+    # hook approval and the daemon's startup directory. This file holds no tokens.
+    discovery_state = os.environ.get("BAP_STATE_DIR") or os.path.expanduser("~/.bapstate")
+    discovery_roots_path = os.path.join(discovery_state, "discovery-roots.json")
+    try:
+        roots = []
+        if os.path.isfile(discovery_roots_path):
+            with open(discovery_roots_path, "r", encoding="utf-8") as stream:
+                roots = json.load(stream).get("roots", [])
+        workspace = os.path.abspath(workspace_root)
+        roots = [workspace] + [root for root in roots if isinstance(root, str) and os.path.normcase(root) != os.path.normcase(workspace)]
+        os.makedirs(discovery_state, exist_ok=True)
+        with open(discovery_roots_path + ".tmp", "w", encoding="utf-8") as stream:
+            json.dump({"roots": roots[:8]}, stream, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(discovery_roots_path + ".tmp", discovery_roots_path)
+    except (OSError, ValueError, TypeError) as error:
+        print(f"  [!] Discovery workspace registration failed: {type(error).__name__}")
+
     # Purge stale credentials if they were bound to a different server URL (e.g. old localhost:8443)
     for cred_dir in [os.path.expanduser("~/.bapstate"), os.path.expanduser("~/.ltd")]:
         cred_file = os.path.join(cred_dir, "credentials.json")
@@ -1520,6 +1547,8 @@ def main():
     parser.add_argument("--system", action="store_true", help="Request administrative elevation for system-wide service installation")
     parser.add_argument("--offline", action="store_true", help="Install in purely offline local governance mode")
     parser.add_argument("--no-path", action="store_true", help="Skip updating User environment PATH")
+    parser.add_argument("--no-startup", action="store_true", help="Disable this installation's per-user logon startup")
+    parser.add_argument("--require-release-manifest", action="store_true", help="Require a complete, internally consistent traceable pilot bundle before changing the installation")
     parser.add_argument("--non-interactive", action="store_true", help="Bypass interactive prompts and use defaults")
     parser.add_argument("--uninstall", action="store_true", help="Cleanly uninstall BAP binaries and restore original agent hooks")
     args = parser.parse_args()
@@ -1579,7 +1608,24 @@ def main():
             sys.exit(1)
 
     # 2. Deploy core binaries
+    # Validate before stopping or replacing the existing installation.
+    release_manifest, release_report = inspect_release_sources(args.require_release_manifest)
+    print(f"[*] Release provenance: {release_report['status']} (publisher signature not checked)")
     deployed_count = install_core_binaries(target_dir)
+    if release_manifest:
+        try:
+            from . import bap_release
+        except ImportError:
+            import bap_release
+        installed_manifest = os.path.join(target_dir, "bap-release.json")
+        shutil.copy2(release_manifest, installed_manifest)
+        installed_paths = bap_release.component_paths(target_dir, os.path.dirname(os.path.abspath(__file__)), target_dir, get_platform_id())
+        # A locked/stale file must not turn into an apparently successful upgrade.
+        release_report = bap_release.verify_manifest(installed_manifest, installed_paths, get_platform_id(), args.require_release_manifest)
+    release_state = os.environ.get("BAP_STATE_DIR") or os.path.expanduser("~/.bapstate")
+    os.makedirs(release_state, exist_ok=True)
+    with open(os.path.join(release_state, "release-provenance.json"), "w", encoding="utf-8") as stream:
+        json.dump(release_report, stream, indent=2)
 
     # 2.5 Configure Central Control Plane Endpoints & write bap-config.json
     configure_bap_config(target_dir, args.workspace, selected_server, is_offline)
@@ -1598,26 +1644,45 @@ def main():
     # 6. Cryptographic Pinning Scan
     run_pin_scan(target_dir, args.workspace)
 
-    # 6.5 Launch background supervisor daemon in user mode (zero admin rights required)
+    # Register automatic reporting after user logon, not a machine-wide service.
+    try:
+        from .bap_startup import configure_startup
+    except ImportError:
+        try:
+            from scripts.bap_startup import configure_startup
+        except ImportError:
+            from bap_startup import configure_startup
+    startup = configure_startup(target_dir, enabled=not args.no_startup)
+    print(f"  [*] Per-user logon startup: {startup['status']}")
+    reporting_startup_failed = startup["status"] == "registration_failed"
+
+    # 6.5 Launch and verify daemon and its independent crash supervisor.
     bapedge_bin = os.path.join(target_dir, "bapedge.exe" if sys.platform == "win32" else "bapedge")
     if os.path.isfile(bapedge_bin):
         try:
             cflags = 0x08000000 | 0x00000200 if sys.platform == "win32" else 0
-            subprocess.Popen(
+            started = subprocess.run(
                 [bapedge_bin, "daemon", "start", "-server", selected_server],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
                 creationflags=cflags,
-                start_new_session=True if sys.platform != "win32" else False
+                start_new_session=True if sys.platform != "win32" else False,
+                timeout=10
             )
-            print(f"  {TermColor.GREEN}[+] BAP background supervisor daemon started in user space (zero admin rights required).{TermColor.RESET}")
-        except Exception as e:
-            pass
+            if started.returncode != 0:
+                raise RuntimeError("daemon readiness failed")
+            supervised = subprocess.run([bapedge_bin, "daemon", "supervise"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, creationflags=cflags)
+            if supervised.returncode != 0:
+                raise RuntimeError("supervisor readiness failed")
+            print(f"  {TermColor.GREEN}[+] Background daemon and crash supervisor passed readiness checks.{TermColor.RESET}")
+        except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+            reporting_startup_failed = True
+            print(f"  [!] Reporting startup incomplete: {type(error).__name__}. Inspect 'bapedge daemon status --json'.")
 
     # 7. Print Completion & Verification Banner
     print("\n" + "=" * 80)
-    print(f"  {TermColor.GREEN}{TermColor.BOLD}[SUCCESS] BAP INSTALLATION COMPLETE! Your machine is ready to govern AI agents.{TermColor.RESET}")
+    print(f"  {TermColor.GREEN}{TermColor.BOLD}BAP FILE INSTALLATION COMPLETE. Validate enrollment, reporting and native callbacks before pilot acceptance.{TermColor.RESET}")
     print("=" * 80)
     print(f"[+] Total Core Binaries Deployed : {deployed_count}")
     print(f"[+] Configured Agent Platforms   : {len(agents)}")
@@ -1625,11 +1690,11 @@ def main():
         print(f"    * {a}")
     print("-" * 80)
     print(f"{TermColor.BOLD}QUICKSTART -- RUN YOUR AGENTS WITH BAP ZERO-TRUST GOVERNANCE:{TermColor.RESET}")
-    print(f"  1. Claude Code   : {TermColor.CYAN}claude{TermColor.RESET} (Hooks auto-intercept all actions)")
-    print(f"  2. Antigravity   : Governed automatically via {TermColor.CYAN}GEMINI.md{TermColor.RESET} & BAP MCP")
+    print(f"  1. Claude Code   : {TermColor.CYAN}claude{TermColor.RESET} (Hooks configured; native approval and reporting probe required)")
+    print(f"  2. Antigravity   : Guidance via {TermColor.CYAN}GEMINI.md{TermColor.RESET} & BAP MCP; verify observed reporting")
     print(f"  3. VS Code Copilot: Opens with {TermColor.CYAN}CopilotSandbox{TermColor.RESET} governed profile")
     print(f"  4. Direct CLI    : {TermColor.CYAN}bapedge exec \"<command>\"{TermColor.RESET}")
-    print(f"  5. Workstation Status: {TermColor.CYAN}bap status{TermColor.RESET} (Inspect 5-layer compliance & identity)")
+    print(f"  5. Workstation Status: {TermColor.CYAN}bapedge daemon status --json{TermColor.RESET} (Inspect runtime, callbacks and delivery)")
     print(f"  6. Verification  : {TermColor.CYAN}bap doctor{TermColor.RESET} (Pre-flight diagnostic health check)")
     print(f"  7. Cockpit       : {TermColor.CYAN}bap launch{TermColor.RESET} (Open developer cockpit & monitor fleet)")
     print(f"  8. Uninstall     : {TermColor.CYAN}bap uninstall{TermColor.RESET} (Clean removal)")
@@ -1638,6 +1703,9 @@ def main():
     print(f"  {TermColor.YELLOW}new terminal window (or run 'refreshenv') so your shell reloads the updated PATH.{TermColor.RESET}")
     print("=" * 80)
 
+
+    if reporting_startup_failed:
+        raise SystemExit(1)
 
 if __name__ == "__main__":
     main()

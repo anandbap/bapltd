@@ -785,7 +785,7 @@
             <p>Answers: <em>What are agents doing? Is it safe? What value is delivered?</em> Non-surveillance enterprise governance.</p>
           </div>
           <div>
-            <span class="status-pill pill-verified" id="govPill">100% CEDAR ENFORCED</span>
+            <span class="status-pill" id="govPill">ENFORCEMENT COVERAGE NOT MEASURED</span>
           </div>
         </div>
 
@@ -805,7 +805,7 @@
               <span class="tag-est">ESTIMATED</span>
             </div>
             <div class="ten-val"><span id="mcAssistedHours">0</span> <span class="unit">hrs</span></div>
-            <div class="ten-sub">Formula: 6.6h / verified active agent</div>
+            <div class="ten-sub">Unavailable without a measured baseline</div>
           </div>
 
           <div class="ten-card">
@@ -814,7 +814,7 @@
               <span class="tag-est">ESTIMATED</span>
             </div>
             <div class="ten-val"><span id="mcFTEEquiv">0</span> <span class="unit">FTE</span></div>
-            <div class="ten-sub">Labor capacity augmented</div>
+            <div class="ten-sub">Unavailable without verified outcome evidence</div>
           </div>
 
           <div class="ten-card">
@@ -823,7 +823,7 @@
               <span class="tag-ver">VERIFIED</span>
             </div>
             <div class="ten-val" style="color:var(--accent-teal);"><span id="mcPrevented">0</span> <span class="unit">blocks</span></div>
-            <div class="ten-sub">Zero-trust Cedar invariants held</div>
+            <div class="ten-sub">A denial is not automatically a high-risk incident</div>
           </div>
 
           <div class="ten-card">
@@ -2189,16 +2189,8 @@ Click "Simulate Evaluation" to run Cedar formal invariants against current fleet
             assisted_fte_equivalent: 34
           });
         } else {
-          // Real honest zero-telemetry state
-          renderMissionControlSummary({
-            total_active_agents: 0,
-            governed_percent: 100.0,
-            high_risk_prevented: 0,
-            business_units_active: '0/0',
-            completed_work_count: 0,
-            estimated_assisted_hours: 0,
-            assisted_fte_equivalent: 0
-          });
+          // A failed summary request is unknown, not a clean zero or 100% coverage.
+          renderMissionControlSummary({});
         }
 
         if (liveRes.status === 'fulfilled' && liveRes.value) {
@@ -2241,23 +2233,21 @@ Click "Simulate Evaluation" to run Cedar formal invariants against current fleet
 
     // Render Mission Control Summary
     function renderMissionControlSummary(summary) {
-      const active = summary.total_active_agents != null ? summary.total_active_agents : 0;
+      const active = summary.total_active_agents != null ? summary.total_active_agents : 'Unavailable';
       document.getElementById('mcActiveAgents').textContent = active;
-      document.getElementById('mcBUCount').textContent = (summary.business_units_active || '0/0') + ' BUs Active';
+      document.getElementById('mcBUCount').textContent = (summary.business_units_active || 'Unavailable') + ' BUs Active';
       
-      const hrs = summary.estimated_assisted_hours != null ? summary.estimated_assisted_hours : Math.round(active * 6.6);
+      const hrs = summary.estimated_assisted_hours != null ? summary.estimated_assisted_hours : 'Unavailable';
       document.getElementById('mcAssistedHours').textContent = hrs.toLocaleString();
       
-      const fte = summary.assisted_fte_equivalent != null ? summary.assisted_fte_equivalent : Math.round(hrs / 8.0);
+      const fte = summary.assisted_fte_equivalent != null ? summary.assisted_fte_equivalent : 'Unavailable';
       document.getElementById('mcFTEEquiv').textContent = fte.toLocaleString();
       
-      const prevented = summary.high_risk_prevented != null ? summary.high_risk_prevented : 0;
+      const prevented = summary.high_risk_prevented != null ? summary.high_risk_prevented : 'Unavailable';
       document.getElementById('mcPrevented').textContent = prevented;
 
-      // Update Topo counts
-      document.getElementById('buEngCount').textContent = active > 0 ? Math.ceil(active * 0.6) + ' active agents' : '0 agents';
-      document.getElementById('buSecCount').textContent = active > 0 ? Math.ceil(active * 0.25) + ' active agents' : '0 agents';
-      document.getElementById('buSupCount').textContent = active > 0 ? Math.ceil(active * 0.15) + ' active agents' : '0 agents';
+      // No measured department denominator is available for this topology.
+      ['buEngCount','buSecCount','buSupCount'].forEach(id => {document.getElementById(id).textContent = 'Unavailable';});
     }
 
     // Render Canonical Workstreams

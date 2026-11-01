@@ -18,12 +18,14 @@ async function main() {
     esc: value => String(value), render() {}, openAdminPopover() {}, confirm: () => true,
     document: { createElement: element, addEventListener(_, cb) { ctx.clickSession = cb; } } });
   const fixtures = {
+    '/api/activity/summary': { denied_operation_records: 3, high_risk_prevented: 999 },
     '/api/v1/sessions': { sessions: [{ session_id: 'claude', app_id: 'claude-code', status: 'active', last_active_at: new Date().toISOString() }] },
     '/api/activity/live': { activities: [{ session_id: 'claude', action_status: 'completed', timestamp: new Date().toISOString() }] }
   };
   ctx.getJSON = async url => fixtures[url] || {};
   vm.runInContext(section('  function loadLive(force)', '  function startLive()'), ctx);
   await ctx.loadLive();
+  assert.equal(ctx.S.blocked, 3, 'Live denials must use the measured record count');
   assert.equal(ctx.S.coverage[0].protect, 'Coverage unknown');
   assert.doesNotMatch(ctx.S.coverage[0].means, /Every action/);
   fixtures['/api/v1/sessions'].sessions[0].reporting_layers = ['discovery'];

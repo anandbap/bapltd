@@ -14,6 +14,12 @@ import zipfile
 import subprocess
 import argparse
 import platform
+import json
+
+try:
+    from . import bap_release
+except ImportError:
+    import bap_release
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BAP_PKG_DIR = os.path.join(REPO_ROOT, "bap")
@@ -167,7 +173,7 @@ def stage_binaries(platforms: list):
 
 def copy_installer_script():
     # 1. Scripts
-    for sname in ["bap_install.py", "bap_doctor.py", "bap_launch.py", "bap_harness.py", "bap_launcher_engine.ps1"]:
+    for sname in ["bap_install.py", "bap_startup.py", "bap_doctor.py", "bap_release.py", "bap_launch.py", "bap_harness.py", "bap_launcher_engine.ps1"]:
         src = os.path.join(REPO_ROOT, "scripts", sname)
         if os.path.isfile(src):
             shutil.copy2(src, os.path.join(BAP_PKG_DIR, sname))
@@ -218,6 +224,7 @@ def build_single_wheel(plat_id: str, plat_tag: str = None):
     ensure_binaries([plat_id])
     stage_binaries([plat_id])
     copy_installer_script()
+    write_release_manifests([plat_id])
 
     cmd = [sys.executable, "setup.py", "bdist_wheel"]
     if plat_tag:
@@ -238,12 +245,28 @@ def build_single_wheel(plat_id: str, plat_tag: str = None):
     print("[!] Error: No wheel was created in dist/")
     sys.exit(1)
 
+def write_release_manifests(platforms):
+    try:
+        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True, timeout=5).strip()
+    except (OSError, subprocess.SubprocessError):
+        commit = "unknown"
+    for platform_id in platforms:
+        directory = os.path.join(BAP_BIN_DIR, platform_id)
+        paths = bap_release.component_paths(directory, BAP_PKG_DIR, os.path.join(BAP_PKG_DIR, "launchers"), platform_id)
+        identities = {name: bap_release.build_identity(paths[name]) for name in ("edge", "interceptor")}
+        manifest = bap_release.create_manifest(platform_id, paths, commit, identities)
+        with open(os.path.join(directory, "bap-release.json"), "w", encoding="utf-8") as stream:
+            json.dump(manifest, stream, indent=2, sort_keys=True)
+
+
 def build_universal_wheel():
     print(f"\n[*] Packaging Universal Fat Wheel (all 5 platforms)...")
     clean_build_artifacts()
     ensure_binaries(UNIVERSAL_PLATFORMS)
     stage_binaries(UNIVERSAL_PLATFORMS)
     copy_installer_script()
+
+    write_release_manifests(UNIVERSAL_PLATFORMS)
 
     cmd = [sys.executable, "setup.py", "bdist_wheel"]
     res = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)

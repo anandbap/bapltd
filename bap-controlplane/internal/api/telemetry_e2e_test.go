@@ -69,4 +69,5 @@ func TestTelemetryDeliveryEndToEnd(t *testing.T) {
 	if sess.UserPrompt != "" || len(sess.ReportingLayers) != 1 || sess.ReportingLayers[0] != "broker" {
 		t.Fatalf("independent command reporting lost across retry/restart: %+v", sess)
 	}
+	if len(sess.Events)!=1||sess.Events[0].FullCommand!="go test ./..." {t.Fatalf("real testing activity lost across retry/restart: %+v",sess.Events)}
 }

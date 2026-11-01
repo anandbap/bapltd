@@ -360,6 +360,7 @@
     <div class="seg view-nav" role="tablist" aria-label="Dashboard Views">
       <button id="navActivity" role="tab" aria-selected="true" type="button">🤖 AI Agent Sessions &middot; AI Agent Activity</button>
       <button id="navWorkstations" role="tab" aria-selected="false" type="button">💻 Workstation Agents Registered &middot; Governed Workstations <span class="badge-count" id="navWsCount">0</span></button>
+      <button id="navDiscovery" role="tab" aria-selected="false" type="button">Discovery &amp; coverage</button>
     </div>
     <div class="top-right">
       <span class="conn" id="buildVer" title="Build version and git commit" style="font-family:var(--mono);font-size:12px;color:var(--ink-3)"></span>
@@ -415,6 +416,7 @@
         </div>
       </section>
 
+      <section class="start-demo"><span id="discoverySummary">Authenticate as admin to inspect workstation discovery.</span><button class="link" id="discoveryOpen">Review discovery &amp; coverage</button></section>
       <section class="stats" aria-label="Proof">
         <div class="stat" id="sAgentsCard"><div class="n" id="sAgents">-</div><div class="l" id="sAgentsLabel">Agent sessions governed</div><div class="h" id="sAgentsHint">Live AI coding sessions</div></div>
         <div class="stat" id="sBlockedCard"><div class="n" id="sBlocked">-</div><div class="l" id="sBlockedLabel">Risky actions stopped</div><div class="h" id="sBlockedHint">Each one has proof</div></div>
@@ -459,6 +461,21 @@
     </div>
 
     <!-- View 2: Governed Workstation Fleet -->
+    <div id="viewDiscovery" role="tabpanel" aria-labelledby="navDiscovery" hidden>
+      <section class="verdict"><div><div class="tag">Discovery &amp; coverage</div><h1>See what is present. Verify what is protected.</h1><p>Configured MCP servers, running agents, and native MCP calls are separate observations. Generic Python/Node workloads and tools outside reported scopes remain unknown.</p><p id="discoveryStorage"></p></div></section>
+      <section class="stats" style="display:block;padding:20px">
+        <label>Workstation ID <input id="discoveryFilter_instance_id" placeholder="All workstations"></label>
+        <label>Evidence <select id="discoveryFilter_kind"><option value="">All</option><option value="mcp_config">Configured MCP</option><option value="agent_process">Running agent</option><option value="mcp_call">Native MCP invocation</option></select></label>
+        <label>Presence <select id="discoveryFilter_state"><option value="">All</option><option value="present">Present</option><option value="not_seen">Not seen in latest complete scope</option></select></label>
+        <button class="btn" id="discoveryRefresh">Refresh</button><button class="btn" id="discoveryRescan" data-admin-control hidden>Request scan</button>
+        <p id="discoveryMessage" role="status">No discovery data loaded.</p><p id="discoveryCount"></p>
+        <div style="overflow:auto"><table><thead><tr><th>Name</th><th>Workstation</th><th>Kind</th><th>Evidence</th><th>Presence</th><th>Review</th><th>Last seen</th><th>Details</th></tr></thead><tbody id="discoveryRows"></tbody></table></div>
+        <button class="link" id="discoveryMore" disabled>Load next 50</button>
+        <details><summary>Expected pilot workstations</summary><p id="pilotCoverageSummary">Pilot roster not loaded.</p><div id="pilotCoverageRows"></div><p>Check-ins describe registry liveness, not complete prompt or operation capture.</p></details>
+        <details><summary>Latest scan coverage (up to 100 workstations)</summary><div id="discoveryCoverage">No scan coverage loaded.</div></details>
+      </section>
+    </div>
+    <dialog id="discoveryDrawer" style="max-width:750px;width:90%;border:1px solid #ddd;border-radius:12px;padding:24px"><h2 id="discoveryEvidenceTitle"></h2><pre id="discoveryEvidenceBody" style="white-space:pre-wrap"></pre><p>Acknowledgment or exception records a review decision; it does not enroll or protect a tool.</p><button id="discoveryAcknowledge" data-admin-control>Acknowledge</button><button id="discoveryException" data-admin-control>Time-limited exception</button><button id="discoveryReopen" data-admin-control>Reopen</button><button id="discoveryClose">Close</button></dialog>
     <div id="viewWorkstations" role="tabpanel" aria-labelledby="navWorkstations" hidden>
       <section class="panel ws-hero">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px">
@@ -484,8 +501,8 @@
           </div>
           <div class="ws-kpi">
             <div class="n" id="wsKpiActive" style="color:var(--ok)">0</div>
-            <div class="l">Active &amp; Governed</div>
-            <div class="h">Heartbeat healthy · Layer 1-4 active</div>
+            <div class="l">Reporting online</div>
+            <div class="h">Recent heartbeat · enforcement varies by workload</div>
           </div>
           <div class="ws-kpi">
             <div class="n" id="wsKpiSubagents" style="color:var(--accent)">0</div>
@@ -591,6 +608,7 @@
   </div>
 </div>
 
+<script src="/dashboard/discovery.js"></script>
 <script>
 (function () {
   'use strict';
@@ -629,11 +647,6 @@
   }
   function apiFetch(url, options) {
     options = options || {};
-    var tok = getAdminToken();
-    if (tok && url.indexOf('token=') === -1 && url.indexOf('admin_token=') === -1) {
-      var sep = url.indexOf('?') === -1 ? '?' : '&';
-      url = url + sep + 'token=' + encodeURIComponent(tok);
-    }
     options.headers = authHeaders(options.headers);
     options.credentials = 'same-origin';
     return fetch(url, options).then(function (r) {
@@ -670,6 +683,7 @@
 
   function updateAdminUI(active) {
     S.adminActive = !!active;
+    if (window.BAPDiscovery) window.BAPDiscovery.authChanged();
     var btn = $('adminToggle'), lbl = $('adminLabel');
     if (btn) btn.setAttribute('aria-pressed', active ? 'true' : 'false');
     if (lbl) lbl.textContent = active ? 'Admin: Active' : 'Admin: Off';
@@ -760,8 +774,8 @@
     if (S.record == null) rec.innerHTML = '<span class="pending">Pending telemetry</span>';
     else { rec.textContent = S.record ? 'Verified' : 'Check failed'; rec.style.color = S.record ? 'var(--ok)' : 'var(--bad)'; }
     var shadowMode = S.mode === 'live' && S.shadow > 0;
-    $('sBlockedLabel').textContent = shadowMode ? 'Flagged, not stopped' : 'Risky actions stopped';
-    $('sBlockedHint').textContent = shadowMode ? 'Audit mode: allowed but recorded' : 'Each one has proof';
+    $('sBlockedLabel').textContent = shadowMode ? 'Flagged, not stopped' : 'Denied operation records';
+    $('sBlockedHint').textContent = shadowMode ? 'Audit mode: allowed but recorded' : 'Recorded denials; not a count of unique threats';
     $('updated').textContent = S.mode === 'live' && S.updated ? '· Updated ' + S.updated.toISOString().slice(11, 19) + ' UTC, refreshes every 8 s' : '';
     var tlEl = $('timeline'), tl = S.timeline || [];
     if (tl.length) {
@@ -804,7 +818,7 @@
     var actCount = S.activeSessionCount != null ? S.activeSessionCount : (S.agents || 0);
     var totCount = S.totalSessionCount != null ? S.totalSessionCount : actCount;
     setNum($('sAgents'), actCount);
-    if ($('sAgentsLabel')) $('sAgentsLabel').textContent = 'Agent sessions governed';
+    if ($('sAgentsLabel')) $('sAgentsLabel').textContent = 'Agent sessions reporting';
     if ($('sAgentsHint')) $('sAgentsHint').textContent = actCount + ' active · ' + totCount + ' total sessions';
     var cn = $('conn');
     cn.className = 'conn' + (S.conn === 'online' ? '' : ' off');
@@ -1058,7 +1072,7 @@
       var idpClass = 'idp-' + (idp.indexOf('google') !== -1 ? 'google' : (idp.indexOf('github') !== -1 ? 'github' : (idp.indexOf('entra') !== -1 ? 'entra' : (idp.indexOf('okta') !== -1 ? 'okta' : 'otc'))));
       var status = (a.status || 'active').toLowerCase();
       var statusClass = (status === 'active' || status === 'enrolled') ? 'g' : (status === 'quarantined' ? 'r' : 'a');
-      var statusText = (status === 'active' || status === 'enrolled') ? 'Active & Governed' : (status === 'quarantined' ? '❄️ Frozen' : (status === 'deregistered' ? '⚪ Logged Out' : esc(status)));
+      var statusText = (status === 'active' || status === 'enrolled') ? 'Reporting online' : (status === 'quarantined' ? '❄️ Frozen' : (status === 'deregistered' ? '⚪ Logged Out' : esc(status)));
 	  if (a.recovery_only && status === 'active') { statusClass = 'a'; statusText = 'Reporting recovered'; }
       var lastSeen = a.last_heartbeat_at || a.enrolled_at || a.created_at;
       var lastStr = lastSeen ? fmtTime(Date.parse(lastSeen)) : 'Recent';
@@ -1077,6 +1091,7 @@
       var devLabel = devIcon + ' ' + (devType === 'server' ? 'Server' : (devType === 'desktop' ? 'Desktop' : 'Laptop'));
       var hostText = esc(a.hostname || 'workstation');
       if (a.ip_address) hostText += ' (' + esc(a.ip_address) + ')';
+      if (a.instance_id && S.adminActive) hostText += '<br><button class="link" data-discovery-instance="' + esc(a.instance_id) + '">View discovery</button>';
 
       var actionButtons = '';
       if (status === 'active' || status === 'enrolled') {
@@ -1372,7 +1387,7 @@
         });
         agents = Object.keys(latest).map(function (k) { return latest[k]; }).sort(function (x, y) { return y._t - x._t; });
         // Seeded demo sessions must never be presented as real agents.
-        var isSim = function (a) { return /^sess-v3-/.test(a.session_id || a.agent_id || '') || /demo/i.test(a.action || ''); };
+        var isSim = function (a) { return a.simulated === true || /^sess-v3-/.test(a.session_id || a.agent_id || ''); };
         var simCount = agents.filter(isSim).length;
         agents = agents.filter(function (a) { return !isSim(a); });
         S.updated = new Date();
@@ -1453,7 +1468,7 @@
         S.totalSessionCount = allSessions.length;
         S.agents = S.activeSessionCount;
         S.simHidden = simCount;
-        S.blocked = sum && sum.high_risk_prevented != null ? sum.high_risk_prevented : null;
+        S.blocked = sum && sum.denied_operation_records != null ? sum.denied_operation_records : null;
         if (S.shadow > 0) S.blocked = S.shadow; // audit mode: show flagged count instead
         var reqs = esc_ ? (Array.isArray(esc_) ? esc_ : (esc_.requests || [])) : null;
         var pend = reqs ? reqs.filter(function (x) { return !x.status || x.status === 'pending'; }) : null;
@@ -1746,6 +1761,7 @@
 
   /* ---------- mode switch ---------- */
   function setMode() {
+    if (window.BAPDiscovery) window.BAPDiscovery.authChanged();
     $('modeLive').setAttribute('aria-pressed', S.mode === 'live');
     $('modeDemo').setAttribute('aria-pressed', S.mode === 'demo');
     $('ribbon').hidden = S.mode !== 'demo';
@@ -1758,28 +1774,20 @@
   }
   /* ---------- primary view navigation & tabs ---------- */
   function switchView(target) {
-    var isWs = target === 'workstations';
-    var navAct = $('navActivity'), navWs = $('navWorkstations');
-    if (navAct) navAct.setAttribute('aria-selected', !isWs ? 'true' : 'false');
-    if (navWs) navWs.setAttribute('aria-selected', isWs ? 'true' : 'false');
-    var vAct = $('viewActivity'), vWs = $('viewWorkstations');
-    if (vAct) vAct.hidden = isWs;
-    if (vWs) vWs.hidden = !isWs;
-    try {
-      var h = isWs ? '#workstations' : '#activity';
-      if (location.hash !== h) {
-        history.replaceState(null, '', location.pathname + (location.search || '') + h);
-      }
-    } catch (_) {}
-    if (isWs) {
-      renderRegisteredAgents();
-    }
+    var isWs = target === 'workstations', isDiscovery = target === 'discovery';
+    [['Activity',!isWs&&!isDiscovery],['Workstations',isWs],['Discovery',isDiscovery]].forEach(function (entry) { $('nav'+entry[0]).setAttribute('aria-selected', String(entry[1])); $('view'+entry[0]).hidden = !entry[1]; });
+    try { history.replaceState(null, '', location.pathname + location.search + '#' + target); } catch (_) {}
+    if (isWs) renderRegisteredAgents();
+    if (window.BAPDiscovery) { if (isDiscovery) window.BAPDiscovery.show(); else window.BAPDiscovery.hide(); }
   }
-
-  var navAct = $('navActivity');
-  if (navAct) navAct.addEventListener('click', function () { switchView('activity'); });
-  var navWs = $('navWorkstations');
-  if (navWs) navWs.addEventListener('click', function () { switchView('workstations'); });
+  $('navActivity').addEventListener('click', function () {switchView('activity');});
+  $('navWorkstations').addEventListener('click', function () {switchView('workstations');});
+  $('navDiscovery').addEventListener('click', function () {switchView('discovery');});
+  $('discoveryOpen').addEventListener('click', function () {switchView('discovery');});
+  document.addEventListener('click', function (event) {
+    var button = event.target.closest('[data-discovery-instance]');
+    if (button) { switchView('discovery'); window.BAPDiscovery.show(button.getAttribute('data-discovery-instance')); }
+  });
 
   var wsRef = $('wsRefreshBtn');
   if (wsRef) {
@@ -1920,7 +1928,10 @@
 
   try { S.sessId = new URLSearchParams(location.search).get('session') || localStorage.getItem('aw3.session') || ''; } catch (_) { S.sessId = ''; }
   $('sessId').value = S.sessId;
-  if (location.hash === '#workstations') {
+  window.BAPDiscovery.init({getJSON:getJSON,apiFetch:apiFetch,isAdmin:function(){return S.adminActive;},isLive:function(){return S.mode==='live';}});
+  if (location.hash === '#discovery') {
+    switchView('discovery');
+  } else if (location.hash === '#workstations') {
     switchView('workstations');
   } else {
     switchView('activity');

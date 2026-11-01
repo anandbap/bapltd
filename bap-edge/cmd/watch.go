@@ -23,7 +23,6 @@ import (
 	"bap-edge/internal/state"
 )
 
-var isLocalScanRunning atomic.Bool
 var isSpoolFlushRunning atomic.Bool
 
 func sanitizeInstanceID(s string) string {
@@ -605,7 +604,6 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string, instanceIDOp
 
 	deadCheckCount := 0
 	sessionFile := sessionMarkerPath(sessionID)
-	var lastScannedEpoch int64
 	heartbeatCounter := 0
 	lastReportingStatus := "starting"
 
@@ -664,7 +662,7 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string, instanceIDOp
 		}
 
 		// Keep alive & pulse heartbeat continuously
-		statusHB, reasonHB, scanEpoch := pulseHeartbeat(serverURL, sessionID)
+		statusHB, reasonHB, _ := pulseHeartbeat(serverURL, sessionID)
 		if statusHB == "missing" {
 			statusHB, reasonHB = recoverMissingSession(context.Background(), httptransport.New(2*time.Second), serverURL, sessionID, appID, watchPID)
 		}
@@ -689,15 +687,6 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string, instanceIDOp
 			if heartbeatCounter%5 == 0 {
 				go func() {
 					_, _ = audit.FlushOfflineAudit(serverURL, "")
-				}()
-			}
-		}
-		if scanEpoch > 0 && scanEpoch != lastScannedEpoch {
-			lastScannedEpoch = scanEpoch
-			if isLocalScanRunning.CompareAndSwap(false, true) {
-				go func() {
-					defer isLocalScanRunning.Store(false)
-					performLocalClientShadowScan(serverURL, sessionID, appID, hostname)
 				}()
 			}
 		}
@@ -888,122 +877,4 @@ func postJSONWithRetry(url string, payload any, maxAttempts int, initialBackoff 
 	}
 	fmt.Fprintf(os.Stderr, "[bapedge watch] Error posting to %s after %d attempts: %v\n", url, maxAttempts, lastErr)
 	return lastErr
-}
-
-// performLocalClientShadowScan scans the local developer workstation and reports unmanaged assets up to control plane.
-func performLocalClientShadowScan(serverURL, sessionID, appID, hostname string) {
-	cwd, _ := os.Getwd()
-	findings := make([]map[string]any, 0)
-
-	// 1. Scan Local Environment Variables for Standing Secrets
-	sensitiveVars := map[string]string{
-		"AWS_SECRET_ACCESS_KEY": "AWS Standing Secret",
-		"AWS_SESSION_TOKEN":     "AWS Session Token",
-		"OPENAI_API_KEY":        "LLM Provider API Key",
-		"ANTHROPIC_API_KEY":     "LLM Provider API Key",
-		"DATABASE_URL":          "Database Connection String",
-		"POSTGRES_PASSWORD":     "Database Password",
-		"GITHUB_TOKEN":          "Source Control Token",
-	}
-	for envKey, category := range sensitiveVars {
-		if val := os.Getenv(envKey); strings.TrimSpace(val) != "" {
-			masked := "***"
-			if len(val) > 6 {
-				masked = val[:4] + "...***"
-			}
-			findings = append(findings, map[string]any{
-				"id":                fmt.Sprintf("laptop-env-%s-%d", strings.ToLower(envKey), time.Now().UnixNano()),
-				"type":              "UNMANAGED_ENV_VARIABLE",
-				"name":              fmt.Sprintf("Local Developer Secret: %s (%s)", envKey, category),
-				"target":            envKey,
-				"risk_level":        "CRITICAL",
-				"risk_score":        0.95,
-				"details":           fmt.Sprintf("Laptop environment variable %s contains plaintext credentials (%s). This bypasses BAP's Zero Standing Privilege invariant.", envKey, masked),
-				"remediation":       "Migrate to BAP Ephemeral Bounded Grants; remove standing credentials from developer environment.",
-				"agent_id":          sessionID,
-				"hostname":          hostname,
-				"is_managed_by_bap": false,
-			})
-		}
-	}
-
-	// 2. Scan Workspace .env Files
-	for _, envName := range []string{".env", ".env.local", ".env.production"} {
-		targetFile := filepath.Join(cwd, envName)
-		if fi, err := os.Stat(targetFile); err == nil && !fi.IsDir() {
-			findings = append(findings, map[string]any{
-				"id":                fmt.Sprintf("laptop-file-%s-%d", envName, time.Now().UnixNano()),
-				"type":              "UNPROTECTED_ENV_FILE",
-				"name":              fmt.Sprintf("Unprotected Secrets File: %s", envName),
-				"target":            targetFile,
-				"risk_level":        "HIGH",
-				"risk_score":        0.75,
-				"details":           fmt.Sprintf("Local environment file %s found on developer disk (%d bytes). Plaintext secrets are vulnerable to unauthorized agent reading.", targetFile, fi.Size()),
-				"remediation":       "Move secrets to corporate Vault/KMS and ensure file is listed in .gitignore.",
-				"agent_id":          sessionID,
-				"hostname":          hostname,
-				"is_managed_by_bap": false,
-			})
-		}
-	}
-
-	// 3. Scan Local Claude Desktop & Cursor MCP Configs
-	mcpPaths := make([]string, 0)
-	if appData := os.Getenv("APPDATA"); appData != "" {
-		mcpPaths = append(mcpPaths, filepath.Join(appData, "Claude", "claude_desktop_config.json"))
-	}
-	if home := os.Getenv("USERPROFILE"); home != "" {
-		mcpPaths = append(mcpPaths, filepath.Join(home, ".cursor", "mcp.json"))
-	}
-	if home := os.Getenv("HOME"); home != "" {
-		mcpPaths = append(mcpPaths,
-			filepath.Join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json"),
-			filepath.Join(home, ".cursor", "mcp.json"),
-		)
-	}
-	mcpPaths = append(mcpPaths, filepath.Join(cwd, ".cursor", "mcp.json"), filepath.Join(cwd, ".vscode", "mcp.json"))
-
-	for _, p := range mcpPaths {
-		data, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		var cfg struct {
-			MCPServers map[string]struct {
-				Command string   `json:"command"`
-				Args    []string `json:"args"`
-			} `json:"mcpServers"`
-		}
-		if json.Unmarshal(data, &cfg) == nil {
-			for srvName, srvDef := range cfg.MCPServers {
-				cmdLine := srvDef.Command + " " + strings.Join(srvDef.Args, " ")
-				if !strings.Contains(strings.ToLower(cmdLine), "bapedge") && !strings.Contains(strings.ToLower(cmdLine), "bapmcp") {
-					findings = append(findings, map[string]any{
-						"id":                fmt.Sprintf("laptop-mcp-%s-%d", srvName, time.Now().UnixNano()),
-						"type":              "UNMANAGED_LOCAL_MCP_SERVER",
-						"name":              fmt.Sprintf("Shadow MCP Server: %s", srvName),
-						"target":            p,
-						"risk_level":        "HIGH",
-						"risk_score":        0.75,
-						"details":           fmt.Sprintf("Local developer MCP server %q executes command %q outside BAP policy governance.", srvName, cmdLine),
-						"remediation":       fmt.Sprintf("Wrap %q command with 'bapedge mcp' or register in BAP fleet catalog.", srvName),
-						"agent_id":          sessionID,
-						"hostname":          hostname,
-						"is_managed_by_bap": false,
-					})
-				}
-			}
-		}
-	}
-
-	if len(findings) > 0 {
-		payload := map[string]any{
-			"agent_id":        sessionID,
-			"hostname":        hostname,
-			"workspace_root":  cwd,
-			"client_findings": findings,
-		}
-		_ = postJSONQuick(serverURL+"/api/v1/discovery/shadow-it/scan", payload)
-		fmt.Fprintf(os.Stderr, "[bapedge watch] 🛡️ Completed local shadow IT sweep: %d unmanaged assets reported to control plane\n", len(findings))
-	}
 }
