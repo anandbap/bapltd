@@ -134,12 +134,20 @@ func TestWorkstationLoginSupersedesHistoricalDuplicates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Establish age explicitly: Windows clock resolution can give adjacent
+	// registrations equal timestamps, invoking the agent-ID tie breaker.
+	s.mu.Lock()
+	s.agents[duplicate.AgentID].CreatedAt = first.CreatedAt.Add(time.Second)
+	s.mu.Unlock()
 	current, err := s.EnrollWorkstation(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.AgentID != first.AgentID || len(s.List()) != 1 || len(s.ListVisible(time.Hour, nil)) != 1 {
-		t.Fatal("historical duplicate remains visible")
+	if current.AgentID != first.AgentID {
+		t.Fatalf("expected oldest registration %s, got %s", first.AgentID, current.AgentID)
+	}
+	if listed, visible := len(s.List()), len(s.ListVisible(time.Hour, nil)); listed != 1 || visible != 1 {
+		t.Fatalf("historical duplicate remains visible: listed=%d visible=%d", listed, visible)
 	}
 	old, err := s.Get(duplicate.AgentID)
 	if err != nil || old.SupersededBy != current.AgentID || old.Status != types.StatusDeregistered {
@@ -152,6 +160,32 @@ func TestWorkstationLoginSupersedesHistoricalDuplicates(t *testing.T) {
 	s.EnsureSessionAgent(req.AppID, "old-instance", "", req.UserEmail, req.Hostname)
 	if len(s.List()) != 1 {
 		t.Fatal("old session recreated a duplicate")
+	}
+}
+
+func TestWorkstationDuplicateTimestampTieIsDeterministic(t *testing.T) {
+	s := NewStore("test")
+	req := workstationFixture()
+	created := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	s.mu.Lock()
+	for _, id := range []string{"agent-b", "agent-a"} {
+		s.agents[id] = &types.RegisteredAgent{
+			AgentID: id, AppID: req.AppID, Hostname: req.Hostname,
+			UserEmail: req.UserEmail, InstanceID: id + "-instance",
+			Status: types.StatusActive, CreatedAt: created,
+		}
+	}
+	s.mu.Unlock()
+	// Repeat selection to cover map iteration order and already-superseded
+	// records without relying on wall-clock precision or randomly generated IDs.
+	for i := 0; i < 20; i++ {
+		current, err := s.EnrollWorkstation(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.AgentID != "agent-a" || len(s.List()) != 1 {
+			t.Fatalf("timestamp tie selected an inconsistent primary: %s", current.AgentID)
+		}
 	}
 }
 
