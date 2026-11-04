@@ -59,6 +59,10 @@ if (Test-Path (Join-Path $scriptDir "policy.cedar")) {
 if (Test-Path (Join-Path $scriptDir "schema.json")) {
     Copy-Item (Join-Path $scriptDir "schema.json") -Destination $InstallDir -Force
 }
+if (Test-Path (Join-Path $scriptDir "plugins")) {
+    Copy-Item (Join-Path $scriptDir "plugins") -Destination (Join-Path $InstallDir "plugins") -Recurse -Force
+    Write-Output ">>> Deployed Native Agent Plugins (Layer 1A: Claude & Copilot) to $(Join-Path $InstallDir 'plugins')"
+}
 
 # Add to PATH (Machine if elevated, User if non-elevated)
 $targetScope = if ($useUserScope) { [System.EnvironmentVariableTarget]::User } else { [System.EnvironmentVariableTarget]::Machine }
@@ -95,4 +99,7 @@ try {
 }
 
 Write-Output ">>> BAP Edge deployed successfully."
+if (Test-Path "$binDir\bapedge.exe") {
+    & "$binDir\bapedge.exe" plugin layers
+}
 exit 0

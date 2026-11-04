@@ -37,6 +37,7 @@ Zero-Trust Governance & HITL Authorization:
   stepup       Task-scoped HITL step-up escalation with approval fatigue throttling (BAP-565)
 
 Execution & Protocol Integration:
+  plugin       Manage native agent plugins for Claude Code & Copilot (BAP-806)
   exec         Evaluate command against Cedar policy and run in sandboxed kernel namespace
   check        Evaluate command against Cedar policy in decision-only mode (zero execution side effects)
   mcp          Run as Model Context Protocol (MCP) server for Claude Code, Copilot, Cursor, Antigravity
@@ -163,6 +164,11 @@ func main() {
 	case "serve":
 		if err := cmd.RunServe(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error running server: %v\n", err)
+			os.Exit(1)
+		}
+	case "plugin":
+		if err := cmd.RunPlugin(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error in plugin command: %v\n", err)
 			os.Exit(1)
 		}
 	case "exec":

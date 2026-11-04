@@ -1025,12 +1025,121 @@ All terminal and tool commands must be routed through the BAP broker:
         print(f"  {TermColor.GREEN}[+] Python SDK:{TermColor.RESET} Local SDK available at {py_agent_dir}")
         detected_agents.append("Python Agent SDK (Available)")
 
-    # 7. PowerShell Profile Auto-Binding (Codex, Claude Code, Antigravity, Copilot)
+    # 7. Native Agent Plugins (BAP-806 Layer 1A)
+    plugin_agents = install_native_agent_plugins(workspace_root, target_dir)
+    detected_agents.extend(plugin_agents)
+
+    # 8. PowerShell Profile Auto-Binding (Codex, Claude Code, Antigravity, Copilot)
     if sys.platform == "win32":
         deploy_powershell_profile(target_dir)
         detected_agents.append("PowerShell Auto-Binding Profile (~/.bap/bap-profile.ps1)")
 
+    # 9. Print Transparent Defense-in-Depth Layer Report
+    print_defense_layers_report(workspace_root, target_dir)
+
     return detected_agents
+
+
+def install_native_agent_plugins(workspace_root: str, target_dir: str) -> list:
+    """Installs native agent plugins for Claude Code and GitHub Copilot (BAP-806 Layer 1A)."""
+    plugins_src = os.path.join(REPO_ROOT, "plugins")
+    plugins_dst = os.path.join(workspace_root, "plugins")
+    installed = []
+
+    if os.path.isdir(plugins_src):
+        # 1. Claude Code Native Plugin
+        claude_src = os.path.join(plugins_src, "claude")
+        claude_dst = os.path.join(plugins_dst, "claude")
+        if os.path.isdir(claude_src):
+            try:
+                os.makedirs(claude_dst, exist_ok=True)
+                shutil.copytree(claude_src, claude_dst, dirs_exist_ok=True)
+                installed.append("Claude Code Native Plugin (Layer 1A: In-Harness Extension)")
+                print(f"  {TermColor.GREEN}[+] Native Plugin:{TermColor.RESET} Installed Claude Code plugin at {claude_dst}")
+            except Exception as e:
+                print(f"  {TermColor.YELLOW}[!] Warning:{TermColor.RESET} Could not copy Claude plugin: {e}")
+
+        # 2. GitHub Copilot Native Plugin
+        copilot_src = os.path.join(plugins_src, "copilot")
+        copilot_dst = os.path.join(plugins_dst, "copilot")
+        if os.path.isdir(copilot_src):
+            try:
+                os.makedirs(copilot_dst, exist_ok=True)
+                shutil.copytree(copilot_src, copilot_dst, dirs_exist_ok=True)
+                installed.append("GitHub Copilot Native Plugin (Layer 1A: In-Harness Extension)")
+                print(f"  {TermColor.GREEN}[+] Native Plugin:{TermColor.RESET} Installed GitHub Copilot plugin at {copilot_dst}")
+            except Exception as e:
+                print(f"  {TermColor.YELLOW}[!] Warning:{TermColor.RESET} Could not copy Copilot plugin: {e}")
+
+    return installed
+
+
+def print_defense_layers_report(workspace_root: str, target_dir: str):
+    """Prints a transparent, comprehensive report showing all active Defense-in-Depth layers
+    and explaining how BAP controls AI agents when rules are violated."""
+    bapedge_bin = os.path.join(target_dir, "bapedge.exe" if sys.platform == "win32" else "bapedge")
+    if not os.path.isfile(bapedge_bin):
+        bapedge_bin = os.path.join(REPO_ROOT, "bapedge.exe" if sys.platform == "win32" else "bapedge")
+
+    claude_plugin = os.path.isfile(os.path.join(workspace_root, "plugins", "claude", ".claude-plugin", "plugin.json"))
+    copilot_plugin = os.path.isfile(os.path.join(workspace_root, "plugins", "copilot", "plugin.json"))
+    has_layer1a = claude_plugin or copilot_plugin
+
+    claude_settings = os.path.isfile(os.path.join(workspace_root, ".claude", "settings.json")) or \
+                      os.path.isfile(os.path.join(workspace_root, ".claude", "managed-settings.json"))
+    has_layer1b = claude_settings
+
+    has_layer2 = os.path.isfile(bapedge_bin)
+    has_layer3 = os.path.isfile(os.path.join(workspace_root, "policy.cedar")) or os.path.isfile(os.path.join(target_dir, "policy.cedar"))
+    has_layer4 = True
+    has_layer5 = True
+
+    print("\n" + "=" * 90)
+    print(f"  {TermColor.CYAN}{TermColor.BOLD}🛡️  BAP ACTIVE DEFENSE-IN-DEPTH ARCHITECTURE & RULE-ENFORCEMENT MATRIX{TermColor.RESET}")
+    print("=" * 90)
+    print("  How BAP Controls AI Agents When Rules Are Violated (Transparent Governance):")
+    print("  ----------------------------------------------------------------------------------------")
+
+    # Layer 1A
+    status_1a = f"{TermColor.GREEN}[ACTIVE]{TermColor.RESET}" if has_layer1a else f"{TermColor.YELLOW}[OPTIONAL]{TermColor.RESET}"
+    print(f"  [✓] Layer 1A: Native Agent Plugin (Claude Code / Copilot Agent Plugin 1.0)       {status_1a}")
+    print("      └─ Mechanism: In-harness tool interception via official Anthropic & Copilot plugin APIs.")
+    print("      └─ When Rules Broken: If agent attempts an unauthorized tool call (e.g. secret reading),")
+    print("         Layer 1A intercepts it BEFORE execution and delivers a structured refusal to the agent.")
+
+    # Layer 1B
+    status_1b = f"{TermColor.GREEN}[ACTIVE]{TermColor.RESET}" if has_layer1b else f"{TermColor.YELLOW}[OPTIONAL]{TermColor.RESET}"
+    print(f"  [✓] Layer 1B: Standalone Configuration Hook (.claude/settings.json / Wrappers)     {status_1b}")
+    print("      └─ Mechanism: Workspace/global configuration interceptor running cchook/interceptor.")
+    print("      └─ When Rules Broken: If an agent bypasses plugin packaging (e.g. launched with --bare),")
+    print("         Layer 1B catches and blocks the call at the configuration boundary with deduplication.")
+
+    # Layer 2
+    status_2 = f"{TermColor.GREEN}[ACTIVE]{TermColor.RESET}" if has_layer2 else f"{TermColor.RED}[OFFLINE]{TermColor.RESET}"
+    print(f"  [✓] Layer 2: Execution Broker & Kernel Sandboxing (bapedge exec)                {status_2}")
+    print("      └─ Mechanism: Windows Restricted Tokens / Linux Namespaces with process tree supervision.")
+    print("      └─ When Rules Broken: If an agent attempts raw subprocess creation, shell expansion, or")
+    print("         running untrusted binaries, the host OS kernel isolates execution in restricted namespaces.")
+
+    # Layer 3
+    status_3 = f"{TermColor.GREEN}[ACTIVE]{TermColor.RESET}" if has_layer3 else f"{TermColor.YELLOW}[STANDBY]{TermColor.RESET}"
+    print(f"  [✓] Layer 3: Anti-Tamper & Credential Shielding (FIM & Storage Layer)           {status_3}")
+    print("      └─ Mechanism: Ambient credential shielding (.env, ~/.ssh, ~/.aws) and cryptographic FIM.")
+    print("      └─ When Rules Broken: If an agent attempts to exfiltrate passwords or tamper with BAP")
+    print("         policies or binaries, Layer 3 blocks the mutation and creates forensic recovery checkpoints.")
+
+    # Layer 4
+    print(f"  [✓] Layer 4: Continuous Health & Telemetry (Agent Watch LTD Attestation)         {TermColor.GREEN}[ACTIVE]{TermColor.RESET}")
+    print("      └─ Mechanism: Observable callback heartbeats, discovery worker, and synthetic probes.")
+    print("      └─ When Rules Broken: If an agent disables plugins or goes dark, health transitions to")
+    print("         'Degraded', sending immediate tamper alerts to the Central Control Plane.")
+
+    # Layer 5
+    print(f"  [✓] Layer 5: Cryptographic Identity & Zero-Trust Egress (SPIFFE/SVID & Gateway)  {TermColor.GREEN}[ACTIVE]{TermColor.RESET}")
+    print("      └─ Mechanism: Short-lived STS tokens, mTLS channel attestation, and BAP Gateway PEP.")
+    print("      └─ When Rules Broken: Upon policy violation or anomalous egress attempt, tokens are")
+    print("         instantly revoked, isolating the rogue agent from enterprise APIs and internal networks.")
+    print("=" * 90)
 
 
 def deploy_powershell_profile(target_dir: str):

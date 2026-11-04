@@ -144,6 +144,8 @@ if "!MY_PID!"=="" (
 
 :: 4. Launch browser inspector
 echo.
+if exist "%~dp0bapedge.exe" "%~dp0bapedge.exe" plugin layers
+echo.
 echo  [*] Opening BAP Executive Cockpit and Live Fleet Radar in default browser...
 start %CP_URL%/inspector?mode=live
 
@@ -166,9 +168,10 @@ echo   [3] [SCALE]     Toggle Fleet Scale (5 Active Squads vs 25 Enterprise Node
 echo   [4] [KILL-ALL]  Toggle Global Emergency Kill-Switch (CISO Enterprise Override)
 echo   [5] [REVOKE]    Targeted Agent Isolation (Revoke Access for 'Carol' Without Stopping Fleet)
 echo   [6] [AUDIT]     Verify Cryptographic Audit Chain (100%% Anti-Tamper Merkle Proof)
-echo   [7] [EXIT]      Exit Demonstration and Cleanly Deregister Fleet
+echo   [7] [DEFENSE]   Inspect Active Defense Layers & Multi-Tier Rule Governance Matrix
+echo   [8] [EXIT]      Exit Demonstration and Cleanly Deregister Fleet
 echo ----------------------------------------------------------------------------------------------------
-set /p OPT="Select action (1-7) [default: 1]: "
+set /p OPT="Select action (1-8) [default: 1]: "
 if "%OPT%"=="" set OPT=1
 
 if "%OPT%"=="1" goto DO_SAFE
@@ -177,8 +180,9 @@ if "%OPT%"=="3" goto DO_SCALE
 if "%OPT%"=="4" goto DO_KILL
 if "%OPT%"=="5" goto DO_KILL_ONE
 if "%OPT%"=="6" goto DO_VERIFY
-if "%OPT%"=="7" goto DO_EXIT
-echo Invalid choice. Please enter 1-7.
+if "%OPT%"=="7" goto DO_DEFENSE
+if "%OPT%"=="8" goto DO_EXIT
+echo Invalid choice. Please enter 1-8.
 goto MENU_LOOP
 
 :DO_SAFE
@@ -214,6 +218,12 @@ goto MENU_LOOP
 :DO_VERIFY
 echo.
 python scripts\demo_actions.py verify
+echo.
+goto MENU_LOOP
+
+:DO_DEFENSE
+echo.
+if exist "%~dp0bapedge.exe" "%~dp0bapedge.exe" plugin status
 echo.
 goto MENU_LOOP
 

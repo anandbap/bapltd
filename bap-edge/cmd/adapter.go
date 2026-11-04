@@ -26,6 +26,8 @@ func RunAdapter(args []string) error {
 		return runGeminiAdapter(rest)
 	case "browser":
 		return runBrowserAdapter(rest)
+	case "hook", "plugin":
+		return RunPlugin(append([]string{"adapter"}, rest...))
 	case "emit":
 		return runEmitAdapter(rest)
 	default:

@@ -119,6 +119,21 @@ func RunSetup(args []string) error {
 	}
 	fmt.Printf("  [✓] Configured %s\n", bapCfgPath)
 
+	// 3. Install Native Agent Plugin alongside Standalone Hook (BAP-806)
+	repoRoot := findRepoRoot(targetDir)
+	if strings.Contains(strings.ToLower(*appFlag), "claude") {
+		if err := installClaudePlugin(repoRoot, targetDir); err == nil {
+			fmt.Println("  [✓] Installed Native Claude Code Plugin (Layer 1A: In-Harness Extension)")
+		}
+	} else if strings.Contains(strings.ToLower(*appFlag), "copilot") {
+		if err := installCopilotPlugin(repoRoot, targetDir); err == nil {
+			fmt.Println("  [✓] Installed Native Copilot Plugin (Layer 1A: In-Harness Extension)")
+		}
+	}
+
+	fmt.Println("")
+	PrintDefenseInDepthLayers(os.Stdout, targetDir)
+
 	fmt.Println("================================================================================")
 	fmt.Println("  ✅ Workstation setup complete! Agent execution is bound to Zero-Trust Policy.")
 	fmt.Println("================================================================================")
@@ -827,8 +842,12 @@ func RunWhy(args []string) error {
 		fmt.Printf("  ERROR DETAILS:      %v\n", evalErr)
 	} else if allowed {
 		fmt.Println("  POLICY DECISION:    ✅ ALLOWED (Permitted by Policy)")
-		fmt.Println("  REASON:             Action conforms to authorized zero-trust rules.")
-		fmt.Println("  RULE SCOPE:         Permitted within local workspace development boundaries.")
+		if escapesWorkspace {
+			fmt.Println("  TRUST STATUS:       Authorized cross-folder operation (pre-authorized via BAP Trust Store)")
+		} else {
+			fmt.Println("  REASON:             Action conforms to authorized zero-trust rules.")
+		}
+		fmt.Println("  RULE SCOPE:         Permitted within authorized development boundaries.")
 	} else {
 		fmt.Println("  POLICY DECISION:    ⛔ DENIED (Blocked by Cedar Policy)")
 		if reason != "" {
@@ -838,6 +857,11 @@ func RunWhy(args []string) error {
 		}
 		if escapesWorkspace {
 			fmt.Println("  RISK VECTOR:        Workspace boundary traversal detected (escapes_workspace=true)")
+			if !strings.Contains(strings.ToLower(reason), "secret") && !strings.Contains(strings.ToLower(reason), "credential") && !strings.Contains(strings.ToLower(reason), "exfiltration") {
+				fmt.Println("  HITL REMEDIATION:   To authorize this cross-folder target, run: bapedge trust <path> --project")
+			} else {
+				fmt.Println("  SECURITY INVARIANT: Absolute secret protection invariant active. Secret access cannot be bypassed.")
+			}
 		}
 	}
 

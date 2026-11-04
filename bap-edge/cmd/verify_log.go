@@ -24,7 +24,7 @@ func RunVerifyLog(args []string) error {
 	fmt.Printf("[*] Verifying cryptographic integrity of audit log: %s\n", logPath)
 	valid, count, err := audit.VerifyLocalLog(logPath)
 	if err != nil {
-		fmt.Printf("[-] TAMPER DETECTED: %v\n", err)
+		fmt.Printf("[-] ERROR: Unable to verify audit log: %v\n", err)
 		return err
 	}
 

@@ -251,6 +251,85 @@ All BAP components (`bap-edge`, `bap-controlplane`, `bap-gateway`, `python-agent
   6. *Contextual Task HITL Escalation & Fatigue Throttling (`BAP-565` - DONE)*: Implemented in `bap-controlplane/internal/hitl/escalation.go` (`/api/v1/escalation/request`, `/api/v1/escalation/resolve`, `bapedge stepup`). Captures rich task context and risk rating, suppresses duplicate escalation prompts within a 30s cooldown window with 429 `ApprovalFatigueThrottled`, caps attempts per task, and issues strictly single-task ephemeral grants (5m TTL).
 - **Verification Suite**: 100% verified via master automated test suite `tests/test_bap_epic32_agent_auth.py` (6/6 tests passing in 3.43s) and 22 Go unit tests across `bap-edge`, `bap-controlplane`, and `bap-gateway`.
 
+---
+
+## 13. Leadership Pilot Architecture & Honest Evidence Contracts (P0 — 1.9.14+)
+- **Honest Telemetry & Grounded Metrics (`bap-controlplane/internal/api/activity.go`)**:
+  - Replaced hallucinated/derived business metrics (event-derived completed work, speculative saved hours, FTE equivalents, hard-coded category trends) with explicit `null` and explanatory reasons.
+  - Distinct separation of metrics: `operations_observed`, `operations_allowed`, `operations_denied`, `work_items_verified_complete`, and `coverage_status`.
+  - Removed engineering test command filtering: `go test`, `pytest`, and testing tools are recognized as legitimate engineering work and delivered to telemetry rather than silently dropped.
+  - Sanitized chain verification responses: removed unsupported regulatory compliance certification claims in favor of cryptographic ledger hash verification.
+- **Contract & Design Reference**: `docs/ACTIVITY_METRICS_CONTRACT.md`, `docs/LEADERSHIP_PILOT_PLAN.md`.
+
+---
+
+## 14. Master Workstation Enrollment & Stable Instance SVIDs (1.9.18–1.9.19)
+- **Single Master Enrollment (`bap-controlplane/internal/registry/workstation.go`)**:
+  - `bap install` and `bap login` serve as workstation provisioning and identity establishment.
+  - Workstation deduplication: lookup, selection, and update share an atomic mutex lock in `EnrollWorkstation`. Older instances for the same host and user are marked `StatusDeregistered` with `SupersededBy` pointing to the primary workstation.
+  - Generates stable instance SVIDs: `spiffe://<trustDomain>/app/<appId>/instance/<instanceId>`.
+  - Mints distinct 1-year workstation login grants (`authz.TokenMinter.MintWorkstationSession`), strictly separating workstation lifecycle credentials from single-use ephemeral execution grants.
+- **Independent Shadow IT & MCP Discovery (v3)**:
+  - Discovers unmediated MCP configs across up to 8 registered workspaces and standard user config paths (`~/.claude/claude_desktop_config.json`, `.cursor/mcp.json`).
+  - Reports named agent process inventory (Claude Code, Antigravity, Copilot, Codex, SDK) without reading transcripts, prompts, or environments.
+  - Discovered observations carry `decision: observed` and do not mint grants, increment operation counters, or imply policy enforcement.
+
+---
+
+## 15. Independent Layer Reporting & Non-Blocking File-Hook Spooling
+- **Non-Blocking Hook Architecture (`cchook/evidence_spool.go`)**:
+  - Direct file-modification decisions (`Edit`, `Write`) are spooled atomically to `.bapstate/hook-evidence/<id>.tmp` -> `Sync()` -> `.json`.
+  - Eliminates network round-trip latency during IDE/CLI tool hooks. Workstation daemon promotes batches to the central journal asynchronously.
+  - Bounded 256-event upload queue with 8 delivery workers.
+- **Enterprise MDM Lock & Break-Glass (`cchook/managed_endpoint.go`)**:
+  - Supports enterprise configuration in `%ProgramData%\BAP\config.json` (Windows) and `/etc/bap` (POSIX) with `lock_endpoints: true`.
+  - Supports 24-hour time-boxed `breakglass.json` emergency overrides with mandatory operator identity and auditable justification.
+- **Cross-Platform Process Ancestry**:
+  - Windows: Win32 API `QueryFullProcessImageNameW` and Job Objects.
+  - Linux: `/proc/<pid>/exe` and `/proc/<pid>/stat`.
+  - macOS (`cchook/proc_darwin.go`): Direct `/bin/ps -ww` execution with 1s context timeout, avoiding shell injection and PATH spoofing.
+- **Codex Native Hook Envelope**: Supports `hookSpecificOutput` envelope for Codex PreToolUse without legacy fields.
+
+---
+
+## 16. Workstation Health, Startup Diagnostics & Pilot Runbook
+- **Background Crash Supervision & User Logon Startup**:
+  - User-mode logon Run key registration (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`) for seamless recovery after reboot.
+  - Detached crash supervisor (`bap-edge/cmd/supervisor.go`) monitoring the daemon PID with bounded exponential backoff.
+- **Diagnostic Doctor (`bap/doctor.py` / `bap/bap_doctor.py`)**:
+  - Comprehensive pre-flight health checker validating daemon status, logon registration, crash supervisor, authenticated heartbeat, and Claude callback registrations (`SessionStart`, `UserPromptSubmit`, `PreToolUse`).
+  - Strict reporting baseline: explicitly warns when file installation exists but native client callbacks have not been approved by the operator.
+- **Packaging & Version Parity (v1.9.19)**:
+  - Unified version 1.9.19 across `bap-controlplane`, `bap-edge`, `bap-gateway`, `bap` Python package, Intune MSI (`bapedge.wxs`), Jamf PKG, and Linux DEB.
+  - 20-Person Named Pilot Plan: `docs/LEADERSHIP_PILOT_PLAN.md`, `docs/PILOT_ROSTER_COVERAGE.md`, `docs/PILOT_RUNBOOK.md`, `docs/FRESH_INSTALL_ACCEPTANCE.md`.
+
+---
+
+## 17. Multi-Module Enterprise Workspaces, Sibling Repositories & HITL Authorization
+- **Enterprise Engineering Reality vs Attack Heuristics**:
+  - Monorepos, multi-repo workspaces, and shared contract packages (e.g., `../shared-contracts`, `../common-proto`, `~/.m2`, `~/.gradle`) require cross-module inspection and synchronized stub generation.
+  - Hard denials are strictly counterproductive when applied to legitimate cross-module developer workflows; outright rejection causes immediate enterprise pilot abandonment.
+- **Two-Tier Zero-Trust Architecture**:
+  1. *Tier A: Multi-Module Cross-Workspace Collaboration (Governed by HITL & BAP Trust Store)*:
+     - Cross-project reads (`dir ..\`, `cat ../shared/schema.proto`, dependency resolution) are **100% permitted out of the box** (Cedar Rule 2 permits inspection and dependency traversal).
+     - Cross-project writes (`cp models.proto ../sibling-project/models.proto`) trigger Step-Up / Human-in-the-Loop authorization.
+     - Developers pre-authorize trusted sibling repositories via: `bapedge trust <path> --project` (or `--session`, `--global`), stored in `.bap/project_permissions.json` and audited via `bapedge permissions`.
+     - When pre-trusted, AI agents execute cross-module builds and copies with **zero developer interruption** and complete audit receipts.
+  2. *Tier B: Absolute Security Invariants (Hard Denial, Zero Bypass, Zero Exceptions)*:
+     - Credential files (`.env`, `~/.aws/credentials`, `~/.ssh/id_rsa`, private keys), anti-tampering on policies (`policy.cedar`), and raw exfiltration tools (`curl`, `wget`) are unconditionally forbidden under Cedar Rule 3.
+     - Even if a sibling directory is trusted, attempting `cp .env ../sibling-contracts/.env` triggers an immediate hard denial with zero step-up bypass.
+- **Engine Bug Fixes & Refinements**:
+  - `bap-edge/internal/authz/decomposer.go`: Added `extractLastFileTarget(tokens)` for write/copy commands (`cp`, `mv`, `copy`, `move`), correctly extracting the destination target rather than the source file.
+  - `bap-edge/internal/authz/workspace.go`: Added `FindEscapingTargets(workspaceRoot, args)` to discover all escaping paths across command arguments.
+  - `bap-edge/internal/authz/authorizer.go`: Enhanced `evaluateAtomicNode` and `evaluateNode` to check all escaping targets against `IsTargetAuthorized(workspaceRoot, sessionID, target, action)`. Neutralizes `escapes_workspace` when targets are pre-authorized in the trust store.
+  - `bap-edge/cmd/exec.go`: Extended target resolution in `exec.go` to scan escaping arguments and check active project/session/global trust grants before prompting.
+  - `bap-edge/cmd/cli_tools.go`: Updated `bapedge why` to display clear trust status (`Authorized cross-folder operation via BAP Trust Store`) and actionable remediation guidance on denials.
+  - `bap-edge/internal/audit/logger.go` & `bap-edge/cmd/verify_log.go`: Fixed false-positive "TAMPER DETECTED" report on uninitialized state logs in sandbox mode.
+- **Verification Suites**:
+  - `scripts/test_manual_pilot_verification.ps1`: Interactive 6-phase manual instruction-by-instruction verification.
+  - `scripts/test_agent_runtime.ps1`: Automated 10-scenario agent wire-protocol verification (Claude Code PreToolUse hooks, Glob subagent whitelisting, Sibling trust, Credential hard denial).
+
+
 
 
 

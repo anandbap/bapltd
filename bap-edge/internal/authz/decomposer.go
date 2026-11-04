@@ -140,7 +140,7 @@ func Decompose(executable, fullCommand, args string) DecomposedAction {
 			TargetEntity:      target,
 		}
 	case "cp", "mv", "copy", "move", "mkdir", "touch", "copy-item", "cpi", "move-item", "mi", "new-item", "ni", "set-content", "sc", "add-content", "ac", "out-file":
-		target := extractFirstFileTarget(tokens)
+		target := extractLastFileTarget(tokens)
 		return DecomposedAction{
 			CanonicalAction:   "fs:file:write",
 			CanonicalResource: "file://" + target,
@@ -580,6 +580,16 @@ func extractFirstFileTargetForTool(exec string, tokens []string) string {
 
 func extractFirstFileTarget(tokens []string) string {
 	for i := 1; i < len(tokens); i++ {
+		t := tokens[i]
+		if !strings.HasPrefix(t, "-") {
+			return filepath.ToSlash(filepath.Clean(t))
+		}
+	}
+	return "local"
+}
+
+func extractLastFileTarget(tokens []string) string {
+	for i := len(tokens) - 1; i >= 1; i-- {
 		t := tokens[i]
 		if !strings.HasPrefix(t, "-") {
 			return filepath.ToSlash(filepath.Clean(t))

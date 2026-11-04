@@ -16,14 +16,17 @@ var (
 	modadvapi32 = syscall.NewLazyDLL("advapi32.dll")
 	modkernel32 = syscall.NewLazyDLL("kernel32.dll")
 
-	procOpenProcessToken      = modadvapi32.NewProc("OpenProcessToken")
-	procCreateRestrictedToken = modadvapi32.NewProc("CreateRestrictedToken")
-	procDuplicateTokenEx      = modadvapi32.NewProc("DuplicateTokenEx")
+	procOpenProcessToken       = modadvapi32.NewProc("OpenProcessToken")
+	procCreateRestrictedToken  = modadvapi32.NewProc("CreateRestrictedToken")
+	procDuplicateTokenEx       = modadvapi32.NewProc("DuplicateTokenEx")
+	procSetTokenInformation    = modadvapi32.NewProc("SetTokenInformation")
+	procConvertStringSidToSidW = modadvapi32.NewProc("ConvertStringSidToSidW")
 
 	procCreateJobObjectW         = modkernel32.NewProc("CreateJobObjectW")
 	procSetInformationJobObject  = modkernel32.NewProc("SetInformationJobObject")
 	procAssignProcessToJobObject = modkernel32.NewProc("AssignProcessToJobObject")
 	procOpenProcess              = modkernel32.NewProc("OpenProcess")
+	procLocalFree                = modkernel32.NewProc("LocalFree")
 )
 
 const (
@@ -37,6 +40,9 @@ const (
 	SecurityImpersonation = 2
 	TokenPrimary          = 1
 
+	TokenIntegrityLevel = 25
+	SE_GROUP_INTEGRITY  = 0x00000020
+
 	JobObjectExtendedLimitInformation          = 9
 	JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE         = 0x2000
 	JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION = 0x0400
@@ -44,6 +50,15 @@ const (
 	PROCESS_SET_QUOTA = 0x0100
 	PROCESS_TERMINATE = 0x0001
 )
+
+type sidAndAttributes struct {
+	sid        uintptr
+	attributes uint32
+}
+
+type tokenMandatoryLabel struct {
+	label sidAndAttributes
+}
 
 var (
 	restrictedTokenOnce sync.Once
@@ -98,6 +113,33 @@ func createRestrictedProcessToken() (syscall.Token, error) {
 	)
 	if r1 == 0 {
 		return 0, fmt.Errorf("DuplicateTokenEx failed: %v", err)
+	}
+
+	// Ensure the restricted token runs at Medium Mandatory Level (S-1-16-8192)
+	// so standard user-mode developer toolchains (Python, Node, git) and user files
+	// remain executable/readable without stripping the non-admin restriction.
+	sidStr, errSid := syscall.UTF16PtrFromString("S-1-16-8192")
+	if errSid == nil {
+		var pSid uintptr
+		rSid, _, _ := procConvertStringSidToSidW.Call(
+			uintptr(unsafe.Pointer(sidStr)),
+			uintptr(unsafe.Pointer(&pSid)),
+		)
+		if rSid != 0 {
+			defer procLocalFree.Call(pSid)
+			tml := tokenMandatoryLabel{
+				label: sidAndAttributes{
+					sid:        pSid,
+					attributes: SE_GROUP_INTEGRITY,
+				},
+			}
+			_, _, _ = procSetTokenInformation.Call(
+				uintptr(hPrimary),
+				uintptr(TokenIntegrityLevel),
+				uintptr(unsafe.Pointer(&tml)),
+				uintptr(unsafe.Sizeof(tml)),
+			)
+		}
 	}
 
 	return hPrimary, nil

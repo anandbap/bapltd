@@ -1,7 +1,7 @@
 # 🚀 BAP Enterprise Pilot Runbook & Evaluation Protocol
 ## A 30-Day Implementation Guide for CISOs, Platform Engineering, and Dev Leads
 
-**Version:** 1.3.0  
+**Version:** 1.9.19 (Updated for 20-Person Leadership Pilot & Agent Watch V3)  
 **Target Audience:** Enterprise Security Teams, Platform Engineers, Developer Productivity Leads  
 **Document Custodian:** BAP Security Architecture Team (`security@bapltd.com`)
 
@@ -12,10 +12,12 @@
 The **Bounded Authority Plane (BAP)** Enterprise Pilot is designed to evaluate runtime zero-trust governance across developer workstations running autonomous AI coding agents (**Claude Code**, **Google Antigravity**, **GitHub Copilot CLI**, **Cursor**, and **custom Python agents**).
 
 ### Primary Pilot Objectives
-1. **Zero-Friction Visibility**: Gain 100% visibility into what AI agents are doing (prompts, shell executions, tool calls, file modifications) without altering developer workflows.
-2. **Deterministic Risk Containment**: Prevent unauthorized credential exfiltration (`.env`, SSH keys), shadow package repository injection, and unmediated subshell evasion.
-3. **Validate Velocity & Sub-Millisecond Performance**: Prove that BAP's local Cedar evaluation (<1.5ms) introduces zero perceptible latency into developer inner-loops.
-4. **Phased Enterprise Rollout**: Transition safely from silent monitoring (**Audit/Shadow Mode**) to deterministic enforcement (**Enforce Mode**) with zero disruption to sprint commitments.
+1. **Honest Leadership Visibility (Agent Watch V3)**: Gain 100% auditable visibility into supported work, active sessions, and verified deliverables with explicit collection gaps—without synthetic hours saved, unverified FTEs, or fabricated productivity scores.
+2. **Deterministic Risk Containment**: Prevent unauthorized credential exfiltration (`.env`, SSH keys), shadow package repository injection, and unmediated subshell evasion through 5-layer endpoint defense.
+3. **Master Workstation Enrollment**: Single `bap install` / `bap login` flow providing persistent workstation identity, stable SPIFFE SVIDs, and automated deduplication across re-logins.
+4. **Independent Shadow IT & MCP Discovery**: Detect unmediated MCP tools and agent processes even when hooks or SDK starters are unused, with clear separation between discovery and enforcement.
+5. **Zero-Latency Developer Inner-Loops**: Sub-2ms local Cedar evaluation and non-blocking asynchronous atomic file-hook spooling (`.bapstate/hook-evidence/`).
+6. **Phased Enterprise Rollout**: Transition safely from silent monitoring (**Audit/Shadow Mode**) to deterministic enforcement (**Enforce Mode**) with zero disruption to sprint commitments.
 
 ---
 
@@ -24,10 +26,10 @@ The **Bounded Authority Plane (BAP)** Enterprise Pilot is designed to evaluate r
 ### Recommended Pilot Cohort Size
 | Role | Recommended Count | Primary Agents Evaluated | Focus Areas |
 | :--- | :--- | :--- | :--- |
-| **Backend Engineers** | 5 – 15 | Claude Code, Cursor | Terminal execution, DB migrations, API calls |
-| **Fullstack Engineers** | 5 – 15 | Antigravity, Copilot | Package dependencies, build tools, frontend tests |
-| **DevOps / Platform** | 3 – 5 | Python SDK, CLI | Terraform, script automation, cloud deployments |
-| **SecOps / CISO Office** | 2 – 4 | Agent Watch V2 | Live fleet radar, audit trail, kill switch, HITL |
+| **Backend Engineers** | 5 – 10 | Claude Code, Cursor | Terminal execution, DB migrations, API calls |
+| **Fullstack Engineers** | 5 – 10 | Antigravity, Copilot | Package dependencies, build tools, frontend tests |
+| **DevOps / Platform** | 2 – 4 | Python SDK, CLI | Terraform, script automation, cloud deployments |
+| **SecOps / CISO Office** | 2 – 4 | Agent Watch V3 | Live fleet radar, audit trail, kill switch, HITL, Discovery |
 
 ### Architecture Deployment Topology
 
@@ -110,9 +112,78 @@ gantt
 2. **Configure Multi-Scope Approvals**: Test Human-in-the-Loop (HITL) step-up for cross-folder operations:
    ```bash
    # Pre-authorize shared internal libraries if needed
-   bapedge trust --path "C:\Users\User\pyprj\shared-libs" --scope project --ops write
+   bapedge trust ..\sibling-contracts --project
    ```
 3. **Verify Supply-Chain Mirrors**: Ensure company npm/pip/maven mirror overrides function seamlessly via `.bapstate/mirrors/`.
+
+---
+
+## 3.5 Enterprise Multi-Module Workspaces, Sibling Repositories & HITL Authorization
+
+In real-world enterprise architectures, software development is rarely confined to a single directory. Monorepos, multi-repo workspaces, microservices, and shared contract libraries are standard practice. Developers routinely need AI agents (Claude Code, Antigravity, Copilot, Cursor) to:
+- Inspect schemas and protobuf definitions in a sibling repository (e.g. `../shared-contracts/models.proto`).
+- Resolve package caches across multi-module projects (e.g. `~/.m2`, `~/.gradle`, `../common-lib/target`).
+- Write generated stubs or sync shared configuration across projects (e.g. `cp models.proto ../sibling-project/backup.md`).
+
+BAP distinguishes between **legitimate multi-module development** and **malicious exfiltration**:
+
+```
+                                [Agent Command Execution]
+                                            │
+                    ┌───────────────────────┴───────────────────────┐
+                    ▼                                               ▼
+         [Secret / Tamper Threat]                       [Cross-Workspace Operation]
+  (e.g., cat .env, ~/.aws, curl evil.com)            (e.g., cp code ../sibling-module/)
+                    │                                               │
+                    ▼                                               ▼
+      [Absolute Invariant Defense]                      [Human-in-the-Loop (HITL)]
+         CEDAR RULE 3 (FORBID)                            CEDAR RULE 2 (GOVERNED)
+                    │                                               │
+                    ▼                                               ▼
+        ⛔ HARD OUTRIGHT DENIAL                         ┌───────────┴───────────┐
+        • 0% Bypass Possibility                         ▼                       ▼
+        • Trust Store Cannot Override           [Pre-Authorized via     [Unprompted Cross-
+        • Immediate Audit Alert                   bapedge trust]         Folder Mutation]
+                                                        │                       │
+                                                        ▼                       ▼
+                                                ✅ ALLOWED (0 Friction)  ⚠️ HITL Step-Up Prompt:
+                                                • Logged in audit       [O] Once [S] Session
+                                                • Cryptographic receipt [P] Project [G] Global
+```
+
+### 1. Read-Only Cross-Module Traversal is Allowed Out-of-the-Box
+Under Cedar Rule 2, reading, searching, inspecting, and navigating cross-project dependencies, sibling repositories, and shared schemas (e.g. `dir ..\`, `cat ../shared-contracts/api.json`, `git status`) is **100% permitted out-of-the-box**. Agents are never blocked from understanding cross-project context.
+
+### 2. Multi-Module Writes are Governed by HITL & Pre-Trust (Not Outright Rejection)
+When an agent attempts to mutate or delete files outside the current project root:
+- **Without Pre-Trust**: BAP halts execution and prompts the developer via HITL step-up (`[O] Once [S] Session [P] Project [G] Global [D] Deny`). In non-interactive agent harness calls (MCP / PreToolUse hooks), BAP responds with a structured suggestion explaining how to authorize the sibling path.
+- **With Pre-Trust**: The developer or team lead pre-authorizes the sibling module using `bapedge trust`:
+  ```powershell
+  # Authorize sibling repository for project workspace
+  bapedge trust ..\sibling-contracts --project
+
+  # Inspect active authorizations
+  bapedge permissions
+
+  # Revoke when no longer needed
+  bapedge untrust ..\sibling-contracts
+  ```
+  Once trusted, agents execute cross-module builds, copies, and edits **with zero interruption**, maintaining full cryptographic provenance in `.bapstate/audit.jsonl`.
+
+### 3. Absolute Secret Invariants Remain Airtight
+Unlike cross-folder development, **sensitive credential files can never be authorized or stepped up**:
+- Attempts to access `.env`, `~/.aws/credentials`, or `~/.ssh/id_rsa` trigger **hard denial** under Cedar Rule 3.
+- Even if a sibling directory is trusted, attempting `cp .env ../sibling-contracts/.env` is **hard blocked** with zero bypass possibility.
+
+### 4. Running the Verification Suites
+SecOps and developers can verify both manual step-by-step and automated agent wire-protocol flows:
+```powershell
+# 1. Step-by-Step Interactive Verification (all 6 phases)
+.\scripts\test_manual_pilot_verification.ps1
+
+# 2. Automated Agent Runtime Wire-Protocol Harness (Claude Code hooks & MCP)
+.\scripts\test_agent_runtime.ps1 -Mode auto
+```
 
 ### Phase 3 (Days 15–24): Deterministic Enforce Mode & Red-Team Testing
 **Target:** Validate that real-world attacks are blocked while day-to-day work proceeds uninterrupted.

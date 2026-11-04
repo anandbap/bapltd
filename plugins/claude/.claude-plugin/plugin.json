@@ -1,0 +1,12 @@
+{
+  "name": "bap-zero-trust",
+  "version": "1.0.0",
+  "description": "BAP Zero-Trust Security & Governance Plugin for Claude Code",
+  "author": {
+    "name": "BAP Enterprise Security Team"
+  },
+  "homepage": "https://bap.local",
+  "repository": "https://github.com/bapltd/bap-edge",
+  "license": "Apache-2.0",
+  "hooks": "./hooks/hooks.json"
+}

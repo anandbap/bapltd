@@ -225,6 +225,7 @@ func (a *Authorizer) EvaluateWithWorkspace(executable, fullCommand, args, worksp
 			// Canonical workspace escape check (e.g., symlink pointing outside workspace)
 			if workspaceRoot != "" && IsPathOutsideWorkspaceCanonical(workspaceRoot, canonical) {
 				nodeEscapes = true
+				canonicalTarget = canonical
 			}
 
 			// Secret path inspection (.env, .ssh, ~/.aws, /etc/shadow)
@@ -350,6 +351,24 @@ func (a *Authorizer) evaluateAtomicNode(executable, fullCommand, args, workspace
 	if escapesWorkspace && checkTarget != "" && (decomp.ActionType == "write" || decomp.ActionType == "delete") {
 		if authorized, _ := IsTargetAuthorized(workspaceRoot, a.sessionID, checkTarget, decomp.ActionType); authorized {
 			effectiveEscapesWorkspace = false
+		}
+	}
+	if effectiveEscapesWorkspace && workspaceRoot != "" && (decomp.ActionType == "write" || decomp.ActionType == "delete") {
+		escaping := FindEscapingTargets(workspaceRoot, args)
+		if len(escaping) == 0 {
+			escaping = FindEscapingTargets(workspaceRoot, fullCommand)
+		}
+		if len(escaping) > 0 {
+			allAuthorized := true
+			for _, esc := range escaping {
+				if auth, _ := IsTargetAuthorized(workspaceRoot, a.sessionID, esc, decomp.ActionType); !auth {
+					allAuthorized = false
+					break
+				}
+			}
+			if allAuthorized {
+				effectiveEscapesWorkspace = false
+			}
 		}
 	}
 	if effectiveEscapesWorkspace {

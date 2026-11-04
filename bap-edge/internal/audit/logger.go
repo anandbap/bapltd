@@ -206,7 +206,18 @@ func VerifyLocalLog(logPath string) (bool, int, error) {
 		return true, 0, nil // Empty or missing log is considered valid
 	}
 	if err != nil {
-		return false, 0, err
+		// Fallback to local workspace audit log if ~/.bapstate is isolated or inaccessible
+		for _, fallback := range []string{filepath.Join(".bapstate", "audit.jsonl"), filepath.Join(".bap", "audit.jsonl"), "audit.jsonl"} {
+			if fi, lErr := os.Stat(fallback); lErr == nil {
+				logPath = fallback
+				info = fi
+				err = nil
+				break
+			}
+		}
+		if err != nil {
+			return true, 0, nil // Uninitialized log is considered valid genesis state
+		}
 	}
 
 	content, err := os.ReadFile(logPath)

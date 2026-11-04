@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if command -v bapedge >/dev/null 2>&1; then
+    exec bapedge plugin adapter --client copilot "$@"
+elif command -v bapedge.exe >/dev/null 2>&1; then
+    exec bapedge.exe plugin adapter --client copilot "$@"
+elif [ -f "$SCRIPT_DIR/../../../bapedge" ]; then
+    exec "$SCRIPT_DIR/../../../bapedge" plugin adapter --client copilot "$@"
+elif [ -f "$SCRIPT_DIR/../../../bapedge.exe" ]; then
+    exec "$SCRIPT_DIR/../../../bapedge.exe" plugin adapter --client copilot "$@"
+elif [ -f "$SCRIPT_DIR/../../../copilot/copilot_interceptor.exe" ]; then
+    exec "$SCRIPT_DIR/../../../copilot/copilot_interceptor.exe" "$@"
+else
+    echo '{"allowed":false,"reason":"bapedge execution broker binary not found"}'
+    exit 1
+fi

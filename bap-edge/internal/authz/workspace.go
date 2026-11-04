@@ -275,3 +275,35 @@ func tokenizeCommand(cmd string) []string {
 	}
 	return tokens
 }
+
+// TokenizeCommand parses a single command line into tokens, respecting quotes.
+func TokenizeCommand(cmd string) []string {
+	return tokenizeCommand(cmd)
+}
+
+// FindEscapingTargets returns all canonical file paths in cmdArgs that escape workspaceRoot.
+func FindEscapingTargets(workspaceRoot, cmdArgs string) []string {
+	if workspaceRoot == "" || cmdArgs == "" {
+		return nil
+	}
+	cleanRoot := filepath.Clean(workspaceRoot)
+	tokens := tokenizeCommand(cmdArgs)
+	var targets []string
+	for _, tok := range tokens {
+		if isCommandFlag(tok) {
+			continue
+		}
+		val := strings.Trim(tok, "\"'`")
+		if idx := strings.Index(val, "="); idx != -1 && strings.HasPrefix(val, "-") {
+			val = val[idx+1:]
+		}
+		if val == "" {
+			continue
+		}
+		canon := ResolveCanonicalPath(val, cleanRoot)
+		if IsPathOutsideWorkspaceCanonical(cleanRoot, canon) {
+			targets = append(targets, canon)
+		}
+	}
+	return targets
+}

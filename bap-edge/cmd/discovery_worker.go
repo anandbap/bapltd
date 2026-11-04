@@ -82,6 +82,35 @@ func collectDiscovery(epoch int64) discoverymeta.Report {
 		}
 	}
 	r.Scopes = append(r.Scopes, scope)
+
+	// BAP-806: Agent Plugin Discovery Scope
+	pluginScope := discoverymeta.Scope{ID: "agent-plugins", Status: "complete"}
+	claudeRec := InspectClaudePlugin(workspace)
+	if claudeRec.PluginInstalled {
+		r.Observations = append(r.Observations, discoverymeta.Observation{
+			Key:        "plugin-" + discoverymeta.ID(claudeRec.Client, claudeRec.PluginName),
+			Scope:      pluginScope.ID,
+			Kind:       "agent_plugin",
+			Name:       claudeRec.PluginName,
+			Client:     claudeRec.Client,
+			Evidence:   string(claudeRec.State),
+			ObservedAt: time.Now().UTC(),
+		})
+	}
+	copilotRec := InspectCopilotPlugin(workspace)
+	if copilotRec.PluginInstalled {
+		r.Observations = append(r.Observations, discoverymeta.Observation{
+			Key:        "plugin-" + discoverymeta.ID(copilotRec.Client, copilotRec.PluginName),
+			Scope:      pluginScope.ID,
+			Kind:       "agent_plugin",
+			Name:       copilotRec.PluginName,
+			Client:     copilotRec.Client,
+			Evidence:   string(copilotRec.State),
+			ObservedAt: time.Now().UTC(),
+		})
+	}
+	r.Scopes = append(r.Scopes, pluginScope)
+
 	r.CompletedAt = time.Now().UTC()
 	return r
 }

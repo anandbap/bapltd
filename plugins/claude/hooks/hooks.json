@@ -1,0 +1,85 @@
+{
+  "description": "BAP Zero-Trust Security Hooks for Claude Code",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/bap-hook-adapter",
+            "args": ["--client", "claude", "--event", "SessionStart"]
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/bap-hook-adapter",
+            "args": ["--client", "claude", "--event", "UserPromptSubmit"]
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/bap-hook-adapter",
+            "args": ["--client", "claude", "--event", "PreToolUse"]
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/bap-hook-adapter",
+            "args": ["--client", "claude", "--event", "PostToolUse"]
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/bap-hook-adapter",
+            "args": ["--client", "claude", "--event", "PostToolUseFailure"]
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/bap-hook-adapter",
+            "args": ["--client", "claude", "--event", "Stop"]
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/bap-hook-adapter",
+            "args": ["--client", "claude", "--event", "SessionEnd"]
+          }
+        ]
+      }
+    ]
+  }
+}

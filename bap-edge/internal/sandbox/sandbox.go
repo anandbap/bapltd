@@ -322,6 +322,19 @@ func RunSandboxedCommandWithShell(cmdStr, shell string) ExecResult {
 				}
 			}
 		}
+
+		// Under Windows restricted token sandboxing, Git cannot read user profile config files.
+		// Default GIT_CONFIG_GLOBAL=NUL and GIT_CONFIG_NOSYSTEM=1 if not explicitly overridden by developer.
+		hasGitConfig := false
+		for _, e := range env {
+			if strings.HasPrefix(strings.ToUpper(e), "GIT_CONFIG_GLOBAL=") {
+				hasGitConfig = true
+				break
+			}
+		}
+		if !hasGitConfig {
+			env = append(env, "GIT_CONFIG_GLOBAL=NUL", "GIT_CONFIG_NOSYSTEM=1", "XDG_CONFIG_HOME=NUL")
+		}
 	}
 
 	// Inject CORP_OBO_TOKEN and broker marker environment variables

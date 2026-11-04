@@ -208,6 +208,15 @@ func promptHumanStepUpApproval(ec *execContext, fullCommand, executable, reason 
 			absTarget = filepath.Clean(filepath.Join(workspaceRoot, targetEntity))
 		}
 	}
+	if absTarget == "" || (workspaceRoot != "" && !authz.IsPathOutsideWorkspaceCanonical(workspaceRoot, absTarget)) {
+		escaping := authz.FindEscapingTargets(workspaceRoot, ec.cmdArguments)
+		if len(escaping) == 0 {
+			escaping = authz.FindEscapingTargets(workspaceRoot, fullCommand)
+		}
+		if len(escaping) > 0 {
+			absTarget = escaping[len(escaping)-1]
+		}
+	}
 
 	escapes := authz.CheckCommandWorkspaceEscape(workspaceRoot, fullCommand)
 	if absTarget != "" && workspaceRoot != "" && authz.IsPathOutsideWorkspaceCanonical(workspaceRoot, absTarget) {

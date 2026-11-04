@@ -56,3 +56,41 @@ type ExecResponse struct {
 	CanonicalResource string            `json:"canonical_resource,omitempty"`
 	Receipt           *ExecutionReceipt `json:"receipt,omitempty"`
 }
+
+// PluginState represents the observable lifecycle state of an agent plugin (BAP-806).
+type PluginState string
+
+const (
+	PluginStateInstalled   PluginState = "Installed"
+	PluginStateActive      PluginState = "Active"
+	PluginStateDegraded    PluginState = "Degraded"
+	PluginStateDisabled    PluginState = "Disabled"
+	PluginStateMissing     PluginState = "Missing"
+	PluginStateUnsupported PluginState = "Unsupported"
+	PluginStateUnknown     PluginState = "Unknown"
+)
+
+// PluginHealthRecord captures observable evidence for an agent plugin.
+type PluginHealthRecord struct {
+	Client              string      `json:"client"`                 // "claude-code" or "copilot"
+	PluginName          string      `json:"plugin_name"`            // e.g. "bap-zero-trust"
+	PluginVersion       string      `json:"plugin_version"`         // e.g. "1.0.0"
+	State               PluginState `json:"state"`                  // Active, Installed, Degraded, etc.
+	ManifestPath        string      `json:"manifest_path,omitempty"`
+	AgentDiscovered     bool        `json:"agent_discovered"`
+	PluginInstalled     bool        `json:"plugin_installed"`
+	HookActive          bool        `json:"hook_active"`
+	EnforcementVerified bool        `json:"enforcement_verified"`
+	LastObservedAt      *time.Time  `json:"last_observed_at,omitempty"`
+	PolicyVersion       string      `json:"policy_version,omitempty"`
+}
+
+// DefenseLayerStatus represents the status of a specific security layer in BAP's defense-in-depth model.
+type DefenseLayerStatus struct {
+	LayerID     string `json:"layer_id"`     // e.g. "Layer 1A", "Layer 1B", "Layer 2", etc.
+	Name        string `json:"name"`         // e.g. "Native Agent Plugin"
+	Description string `json:"description"`  // e.g. "Vendor plugin framework hook interception"
+	Status      string `json:"status"`       // "ACTIVE", "OPTIONAL", "DEGRADED", "DISABLED"
+	Evidence    string `json:"evidence"`
+}
+

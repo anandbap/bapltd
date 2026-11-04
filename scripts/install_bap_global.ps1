@@ -202,4 +202,21 @@ This environment is actively governed by the BAP Zero-Trust Local Trusted Daemon
 $agentsMdContent | Set-Content -Path (Join-Path $rulesDir "AGENTS.md") -Encoding UTF8
 
 Write-Host "[+] Antigravity global plugin active in $bapPluginDir" -ForegroundColor Green
+
+# 6. Native Agent Plugins Installation (BAP-806 Layer 1A)
+Write-Host ">>> Deploying Native Agent Plugins (Claude Code & Copilot)..." -ForegroundColor Cyan
+$pluginsSrc = Join-Path $repoRoot "plugins"
+if (Test-Path $pluginsSrc) {
+    # Workspace plugins
+    $wsPlugins = Join-Path $repoRoot "plugins"
+    Copy-Item -Path (Join-Path $pluginsSrc "*") -Destination (Join-Path $installDir "plugins") -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "[+] Native plugins deployed to $(Join-Path $installDir 'plugins')" -ForegroundColor Green
+}
+
+# 7. Display Transparent Defense-in-Depth Layer Architecture
+$bapedgeBin = Join-Path $binDir "bapedge.exe"
+if (Test-Path $bapedgeBin) {
+    & $bapedgeBin plugin layers
+}
+
 Write-Host ">>> BAP Zero-Trust Universal Global Deployment Complete!" -ForegroundColor Green

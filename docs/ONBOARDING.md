@@ -357,20 +357,49 @@ session.end()
 
 ---
 
-## 5. Human Step-Up Approvals (Cross-Folder Operations)
+## 5. Multi-Module Workspaces & Human Step-Up Approvals (HITL)
 
-When an agent attempts a mutating operation outside the workspace boundary (e.g. modifying code in a sibling repo `../shared-library/auth.py`):
-```text
-[!] STEP-UP REQUIRED: Agent requested write outside workspace root.
-    Target: ../shared-library/auth.py
-    [O] Approve Once
-    [S] Remember for this Session
-    [P] Remember for this Project
-    [G] Remember Globally
-    [D] Deny
-```
-- **Read-Only operations** (`cat`, `dir`, `git status`) across sibling directories are permitted automatically for build and navigation context.
-- **Mutations** require explicit Human-in-the-Loop (HITL) approval, preventing agent runaway side-effects.
+Enterprise applications frequently span multiple repositories, sibling modules, and shared contract packages (e.g., `../shared-contracts`, `../common-proto`, `~/.m2`, `~/.gradle`).
+
+### 5.1 Read-Only Traversal is Always Allowed
+Reading, searching, inspecting, and navigating cross-project dependencies (e.g. `dir ..\`, `cat ../shared-contracts/models.proto`, `git status`) is **permitted out of the box** without prompts. AI agents can always inspect sibling dependencies to understand contracts, interfaces, and types.
+
+### 5.2 Cross-Folder Writes are Governed by Step-Up / Pre-Trust
+When an agent attempts to mutate or delete files outside the current project root (e.g., `cp models.proto ../sibling-project/backup.md`):
+
+1. **Interactive Terminal Session**:
+   BAP halts execution and prompts the human developer directly:
+   ```text
+   [BAP STEP-UP HITL] Cross-folder mutation detected outside workspace root.
+       Target: C:\Users\User\pyprj\sibling-contracts\models.proto
+       [O] Approve Once
+       [S] Remember for this Active Session
+       [P] Remember for this Project Workspace
+       [G] Remember Globally across Workstation
+       [D] Deny
+   ```
+
+2. **Pre-Authorizing Sibling Modules (`bapedge trust`)**:
+   Developers and team leads can pre-authorize trusted sibling repositories to avoid agent interruptions:
+   ```bash
+   # Pre-authorize sibling repository for the current project
+   bapedge trust ..\sibling-contracts --project
+
+   # Authorize for current session only
+   bapedge trust ..\sibling-contracts --session
+
+   # Inspect active authorizations
+   bapedge permissions
+
+   # Revoke permission when no longer needed
+   bapedge untrust ..\sibling-contracts
+   ```
+   Authorizations are saved in `.bap/project_permissions.json` (for project scope) or `~/.bap/global_permissions.json` (for global scope). Once trusted, agents execute cross-module builds and copies with **zero developer interruption**.
+
+### 5.3 Absolute Security Invariants Cannot Be Bypassed
+Unlike cross-folder development, **sensitive credential files can never be authorized or stepped up**:
+- Attempts to access `.env`, `~/.aws/credentials`, `~/.ssh/id_rsa`, or private keys trigger **hard denial** under Cedar Rule 3.
+- Even if a sibling directory is trusted, attempting `cp .env ../sibling-contracts/.env` is **hard blocked** with zero exceptions.
 
 ---
 
