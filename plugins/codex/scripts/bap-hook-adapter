@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+# BAP Local Trusted Daemon Hook Adapter for OpenAI Codex
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+BAPEDGE_BIN="bapedge"
+if [ -f "$PLUGIN_ROOT/../../bapedge" ]; then
+    BAPEDGE_BIN="$PLUGIN_ROOT/../../bapedge"
+elif command -v bapedge >/dev/null 2>&1; then
+    BAPEDGE_BIN="bapedge"
+fi
+
+exec "$BAPEDGE_BIN" plugin adapter --client codex

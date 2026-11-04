@@ -348,6 +348,13 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/saas/tokens/bind", s.handleBindSaaSToken)
 	s.mux.HandleFunc("/api/v1/saas/tokens/verify", s.handleVerifySaaSToken)
 	s.mux.HandleFunc("/api/v1/saas/tokens", s.handleListSaaSTokens)
+
+	// RFC 8693 OAuth 2.0 Security Token Service & OBO Exchange (BAP-810)
+	s.mux.HandleFunc("/api/v1/sts/token", s.handleSTSToken)
+	s.mux.HandleFunc("/api/v1/oauth/token", s.handleSTSToken)
+	s.mux.HandleFunc("/oauth/token", s.handleSTSToken)
+	s.mux.HandleFunc("/api/v1/sts/tokens", s.handleSTSInspector)
+	s.mux.HandleFunc("/api/v1/sts/inspector", s.handleSTSInspector)
 	s.mux.HandleFunc("/api/v1/intent/attest", s.handleAttestIntent)
 	s.mux.HandleFunc("/api/v1/intent/verify", s.handleVerifyIntent)
 	s.mux.HandleFunc("/api/v1/intent/", s.handleGetIntent)

@@ -65,6 +65,10 @@ flowchart TD
 ```
 
 ### 2.1 Claude Code Integration Contract
+- **Interception Vectors (Layer 1A & Layer 1B)**:
+  - **Layer 1A (Native Plugin)**: Deployed via Anthropic's plugin architecture (`plugins/claude/.claude-plugin/plugin.json` and `hooks/hooks.json`). Calls `bap-hook-adapter` before tool execution.
+  - **Layer 1B (Standalone Hook)**: Intercepts commands via `.claude/settings.json` and `cchook-interceptor`.
+  - *Deduplication*: When both layers intercept the same event within 5 seconds, `bapedge` returns the cached verdict without double-prompting the developer.
 - **Enforcement Mode (`enforce`)**:
   - The `PreToolUse` hook intercepts command actions (`Bash`).
   - The hook validates Cedar policy via `bapedge check --cmd-b64 <b64>`.
@@ -87,6 +91,10 @@ flowchart TD
   - POSIX group isolation and sandboxed environment variables.
 
 ### 2.2 GitHub Copilot CLI Integration Contract
+- **Interception Vectors (Layer 1A & Layer 1B)**:
+  - **Layer 1A (Native Plugin)**: Packaged according to the Agent Plugins 1.0 schema (`plugins/copilot/plugin.json` and `com.github.copilot/hooks/hooks.json`). Translates Copilot execution payloads into BAP event contracts.
+  - **Layer 1B (Standalone Shim)**: Executes commands through `copilot-interceptor.exe` wrapping `bapedge exec`.
+  - Both adapters route requests through `bapedge exec` with identical session identity and audit provenance.
 - GitHub Copilot CLI executes commands through `copilot-interceptor.exe`.
 - The interceptor replaces native shell execution by delegating directly to `bapedge exec`. BAPEdge executes once in the sandbox and returns stdout, stderr, and exit status.
 
@@ -104,6 +112,15 @@ flowchart TD
   `spiffe://<trust_domain>/workstation/<instance_id>/session/<session_id>`
 - **Zero Fleet Sprawl**: The Control Plane maintains a single master identity card in `s.agents` per physical machine, tracking active tools in `master.Subagents` (e.g. `["claude-code", "python-agent"]`) and recording ephemeral runtime execution in `s.sessions`.
 - **Multi-Schema Interoperability**: `interceptor` and `cchook-interceptor` dynamically normalize output schemas (legacy `decision: "approve" | "block"` for Claude Code vs `decision: "allow" | "deny"` for generic CLIs) and resolve binary aliases (`claude`, `claude-code`, `claudecode`).
+
+### 2.6 Native Agent Plugins & 5-Layer Defense-in-Depth (BAP-806)
+- **Native Vendor Packaging**: Provides native packaging for Claude Code (`plugins/claude`) and GitHub Copilot (`plugins/copilot`), allowing zero-trust protection to install seamlessly into native plugin directories without modifying global shell paths.
+- **Sub-Layer Deduplication Engine**: When an agent runtime triggers both Layer 1A (plugin) and Layer 1B (standalone hook), `bapedge` detects identical `(session_id, command_hash)` within a 5-second TTL, evaluating Cedar policy exactly once and returning cached execution receipts.
+- **5-Layer Redundancy**: If an agent somehow evades Layer 1 (e.g., via subshells, dynamic `eval`, or plugin deactivation), subsequent layers halt the action:
+  - **Layer 2 (Broker Sandbox)**: Strips OS tokens and intercepts child processes.
+  - **Layer 3 (Anti-Tamper & DLP)**: File Integrity Monitoring blocks configuration modification, while environment scrubbing strips ambient credentials.
+  - **Layer 4 (Watchdog)**: Heartbeat monitoring detects unauthenticated evasion and isolates the session.
+  - **Layer 5 (Gateway PEP)**: Network egress is blocked without single-use authorization grants.
 
 ---
 

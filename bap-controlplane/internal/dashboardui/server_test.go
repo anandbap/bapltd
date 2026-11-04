@@ -8,19 +8,30 @@ import (
 	"testing"
 )
 
+type mockRoundTripper struct {
+	handler http.Handler
+}
+
+func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	rec := httptest.NewRecorder()
+	m.handler.ServeHTTP(rec, req)
+	return rec.Result(), nil
+}
+
 func TestDashboardServesAssetsAndProxiesAPI(t *testing.T) {
 	var expectedHost string
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstreamHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != expectedHost {
 			t.Errorf("proxy did not rewrite host: %q", r.Host)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"upstream"}`))
-	}))
+	})
+	upstream := httptest.NewServer(upstreamHandler)
 	defer upstream.Close()
 	target, _ := url.Parse(upstream.URL)
 	expectedHost = target.Host
-	handler := Handler(target, http.DefaultTransport, false)
+	handler := Handler(target, &mockRoundTripper{handler: upstreamHandler}, false)
 
 	page := httptest.NewRecorder()
 	handler.ServeHTTP(page, httptest.NewRequest("GET", "/dashboard/", nil))

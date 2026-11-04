@@ -986,6 +986,11 @@ func RunExec(args []string) {
 		callerHash:      callerHash,
 	}
 
+	// Ensure agent session is registered on Control Plane (Gap 1 auto-session start)
+	if ec.sessionID != "" && isAgentSource(ec.source) && !IsSessionActive(ec.sessionID) {
+		_ = EnsureSessionStarted(ec.sessionID, ec.source, ec.parentPID, ec.userPrompt)
+	}
+
 	cmdArgs := fs.Args()
 	var fullCommand string
 

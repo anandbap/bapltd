@@ -8,14 +8,17 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"bap-controlplane/pkg/types"
 )
 
 var (
-	ErrTokenNotFound        = errors.New("SaaS delegated token not found in registry")
-	ErrTokenExpired         = errors.New("SaaS delegated token has expired")
-	ErrTokenRevoked         = errors.New("SaaS delegated token has been revoked")
+	ErrTokenNotFound           = errors.New("SaaS delegated token not found in registry")
+	ErrTokenExpired            = errors.New("SaaS delegated token has expired")
+	ErrTokenRevoked            = errors.New("SaaS delegated token has been revoked")
 	ErrSessionBindingViolation = errors.New("SaaSTokenSessionBindingViolation: token cannot be reused outside of attested session context")
-	ErrScopeNotPermitted    = errors.New("requested scope exceeds token's bound authority")
+	ErrScopeNotPermitted       = errors.New("requested scope exceeds token's bound authority")
+	ErrGrantAlreadyBurned      = errors.New("GrantAlreadyBurned: single-use grant token has already been consumed")
 )
 
 // SaaSTokenBinding represents a third-party or cloud OAuth token bound to an attested BAP session
@@ -30,21 +33,69 @@ type SaaSTokenBinding struct {
 	ExpiresAt      time.Time `json:"expires_at"`
 	MaxUses        int       `json:"max_uses,omitempty"`
 	UseCount       int       `json:"use_count"`
-	Status         string    `json:"status"` // "active", "revoked", "expired"
+	Status         string    `json:"status"` // "active", "revoked", "expired", "burned"
 	RevokeReason   string    `json:"revoke_reason,omitempty"`
 }
 
 // SaaSTokenManager governs the issuance, session-binding, and verification of SaaS OAuth tokens
 type SaaSTokenManager struct {
-	mu     sync.RWMutex
-	tokens map[string]*SaaSTokenBinding
+	mu           sync.RWMutex
+	tokens       map[string]*SaaSTokenBinding
+	burnedGrants map[string]time.Time
+	exchanges    []*types.OBOTokenExchangeRecord
 }
 
 // NewSaaSTokenManager creates a new SaaSTokenManager
 func NewSaaSTokenManager() *SaaSTokenManager {
 	return &SaaSTokenManager{
-		tokens: make(map[string]*SaaSTokenBinding),
+		tokens:       make(map[string]*SaaSTokenBinding),
+		burnedGrants: make(map[string]time.Time),
+		exchanges:    make([]*types.OBOTokenExchangeRecord, 0),
 	}
+}
+
+// BurnGrantOnce atomically burns a grant or subject token, rejecting replay attempts
+func (m *SaaSTokenManager) BurnGrantOnce(grantToken string) (bool, string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	trimmed := strings.TrimSpace(grantToken)
+	if trimmed == "" {
+		return false, "MissingGrantToken", errors.New("grantToken is required")
+	}
+
+	if burnedAt, exists := m.burnedGrants[trimmed]; exists {
+		reason := fmt.Sprintf("GrantAlreadyBurned: single-use grant token was already consumed at %s", burnedAt.Format(time.RFC3339))
+		return false, "GrantAlreadyBurned", fmt.Errorf("%w: %s", ErrGrantAlreadyBurned, reason)
+	}
+
+	m.burnedGrants[trimmed] = time.Now().UTC()
+	return true, "GrantBurnedSuccessfully", nil
+}
+
+// RecordExchange records an RFC 8693 token exchange event for audit & inspector UI
+func (m *SaaSTokenManager) RecordExchange(record *types.OBOTokenExchangeRecord) {
+	if record == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Keep up to 500 recent exchanges
+	if len(m.exchanges) >= 500 {
+		m.exchanges = m.exchanges[1:]
+	}
+	m.exchanges = append(m.exchanges, record)
+}
+
+// ListExchanges returns a snapshot of recorded RFC 8693 token exchange events
+func (m *SaaSTokenManager) ListExchanges() []*types.OBOTokenExchangeRecord {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	res := make([]*types.OBOTokenExchangeRecord, len(m.exchanges))
+	copy(res, m.exchanges)
+	return res
 }
 
 // BindToken creates an attested binding between an OAuth/SaaS token and a specific active BAP session
@@ -110,6 +161,12 @@ func (m *SaaSTokenManager) VerifyUsage(tokenID, callingSessionID, requestedScope
 		reason := fmt.Sprintf("SaaSTokenSessionBindingViolation: token bound to session %q cannot be used in session %q",
 			binding.BoundSessionID, callingSessionID)
 		return false, "SessionBindingViolation", fmt.Errorf("%w: %s", ErrSessionBindingViolation, reason)
+	}
+
+	// Single-use / Max-use invariant enforcement (BAP-810)
+	if binding.MaxUses > 0 && binding.UseCount >= binding.MaxUses {
+		binding.Status = "burned"
+		return false, "GrantAlreadyBurned", ErrGrantAlreadyBurned
 	}
 
 	// Verify scope if specified

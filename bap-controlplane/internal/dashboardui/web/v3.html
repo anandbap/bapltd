@@ -361,6 +361,7 @@
       <button id="navActivity" role="tab" aria-selected="true" type="button">🤖 AI Agent Sessions &middot; AI Agent Activity</button>
       <button id="navWorkstations" role="tab" aria-selected="false" type="button">💻 Workstation Agents Registered &middot; Governed Workstations <span class="badge-count" id="navWsCount">0</span></button>
       <button id="navDiscovery" role="tab" aria-selected="false" type="button">Discovery &amp; coverage</button>
+      <button id="navOBO" role="tab" aria-selected="false" type="button">🔐 STS &amp; OBO Token Exchange <span class="badge-count" id="navOboCount">0</span></button>
     </div>
     <div class="top-right">
       <span class="conn" id="buildVer" title="Build version and git commit" style="font-family:var(--mono);font-size:12px;color:var(--ink-3)"></span>
@@ -550,6 +551,128 @@
             </thead>
             <tbody id="regBody">
               <tr><td colspan="8" class="pending">Checking registered workstation fleet...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <!-- View 4: RFC 8693 STS & OBO Token Exchange View (BAP-811) -->
+    <div id="viewOBO" role="tabpanel" aria-labelledby="navOBO" hidden>
+      <section class="panel" style="margin-bottom:20px">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+          <div>
+            <h1 style="font:600 24px/1.2 var(--sans);margin:0 0 4px">RFC 8693 Security Token Service (STS) &middot; On-Behalf-Of (OBO) Exchange</h1>
+            <p class="cov-note" style="margin:0">Zero Standing Privilege (ZSP) JIT credential translation. Developer SSO identities attenuate to short-lived (5-minute) ephemeral tokens strictly bound to attested AI sessions.</p>
+          </div>
+          <button class="btn ghost" id="oboRefreshBtn" type="button" style="font-size:12.5px;padding:6px 14px">&#x21bb; Refresh STS</button>
+        </div>
+
+        <div class="ws-kpis" style="margin-top:16px">
+          <div class="ws-kpi">
+            <div class="n" id="oboKpiTotal" style="color:var(--accent)">0</div>
+            <div class="l">Total OBO Exchanges</div>
+            <div class="h">RFC 8693 token exchanges</div>
+          </div>
+          <div class="ws-kpi">
+            <div class="n" id="oboKpiActive" style="color:var(--ok)">0</div>
+            <div class="l">Active Session-Bound Tokens</div>
+            <div class="h">Valid &lt; 5-min ephemeral credentials</div>
+          </div>
+          <div class="ws-kpi">
+            <div class="n" id="oboKpiEscalations" style="color:var(--bad)">0</div>
+            <div class="l">Scope Escalations Blocked</div>
+            <div class="h">Privilege abuse prevented by Cedar</div>
+          </div>
+          <div class="ws-kpi">
+            <div class="n" id="oboKpiReplays" style="color:var(--warn)">0</div>
+            <div class="l">Single-Use Replays Blocked</div>
+            <div class="h">Burned grant re-use contained</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- OBO Sequence Ladder Diagram -->
+      <section class="panel" style="margin-bottom:20px">
+        <h2 style="margin:0 0 8px">OBO Token Exchange Attestation Ladder</h2>
+        <div style="display:grid;grid-template-columns:repeat(5, 1fr);gap:12px;margin-top:14px">
+          <div style="background:#faf9f6;border:1.5px solid var(--line);border-radius:10px;padding:12px;text-align:center">
+            <div style="font-size:22px;margin-bottom:4px">👤</div>
+            <div style="font-weight:700;font-size:13px">1. Verified SSO Identity</div>
+            <div style="color:var(--ink-3);font-size:11.5px;margin-top:4px">GitHub OIDC / Google / Okta via bap login</div>
+          </div>
+          <div style="background:#faf9f6;border:1.5px solid var(--line);border-radius:10px;padding:12px;text-align:center">
+            <div style="font-size:22px;margin-bottom:4px">🆔</div>
+            <div style="font-weight:700;font-size:13px">2. Session SVID Attestation</div>
+            <div style="color:var(--ink-3);font-size:11.5px;margin-top:4px">SPIFFE ID bound to local AI Coding Agent</div>
+          </div>
+          <div style="background:#faf9f6;border:1.5px solid var(--line);border-radius:10px;padding:12px;text-align:center">
+            <div style="font-size:22px;margin-bottom:4px">🔄</div>
+            <div style="font-weight:700;font-size:13px">3. RFC 8693 STS Exchange</div>
+            <div style="color:var(--ink-3);font-size:11.5px;margin-top:4px">POST /api/v1/sts/token with Target Audience</div>
+          </div>
+          <div style="background:#faf9f6;border:1.5px solid var(--line);border-radius:10px;padding:12px;text-align:center">
+            <div style="font-size:22px;margin-bottom:4px">🛡️</div>
+            <div style="font-weight:700;font-size:13px">4. Cedar Policy Attenuation</div>
+            <div style="color:var(--ink-3);font-size:11.5px;margin-top:4px">Monotonic scope reduction &amp; anti-escalation</div>
+          </div>
+          <div style="background:#faf9f6;border:1.5px solid var(--line);border-radius:10px;padding:12px;text-align:center">
+            <div style="font-size:22px;margin-bottom:4px">🔒</div>
+            <div style="font-weight:700;font-size:13px">5. Bound Ephemeral Credential</div>
+            <div style="color:var(--ink-3);font-size:11.5px;margin-top:4px">5-min TTL, strictly bound to Session ID</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Active Exchanged Tokens Table -->
+      <section class="panel reg-agents">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:12px">
+          <div>
+            <h2 style="margin:0 0 4px">Downstream SaaS &amp; OAuth Token Bindings</h2>
+            <p class="cov-note" style="margin:0">Active credentials issued on behalf of human operator to AI coding sessions (GitHub, AWS, Railway, Jira).</p>
+          </div>
+          <span class="pill g" id="oboTokenCountPill">0 Active</span>
+        </div>
+        <div class="reg-table-wrap">
+          <table class="cov" id="oboTokensTable">
+            <thead>
+              <tr>
+                <th>Token ID</th>
+                <th>Target Provider / Audience</th>
+                <th>Bound Session ID</th>
+                <th>Operator Identity</th>
+                <th>Attenuated Scopes</th>
+                <th>Status</th>
+                <th>Expires In</th>
+                <th>Uses</th>
+              </tr>
+            </thead>
+            <tbody id="oboTokensBody">
+              <tr><td colspan="8" class="pending">Checking active token bindings...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Exchange History Log -->
+      <section class="panel reg-agents" style="margin-top:20px">
+        <h2 style="margin:0 0 4px">Recent OBO Token Exchange Requests</h2>
+        <p class="cov-note" style="margin:0 0 14px">Audit trail of all RFC 8693 STS requests evaluated against Cedar Zero-Trust policies.</p>
+        <div class="reg-table-wrap">
+          <table class="cov" id="oboHistoryTable">
+            <thead>
+              <tr>
+                <th>Exchange ID</th>
+                <th>Timestamp</th>
+                <th>Audience</th>
+                <th>Subject Token / SVID</th>
+                <th>Requested Scopes</th>
+                <th>Attenuated Scopes</th>
+                <th>Result</th>
+              </tr>
+            </thead>
+            <tbody id="oboHistoryBody">
+              <tr><td colspan="7" class="pending">Loading exchange history...</td></tr>
             </tbody>
           </table>
         </div>
@@ -1774,16 +1897,109 @@
   }
   /* ---------- primary view navigation & tabs ---------- */
   function switchView(target) {
-    var isWs = target === 'workstations', isDiscovery = target === 'discovery';
-    [['Activity',!isWs&&!isDiscovery],['Workstations',isWs],['Discovery',isDiscovery]].forEach(function (entry) { $('nav'+entry[0]).setAttribute('aria-selected', String(entry[1])); $('view'+entry[0]).hidden = !entry[1]; });
+    var isWs = target === 'workstations', isDiscovery = target === 'discovery', isObo = target === 'obo';
+    [['Activity',!isWs&&!isDiscovery&&!isObo],['Workstations',isWs],['Discovery',isDiscovery],['OBO',isObo]].forEach(function (entry) {
+      var navBtn = $('nav'+entry[0]), viewDiv = $('view'+entry[0]);
+      if (navBtn) navBtn.setAttribute('aria-selected', String(entry[1]));
+      if (viewDiv) viewDiv.hidden = !entry[1];
+    });
     try { history.replaceState(null, '', location.pathname + location.search + '#' + target); } catch (_) {}
     if (isWs) renderRegisteredAgents();
+    if (isObo) renderOBOExchanges();
     if (window.BAPDiscovery) { if (isDiscovery) window.BAPDiscovery.show(); else window.BAPDiscovery.hide(); }
   }
   $('navActivity').addEventListener('click', function () {switchView('activity');});
   $('navWorkstations').addEventListener('click', function () {switchView('workstations');});
   $('navDiscovery').addEventListener('click', function () {switchView('discovery');});
+  $('navOBO').addEventListener('click', function () {switchView('obo');});
   $('discoveryOpen').addEventListener('click', function () {switchView('discovery');});
+
+  var oboRef = $('oboRefreshBtn');
+  if (oboRef) {
+    oboRef.addEventListener('click', function () {
+      oboRef.textContent = '...';
+      renderOBOExchanges();
+      setTimeout(function () { oboRef.innerHTML = '&#x21bb; Refresh STS'; }, 600);
+    });
+  }
+
+  function renderOBOExchanges() {
+    getJSON('/api/v1/sts/inspector').then(function (data) {
+      var exchanges = (data && data.exchanges) || [];
+      var tokens = (data && data.active_tokens) || [];
+      var activeCount = 0, escalationsCount = 0, replaysCount = 0;
+      var now = Date.now();
+
+      tokens.forEach(function (t) {
+        var exp = new Date(t.expires_at).getTime();
+        if (t.status === 'active' && exp > now) activeCount++;
+      });
+
+      exchanges.forEach(function (ex) {
+        if (ex.status === 'DENIED') {
+          var r = String(ex.decision_reason || '').toLowerCase();
+          if (r.indexOf('escalation') !== -1 || r.indexOf('scope') !== -1) escalationsCount++;
+          if (r.indexOf('replay') !== -1 || r.indexOf('burned') !== -1) replaysCount++;
+        }
+      });
+
+      if ($('oboKpiTotal')) $('oboKpiTotal').textContent = exchanges.length;
+      if ($('oboKpiActive')) $('oboKpiActive').textContent = activeCount;
+      if ($('oboKpiEscalations')) $('oboKpiEscalations').textContent = escalationsCount;
+      if ($('oboKpiReplays')) $('oboKpiReplays').textContent = replaysCount;
+      if ($('navOboCount')) $('navOboCount').textContent = activeCount;
+      if ($('oboTokenCountPill')) $('oboTokenCountPill').textContent = activeCount + ' Active';
+
+      var tbBody = $('oboTokensBody');
+      if (tbBody) {
+        if (tokens.length === 0) {
+          tbBody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--ink-3);padding:24px">No active downstream SaaS OAuth tokens minted yet. AI Agent sessions will acquire short-lived tokens via RFC 8693 STS during execution.</td></tr>';
+        } else {
+          tbBody.innerHTML = tokens.map(function (t) {
+            var exp = new Date(t.expires_at).getTime();
+            var remainingSec = Math.max(0, Math.round((exp - now) / 1000));
+            var isLive = t.status === 'active' && remainingSec > 0;
+            var pillCls = isLive ? 'pill g' : (t.status === 'revoked' ? 'pill r' : 'pill');
+            var statusLabel = isLive ? 'ACTIVE' : (remainingSec === 0 ? 'EXPIRED' : String(t.status).toUpperCase());
+            return '<tr>' +
+              '<td><code style="font-size:12px;color:var(--accent)">' + esc(t.token_id) + '</code></td>' +
+              '<td><b>' + esc(String(t.saas_provider || '').toUpperCase()) + '</b></td>' +
+              '<td><span style="font-family:var(--mono);font-size:12px">' + esc(t.bound_session_id) + '</span></td>' +
+              '<td>' + esc(t.bound_user_email || 'operator@bap.local') + '</td>' +
+              '<td>' + (t.scopes || []).map(function(s){return '<span class="chip ok" style="margin:2px 4px 2px 0">' + esc(s) + '</span>';}).join('') + '</td>' +
+              '<td><span class="' + pillCls + '">' + statusLabel + '</span></td>' +
+              '<td>' + remainingSec + 's</td>' +
+              '<td>' + (t.use_count || 0) + (t.max_uses ? ' / ' + t.max_uses : '') + '</td>' +
+            '</tr>';
+          }).join('');
+        }
+      }
+
+      var histBody = $('oboHistoryBody');
+      if (histBody) {
+        if (exchanges.length === 0) {
+          histBody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--ink-3);padding:24px">No STS exchanges recorded yet.</td></tr>';
+        } else {
+          histBody.innerHTML = exchanges.slice().reverse().map(function (ex) {
+            var isAllow = ex.status === 'ACTIVE';
+            var pillCls = isAllow ? 'pill g' : 'pill r';
+            var resultText = isAllow ? 'ALLOWED (Bound)' : 'DENIED (' + esc(ex.decision_reason || 'Policy Violation') + ')';
+            return '<tr>' +
+              '<td><code style="font-size:12px">' + esc(ex.exchange_id) + '</code></td>' +
+              '<td>' + new Date(ex.timestamp).toLocaleTimeString() + '</td>' +
+              '<td><b>' + esc(String(ex.audience || '').toUpperCase()) + '</b></td>' +
+              '<td><span style="font-family:var(--mono);font-size:11.5px">' + esc(ex.subject_svid || '') + '</span></td>' +
+              '<td>' + esc(ex.requested_scope || '-') + '</td>' +
+              '<td>' + (ex.attenuated_scope ? '<span class="chip ok">' + esc(ex.attenuated_scope) + '</span>' : '<span style="color:var(--ink-3)">None (Dropped)</span>') + '</td>' +
+              '<td><span class="' + pillCls + '">' + resultText + '</span></td>' +
+            '</tr>';
+          }).join('');
+        }
+      }
+    }).catch(function (err) {
+      console.warn('Failed to fetch STS inspector data:', err);
+    });
+  }
   document.addEventListener('click', function (event) {
     var button = event.target.closest('[data-discovery-instance]');
     if (button) { switchView('discovery'); window.BAPDiscovery.show(button.getAttribute('data-discovery-instance')); }
@@ -1933,6 +2149,8 @@
     switchView('discovery');
   } else if (location.hash === '#workstations') {
     switchView('workstations');
+  } else if (location.hash === '#obo') {
+    switchView('obo');
   } else {
     switchView('activity');
   }

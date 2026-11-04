@@ -8,6 +8,7 @@ BAP is an open reference architecture and implementation for governing AI agents
 
 📖 **Core Documentation Links:**
 - [🚀 5-Minute Developer Onboarding Guide (`docs/ONBOARDING.md`)](docs/ONBOARDING.md) — Single-click user-mode setup for Claude Code, Antigravity, Copilot, Cursor & Python.
+- [🔌 Native Agent Plugin Architecture (`PLUGIN_ARCHITECTURE.md`)](PLUGIN_ARCHITECTURE.md) — Native Claude Code, GitHub Copilot, Google Antigravity, OpenCode & OpenAI Codex plugin specifications & 5-layer Defense-in-Depth hierarchy.
 - [📰 Launch Blog & Announcement (`docs/BLOG_LAUNCH_ANNOUNCEMENT.md`)](docs/BLOG_LAUNCH_ANNOUNCEMENT.md) — Why Autonomous AI Coding Agents Demand a Bounded Authority Plane.
 - [📋 Enterprise Pilot Runbook & Evaluation Protocol (`docs/PILOT_RUNBOOK.md`)](docs/PILOT_RUNBOOK.md) — 30-Day implementation guide for CISOs, Platform Engineering & DevLeads.
 - [🛡️ Security Assurance & Enterprise FAQ (`docs/FAQ_AND_SECURITY_ASSURANCE.md`)](docs/FAQ_AND_SECURITY_ASSURANCE.md) — Privacy, zero code exfiltration, compliance, and threat mitigation.
@@ -16,8 +17,8 @@ BAP is an open reference architecture and implementation for governing AI agents
 - [🌟 Strategic Vision Document (`VISION.md`)](VISION.md) — The executive problem statement, the AI agent crisis, and strategic North Star.
 - [🏛️ Architecture & Technical Design (`ARCHITECTURE.md`)](ARCHITECTURE.md) — Complete 4-Plane technical architecture, state machines, and threat mitigations.
 - [📁 `.bapstate` Architecture & Troubleshooting (`docs/BAPSTATE_AND_TROUBLESHOOTING.md`)](docs/BAPSTATE_AND_TROUBLESHOOTING.md) — Unified state directory, command operations, and troubleshooting playbooks.
-- [📋 Jira Backlog & Stories (`JIRA_Stories.md`)](JIRA_Stories.md) — Complete epics, user stories, and delivery boards (BAP-100 through BAP-743).
-- [🔒 Security Assurance Program: BAP-700 Series (`docs/adr/ADR-004-IAM-Federation-And-Fallback.md`)](docs/adr/ADR-004-IAM-Federation-And-Fallback.md) — Enterprise Trust, Containment, Evidence, and Risk-Based Acceleration (BAP-701 to BAP-743).
+- [📋 Jira Backlog & Stories (`JIRA_Stories.md`)](JIRA_Stories.md) — Complete epics, user stories, and delivery boards (BAP-100 through BAP-806).
+- [🔒 Security Assurance Program: BAP-700 Series (`docs/adr/ADR-004-IAM-Federation-And-Fallback.md`)](docs/adr/ADR-004-IAM-Federation-And-Fallback.md) — Enterprise Trust, Containment, Evidence, and Risk-Based Acceleration (BAP-701 to BAP-806).
 - [🧪 10-Point Adversarial Test Matrix (`tests/test_bounded_authority_matrix.py`)](tests/test_bounded_authority_matrix.py) — 100% automated regression matrix.
 - [🎯 Adversarial Red-Team Test Suite (`tests/test_bap714_containment_redteam.py`)](tests/test_bap714_containment_redteam.py) — Automated escape validation across 5 attack vectors.
 
@@ -40,18 +41,24 @@ bap login
 # 4. Check workstation governance status & operating mode
 bap status
 
-# 5. Manage background supervisor daemon (user-mode, zero admin required)
+# 5. Inspect native agent plugins & active Defense-in-Depth layers
+bapedge plugin status
+bapedge plugin layers
+bapedge plugin verify all
+bapedge plugin verify codex
+
+# 6. Manage background supervisor daemon (user-mode, zero admin required)
 bap daemon status
 bap daemon start
 bap daemon stop
 
-# 6. Verify workstation health with pre-flight doctor
+# 7. Verify workstation health with pre-flight doctor
 bap doctor
 
-# 7. Launch developer cockpit & verify governed agents
+# 8. Launch developer cockpit & verify governed agents
 bap launch
 
-# 8. Log out and deregister workstation when finished
+# 9. Log out and deregister workstation when finished
 bap logout
 ```
 

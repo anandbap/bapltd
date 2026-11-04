@@ -1,8 +1,8 @@
-# BAP Native Agent Plugin Architecture (BAP-806)
+# BAP Native Agent Plugin Architecture (BAP-806, BAP-807 & BAP-808)
 
 ## 1. Overview & Mission
 
-The **BAP Native Agent Plugin Framework** extends BAP (Agent Watch) to support native plugin architectures for **Claude Code** and **GitHub Copilot** alongside existing standalone hooks.
+The **BAP Native Agent Plugin Framework** extends BAP (Agent Watch) to support native plugin architectures for **Claude Code**, **GitHub Copilot**, **Google Antigravity (`agy`)**, **OpenCode**, and **OpenAI Codex** alongside existing standalone hooks.
 
 This provides an additive, standardized integration layer into the **BAP Edge Local Trusted Daemon (`bapedge`)** while preserving all existing security invariants:
 * No duplicated policy evaluation engines (Cedar remains the single source of truth).
@@ -18,7 +18,7 @@ A fundamental security principle of BAP is that **a user-space agent plugin alon
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
 │ Layer 1: Agent Harness Interception (Cooperative Application Layer)    │
-│   ├─ Layer 1A: Native Agent Plugin (Claude Code / Copilot Agent Plugin)│
+│   ├─ Layer 1A: Native Agent Plugin (Claude, Copilot, Antigravity, etc.)│
 │   └─ Layer 1B: Standalone Configuration Hook (.claude/settings.json)   │
 ├────────────────────────────────────────────────────────────────────────┤
 │ Layer 2: Execution Broker & Kernel Sandboxing (Host OS Layer)          │
@@ -40,11 +40,11 @@ A fundamental security principle of BAP is that **a user-space agent plugin alon
 **They are two distinct sub-layers within Layer 1 (Agent Harness Interception):**
 
 * **Layer 1A: Native Agent Plugin (In-Harness Extension)**
-  * **Role:** Operates inside the agent framework's native extension architecture (Anthropic Claude Code Plugin, GitHub Copilot Agent Plugins 1.0).
-  * **Strengths:** Standard vendor packaging, cross-platform path resolution via `${CLAUDE_PLUGIN_ROOT}`, IDE compatibility (VS Code, JetBrains), and structured PreToolUse blocking before execution.
+  * **Role:** Operates inside the agent framework's native extension architecture (Anthropic Claude Code Plugin, GitHub Copilot Agent Plugins 1.0, Google Antigravity Customization Plugin, OpenCode Plugin Framework, OpenAI Codex Plugin).
+  * **Strengths:** Standard vendor packaging, cross-platform path resolution via `${CLAUDE_PLUGIN_ROOT}` or relative manifests, IDE compatibility (VS Code, JetBrains, Antigravity IDE, Codex Desktop), and structured PreToolUse blocking before execution.
   * **Limitations:** Lives in user space; can be bypassed if the user launches the CLI with `--bare` / safe mode or edits local plugin configuration.
 * **Layer 1B: Standalone Configuration Hook (Local Policy Interception)**
-  * **Role:** Operates via workspace or global configuration files (e.g. `.claude/settings.json`, `.claude/managed-settings.json`, wrapper scripts).
+  * **Role:** Operates via workspace or global configuration files (e.g. `.claude/settings.json`, `.claude/managed-settings.json`, `.codex/hooks.json`, wrapper scripts).
   * **Strengths:** Directly bound to project workspace roots; fires even if vendor plugin packaging is disabled or unsupported.
   * **Limitations:** Requires file-level configuration in workspace directories.
 
@@ -61,6 +61,9 @@ A fundamental security principle of BAP is that **a user-space agent plugin alon
 | **Claude Code** | JetBrains IDE | Layer 1A Native Plugin | Blocking (`PreToolUse`), Lifecycle Telemetry |
 | **GitHub Copilot** | Copilot CLI | Layer 1A Agent Plugin & Layer 1B Wrapper | Blocking (`preToolExecution`), Telemetry (`sessionStart`, `sessionEnd`) |
 | **GitHub Copilot** | VS Code Agent Mode | Layer 1A Agent Plugin 1.0 | Blocking (`preToolExecution`), Structured Denial Directives |
+| **Google Antigravity** | Antigravity CLI / IDE | Layer 1A Native Plugin (`plugins/antigravity`) | Blocking (`PreToolUse`), Lifecycle Telemetry (`SessionStart`, `PostToolUse`, `Stop`) |
+| **OpenCode** | OpenCode CLI / Web | Layer 1A Native Plugin (`plugins/opencode`) & Transactional Launcher | Blocking (`tool.execute.before`), Telemetry (`tool.execute.after`) |
+| **OpenAI Codex** | Codex CLI / Desktop | Layer 1A Native Plugin (`plugins/codex`) & Standalone Hooks | Blocking (`PreToolUse`), Telemetry (`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`, `SessionEnd`) |
 
 ---
 
@@ -120,13 +123,21 @@ bapedge plugin list
 # Inspect health state, verification status, and active defense layers
 bapedge plugin status
 
-# Install native plugin into the workspace (Claude Code or Copilot)
+# Install native plugin into the workspace (Claude Code, Copilot, Antigravity, OpenCode, Codex, or all)
 bapedge plugin install claude
 bapedge plugin install copilot
+bapedge plugin install antigravity
+bapedge plugin install opencode
+bapedge plugin install codex
+bapedge plugin install all
 
 # Verify end-to-end policy enforcement via synthetic probe (Pass/Fail check)
 bapedge plugin verify claude
 bapedge plugin verify copilot
+bapedge plugin verify antigravity
+bapedge plugin verify opencode
+bapedge plugin verify codex
+bapedge plugin verify all
 
 # Remove plugin registration cleanly without affecting standalone hooks
 bapedge plugin uninstall claude

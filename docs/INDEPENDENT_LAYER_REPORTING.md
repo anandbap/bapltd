@@ -18,14 +18,24 @@ These boundaries operate independently. They are not a serial chain in which a s
 
 | Boundary | Evidence it can report | Missing hooks/prompts | Enforcement scope |
 | --- | --- | --- | --- |
-| Layer 1: approved native hook | Session lifecycle, classified prompt/hash when available, shell policy verdict, direct file-hook verdict | Unapproved hooks do not execute. Missing prompt text never prevents lower-layer telemetry. | Supported native hook callbacks; workspace instruction files remain cooperative. |
+| Layer 1A: approved native agent plugin | In-harness tool invocations, lifecycle callbacks (`SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, `SessionEnd`), normalized prompt classification | Unapproved or uninstalled plugins do not execute. Standalone hooks provide fallback Layer 1B coverage. | In-harness vendor manifest/extension callbacks (`.claude-plugin/plugin.json`, Copilot `plugin.json`). |
+| Layer 1B: approved configuration hook | Session lifecycle, classified prompt/hash when available, shell policy verdict, direct file-hook verdict | Unapproved hooks do not execute. Deduplicated against Layer 1A (5-second cache) if both are active. | Supported native hook callbacks (`.claude/settings.json`, wrapper shims); workspace files remain cooperative. |
 | Layer 2: BAP MCP | Tool name/command, policy decision and execution result | Reports independently; prompt text is optional. | Calls routed through BAP's MCP tools. |
 | Layer 3: terminal shim | Command, stable session identity and broker result, tagged `shim` | Reports independently through edge. | Commands resolving through the installed shim. Absolute paths and unmediated IDE tools need another boundary. |
-| Layer 4: local broker/OS containment | Broker command, decision, result and process lineage, tagged `broker` | Reports even with no hook or prompt. Local cached policy remains applicable offline. | Brokered execution and the containment primitives actually installed. Elevation alone does not attest an OS-wide sensor/filter. |
+| Layer 4: local broker/OS containment | Broker command, decision, result and process lineage, tagged `broker` | Reports even with no hook or prompt. Local cached policy remains applicable offline. | Brokered execution (`bapedge exec`) and kernel containment primitives (Windows Job Objects / Linux Landlock). |
 | Layer 5: gateway PEP | Actual protected resource operation and gateway verdict, tagged `gateway` | Reports independently through its service credential. | Traffic reaching that protected resource boundary. Collector correlation cannot create/refresh workstation sessions. |
-| Passive workstation observation | Recognized agent executable, PID, process birth and reporting presence, tagged `discovery` | Finds named agent processes even when their hooks are not approved. Does not read transcripts, process environments or prompt text. | Observation only. Does not grant authority or prove interception. |
+| Passive workstation observation | Recognized agent executable, PID, process birth and reporting presence, tagged `discovery` | Finds named agent processes even when their hooks/plugins are not approved. Does not read transcripts or envs. | Observation only. Does not grant authority or prove interception. |
 
-Native hook trust remains under user/administrator control. BAP does not approve or silently trust hooks. Codex PreToolUse responses use its supported `hookSpecificOutput` envelope; legacy `continue`/`stopReason` fields must not invalidate a denial. The control plane accepts the existing `codex-lifecycle-hook` prompt producer under authenticated session ownership, including hash-only capture-disabled submissions.
+### Sub-Layer Deduplication (Layer 1A vs Layer 1B)
+When both native agent plugins (Layer 1A) and standalone configuration hooks (Layer 1B) are present on the same workstation, `bapedge` employs an in-memory 5-second TTL deduplication cache keyed by `(session_id, command_hash)`. If Layer 1A executes a policy check and tool execution, a near-instantaneous secondary call from Layer 1B returns the cached decision receipt immediately, preventing dual developer prompts and duplicate audit records.
+
+Operators can inspect active layers and observable states at any time via:
+```bash
+bapedge plugin status
+bapedge plugin layers
+```
+
+Native hook and plugin trust remains under user/administrator control. BAP does not approve or silently trust hooks. Codex/Claude PreToolUse responses use their supported envelope; legacy fields must not invalidate a denial. The control plane accepts prompt producers under authenticated session ownership, including hash-only capture-disabled submissions.
 
 ## Identity, persistence and recovery
 

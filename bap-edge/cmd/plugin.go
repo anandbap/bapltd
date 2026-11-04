@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -65,16 +64,16 @@ func RunPlugin(args []string) error {
 }
 
 func printPluginUsage() {
-	fmt.Println("BAP Native Agent Plugin Framework (BAP-806)")
+	fmt.Println("BAP Native Agent Plugin Framework (BAP-806 & BAP-807)")
 	fmt.Println("")
 	fmt.Println("Usage:")
-	fmt.Println("  bapedge plugin list                     List discovered agents and plugin packages")
-	fmt.Println("  bapedge plugin status                   Inspect active plugin health and defense layers")
-	fmt.Println("  bapedge plugin install <claude|copilot> Install native agent plugin into workspace")
-	fmt.Println("  bapedge plugin verify <claude|copilot>  Verify plugin hook execution and enforcement")
-	fmt.Println("  bapedge plugin uninstall <claude|copilot> Remove plugin registration safely")
-	fmt.Println("  bapedge plugin adapter [args...]        Plugin runtime execution adapter (called by hook)")
-	fmt.Println("  bapedge plugin layers                   Show active defense-in-depth security layers")
+	fmt.Println("  bapedge plugin list                                     List discovered agents and plugin packages")
+	fmt.Println("  bapedge plugin status                                   Inspect active plugin health and defense layers")
+	fmt.Println("  bapedge plugin install <claude|copilot|antigravity|opencode|all> Install native agent plugin into workspace")
+	fmt.Println("  bapedge plugin verify <claude|copilot|antigravity|opencode|all>  Verify plugin hook execution and enforcement")
+	fmt.Println("  bapedge plugin uninstall <claude|copilot|antigravity|opencode|all> Remove plugin registration safely")
+	fmt.Println("  bapedge plugin adapter [args...]                        Plugin runtime execution adapter (called by hook)")
+	fmt.Println("  bapedge plugin layers                                   Show active defense-in-depth security layers")
 	fmt.Println("")
 }
 
@@ -86,13 +85,16 @@ func runPluginList(args []string) error {
 
 	claudePlugin := InspectClaudePlugin(workspace)
 	copilotPlugin := InspectCopilotPlugin(workspace)
+	antigravityPlugin := InspectAntigravityPlugin(workspace)
+	opencodePlugin := InspectOpenCodePlugin(workspace)
+	codexPlugin := InspectCodexPlugin(workspace)
 
 	fmt.Println("================================================================================")
-	fmt.Println("  [BAP ZERO-TRUST] Discovered Native Agent Plugins (BAP-806)")
+	fmt.Println("  [BAP ZERO-TRUST] Discovered Native Agent Plugins (BAP-806, BAP-807 & BAP-808)")
 	fmt.Println("================================================================================")
 	fmt.Printf("  Workspace: %s\n", workspace)
 	fmt.Println("--------------------------------------------------------------------------------")
-	fmt.Printf("  %-15s %-20s %-10s %-12s %-25s\n", "AGENT CLIENT", "PLUGIN NAME", "VERSION", "STATE", "ENFORCEMENT")
+	fmt.Printf("  %-15s %-22s %-10s %-12s %-25s\n", "AGENT CLIENT", "PLUGIN NAME", "VERSION", "STATE", "ENFORCEMENT")
 	fmt.Println("--------------------------------------------------------------------------------")
 
 	formatRow := func(rec types.PluginHealthRecord) {
@@ -102,11 +104,14 @@ func runPluginList(args []string) error {
 		} else if rec.HookActive {
 			enf = "Hook Active"
 		}
-		fmt.Printf("  %-15s %-20s %-10s %-12s %-25s\n", rec.Client, rec.PluginName, rec.PluginVersion, rec.State, enf)
+		fmt.Printf("  %-15s %-22s %-10s %-12s %-25s\n", rec.Client, rec.PluginName, rec.PluginVersion, rec.State, enf)
 	}
 
 	formatRow(claudePlugin)
 	formatRow(copilotPlugin)
+	formatRow(antigravityPlugin)
+	formatRow(opencodePlugin)
+	formatRow(codexPlugin)
 	fmt.Println("================================================================================")
 	return nil
 }
@@ -126,10 +131,19 @@ func runPluginStatus(args []string) error {
 
 	claudeRec := InspectClaudePlugin(workspace)
 	copilotRec := InspectCopilotPlugin(workspace)
+	antigravityRec := InspectAntigravityPlugin(workspace)
+	opencodeRec := InspectOpenCodePlugin(workspace)
+	codexRec := InspectCodexPlugin(workspace)
 
 	printPluginDetail(claudeRec)
 	fmt.Println("--------------------------------------------------------------------------------")
 	printPluginDetail(copilotRec)
+	fmt.Println("--------------------------------------------------------------------------------")
+	printPluginDetail(antigravityRec)
+	fmt.Println("--------------------------------------------------------------------------------")
+	printPluginDetail(opencodeRec)
+	fmt.Println("--------------------------------------------------------------------------------")
+	printPluginDetail(codexRec)
 
 	fmt.Println("")
 	PrintDefenseInDepthLayers(os.Stdout, workspace)
@@ -186,8 +200,30 @@ func runPluginInstall(args []string) error {
 		installErr = installClaudePlugin(repoRoot, workspace)
 	case "copilot", "github-copilot":
 		installErr = installCopilotPlugin(repoRoot, workspace)
+	case "antigravity", "agy":
+		installErr = installAntigravityPlugin(repoRoot, workspace)
+	case "opencode":
+		installErr = installOpenCodePlugin(repoRoot, workspace)
+	case "codex", "openai-codex", "openai":
+		installErr = installCodexPlugin(repoRoot, workspace)
+	case "all":
+		if err := installClaudePlugin(repoRoot, workspace); err != nil {
+			installErr = err
+		}
+		if err := installCopilotPlugin(repoRoot, workspace); err != nil {
+			installErr = err
+		}
+		if err := installAntigravityPlugin(repoRoot, workspace); err != nil {
+			installErr = err
+		}
+		if err := installOpenCodePlugin(repoRoot, workspace); err != nil {
+			installErr = err
+		}
+		if err := installCodexPlugin(repoRoot, workspace); err != nil {
+			installErr = err
+		}
 	default:
-		return fmt.Errorf("unsupported agent client %q (supported: claude, copilot)", clientArg)
+		return fmt.Errorf("unsupported agent client %q (supported: claude, copilot, antigravity, opencode, codex, all)", clientArg)
 	}
 
 	if installErr != nil {
@@ -209,29 +245,43 @@ func runPluginVerify(args []string) error {
 	}
 	workspace, _ := os.Getwd()
 
+	clientsToVerify := []string{clientArg}
+	if clientArg == "all" {
+		clientsToVerify = []string{"claude", "copilot", "antigravity", "opencode", "codex"}
+	}
+
+	for _, c := range clientsToVerify {
+		if err := verifySingleClientPlugin(c, workspace); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func verifySingleClientPlugin(clientArg, workspace string) error {
 	fmt.Println("================================================================================")
 	fmt.Printf("  [BAP ZERO-TRUST] Verifying Policy Enforcement for %s Plugin\n", clientArg)
 	fmt.Println("================================================================================")
 
 	// 1. Synthetic benign test: allow
-	benignEvent := `{"tool_name":"Bash","tool_input":{"command":"echo bap_verify_test"}}`
+	benignEvent := `{"tool_name":"run_command","tool_input":{"command":"echo bap_verify_test"}}`
 	allowResp, err := executeSyntheticProbe(clientArg, benignEvent, "PreToolUse")
 	if err != nil {
-		return fmt.Errorf("benign test probe failed to execute: %w", err)
+		return fmt.Errorf("benign test probe failed to execute for %s: %w", clientArg, err)
 	}
 	if !allowResp.Allowed {
-		return fmt.Errorf("benign command was unexpectedly denied: %s", allowResp.Reason)
+		return fmt.Errorf("benign command was unexpectedly denied for %s: %s", clientArg, allowResp.Reason)
 	}
 	fmt.Println("  [✓] Test 1: Benign Command Interception -> ALLOW (Pass)")
 
 	// 2. Synthetic sensitive test: deny
-	sensitiveEvent := `{"tool_name":"Bash","tool_input":{"command":"type C:\\Users\\User\\.ssh\\id_rsa"}}`
+	sensitiveEvent := `{"tool_name":"run_command","tool_input":{"command":"type C:\\Users\\User\\.ssh\\id_rsa"}}`
 	denyResp, err := executeSyntheticProbe(clientArg, sensitiveEvent, "PreToolUse")
 	if err != nil {
-		return fmt.Errorf("sensitive test probe failed to execute: %w", err)
+		return fmt.Errorf("sensitive test probe failed to execute for %s: %w", clientArg, err)
 	}
 	if denyResp.Allowed {
-		return errors.New("security Invariant Failure: Credential access command was allowed")
+		return fmt.Errorf("security invariant failure for %s: Credential access command was allowed", clientArg)
 	}
 	fmt.Printf("  [✓] Test 2: Sensitive Invariant Violation -> DENY (Pass: %s)\n", denyResp.Reason)
 
@@ -262,6 +312,25 @@ func runPluginUninstall(args []string) error {
 		targetDir := filepath.Join(workspace, "plugins", "copilot")
 		_ = os.RemoveAll(targetDir)
 		fmt.Printf("  [✓] Removed %s\n", targetDir)
+	case "antigravity", "agy":
+		targetDir := filepath.Join(workspace, "plugins", "antigravity")
+		_ = os.RemoveAll(targetDir)
+		fmt.Printf("  [✓] Removed %s\n", targetDir)
+	case "opencode":
+		targetDir := filepath.Join(workspace, "plugins", "opencode")
+		_ = os.RemoveAll(targetDir)
+		fmt.Printf("  [✓] Removed %s\n", targetDir)
+	case "codex", "openai-codex", "openai":
+		targetDir := filepath.Join(workspace, "plugins", "codex")
+		_ = os.RemoveAll(targetDir)
+		fmt.Printf("  [✓] Removed %s\n", targetDir)
+	case "all":
+		_ = os.RemoveAll(filepath.Join(workspace, "plugins", "claude"))
+		_ = os.RemoveAll(filepath.Join(workspace, "plugins", "copilot"))
+		_ = os.RemoveAll(filepath.Join(workspace, "plugins", "antigravity"))
+		_ = os.RemoveAll(filepath.Join(workspace, "plugins", "opencode"))
+		_ = os.RemoveAll(filepath.Join(workspace, "plugins", "codex"))
+		fmt.Println("  [✓] Removed all native plugins from workspace")
 	}
 
 	fmt.Println("  [✓] Plugin removed cleanly. Existing standalone hooks remain preserved.")
@@ -308,17 +377,51 @@ func runPluginAdapter(args []string) error {
 	// Record callback for observability
 	recordPluginCallback(client, event, rawPayload)
 
-	// Non-blocking telemetry events
+	sessionID := resolvePluginSessionID(client, rawPayload)
+	targetPID := extractClientPID(rawPayload)
+	promptText := extractPrompt(rawPayload)
+
+	normEvent := strings.ToLower(strings.TrimSpace(event))
+
+	// 1. SessionStart event (CLI or IDE startup hook)
+	if normEvent == "sessionstart" {
+		if err := EnsureSessionStarted(sessionID, client, targetPID, promptText); err != nil {
+			emitPluginDecision(client, event, "deny", err.Error(), nil)
+			return err
+		}
+		emitPluginSuccess(client, event)
+		return nil
+	}
+
+	// 2. SessionEnd / Stop event (Agent exit)
+	if normEvent == "sessionend" || normEvent == "stop" || normEvent == "sessionstop" {
+		_ = EnsureSessionEnded(sessionID, "Agent session closed gracefully")
+		emitPluginSuccess(client, event)
+		return nil
+	}
+
+	// 3. UserPromptSubmit event (Chat / prompt submitted in CLI or IDE)
+	if normEvent == "userpromptsubmit" || normEvent == "userprompt" {
+		_ = EnsureSessionStarted(sessionID, client, targetPID, promptText)
+		_ = SubmitUserPrompt(sessionID, client, promptText)
+		emitPluginSuccess(client, event)
+		return nil
+	}
+
+	// 4. PreToolUse / Tool Execution hook
+	// Guarantees session is auto-started even if SessionStart was never fired (e.g. in VS Code chat mode)
+	_ = EnsureSessionStarted(sessionID, client, targetPID, promptText)
+
+	// Non-blocking post-execution telemetry events (e.g. PostToolUse)
 	if isTelemetryEvent(event) {
 		emitPluginSuccess(client, event)
 		return nil
 	}
 
-	// 3. Extract command or file path
+	// 5. Extract command or file path
 	command, targetFile := extractCommandAndFile(rawPayload)
 
-	// 4. Check Deduplication against recent standalone hook execution
-	sessionID := resolvePluginSessionID(client, rawPayload)
+	// 6. Check Deduplication against recent standalone hook execution
 	cmdHash := computeCommandHash(command, targetFile)
 	if cached, ok := checkDedup(sessionID, cmdHash); ok {
 		// Output cached decision directly
@@ -326,7 +429,7 @@ func runPluginAdapter(args []string) error {
 		return nil
 	}
 
-	// 5. Evaluate against Cedar policy invariants using bapedge check
+	// 7. Evaluate against Cedar policy invariants using bapedge check
 	ecResp := evaluateWithBapedge(sessionID, client, command, targetFile)
 
 	decision := "allow"
@@ -337,7 +440,7 @@ func runPluginAdapter(args []string) error {
 	// Record to dedup cache
 	recordDedup(sessionID, cmdHash, decision, ecResp.Reason, ecResp.Receipt)
 
-	// 6. Emit Vendor-Specific Response
+	// 8. Emit Vendor-Specific Response
 	emitPluginDecision(client, event, decision, ecResp.Reason, ecResp.Receipt)
 	return nil
 }
@@ -349,19 +452,33 @@ func runPluginAdapter(args []string) error {
 func GetDefenseInDepthLayers(workspace string) []types.DefenseLayerStatus {
 	claudeRec := InspectClaudePlugin(workspace)
 	copilotRec := InspectCopilotPlugin(workspace)
+	antigravityRec := InspectAntigravityPlugin(workspace)
+	opencodeRec := InspectOpenCodePlugin(workspace)
+	codexRec := InspectCodexPlugin(workspace)
 
 	// Layer 1A: Native Agent Plugin
+	var activePlugins []string
+	if claudeRec.PluginInstalled {
+		activePlugins = append(activePlugins, "Claude Code")
+	}
+	if copilotRec.PluginInstalled {
+		activePlugins = append(activePlugins, "Copilot")
+	}
+	if antigravityRec.PluginInstalled {
+		activePlugins = append(activePlugins, "Antigravity")
+	}
+	if opencodeRec.PluginInstalled {
+		activePlugins = append(activePlugins, "OpenCode")
+	}
+	if codexRec.PluginInstalled {
+		activePlugins = append(activePlugins, "Codex")
+	}
+
 	l1aStatus := "DISABLED"
 	l1aEvidence := "No native agent plugin manifest installed"
-	if claudeRec.PluginInstalled || copilotRec.PluginInstalled {
+	if len(activePlugins) > 0 {
 		l1aStatus = "ACTIVE"
-		if claudeRec.PluginInstalled && copilotRec.PluginInstalled {
-			l1aEvidence = "Claude Code and Copilot native plugins installed"
-		} else if claudeRec.PluginInstalled {
-			l1aEvidence = "Claude Code native plugin installed"
-		} else {
-			l1aEvidence = "Copilot native plugin installed"
-		}
+		l1aEvidence = strings.Join(activePlugins, ", ") + " native plugins installed"
 	}
 
 	// Layer 1B: Standalone Configuration Hook
@@ -375,6 +492,9 @@ func GetDefenseInDepthLayers(workspace string) []types.DefenseLayerStatus {
 	} else if _, err := os.Stat(claudeManaged); err == nil {
 		l1bStatus = "ACTIVE"
 		l1bEvidence = ".claude/managed-settings.json lifecycle hooks configured"
+	} else if _, err := os.Stat(filepath.Join(workspace, "GEMINI.md")); err == nil {
+		l1bStatus = "ACTIVE"
+		l1bEvidence = "GEMINI.md policy interceptor configured"
 	}
 
 	// Layer 2: Execution Broker & Kernel Sandboxing
@@ -504,6 +624,165 @@ func InspectCopilotPlugin(workspace string) types.PluginHealthRecord {
 	return rec
 }
 
+func InspectAntigravityPlugin(workspace string) types.PluginHealthRecord {
+	manifestCandidates := []string{
+		filepath.Join(workspace, "plugins", "antigravity", "plugin.json"),
+		filepath.Join(workspace, ".agents", "plugins", "bap-antigravity", "plugin.json"),
+	}
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		manifestCandidates = append(manifestCandidates, filepath.Join(home, ".gemini", "config", "plugins", "bap-antigravity", "plugin.json"))
+	}
+
+	manifestPath := manifestCandidates[0]
+	installed := false
+	for _, p := range manifestCandidates {
+		if _, err := os.Stat(p); err == nil {
+			manifestPath = p
+			installed = true
+			break
+		}
+	}
+
+	rec := types.PluginHealthRecord{
+		Client:        "antigravity",
+		PluginName:    "bap-antigravity",
+		PluginVersion: "1.0.0",
+		State:         types.PluginStateMissing,
+		ManifestPath:  manifestPath,
+	}
+
+	rec.AgentDiscovered = isAgentExecutablePresent("agy") || isAgentExecutablePresent("antigravity")
+
+	if installed {
+		rec.PluginInstalled = true
+		rec.State = types.PluginStateInstalled
+	}
+
+	hookActive, verified, lastObs := readHealthStatus("antigravity")
+	rec.HookActive = hookActive
+	rec.EnforcementVerified = verified
+	rec.LastObservedAt = lastObs
+
+	if rec.PluginInstalled {
+		if rec.EnforcementVerified || rec.HookActive {
+			rec.State = types.PluginStateActive
+		} else if rec.AgentDiscovered {
+			rec.State = types.PluginStateDegraded
+		}
+	} else if rec.AgentDiscovered {
+		rec.State = types.PluginStateMissing
+	}
+
+	return rec
+}
+
+func InspectOpenCodePlugin(workspace string) types.PluginHealthRecord {
+	manifestCandidates := []string{
+		filepath.Join(workspace, "plugins", "opencode", "plugin.json"),
+		filepath.Join(workspace, ".opencode", "plugins", "bap-opencode", "plugin.json"),
+	}
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		manifestCandidates = append(manifestCandidates, filepath.Join(home, ".config", "opencode", "plugins", "bap-opencode", "plugin.json"))
+	}
+
+	manifestPath := manifestCandidates[0]
+	installed := false
+	for _, p := range manifestCandidates {
+		if _, err := os.Stat(p); err == nil {
+			manifestPath = p
+			installed = true
+			break
+		}
+	}
+
+	rec := types.PluginHealthRecord{
+		Client:        "opencode",
+		PluginName:    "bap-opencode-plugin",
+		PluginVersion: "1.0.0",
+		State:         types.PluginStateMissing,
+		ManifestPath:  manifestPath,
+	}
+
+	rec.AgentDiscovered = isAgentExecutablePresent("opencode")
+
+	if installed {
+		rec.PluginInstalled = true
+		rec.State = types.PluginStateInstalled
+	}
+
+	hookActive, verified, lastObs := readHealthStatus("opencode")
+	rec.HookActive = hookActive
+	rec.EnforcementVerified = verified
+	rec.LastObservedAt = lastObs
+
+	if rec.PluginInstalled {
+		if rec.EnforcementVerified || rec.HookActive {
+			rec.State = types.PluginStateActive
+		} else if rec.AgentDiscovered {
+			rec.State = types.PluginStateDegraded
+		}
+	} else if rec.AgentDiscovered {
+		rec.State = types.PluginStateMissing
+	}
+
+	return rec
+}
+
+func InspectCodexPlugin(workspace string) types.PluginHealthRecord {
+	manifestCandidates := []string{
+		filepath.Join(workspace, "plugins", "codex", "plugin.json"),
+		filepath.Join(workspace, ".codex", "plugin.json"),
+	}
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		manifestCandidates = append(manifestCandidates, filepath.Join(home, ".codex", "plugin.json"))
+	}
+
+	manifestPath := manifestCandidates[0]
+	installed := false
+	for _, p := range manifestCandidates {
+		if _, err := os.Stat(p); err == nil {
+			manifestPath = p
+			installed = true
+			break
+		}
+	}
+
+	rec := types.PluginHealthRecord{
+		Client:        "codex",
+		PluginName:    "bap-codex-plugin",
+		PluginVersion: "1.0.0",
+		State:         types.PluginStateMissing,
+		ManifestPath:  manifestPath,
+	}
+
+	rec.AgentDiscovered = isAgentExecutablePresent("codex")
+
+	if installed {
+		rec.PluginInstalled = true
+		rec.State = types.PluginStateInstalled
+	}
+
+	hookActive, verified, lastObs := readHealthStatus("codex")
+	rec.HookActive = hookActive
+	rec.EnforcementVerified = verified
+	rec.LastObservedAt = lastObs
+
+	if rec.PluginInstalled {
+		if rec.EnforcementVerified || rec.HookActive {
+			rec.State = types.PluginStateActive
+		} else if rec.AgentDiscovered {
+			rec.State = types.PluginStateDegraded
+		}
+	} else if rec.AgentDiscovered {
+		rec.State = types.PluginStateMissing
+	}
+
+	return rec
+}
+
 func isAgentExecutablePresent(name string) bool {
 	exts := []string{"", ".exe", ".cmd", ".bat"}
 	pathEnv := os.Getenv("PATH")
@@ -525,6 +804,15 @@ func normalizeClientAppID(client string) string {
 	}
 	if lower == "copilot" || lower == "github-copilot" {
 		return "copilot"
+	}
+	if lower == "antigravity" || lower == "agy" || lower == "gemini" {
+		return "antigravity"
+	}
+	if lower == "opencode" || lower == "open-code" {
+		return "opencode"
+	}
+	if lower == "codex" || lower == "openai-codex" || lower == "openai" {
+		return "codex"
 	}
 	return lower
 }
@@ -705,6 +993,223 @@ func installCopilotPlugin(repoRoot, workspace string) error {
 	return copyDirRecursive(srcDir, destDir)
 }
 
+func installAntigravityPlugin(repoRoot, workspace string) error {
+	destDir := filepath.Join(workspace, "plugins", "antigravity")
+	srcDir := filepath.Join(repoRoot, "plugins", "antigravity")
+
+	if _, err := os.Stat(srcDir); err != nil {
+		return copyDirRecursive(destDir, srcDir)
+	}
+	return copyDirRecursive(srcDir, destDir)
+}
+
+func installOpenCodePlugin(repoRoot, workspace string) error {
+	destDir := filepath.Join(workspace, "plugins", "opencode")
+	srcDir := filepath.Join(repoRoot, "plugins", "opencode")
+
+	if _, err := os.Stat(srcDir); err != nil {
+		return copyDirRecursive(destDir, srcDir)
+	}
+	return copyDirRecursive(srcDir, destDir)
+}
+
+func installCodexPlugin(repoRoot, workspace string) error {
+	destDir := filepath.Join(workspace, "plugins", "codex")
+	srcDir := filepath.Join(repoRoot, "plugins", "codex")
+
+	if _, err := os.Stat(srcDir); err == nil {
+		return copyDirRecursive(srcDir, destDir)
+	}
+
+	_ = os.MkdirAll(filepath.Join(destDir, "scripts"), 0755)
+	_ = os.MkdirAll(filepath.Join(destDir, "rules"), 0755)
+
+	manifestPath := filepath.Join(destDir, "plugin.json")
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		manifest := map[string]any{
+			"name":        "bap-codex-plugin",
+			"displayName": "BAP Zero-Trust Policy Enforcement for OpenAI Codex",
+			"version":     "1.0.0",
+			"description": "BAP Zero-Trust Policy Enforcement and Agent Watch Plugin for OpenAI Codex CLI and Desktop",
+			"publisher":   "Bounded Authority Plane (BAP)",
+			"client":      "codex",
+			"entrypoint":  "hooks.json",
+			"supportedSurfaces": []string{
+				"cli",
+				"vscode",
+				"jetbrains",
+				"desktop",
+			},
+			"capabilities": map[string]any{
+				"blocking": true,
+				"audit":    true,
+				"events": []string{
+					"SessionStart",
+					"UserPromptSubmit",
+					"PreToolUse",
+					"PostToolUse",
+					"Stop",
+					"SessionEnd",
+				},
+			},
+		}
+		data, _ := json.MarshalIndent(manifest, "", "  ")
+		_ = os.WriteFile(manifestPath, data, 0644)
+	}
+
+	hooksPath := filepath.Join(destDir, "hooks.json")
+	if _, err := os.Stat(hooksPath); os.IsNotExist(err) {
+		hooksDoc := map[string]any{
+			"description": "BAP Zero-Trust Policy Enforcement & Interception Hooks for OpenAI Codex",
+			"version":     "1.0.0",
+			"hooks": map[string]any{
+				"SessionStart": []any{
+					map[string]any{
+						"hooks": []any{
+							map[string]any{
+								"type":           "command",
+								"command":        "scripts/bap-hook-adapter",
+								"commandWindows": "scripts\\bap-hook-adapter.cmd",
+								"timeout":        10,
+							},
+						},
+					},
+				},
+				"UserPromptSubmit": []any{
+					map[string]any{
+						"hooks": []any{
+							map[string]any{
+								"type":           "command",
+								"command":        "scripts/bap-hook-adapter",
+								"commandWindows": "scripts\\bap-hook-adapter.cmd",
+								"timeout":        10,
+							},
+						},
+					},
+				},
+				"PreToolUse": []any{
+					map[string]any{
+						"matcher": ".*",
+						"hooks": []any{
+							map[string]any{
+								"type":           "command",
+								"command":        "scripts/bap-hook-adapter",
+								"commandWindows": "scripts\\bap-hook-adapter.cmd",
+								"timeout":        30,
+							},
+						},
+					},
+				},
+				"PostToolUse": []any{
+					map[string]any{
+						"matcher": ".*",
+						"hooks": []any{
+							map[string]any{
+								"type":           "command",
+								"command":        "scripts/bap-hook-adapter",
+								"commandWindows": "scripts\\bap-hook-adapter.cmd",
+								"timeout":        15,
+							},
+						},
+					},
+				},
+				"Stop": []any{
+					map[string]any{
+						"hooks": []any{
+							map[string]any{
+								"type":           "command",
+								"command":        "scripts/bap-hook-adapter",
+								"commandWindows": "scripts\\bap-hook-adapter.cmd",
+								"timeout":        10,
+							},
+						},
+					},
+				},
+				"SessionEnd": []any{
+					map[string]any{
+						"hooks": []any{
+							map[string]any{
+								"type":           "command",
+								"command":        "scripts/bap-hook-adapter",
+								"commandWindows": "scripts\\bap-hook-adapter.cmd",
+								"timeout":        5,
+							},
+						},
+					},
+				},
+			},
+		}
+		data, _ := json.MarshalIndent(hooksDoc, "", "  ")
+		_ = os.WriteFile(hooksPath, data, 0644)
+	}
+
+	adapterSh := filepath.Join(destDir, "scripts", "bap-hook-adapter")
+	if _, err := os.Stat(adapterSh); os.IsNotExist(err) {
+		shContent := `#!/usr/bin/env sh
+# BAP Local Trusted Daemon Hook Adapter for OpenAI Codex
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+BAPEDGE_BIN="bapedge"
+if [ -f "$PLUGIN_ROOT/../../bapedge" ]; then
+    BAPEDGE_BIN="$PLUGIN_ROOT/../../bapedge"
+elif command -v bapedge >/dev/null 2>&1; then
+    BAPEDGE_BIN="bapedge"
+fi
+
+exec "$BAPEDGE_BIN" plugin adapter --client codex
+`
+		_ = os.WriteFile(adapterSh, []byte(shContent), 0755)
+	}
+
+	adapterCmd := filepath.Join(destDir, "scripts", "bap-hook-adapter.cmd")
+	if _, err := os.Stat(adapterCmd); os.IsNotExist(err) {
+		cmdContent := `@echo off
+setlocal enabledelayedexpansion
+
+set "SCRIPT_DIR=%~dp0"
+for %%I in ("%SCRIPT_DIR%..") do set "PLUGIN_ROOT=%%~fI"
+
+set "BAPEDGE_BIN=bapedge.exe"
+if exist "%PLUGIN_ROOT%\..\..\bapedge.exe" (
+    set "BAPEDGE_BIN=%PLUGIN_ROOT%\..\..\bapedge.exe"
+) else (
+    where bapedge.exe >nul 2>nul
+    if %ERRORLEVEL% equ 0 (
+        set "BAPEDGE_BIN=bapedge.exe"
+    )
+)
+
+"%BAPEDGE_BIN%" plugin adapter --client codex
+exit /b %ERRORLEVEL%
+`
+		_ = os.WriteFile(adapterCmd, []byte(cmdContent), 0755)
+	}
+
+	rulesPath := filepath.Join(destDir, "rules", "AGENTS.md")
+	if _, err := os.Stat(rulesPath); os.IsNotExist(err) {
+		rulesContent := `# BAP Zero-Trust Policy & Shell Governance for OpenAI Codex (Governed Session)
+
+This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (bapedge.exe).
+
+## Mandatory Execution Rules
+1. **Always Use BAP Edge Execution Broker**:
+   - All shell executions MUST run through bapedge.exe exec:
+      bapedge.exe exec "<command>"
+   - Never run raw, ungoverned shell commands directly on the host machine.
+2. **Zero-Trust Policy Enforcement**:
+   - Commands are evaluated against Cedar invariants before execution.
+   - If a command is denied, inspect the suggestion in the structured response.
+3. **Identity & Audit Logging**:
+   - LTD_SOURCE=codex
+   - Identity: spiffe://bap.local/agent/codex
+`
+		_ = os.WriteFile(rulesPath, []byte(rulesContent), 0644)
+	}
+
+	return nil
+}
+
 func copyDirRecursive(src, dst string) error {
 	if src == dst {
 		return nil
@@ -732,8 +1237,7 @@ func copyDirRecursive(src, dst string) error {
 
 func isTelemetryEvent(event string) bool {
 	lower := strings.ToLower(event)
-	return lower == "sessionstart" || lower == "sessionend" || lower == "stop" ||
-		lower == "posttooluse" || lower == "posttoolexecution" || lower == "userpromptsubmit"
+	return lower == "posttooluse" || lower == "posttoolexecution" || lower == "posttoolusefailure"
 }
 
 func extractCommandAndFile(payload map[string]any) (command, filePath string) {
@@ -835,15 +1339,23 @@ func executeSyntheticProbe(client, eventJSON, eventName string) (types.ExecRespo
 }
 
 func emitPluginSuccess(client, event string) {
-	if client == "claude" || client == "claude-code" {
+	norm := normalizeClientAppID(client)
+	switch norm {
+	case "claude-code":
 		fmt.Println(`{"status":"ok","continue":true}`)
-	} else {
+	case "codex":
+		fmt.Println(`{"status":"ok","continue":true}`)
+	case "antigravity":
+		fmt.Println(`{"decision":"allow"}`)
+	default:
 		fmt.Println(`{"allowed":true}`)
 	}
 }
 
 func emitPluginDecision(client, event, decision, reason string, receipt *types.ExecutionReceipt) {
-	if client == "claude" || client == "claude-code" {
+	norm := normalizeClientAppID(client)
+	switch norm {
+	case "claude-code":
 		if decision == "allow" {
 			out := map[string]any{
 				"status":   "ok",
@@ -869,7 +1381,56 @@ func emitPluginDecision(client, event, decision, reason string, receipt *types.E
 			data, _ := json.Marshal(out)
 			fmt.Println(string(data))
 		}
-	} else {
+	case "codex":
+		if decision == "allow" {
+			out := map[string]any{
+				"hookSpecificOutput": map[string]any{
+					"hookEventName":            event,
+					"permissionDecision":       "allow",
+					"permissionDecisionReason": reason,
+				},
+			}
+			data, _ := json.Marshal(out)
+			fmt.Println(string(data))
+		} else {
+			fmt.Fprintf(os.Stderr, "[CODEX BLOCKED BY POLICY] %s\n", reason)
+			fmt.Fprintln(os.Stderr, "[CRITICAL SECURITY INVARIANT] Access to this resource is permanently prohibited by enterprise zero-trust policy.")
+			out := map[string]any{
+				"hookSpecificOutput": map[string]any{
+					"hookEventName":            event,
+					"permissionDecision":       "deny",
+					"permissionDecisionReason": reason,
+					"additionalContext":        "Action blocked by enterprise zero-trust policy. CEASE attempts to access this resource.",
+				},
+			}
+			data, _ := json.Marshal(out)
+			fmt.Println(string(data))
+		}
+	case "antigravity":
+		if decision == "allow" {
+			fmt.Println(`{"decision":"allow"}`)
+		} else {
+			fmt.Fprintf(os.Stderr, "[ANTIGRAVITY BLOCKED BY POLICY] %s\n", reason)
+			out := map[string]any{
+				"decision": "deny",
+				"reason":   reason,
+			}
+			data, _ := json.Marshal(out)
+			fmt.Println(string(data))
+		}
+	case "opencode":
+		if decision == "allow" {
+			fmt.Println(`{"allowed":true}`)
+		} else {
+			fmt.Fprintf(os.Stderr, "[OPENCODE BLOCKED BY POLICY] %s\n", reason)
+			out := map[string]any{
+				"allowed": false,
+				"reason":  reason,
+			}
+			data, _ := json.Marshal(out)
+			fmt.Println(string(data))
+		}
+	default:
 		// Copilot response format
 		if decision == "allow" {
 			fmt.Println(`{"allowed":true}`)

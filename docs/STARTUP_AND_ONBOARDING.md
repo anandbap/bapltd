@@ -4,14 +4,16 @@ Implemented P1a: daemon crash supervision, Windows current-user logon registrati
 
 ## Runtime
 
-- `bap install` registers `BAPEdgeSupervisor` under the current user's Windows Run key. The command contains the installed binary and state directory, never enrollment tokens or a second reporting destination. Master enrollment/configuration still selects the control plane. `--no-startup` removes only this installation's owned registration. Uninstall removes that owned entry and gracefully stops its supervisor/daemon; it does not kill unrelated BAP processes by name.
+- `bap install` registers `BAPEdgeSupervisor` under the current user's Windows Run key. The command contains the installed binary and state directory, never enrollment tokens or a second reporting destination. Master enrollment/configuration still selects the control plane. `--no-startup` removes only this installation's owned registration. Additionally, `bap install` detects installed agent environments (Claude Code, GitHub Copilot, Antigravity IDE) and automatically provisions native agent plugins (`plugins/claude`, `plugins/copilot`) alongside standalone hooks, reporting active Defense-in-Depth layers. Uninstall removes that owned entry and gracefully stops its supervisor/daemon; it does not kill unrelated BAP processes by name.
 - `bapedge daemon supervise` starts the detached per-user supervisor. `daemon supervise --stop` stops supervision without killing the daemon. `daemon start` explicitly resumes reporting. `daemon stop` records a persistent intentional pause, so the supervisor does not immediately undo it. A logon launch respects that pause until explicit start/login/reinstallation.
 - The supervisor checks every two seconds, with launch-failure backoff up to 30 seconds. A crashed daemon restarts; a live but unresponsive process is reported for inspection rather than forcibly killed. Windows mutex/Unix file locks prevent duplicate runtimes. Process-birth checks reject reused PIDs. Readiness requires the expected local process to answer its loopback health endpoint, not simply successful process creation.
 - Startup is after user logon, not while logged out, and is not a machine-wide Windows service. Linux/macOS automatic startup is not registered by this implementation. Simultaneous interactive sessions and supervisor-process crash recovery by an external service remain unqualified.
 
 ## Inspect
 
-Run `bapedge daemon status --json` and `bap doctor` using the matching installed build. Diagnostics expose:
+Run `bapedge daemon status --json`, `bap doctor`, `bapedge plugin status`, and `bapedge plugin layers` using the matching installed build. Diagnostics expose:
+
+- Native agent plugin installation state, observable health (`Active`, `Installed`, `Degraded`), and active Defense-in-Depth layers. Synthetic verification probes (`bapedge plugin verify claude|copilot`) validate adapters independently of interactive agent sessions.
 
 - Supervisor state, restart attempts, last check and intentional pause; startup registration metadata.
 - Daemon version/commit/process birth, last authenticated heartbeat result/time, and successful audit upload/attempt times.

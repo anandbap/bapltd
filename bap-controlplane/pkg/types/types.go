@@ -342,3 +342,50 @@ type StepUpResolveRequest struct {
 	ReviewerEmail string `json:"reviewer_email,omitempty"`
 	TTLSeconds    int    `json:"ttl_seconds,omitempty"`
 }
+
+// RFC 8693 OAuth 2.0 Security Token Service (STS) Types (BAP-810)
+const (
+	RFC8693GrantTypeTokenExchange = "urn:ietf:params:oauth:grant-type:token-exchange"
+	RFC8693TokenTypeAccessToken   = "urn:ietf:params:oauth:token-type:access_token"
+	RFC8693TokenTypeJWT           = "urn:ietf:params:oauth:token-type:jwt"
+	RFC8693TokenTypeIDToken       = "urn:ietf:params:oauth:token-type:id_token"
+	RFC8693TokenTypeSVID          = "urn:ietf:params:oauth:token-type:svid"
+)
+
+type RFC8693TokenExchangeRequest struct {
+	GrantType          string `json:"grant_type"`
+	Resource           string `json:"resource,omitempty"`
+	Audience           string `json:"audience,omitempty"`
+	Scope              string `json:"scope,omitempty"`
+	RequestedTokenType string `json:"requested_token_type,omitempty"`
+	SubjectToken       string `json:"subject_token"`
+	SubjectTokenType   string `json:"subject_token_type"`
+	ActorToken         string `json:"actor_token,omitempty"`
+	ActorTokenType     string `json:"actor_token_type,omitempty"`
+	SessionID          string `json:"session_id,omitempty"`
+	MaxUses            int    `json:"max_uses,omitempty"`
+}
+
+type RFC8693TokenExchangeResponse struct {
+	AccessToken     string `json:"access_token"`
+	IssuedTokenType string `json:"issued_token_type"`
+	TokenType       string `json:"token_type"` // "Bearer"
+	ExpiresIn       int    `json:"expires_in"` // seconds (e.g. 300)
+	Scope           string `json:"scope,omitempty"`
+}
+
+type OBOTokenExchangeRecord struct {
+	ExchangeID      string    `json:"exchange_id"`
+	Timestamp       time.Time `json:"timestamp"`
+	SubjectSVID     string    `json:"subject_svid"`
+	ActorSVID       string    `json:"actor_svid,omitempty"`
+	UserEmail       string    `json:"user_email"`
+	Audience        string    `json:"audience"`
+	RequestedScope  string    `json:"requested_scope"`
+	AttenuatedScope string    `json:"attenuated_scope"`
+	BoundSessionID  string    `json:"bound_session_id"`
+	TokenID         string    `json:"token_id"`
+	Status          string    `json:"status"` // "ACTIVE", "BURNED", "DENIED", "EXPIRED", "REVOKED"
+	DecisionReason  string    `json:"decision_reason,omitempty"`
+}
+

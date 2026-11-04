@@ -80,6 +80,12 @@ This document represents the complete functional and non-functional requirements
 | `BAP-791`–`BAP-795` | Enterprise Device Enrollment, Workstation Identity, & Remote Containment | **DONE** | RFC 8628 Device Authorization, multi-IdP federation (Google/GitHub/OIDC), user-space supervisor daemon, remote freeze/quarantine, and centralized logout/deregistration. |
 | `BAP-801`–`BAP-805` | Workstation Master Anchor Registration & Ephemeral Session SVIDs | **DONE** | 1 master card per physical machine (`s.agents`), dynamic subagent tracking (`master.Subagents`), child session SVIDs (`spiffe://<td/workstation/<inst>/session/<sess>`), unified `credentials.json` across Edge & Python SDK, and zero agent sprawl verified by `tests/test_workstation_session_svid.py`. |
 | `BAP-784` | Windows CI Process Decoupling & Test Concurrency Isolation | **DONE** | `isTestEnv()` execution guards in `watch.go` and `mcp_enroll.go` preventing detached daemon spawning and Windows file locks during tests. |
+| `BAP-806` | Native Agent Plugin Framework for bapedge & Multi-Layer Defense Architecture | **DONE** | Native Claude & Copilot plugin packages, `bapedge plugin` CLI suite (`list`, `status`, `install`, `verify`, `uninstall`, `adapter`, `layers`), sub-layer deduplication (Layer 1A vs Layer 1B), smart transparent installer reporting, and CIO demo multi-layer rogue agent escalation simulation. |
+| `BAP-807` | Google Antigravity & OpenCode Native Plugin & Runtime Governance | **DONE** | Native Antigravity custom plugin (`plugin.json`, `hooks.json`, `rules/AGENTS.md`), OpenCode plugin package (`package.json`, `index.js` tool hooks), multi-client `bapedge plugin` CLI (`claude`, `copilot`, `antigravity`, `opencode`), and transactional CLI launchers. |
+| `BAP-808` | OpenAI Codex Native Agent Plugin & Universal Governance | **DONE** | Native OpenAI Codex plugin package (`plugins/codex/plugin.json`, `hooks.json`, `scripts/bap-hook-adapter[.cmd]`, `rules/AGENTS.md`), strict `hookSpecificOutput` decision envelope, multi-client `bapedge plugin` CLI (`codex`, `all`), and transactional CLI launchers. |
+| `BAP-809` | Universal Lifecycle Auto-Session-Start & Attestation for IDE & CLI Coding Agents | **DONE** | Universal lazy session initialization (`EnsureSessionStarted`), hierarchical SPIFFE SVID minting, Control Plane enrollment (`/api/v1/sessions/start`), background heartbeat watcher spawning, and graceful teardown (`/api/v1/sessions/end`) across all 5 agent platforms (Claude, Copilot, Antigravity, OpenCode, Codex) in both raw CLI and IDE Chat/Tool modes. |
+| `BAP-810` | RFC 8693 OAuth 2.0 Security Token Service (STS) & Zero Standing Privilege Credential Translation | **DONE** | Standard RFC 8693 token exchange (`/api/v1/sts/token`), multi-gate Cedar policy evaluation, monotonic scope attenuation, anti-escalation hard-gating (`admin:org`, `delete_repo` blocked), atomic single-use grant burning, and session-bound downstream credentials (`saas-github-*`) with 5-min bounded TTL. |
+| `BAP-811` | On-Behalf-Of (OBO) Token Exchange Cockpit Inspector & Git Attestation Proof | **DONE** | Executive Cockpit OBO Dashboard tab in `v3.html`, 5-stage attestation sequence ladder, real-time token binding inspector (`/api/v1/sts/inspector`), and end-to-end verification proving authorized git operations alongside strict zero-trust denial of scope escalation, session hijacking, replay attacks, secret file access, and network exfiltration. |
 
 ### MVP exit sequence
 
@@ -128,6 +134,9 @@ This document represents the complete functional and non-functional requirements
    - [Epic 39: Interactive Session Conversation Cockpit & Privacy-Preserving Prompt Telemetry (BAP-EPIC-39)](#epic-39-interactive-session-conversation-cockpit--privacy-preserving-prompt-telemetry-bap-epic-39--bap-760)
    - [Epic 40: Concurrent Multi-Workload Telemetry & Autonomous IDE Prompt Ingestion (BAP-EPIC-40)](#epic-40-concurrent-multi-workload-telemetry--autonomous-ide-prompt-ingestion-bap-epic-40--bap-770)
    - [Epic 41: Enterprise Compile-Time Developer Feature Stripping & Pipeline Hardening (BAP-EPIC-41)](#epic-41-enterprise-compile-time-developer-feature-stripping--pipeline-hardening-bap-epic-41--bap-780)
+   - [Epic 42: Workstation Fleet Identity, Remote Governance & Two-Tier Execution Model (BAP-EPIC-42)](#bap-790-series-workstation-fleet-identity-remote-governance--two-tier-execution-model-bap-epic-38)
+   - [Epic 43: Workstation Master Anchor Registration & Ephemeral Session SVIDs (BAP-EPIC-43)](#epic-43-workstation-master-anchor-registration--ephemeral-session-svids-bap-epic-43--bap-800)
+   - [Epic 44: Native Agent Plugin Framework & Multi-Layer Tool Defense (BAP-EPIC-44 / BAP-806 & BAP-807)](#epic-44-native-agent-plugin-framework--multi-layer-tool-defense-bap-epic-44--bap-806--bap-807)
    - [Core Architectural Invariants & Adversarial Test Matrix](#core-architectural-invariants--adversarial-test-matrix)
 
 ---
@@ -176,6 +185,9 @@ This document represents the complete functional and non-functional requirements
 | `BAP-EPIC-39` | Interactive Session Conversation Cockpit & Telemetry (BAP-761–BAP-764) | Enterprise Observability v2.5 | **DONE** |
 | `BAP-EPIC-40` | Concurrent Multi-Workload & Autonomous IDE Ingestion (BAP-771–BAP-774) | Enterprise Multi-Agent v2.6 | **DONE** |
 | `BAP-EPIC-41` | Enterprise Compile-Time Feature Stripping & Hardening (BAP-781–BAP-784) | Enterprise Release v2.6 | **DONE** |
+| `BAP-EPIC-42` | Workstation Fleet Identity, Remote Governance & Two-Tier Execution Model (BAP-791–BAP-795) | Enterprise Hardening v2.7 | **DONE** |
+| `BAP-EPIC-43` | Workstation Master Anchor Registration & Ephemeral Session SVIDs (BAP-801–BAP-805) | Enterprise Security v3.0 | **DONE** |
+| `BAP-EPIC-44` | Native Agent Plugin Framework & Multi-Layer Tool Defense (BAP-806 & BAP-807) | Enterprise Defense v3.1 | **DONE** |
 
 ---
 
@@ -3765,3 +3777,285 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 - **Implementation Evidence**:
   - Implemented in `tests/test_workstation_session_svid.py` and `scripts/build_binaries.ps1`.
   - Verified: `Ran 261 tests in 223.743s — OK`.
+
+---
+
+### Epic 44: Native Agent Plugin Framework & Multi-Layer Tool Defense (BAP-EPIC-44 / BAP-806 & BAP-807)
+**Summary**: Extend the BAP (Agent Watch) zero-trust architecture to support native agent plugins alongside existing standalone hooks across Claude Code, GitHub Copilot, Google Antigravity, and OpenCode. Formalize the 5-layer Defense-in-Depth hierarchy (differentiating Layer 1A native in-harness plugins from Layer 1B workspace/global configuration hooks, backed by Layers 2–5 OS sandboxing, anti-tamper shielding, telemetry watchdogs, and cryptographic Gateway PEP authorization). Implement sub-layer deduplication, observable lifecycle health tracking, synthetic verification probes, transparent smart installer reporting, and interactive CIO demonstration containment workflows.
+
+#### Story BAP-806: Native Agent Plugin Framework for bapedge & Multi-Layer Defense Architecture
+- **Type**: Story | **Points**: 13 | **Priority**: P0 - Blocker | **Status**: `DONE`
+- **Description**:
+  Extend `bapedge` to support vendor-native agent plugins as an additive entry point alongside existing hooks, while reusing identical identity, Cedar authorization, telemetry, and audit pipelines:
+  1. **Native Claude Code Plugin Package** (`plugins/claude`):
+     - Anthropic-compliant manifest (`.claude-plugin/plugin.json`).
+     - Event hook registrations (`hooks/hooks.json`) for `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, and `SessionEnd`.
+     - Cross-platform hook adapters (`scripts/bap-hook-adapter` for POSIX and `scripts/bap-hook-adapter.cmd` for Windows).
+  2. **Native GitHub Copilot Plugin Package** (`plugins/copilot`):
+     - Manifest adhering to Agent Plugins 1.0 schema (`plugin.json`).
+     - Hook registrations (`com.github.copilot/hooks/hooks.json`) for `sessionStart`, `preToolExecution`, `postToolExecution`, and `sessionEnd`.
+     - Cross-platform hook adapters (`scripts/bap-hook-adapter` and `scripts/bap-hook-adapter.cmd`).
+  3. **Unified CLI Command Suite (`bapedge plugin`)**:
+     - `bapedge plugin list`: Discovers installed plugins and hooks across workspace and global locations.
+     - `bapedge plugin status`: Reports granular health, active layers, and observable states (`Installed`, `Active`, `Degraded`, `Disabled`, `Missing`, `Unsupported`, `Unknown`).
+     - `bapedge plugin install <claude|copilot|all>`: Automatically installs plugins to appropriate agent directory targets.
+     - `bapedge plugin verify <claude|copilot>`: Executes an end-to-end synthetic probe through the native adapter and records verification telemetry.
+     - `bapedge plugin layers`: Computes active Defense-in-Depth layers and presents a visual terminal matrix.
+     - `bapedge plugin adapter`: CLI entry point invoked by native plugin adapters for event normalization.
+  4. **Sub-Layer Deduplication Engine**:
+     - 5-second TTL cache keyed by `(session_id, command_hash)` prevents duplicate prompt prompts and audit record double-spooling when both Layer 1A (native plugin) and Layer 1B (standalone hook) intercept the same tool event.
+  5. **Smart Installer & Transparent Reporting**:
+     - Enhanced `scripts/bap_install.py`, `bap/bap_install.py`, `scripts/install_bap_global.ps1`, and `packaging/intune/Install-BAPEdge.ps1` to detect installed agent harnesses, install native plugins, and print a clear Defense-in-Depth explanation showing how BAP halts non-compliant or rogue agents across every layer.
+  6. **Interactive CIO Fleet Command Demo Updates**:
+     - Integrated Defense-in-Depth status cockpit into `demo_v3_cio.py` and `cio_demo.bat`.
+     - Added option `[6] Simulate Rogue Escalation` demonstrating progressive 4-stage containment (Stage 1: In-Harness tool block, Stage 2: Subprocess sandbox block, Stage 3: FIM anti-tamper block, Stage 4: Heartbeat drift detection & STS token revocation).
+
+- **Defense-in-Depth Architectural Hierarchy**:
+  - **Layer 1: Agent Execution Surface Interception**
+    - **Layer 1A: Native Agent Plugin** (In-harness tool gating via vendor plugin manifests: Claude Code `.claude-plugin/plugin.json`, Copilot Agent Plugins 1.0 `plugin.json`).
+    - **Layer 1B: Standalone Configuration Hook** (Workspace and global config interceptors: `.claude/settings.json`, shell wrapper scripts).
+  - **Layer 2: Execution Broker & OS Sandboxing** (`bapedge exec`, Windows Job Objects, Linux Landlock, restricted tokens blocking unauthorized subshells).
+  - **Layer 3: Anti-Tamper & Credential Shielding** (File Integrity Monitoring on manifests/configs, env var scrubbing `AWS_*`, `GITHUB_*`, output token masking).
+  - **Layer 4: Continuous Health & Anomaly Watchdog** (Agent Watch heartbeat monitoring, 120ms IDE prompt tailing, drift detection, session isolation).
+  - **Layer 5: Cryptographic Identity & Zero-Trust Egress** (Hierarchical Session SVIDs, SPIFFE/mTLS token exchange, single-use Gateway PEP authorization grants).
+
+- **Non-Negotiable Architectural Invariants**:
+  1. *No removal or breakage of existing bapedge integrations.*
+  2. *No replacement of Agent Runtime or Control Plane.*
+  3. *No duplicate policy evaluation or authorization logic inside plugins.*
+  4. *Plugins must use the same identity, policy, telemetry, and audit pipeline as existing hooks.*
+  5. *Preserve current SPIFFE/SVID, mTLS, session isolation, STS, and Zero Standing Privilege architecture.*
+  6. *Reuse existing Go packages, interfaces, and IPC mechanisms.*
+  7. *Do not introduce mandatory cloud dependencies for local enforcement.*
+  8. *Do not claim complete endpoint protection merely because a plugin is installed.*
+
+- **Acceptance Criteria**:
+  - `Given` a developer environment with Claude Code or GitHub Copilot,
+  - `When` `bap install` or `bapedge plugin install all` is executed,
+  - `Then` valid native plugin packages (`plugins/claude`, `plugins/copilot`) are deployed to user and workspace discovery paths with compliant manifests and executable hook adapters.
+  - `When` both native plugins (Layer 1A) and standalone hooks (Layer 1B) invoke `bapedge` for the exact same tool execution within 5 seconds,
+  - `Then` edge deduplication identifies `(session_id, command_hash)` and executes Cedar policy exactly once, returning the cached decision to eliminate double prompts and duplicate audit records.
+  - `When` `bapedge plugin verify <claude|copilot>` runs,
+  - `Then` a synthetic probe simulates tool evaluation, exercises the hook adapter, verifies socket/local authorization, and records observable health state (`Active`).
+  - `When` running `bapedge plugin layers` or the smart installer (`scripts/bap_install.py`, `packaging/intune/Install-BAPEdge.ps1`),
+  - `Then` the system prints a transparent defense layer matrix explaining how each layer halts non-compliant agents when rules are broken.
+  - `When` running the CIO Fleet Command demo (`demo_v3_cio.py`, `cio_demo.bat`),
+  - `Then` the defense layers cockpit and simulated rogue agent escalation walk through progressive containment across Layers 1 to 5.
+
+- **Implementation Evidence**:
+  - **Plugin Manifests & Adapters**:
+    - `plugins/claude/.claude-plugin/plugin.json` (Manifest)
+    - `plugins/claude/hooks/hooks.json` (Hook configurations)
+    - `plugins/claude/scripts/bap-hook-adapter` & `bap-hook-adapter.cmd` (Cross-platform adapters)
+    - `plugins/copilot/plugin.json` (Copilot Agent Plugins 1.0 schema)
+    - `plugins/copilot/com.github.copilot/hooks/hooks.json` (Hook configurations)
+    - `plugins/copilot/scripts/bap-hook-adapter` & `bap-hook-adapter.cmd` (Cross-platform adapters)
+  - **BAP Edge Daemon Subsystem**:
+    - `bap-edge/cmd/plugin.go` (Implementation of `RunPlugin` with `list`, `status`, `install`, `verify`, `uninstall`, `adapter`, `layers`, deduplication cache, and health spooling)
+    - `bap-edge/cmd/plugin_test.go` (Unit tests covering discovery, layers calculation, deduplication, synthetic probe, and verification health spooling)
+    - `bap-edge/pkg/types/types.go` (Domain types: `PluginState`, `PluginHealthRecord`, `DefenseLayerStatus`)
+    - `bap-edge/cmd/cli_tools.go` (Integration into `RunSetup` for automated plugin deployment and defense layers display)
+    - `bap-edge/cmd/discovery_worker.go` (Added `agent-plugins` discovery scope to Agent Watch inventory telemetry)
+    - `bap-edge/cmd/adapter.go` (Hook routing and legacy adapter compatibility)
+    - `bap-edge/main.go` (CLI dispatcher for `plugin` subcommand)
+  - **Smart Installers**:
+    - `scripts/bap_install.py` & `bap/bap_install.py` (`install_native_agent_plugins`, `print_defense_layers_report`)
+    - `scripts/install_bap_global.ps1` (Plugin deployment and `bapedge plugin layers` invocation)
+    - `packaging/intune/Install-BAPEdge.ps1` (Enterprise plugin installation and layer reporting)
+  - **CIO Fleet Command Demo**:
+    - `demo_v3_cio.py` (`display_defense_layers_cockpit`, `simulate_rogue_agent_escalation` stages 1-4)
+    - `cio_demo.bat` (Defense layer inspection and rogue simulation menu options)
+  - **Architecture Documentation**:
+    - `PLUGIN_ARCHITECTURE.md` and `docs/PLUGIN_ARCHITECTURE.md` (Comprehensive specification of plugin lifecycle, defense-in-depth model, and failure semantics)
+  - **Automated Verification**:
+    - Unit tests: `go test -v ./bap-edge/cmd -run TestPlugin` passing (`ok bap-edge/cmd 2.186s`).
+    - CLI verification: `bapedge plugin status`, `bapedge plugin verify claude`, and `bapedge plugin layers` verified.
+
+#### Story BAP-807: Google Antigravity & OpenCode Native Plugin & Runtime Governance
+- **Type**: Story | **Points**: 8 | **Priority**: P0 - Blocker | **Status**: `DONE`
+- **Description**:
+  Extend the BAP Zero-Trust native agent plugin framework and defense-in-depth architecture to natively govern **Google Antigravity** and **OpenCode**:
+  1. **Google Antigravity Custom Plugin Package (`plugins/antigravity`)**:
+     - Manifest adhering to the Antigravity Customization System specification (`plugin.json`).
+     - Lifecycle hooks specification (`hooks.json`) registering `SessionStart`, `PreToolUse` (matcher: `run_command|execute_command|terminal_.*`), `PostToolUse`, and `Stop`.
+     - Cross-platform hook adapters (`scripts/bap-hook-adapter` and `scripts/bap-hook-adapter.cmd`) translating Antigravity payloads to BAP event contracts.
+     - Enterprise rules bundle (`rules/AGENTS.md`) enforcing execution broker mediation and secret protection.
+     - Discovery across workspace `plugins/antigravity/`, project `.agents/plugins/bap-antigravity/`, and user config `~/.gemini/config/plugins/bap-antigravity/`.
+  2. **OpenCode Native Plugin Package (`plugins/opencode`)**:
+     - Complies with the OpenCode native plugin architecture (`package.json`, `plugin.json`, `index.js`).
+     - Hooks `tool.execute.before` (intercepts tool name, args, and file paths, halting unauthorized executions with structured errors) and `tool.execute.after` (telemetry callback).
+     - Dedicated cross-platform transactional CLI launchers (`run_opencode_cli_bap.ps1`, `.bat`, `.sh` in workspace root and `bap/launchers/`).
+     - Discovery across workspace `plugins/opencode/`, project `.opencode/plugins/bap-opencode/`, and user config `~/.config/opencode/plugins/bap-opencode/`.
+  3. **Unified Multi-Client Plugin CLI Suite**:
+     - `bapedge plugin list` & `status`: Discovers, inspects, and reports observable health across all 4 major agent clients (`claude-code`, `copilot`, `antigravity`, `opencode`).
+     - `bapedge plugin install <claude|copilot|antigravity|opencode|all>`: Single command provisioning for individual or all agent platforms.
+     - `bapedge plugin verify <claude|copilot|antigravity|opencode|all>`: Automated synthetic probe suite validating benign allowance and credential exfiltration blocking.
+     - `bapedge plugin layers`: Dynamically computes Layer 1A evidence listing active plugins among Claude, Copilot, Antigravity, and OpenCode.
+  4. **Smart Installer & Inventory Telemetry**:
+     - `scripts/bap_install.py` and `bap/bap_install.py` automatically detect Antigravity and OpenCode runtime environments, deploy plugins alongside shims, and output transparent Defense-in-Depth layer reporting.
+     - `discovery_worker.go` actively reports Antigravity and OpenCode plugin presence into the central control plane `agent-plugins` inventory scope.
+
+- **Acceptance Criteria**:
+  - `Given` a workstation running Google Antigravity or OpenCode,
+  - `When` `bapedge plugin install antigravity` or `bapedge plugin install opencode` is run,
+  - `Then` valid plugin manifests and hook adapters are deployed into workspace discovery targets.
+  - `When` `bapedge plugin verify antigravity` and `bapedge plugin verify opencode` execute,
+  - `Then` both synthetic probes pass with `[✓] Test 1: Benign Command Interception -> ALLOW` and `[✓] Test 2: Sensitive Invariant Violation -> DENY`, spooling verified health records.
+  - `When` `bapedge plugin status` and `bapedge plugin layers` are executed,
+  - `Then` all 4 clients report `Active` state with `Enforcement Verified: true`, and Layer 1A evidence reflects all installed plugins.
+
+- **Implementation Evidence**:
+  - **Antigravity Plugin**: `plugins/antigravity/plugin.json`, `plugins/antigravity/hooks.json`, `plugins/antigravity/scripts/bap-hook-adapter[.cmd]`, `plugins/antigravity/rules/AGENTS.md`.
+  - **OpenCode Plugin & Launchers**: `plugins/opencode/package.json`, `plugins/opencode/plugin.json`, `plugins/opencode/index.js`, `plugins/opencode/scripts/bap-hook-adapter[.cmd]`, `plugins/opencode/rules/AGENTS.md`, `run_opencode_cli_bap.ps1`, `run_opencode_cli_bap.bat`, `run_opencode_cli_bap.sh`.
+  - **BAP Edge CLI & Engine**: `bap-edge/cmd/plugin.go`, `bap-edge/cmd/cli_tools.go`, `bap-edge/cmd/discovery_worker.go`.
+  - **Unit Tests**: `TestAntigravityPluginInspection`, `TestOpenCodePluginInspection`, `TestMultiClientSyntheticProbes` passing in `bap-edge/cmd/plugin_test.go`.
+  - **Smart Installers**: `scripts/bap_install.py`, `bap/bap_install.py`, `scripts/install_bap_global.ps1`.
+
+#### Story BAP-808: OpenAI Codex Native Agent Plugin & Universal Governance
+- **Type**: Story | **Points**: 8 | **Priority**: P0 - Blocker | **Status**: `DONE`
+- **Description**:
+  Extend the BAP Zero-Trust native agent plugin framework to natively govern **OpenAI Codex** (CLI and Desktop):
+  1. **OpenAI Codex Native Plugin Package (`plugins/codex`)**:
+     - Manifest adhering to the Codex plugin specification (`plugin.json`).
+     - Lifecycle hooks specification (`hooks.json`) registering `SessionStart`, `UserPromptSubmit`, `PreToolUse` (matcher: `.*`), `PostToolUse`, `Stop`, and `SessionEnd`.
+     - Cross-platform hook adapters (`scripts/bap-hook-adapter` and `scripts/bap-hook-adapter.cmd`) translating Codex payloads to BAP event contracts.
+     - Enterprise rules bundle (`rules/AGENTS.md`) enforcing execution broker mediation and secret protection.
+     - Strict `hookSpecificOutput` decision envelope compliance (`{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"|"deny",...}}`).
+     - Transactional CLI launchers (`run_codex_cli_bap.ps1`, `.bat`, `.sh` in workspace root and `bap/launchers/`).
+  2. **Multi-Client Plugin CLI Suite & Core Engine**:
+     - `bapedge plugin list` & `status`: Discovers, inspects, and reports observable health across all 5 major agent clients (`claude-code`, `copilot`, `antigravity`, `opencode`, `codex`).
+     - `bapedge plugin install <claude|copilot|antigravity|opencode|codex|all>`: Single command provisioning for individual or all agent platforms.
+     - `bapedge plugin verify <claude|copilot|antigravity|opencode|codex|all>`: Automated synthetic probe suite validating benign allowance and credential exfiltration blocking.
+     - `bapedge plugin layers`: Dynamically computes Layer 1A evidence listing active plugins among Claude, Copilot, Antigravity, OpenCode, and Codex.
+  3. **Smart Installer & Inventory Telemetry**:
+     - `scripts/bap_install.py` and `bap/bap_install.py` automatically detect Codex runtime environments, deploy plugins alongside shims, and output transparent Defense-in-Depth layer reporting.
+     - `discovery_worker.go` actively reports Codex plugin presence into the central control plane `agent-plugins` inventory scope.
+
+- **Acceptance Criteria**:
+  - `Given` a workstation running OpenAI Codex,
+  - `When` `bapedge plugin install codex` is run,
+  - `Then` valid plugin manifests and hook adapters are deployed into workspace discovery targets.
+  - `When` `bapedge plugin verify codex` executes,
+  - `Then` synthetic probes pass with `[✓] Test 1: Benign Command Interception -> ALLOW` and `[✓] Test 2: Sensitive Invariant Violation -> DENY`, spooling verified health records.
+  - `When` `bapedge plugin status` and `bapedge plugin layers` are executed,
+  - `Then` all 5 clients report `Active` state with `Enforcement Verified: true`, and Layer 1A evidence reflects all installed plugins.
+
+- **Implementation Evidence**:
+  - **Codex Plugin Package**: `plugins/codex/plugin.json`, `plugins/codex/hooks.json`, `plugins/codex/scripts/bap-hook-adapter[.cmd]`, `plugins/codex/rules/AGENTS.md`.
+  - **Launchers**: `run_codex_cli_bap.ps1`, `run_codex_cli_bap.bat`, `run_codex_cli_bap.sh` in root and `bap/launchers/`.
+  - **BAP Edge CLI & Engine**: `bap-edge/cmd/plugin.go`, `bap-edge/cmd/cli_tools.go`, `bap-edge/cmd/discovery_worker.go`.
+  - **Unit Tests**: `TestCodexPluginInspection` and `TestMultiClientSyntheticProbes` passing in `bap-edge/cmd/plugin_test.go`.
+  - **Smart Installers**: `scripts/bap_install.py`, `bap/bap_install.py`, `scripts/install_bap_global.ps1`.
+
+#### Story BAP-809: Universal Lifecycle Auto-Session-Start & Attestation for IDE & CLI Coding Agents
+- **Type**: Story | **Points**: 5 | **Priority**: P0 - Blocker | **Status**: `DONE`
+- **Description**:
+  Eliminate Gap 1 in agent session tracking so that regardless of how an agent is invoked (raw CLI, transactional launcher, VS Code / JetBrains / IDE Chat, or indirect tool execution), the session is guaranteed to be enrolled, monitored, and attested in the BAP Central Control Plane:
+  1. **Universal Lazy Session Initialization (`EnsureSessionStarted`)**:
+     - Automatically called on `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `preToolExecution`, and within `bapedge exec` when an agent source is detected.
+     - Resolves workstation identity claims from `credentials.json` (`UserEmail`, `WorkstationSPIFFEID`, `InstanceID`).
+     - Derives hierarchical Session SPIFFE SVID: `spiffe://bap.internal/workstation/<instance_id>/session/<session_id>`.
+     - Enrolls the session in the Control Plane via `POST /api/v1/sessions/start`.
+     - Writes local per-session markers in `.bapstate/sessions/<hash>.json` and spawns the detached background heartbeat watcher daemon (`bapedge watch`).
+     - Handles fail-closed response: immediately denies/blocks execution if the user or session is revoked (`403 Forbidden`).
+  2. **Zero-Friction IDE Support (VS Code, JetBrains, Desktop GUIs)**:
+     - Handles agent environments (e.g. VS Code Copilot Chat, Claude Code extension) where explicit `SessionStart` hooks do not fire at launch.
+     - Detects first chat prompt (`UserPromptSubmit`) or first tool call (`PreToolUse` / `preToolExecution`) and transparently registers the session before policy evaluation or tool execution.
+  3. **OpenCode Auto-Initialization**:
+     - `plugins/opencode/index.js` fires `SessionStart` on plugin activation in addition to `PreToolUse` lazy registration on every tool execution.
+  4. **Graceful Teardown (`EnsureSessionEnded`)**:
+     - Dispatches `POST /api/v1/sessions/end` on `SessionEnd`, `Stop`, or `sessionStop` hook events.
+     - Purges local session markers, cancels active execution grants, and removes watcher liveness tokens.
+  5. **Verification & Test Harness**:
+     - Unit test suite in `bap-edge/cmd/session_lifecycle_test.go` covering all 5 agents (`claude-code`, `copilot`, `antigravity`, `opencode`, `codex`) and simulating both clean startup and IDE chat-first / tool-first invocations.
+
+- **Acceptance Criteria**:
+  - `Given` a developer launches any of the 5 coding agents directly via CLI, IDE chat, or tool call,
+  - `When` the agent emits any lifecycle hook (`SessionStart`, `UserPromptSubmit`, `PreToolUse`),
+  - `Then` `EnsureSessionStarted` registers the session with the Control Plane with an attested SPIFFE SVID.
+  - `When` the session is active,
+  - `Then` `IsSessionActive(sessionID)` returns `true` and the session appears in the Control Plane dashboard.
+  - `When` the agent exits,
+  - `Then` `EnsureSessionEnded` notifies the Control Plane and purges local markers.
+  - `When` tests run in `session_lifecycle_test.go`,
+  - `Then` all 5 client suites and IDE simulation tests pass with 100% success rate.
+
+- **Implementation Evidence**:
+  - **Lifecycle Engine**: `bap-edge/cmd/session_lifecycle.go` (`EnsureSessionStarted`, `EnsureSessionEnded`, `SubmitUserPrompt`, `IsSessionActive`, `IsWatcherAlive`).
+  - **Hook Adapter & Broker Bridge**: `bap-edge/cmd/plugin.go` (`runPluginAdapter`), `bap-edge/cmd/exec.go` (`RunExec`).
+  - **OpenCode Plugin**: `plugins/opencode/index.js` (plugin load session startup).
+  - **Automated Tests**: `bap-edge/cmd/session_lifecycle_test.go` (`TestSessionLifecycle_EnsureSessionStartedAndEnded`, `TestSessionLifecycle_AutoSessionStartOnChatOrToolUse`).
+
+#### Story BAP-810: RFC 8693 OAuth 2.0 Security Token Service (STS) & Zero Standing Privilege Credential Translation
+- **Type**: Story | **Points**: 5 | **Priority**: P0 - Blocker | **Status**: `DONE`
+- **Description**:
+  Implement Gap 2 in BAP Enterprise Governance: A formal RFC 8693 OAuth 2.0 Token Exchange endpoint (`/api/v1/sts/token`, `/api/v1/oauth/token`, and `/oauth/token`) within the BAP Control Plane & Gateway PEP.
+  Enforces Zero Standing Privilege (ZSP) for all AI coding agents communicating with external downstream SaaS services (GitHub, AWS, Railway, Jira, Salesforce, Stripe):
+  1. **Standard RFC 8693 Interface**: Accepts JSON and `application/x-www-form-urlencoded` token exchange requests with `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`, `subject_token` (attested Session SPIFFE SVID or BAP JWT), `audience` (target service), `scope`, and `requested_token_type`.
+  2. **Multi-Gate Policy-as-Code Evaluation**:
+     - *Gate 1 (Session Liveness)*: Validates session exists in `session.Store` and has not been revoked or frozen.
+     - *Gate 2 (Operator Identity)*: Verifies user claims from workstation enrolment (`credentials.json` via GitHub OIDC / Okta / Entra). Rejects revoked users.
+     - *Gate 3 (Cedar Anti-Escalation Boundary)*: Evaluates target audience against permitted scopes (`repo:push`, `repo:read`, `pull_request:write`, `workflow` for GitHub). Strictly blocks privilege escalation attempts (e.g. `admin:org`, `delete_repo`, `repo:delete`, `site_admin`, `admin:enterprise`) with HTTP 403 `invalid_scope`.
+     - *Gate 4 (Monotonic Scope Attenuation)*: Drops requested scopes not allowed by policy, issuing strictly attenuated authorities.
+     - *Gate 5 (Single-Use Replay Protection)*: Atomic grant burning via `BurnGrantOnce`, rejecting replay attacks on consumed grant tokens.
+  3. **Strict Session Binding (`SaaSTokenManager`)**: Mints short-lived (5-minute bounded TTL) downstream credential tied strictly to `bound_session_id`. Rejects any cross-session usage attempt with `SaaSTokenSessionBindingViolation`.
+  4. **Cryptographic Audit Ingestion**: Every token exchange (ALLOW and DENY) is ingested into `audit.Store` with full command context and receipt.
+
+- **Acceptance Criteria**:
+  - `Given` an active coding session presents its Session SPIFFE SVID to `/api/v1/sts/token`,
+  - `When` requesting authorized scopes (`audience: "github"`, `scope: "repo:push"`),
+  - `Then` the STS returns HTTP 200 with an ephemeral `access_token` (`saas-github-*`), `token_type: "Bearer"`, and 300-second TTL.
+  - `When` the agent attempts privilege escalation (`scope: "admin:org"` or `"delete_repo"`),
+  - `Then` the STS rejects the request with HTTP 403 Forbidden and `error: "invalid_scope"`.
+  - `When` another session attempts to use the issued token,
+  - `Then` `VerifyUsage` denies the action with `SaaSTokenSessionBindingViolation`.
+  - `When` a single-use token or burned grant is reused,
+  - `Then` `VerifyUsage` rejects the replay with `GrantAlreadyBurned`.
+  - `When` tests run in `sts_test.go`,
+  - `Then` all 7 STS test suites pass.
+
+- **Implementation Evidence**:
+  - **STS Endpoint**: `bap-controlplane/internal/api/sts.go` (`handleSTSToken`, `handleSTSInspector`, `resolveSessionFromSubjectToken`).
+  - **Route Wiring**: `bap-controlplane/internal/api/handlers.go` (`/api/v1/sts/token`, `/api/v1/oauth/token`, `/oauth/token`).
+  - **Types**: `bap-controlplane/pkg/types/types.go` (`RFC8693TokenExchangeRequest`, `RFC8693TokenExchangeResponse`, `OBOTokenExchangeRecord`).
+  - **Session-Binding & Replay Engine**: `bap-controlplane/internal/authz/saas_tokens.go` (`BurnGrantOnce`, `RecordExchange`, `ListExchanges`, `MaxUses` tracking).
+  - **Unit Tests**: `bap-controlplane/internal/api/sts_test.go` (7 tests passing) and `bap-controlplane/internal/authz/saas_tokens_test.go`.
+
+#### Story BAP-811: On-Behalf-Of (OBO) Token Exchange Cockpit Inspector & Git Attestation Proof
+- **Type**: Story | **Points**: 5 | **Priority**: P0 - Blocker | **Status**: `DONE`
+- **Description**:
+  Implement Gap 3 in BAP Enterprise Governance: Live On-Behalf-Of (OBO) token exchange visualization in the CIO / Security Cockpit (`v3.html`), live inspector API (`GET /api/v1/sts/inspector`), and cryptographic git attestation proof:
+  1. **Executive Cockpit OBO Dashboard View**:
+     - New dedicated tab in Agent Watch V3: `🔐 STS & OBO Token Exchange` with live count badge.
+     - Live KPI metric cards: Total OBO Exchanges, Active Ephemeral Tokens, Scope Escalations Prevented, and Single-Use Replays Blocked.
+     - 5-Stage OBO Sequence Ladder: Verified SSO Identity $\rightarrow$ Session SVID Attestation $\rightarrow$ RFC 8693 STS Exchange $\rightarrow$ Cedar Policy Attenuation $\rightarrow$ Bound Ephemeral Credential.
+     - Active SaaS Token Bindings Table: Live monitoring of active credentials with remaining TTL countdown, use counts, and bound session IDs.
+     - Audit Exchange History Table: Live audit trail of all allowed and denied exchanges with policy rejection reasons.
+  2. **STS Inspector API**: `GET /api/v1/sts/tokens` and `GET /api/v1/sts/inspector` exporting live bindings, exchange history, and active token states.
+  3. **Git Push & Zero-Trust Proof Suite**:
+     - Proves authorized git workflow execution via BAP broker (`canonical_action: git:push:write`, `ALLOWED_EXECUTED` receipts).
+     - Proves zero-trust Cedar prevention of unauthorized access:
+       - Scope escalation blocked (`admin:org` denied with 403 `invalid_scope`).
+       - Cross-session hijacking blocked (`SessionBindingViolation`).
+       - Replay attack blocked (`GrantAlreadyBurned`).
+       - Destructive operations blocked (`Remove-Item -Recurse` / `rmdir /s /q` denied with `DENIED_POLICY`).
+       - Secret/credential theft blocked (`.env` file read denied with `DENIED_POLICY`).
+       - Raw network exfiltration blocked (`curl` utilities denied with `DENIED_POLICY`).
+
+- **Acceptance Criteria**:
+  - `Given` an enterprise administrator opens the Cockpit UI (`/dashboard/v3`),
+  - `When` navigating to the `🔐 STS & OBO Token Exchange` tab,
+  - `Then` the 5-stage ladder diagram, KPI summary cards, active tokens, and exchange history tables render accurately.
+  - `When` a git operation is invoked via `bapedge.exe exec`,
+  - `Then` an authenticated `ALLOWED_EXECUTED` receipt is emitted with canonical action `git:inspect:read` or `git:push:write`.
+  - `When` an unauthorized access attempt is made (`cat .env` or `curl`),
+  - `Then` bapedge emits a tamper-proof `DENIED_POLICY` receipt with Cedar invariant attribution.
+  - `When` automated verification script runs,
+  - `Then` all zero-trust assertions succeed.
+
+- **Implementation Evidence**:
+  - **Cockpit UI**: `bap-controlplane/internal/dashboardui/web/v3.html` (View 4 tab, ladder diagram, KPI cards, `renderOBOExchanges()`).
+  - **Dashboard Server & Tests**: `bap-controlplane/internal/dashboardui/server.go`, `bap-controlplane/internal/dashboardui/server_test.go`.
+  - **Verification Script & Receipts**: `scripts/verify_sts_obo_exchange.py`, BAP Broker receipts.
+
+

@@ -109,6 +109,42 @@ func collectDiscovery(epoch int64) discoverymeta.Report {
 			ObservedAt: time.Now().UTC(),
 		})
 	}
+	antigravityRec := InspectAntigravityPlugin(workspace)
+	if antigravityRec.PluginInstalled {
+		r.Observations = append(r.Observations, discoverymeta.Observation{
+			Key:        "plugin-" + discoverymeta.ID(antigravityRec.Client, antigravityRec.PluginName),
+			Scope:      pluginScope.ID,
+			Kind:       "agent_plugin",
+			Name:       antigravityRec.PluginName,
+			Client:     antigravityRec.Client,
+			Evidence:   string(antigravityRec.State),
+			ObservedAt: time.Now().UTC(),
+		})
+	}
+	opencodeRec := InspectOpenCodePlugin(workspace)
+	if opencodeRec.PluginInstalled {
+		r.Observations = append(r.Observations, discoverymeta.Observation{
+			Key:        "plugin-" + discoverymeta.ID(opencodeRec.Client, opencodeRec.PluginName),
+			Scope:      pluginScope.ID,
+			Kind:       "agent_plugin",
+			Name:       opencodeRec.PluginName,
+			Client:     opencodeRec.Client,
+			Evidence:   string(opencodeRec.State),
+			ObservedAt: time.Now().UTC(),
+		})
+	}
+	codexRec := InspectCodexPlugin(workspace)
+	if codexRec.PluginInstalled {
+		r.Observations = append(r.Observations, discoverymeta.Observation{
+			Key:        "plugin-" + discoverymeta.ID(codexRec.Client, codexRec.PluginName),
+			Scope:      pluginScope.ID,
+			Kind:       "agent_plugin",
+			Name:       codexRec.PluginName,
+			Client:     codexRec.Client,
+			Evidence:   string(codexRec.State),
+			ObservedAt: time.Now().UTC(),
+		})
+	}
 	r.Scopes = append(r.Scopes, pluginScope)
 
 	r.CompletedAt = time.Now().UTC()

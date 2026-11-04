@@ -1071,6 +1071,42 @@ def install_native_agent_plugins(workspace_root: str, target_dir: str) -> list:
             except Exception as e:
                 print(f"  {TermColor.YELLOW}[!] Warning:{TermColor.RESET} Could not copy Copilot plugin: {e}")
 
+        # 3. Google Antigravity Native Plugin
+        antigravity_src = os.path.join(plugins_src, "antigravity")
+        antigravity_dst = os.path.join(plugins_dst, "antigravity")
+        if os.path.isdir(antigravity_src):
+            try:
+                os.makedirs(antigravity_dst, exist_ok=True)
+                shutil.copytree(antigravity_src, antigravity_dst, dirs_exist_ok=True)
+                installed.append("Google Antigravity Native Plugin (Layer 1A: In-Harness Extension)")
+                print(f"  {TermColor.GREEN}[+] Native Plugin:{TermColor.RESET} Installed Google Antigravity plugin at {antigravity_dst}")
+            except Exception as e:
+                print(f"  {TermColor.YELLOW}[!] Warning:{TermColor.RESET} Could not copy Antigravity plugin: {e}")
+
+        # 4. OpenCode Native Plugin
+        opencode_src = os.path.join(plugins_src, "opencode")
+        opencode_dst = os.path.join(plugins_dst, "opencode")
+        if os.path.isdir(opencode_src):
+            try:
+                os.makedirs(opencode_dst, exist_ok=True)
+                shutil.copytree(opencode_src, opencode_dst, dirs_exist_ok=True)
+                installed.append("OpenCode Native Plugin (Layer 1A: In-Harness Extension)")
+                print(f"  {TermColor.GREEN}[+] Native Plugin:{TermColor.RESET} Installed OpenCode plugin at {opencode_dst}")
+            except Exception as e:
+                print(f"  {TermColor.YELLOW}[!] Warning:{TermColor.RESET} Could not copy OpenCode plugin: {e}")
+
+        # 5. OpenAI Codex Native Plugin
+        codex_src = os.path.join(plugins_src, "codex")
+        codex_dst = os.path.join(plugins_dst, "codex")
+        if os.path.isdir(codex_src):
+            try:
+                os.makedirs(codex_dst, exist_ok=True)
+                shutil.copytree(codex_src, codex_dst, dirs_exist_ok=True)
+                installed.append("OpenAI Codex Native Plugin (Layer 1A: In-Harness Extension)")
+                print(f"  {TermColor.GREEN}[+] Native Plugin:{TermColor.RESET} Installed OpenAI Codex plugin at {codex_dst}")
+            except Exception as e:
+                print(f"  {TermColor.YELLOW}[!] Warning:{TermColor.RESET} Could not copy Codex plugin: {e}")
+
     return installed
 
 
@@ -1083,11 +1119,14 @@ def print_defense_layers_report(workspace_root: str, target_dir: str):
 
     claude_plugin = os.path.isfile(os.path.join(workspace_root, "plugins", "claude", ".claude-plugin", "plugin.json"))
     copilot_plugin = os.path.isfile(os.path.join(workspace_root, "plugins", "copilot", "plugin.json"))
-    has_layer1a = claude_plugin or copilot_plugin
+    antigravity_plugin = os.path.isfile(os.path.join(workspace_root, "plugins", "antigravity", "plugin.json"))
+    opencode_plugin = os.path.isfile(os.path.join(workspace_root, "plugins", "opencode", "plugin.json"))
+    codex_plugin = os.path.isfile(os.path.join(workspace_root, "plugins", "codex", "plugin.json"))
+    has_layer1a = claude_plugin or copilot_plugin or antigravity_plugin or opencode_plugin or codex_plugin
 
     claude_settings = os.path.isfile(os.path.join(workspace_root, ".claude", "settings.json")) or \
                       os.path.isfile(os.path.join(workspace_root, ".claude", "managed-settings.json"))
-    has_layer1b = claude_settings
+    has_layer1b = claude_settings or os.path.isfile(os.path.join(workspace_root, "GEMINI.md"))
 
     has_layer2 = os.path.isfile(bapedge_bin)
     has_layer3 = os.path.isfile(os.path.join(workspace_root, "policy.cedar")) or os.path.isfile(os.path.join(target_dir, "policy.cedar"))
@@ -1102,7 +1141,7 @@ def print_defense_layers_report(workspace_root: str, target_dir: str):
 
     # Layer 1A
     status_1a = f"{TermColor.GREEN}[ACTIVE]{TermColor.RESET}" if has_layer1a else f"{TermColor.YELLOW}[OPTIONAL]{TermColor.RESET}"
-    print(f"  [✓] Layer 1A: Native Agent Plugin (Claude Code / Copilot Agent Plugin 1.0)       {status_1a}")
+    print(f"  [✓] Layer 1A: Native Agent Plugin (Claude / Copilot / Antigravity / OpenCode / Codex) {status_1a}")
     print("      └─ Mechanism: In-harness tool interception via official Anthropic & Copilot plugin APIs.")
     print("      └─ When Rules Broken: If agent attempts an unauthorized tool call (e.g. secret reading),")
     print("         Layer 1A intercepts it BEFORE execution and delivers a structured refusal to the agent.")

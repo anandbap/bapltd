@@ -1,0 +1,24 @@
+#!/usr/bin/env sh
+# BAP Hook Adapter for Google Antigravity
+# Routes Antigravity lifecycle and PreToolUse/PostToolUse hooks into bapedge.
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+
+BAPEDGE_BIN=""
+if [ -n "$BAPEDGE_PATH" ] && [ -x "$BAPEDGE_PATH" ]; then
+    BAPEDGE_BIN="$BAPEDGE_PATH"
+elif [ -x "$WORKSPACE_ROOT/bapedge" ]; then
+    BAPEDGE_BIN="$WORKSPACE_ROOT/bapedge"
+elif command -v bapedge >/dev/null 2>&1; then
+    BAPEDGE_BIN="bapedge"
+fi
+
+if [ -z "$BAPEDGE_BIN" ]; then
+    cat <<'EOF'
+{"decision":"allow"}
+EOF
+    exit 0
+fi
+
+exec "$BAPEDGE_BIN" plugin adapter --client antigravity "$@"

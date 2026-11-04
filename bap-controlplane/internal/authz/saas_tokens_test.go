@@ -47,4 +47,18 @@ func TestSaaSTokenManager_BindingAndVerification(t *testing.T) {
 	if okRev || errRev == nil {
 		t.Fatalf("Expected revoked token to be blocked")
 	}
+
+	// 6. Single-Use Grant Burning & Replay Attack Prevention (BAP-810)
+	burned, status, err := mgr.BurnGrantOnce("grant-single-use-abc")
+	if !burned || err != nil {
+		t.Fatalf("First burn must succeed: status=%s, err=%v", status, err)
+	}
+	// Replay attempt must fail
+	burned2, status2, err2 := mgr.BurnGrantOnce("grant-single-use-abc")
+	if burned2 || err2 == nil {
+		t.Fatal("Replay of burned grant must fail!")
+	}
+	if status2 != "GrantAlreadyBurned" {
+		t.Errorf("Expected status GrantAlreadyBurned, got %s", status2)
+	}
 }

@@ -40,14 +40,21 @@ flowchart TD
 The BAP Universal Installer supports unattended, silent installation for MDM and automated rollouts.
 
 ### Windows (Microsoft Intune / SCCM / PowerShell)
-Deploy as a user-context or system-context script:
+Deploy as a user-context or system-context script via `packaging/intune/Install-BAPEdge.ps1` or `scripts/bap_install.py`:
 
 ```powershell
 # Silent User-Mode Deployment (No Admin Required)
+# Automatically deploys native agent plugins and prints 5-layer defense status
 python scripts/bap_install.py `
     --non-interactive `
     --server "https://bap-controlplane.onrender.com" `
     --workspace "$env:USERPROFILE\source\repos"
+```
+
+To verify active defense layers after deployment:
+```powershell
+bapedge plugin layers
+bapedge plugin status
 ```
 
 To deploy as an auto-starting background Windows Service:

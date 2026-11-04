@@ -121,14 +121,34 @@ func RunSetup(args []string) error {
 
 	// 3. Install Native Agent Plugin alongside Standalone Hook (BAP-806)
 	repoRoot := findRepoRoot(targetDir)
-	if strings.Contains(strings.ToLower(*appFlag), "claude") {
+	appLower := strings.ToLower(*appFlag)
+	if strings.Contains(appLower, "claude") {
 		if err := installClaudePlugin(repoRoot, targetDir); err == nil {
 			fmt.Println("  [✓] Installed Native Claude Code Plugin (Layer 1A: In-Harness Extension)")
 		}
-	} else if strings.Contains(strings.ToLower(*appFlag), "copilot") {
+	} else if strings.Contains(appLower, "copilot") {
 		if err := installCopilotPlugin(repoRoot, targetDir); err == nil {
 			fmt.Println("  [✓] Installed Native Copilot Plugin (Layer 1A: In-Harness Extension)")
 		}
+	} else if strings.Contains(appLower, "antigravity") || strings.Contains(appLower, "agy") {
+		if err := installAntigravityPlugin(repoRoot, targetDir); err == nil {
+			fmt.Println("  [✓] Installed Native Antigravity Plugin (Layer 1A: In-Harness Extension)")
+		}
+	} else if strings.Contains(appLower, "opencode") {
+		if err := installOpenCodePlugin(repoRoot, targetDir); err == nil {
+			fmt.Println("  [✓] Installed Native OpenCode Plugin (Layer 1A: In-Harness Extension)")
+		}
+	} else if strings.Contains(appLower, "codex") || strings.Contains(appLower, "openai") {
+		if err := installCodexPlugin(repoRoot, targetDir); err == nil {
+			fmt.Println("  [✓] Installed Native Codex Plugin (Layer 1A: In-Harness Extension)")
+		}
+	} else if appLower == "all" {
+		_ = installClaudePlugin(repoRoot, targetDir)
+		_ = installCopilotPlugin(repoRoot, targetDir)
+		_ = installAntigravityPlugin(repoRoot, targetDir)
+		_ = installOpenCodePlugin(repoRoot, targetDir)
+		_ = installCodexPlugin(repoRoot, targetDir)
+		fmt.Println("  [✓] Installed Native Plugins for Claude, Copilot, Antigravity, OpenCode, and Codex (Layer 1A)")
 	}
 
 	fmt.Println("")

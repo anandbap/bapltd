@@ -111,3 +111,101 @@ func TestPluginVerificationHealthSpool(t *testing.T) {
 		t.Errorf("expected recent lastObs timestamp")
 	}
 }
+
+func TestAntigravityPluginInspection(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// 1. Missing initially
+	rec := InspectAntigravityPlugin(tmpDir)
+	if rec.PluginInstalled {
+		t.Errorf("expected plugin not installed initially")
+	}
+
+	// 2. Install plugin
+	pluginDir := filepath.Join(tmpDir, "plugins", "antigravity")
+	if err := os.MkdirAll(pluginDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(`{"name":"bap-antigravity"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	recInstalled := InspectAntigravityPlugin(tmpDir)
+	if !recInstalled.PluginInstalled {
+		t.Errorf("expected Antigravity plugin installed")
+	}
+}
+
+func TestOpenCodePluginInspection(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// 1. Missing initially
+	rec := InspectOpenCodePlugin(tmpDir)
+	if rec.PluginInstalled {
+		t.Errorf("expected plugin not installed initially")
+	}
+
+	// 2. Install plugin
+	pluginDir := filepath.Join(tmpDir, "plugins", "opencode")
+	if err := os.MkdirAll(pluginDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(`{"name":"bap-opencode-plugin"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	recInstalled := InspectOpenCodePlugin(tmpDir)
+	if !recInstalled.PluginInstalled {
+		t.Errorf("expected OpenCode plugin installed")
+	}
+}
+
+func TestCodexPluginInspection(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// 1. Missing initially
+	rec := InspectCodexPlugin(tmpDir)
+	if rec.PluginInstalled {
+		t.Errorf("expected plugin not installed initially")
+	}
+
+	// 2. Install plugin
+	pluginDir := filepath.Join(tmpDir, "plugins", "codex")
+	if err := os.MkdirAll(pluginDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(`{"name":"bap-codex-plugin"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	recInstalled := InspectCodexPlugin(tmpDir)
+	if !recInstalled.PluginInstalled {
+		t.Errorf("expected Codex plugin installed")
+	}
+}
+
+func TestMultiClientSyntheticProbes(t *testing.T) {
+	clients := []string{"claude", "copilot", "antigravity", "opencode", "codex"}
+
+	for _, client := range clients {
+		// Benign test: allow
+		benign := `{"tool_name":"run_command","tool_input":{"command":"echo test"}}`
+		resp, err := executeSyntheticProbe(client, benign, "PreToolUse")
+		if err != nil {
+			t.Fatalf("client %s synthetic probe failed: %v", client, err)
+		}
+		if !resp.Allowed {
+			t.Errorf("expected client %s benign probe allowed, got denied", client)
+		}
+
+		// Credential access: deny
+		sensitive := `{"tool_name":"run_command","tool_input":{"command":"cat ~/.aws/credentials"}}`
+		denyResp, err := executeSyntheticProbe(client, sensitive, "PreToolUse")
+		if err != nil {
+			t.Fatalf("client %s sensitive probe failed: %v", client, err)
+		}
+		if denyResp.Allowed {
+			t.Errorf("expected client %s sensitive probe denied, got allowed", client)
+		}
+	}
+}

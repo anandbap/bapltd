@@ -83,11 +83,30 @@ $env:BAP_HOME = $BapBin
 & $Edge version
 & $Edge status --json
 & $Edge daemon status --json
+& $Edge plugin status
+& $Edge plugin layers
 ```
 
-The approved release must contain/provide its matching native artifacts. Do not substitute a public-registry install or accept an unexpected public download to get around missing corporate artifacts. This guide does not require administrator elevation, an enforcement override or manual credential deletion.
+The approved release must contain/provide its matching native artifacts (including native Claude and Copilot plugin packages in `plugins/`). Do not substitute a public-registry install or accept an unexpected public download to get around missing corporate artifacts. This guide does not require administrator elevation, an enforcement override or manual credential deletion.
 
-**PASS:** the intended native binaries and launchers exist; the daemon runs against the intended server. Before login on a genuinely fresh profile, status reports unenrolled. Installation/settings alone do not prove hook execution or kernel protection. If already enrolled, this is an upgrade test, not a clean-install test; use another disposable profile rather than deleting credentials.
+**PASS:** the intended native binaries, launchers, and native plugin packages exist; the daemon runs against the intended server, and `bapedge plugin layers` prints the active 5-layer Defense-in-Depth hierarchy. Before login on a genuinely fresh profile, status reports unenrolled. Installation/settings alone do not prove hook execution or kernel protection. If already enrolled, this is an upgrade test, not a clean-install test; use another disposable profile rather than deleting credentials.
+
+## 1a. Verify Native Agent Plugins with Synthetic Probes
+
+Verify the vendor plugin adapters without launching an interactive AI agent session:
+
+```powershell
+# Probe Claude Code native hook adapter
+& $Edge plugin verify claude
+
+# Probe GitHub Copilot Agent Plugins 1.0 adapter
+& $Edge plugin verify copilot
+
+# Re-inspect plugin observable health states
+& $Edge plugin status
+```
+
+**PASS:** both probes report `VERIFICATION PROBE SUCCESSFUL`, health records are spooled under `.bapstate/reporting-health/`, and plugin state transitions to `Active` or `Installed` with a recent `Last Observed` timestamp.
 
 ## 2. Login establishes the master workstation identity
 
