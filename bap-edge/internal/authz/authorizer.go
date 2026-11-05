@@ -70,36 +70,46 @@ func NewAuthorizer(policyPath string) (*Authorizer, error) {
 		return nil, fmt.Errorf("policy.cedar not available: zero-trust policy file missing; bapedge fail-closed")
 	}
 
-	// Check if kill-switch is active or policy-state has digest to verify anti-tamper
+	// 1. Check if emergency kill-switch is active across candidate locations
 	policyDir := filepath.Dir(resolvedPolicyPath)
-	candidates := []string{
+	killSwitchCandidates := []string{
 		filepath.Join(policyDir, ".bap", "policy-state.json"),
 		filepath.Join(policyDir, "policy-state.json"),
 		filepath.Join(state.PolicyDir(), "policy-state.json"),
 		filepath.Join(".bap", "policy-state.json"),
 		"policy-state.json",
 	}
-	for _, statePath := range candidates {
+	for _, ksPath := range killSwitchCandidates {
+		if ksData, ksErr := os.ReadFile(ksPath); ksErr == nil {
+			var ks struct {
+				KillSwitch bool `json:"kill_switch"`
+			}
+			if json.Unmarshal(ksData, &ks) == nil && ks.KillSwitch {
+				return nil, fmt.Errorf("emergency kill-switch is active; all executions are blocked")
+			}
+		}
+	}
+
+	// 2. Verify cryptographic anti-tamper digest if policy-state.json exists in the same policy directory
+	digestCandidates := []string{
+		filepath.Join(policyDir, ".bap", "policy-state.json"),
+		filepath.Join(policyDir, "policy-state.json"),
+	}
+	for _, statePath := range digestCandidates {
 		if stateData, stateErr := os.ReadFile(statePath); stateErr == nil {
 			var pState struct {
-				KillSwitch bool   `json:"kill_switch"`
-				Digest     string `json:"digest"`
+				Digest string `json:"digest"`
 			}
-			if json.Unmarshal(stateData, &pState) == nil {
-				if pState.KillSwitch {
-					return nil, fmt.Errorf("emergency kill-switch is active; all executions are blocked")
+			if json.Unmarshal(stateData, &pState) == nil && pState.Digest != "" {
+				var schemaData []byte
+				if sData, sErr := os.ReadFile(filepath.Join(policyDir, "schema.json")); sErr == nil {
+					schemaData = sData
 				}
-				if pState.Digest != "" {
-					schemaPathCandidate := filepath.Join(policyDir, "schema.json")
-					var schemaData []byte
-					if resolvedSchemaPath, sErr := findFile(schemaPathCandidate, "schema.json"); sErr == nil {
-						schemaData, _ = os.ReadFile(resolvedSchemaPath)
-					}
-					computed := ComputePolicyDigest(string(policyData), string(schemaData))
-					if computed != pState.Digest && ComputePolicyDigest(string(policyData), "") != pState.Digest {
-						return nil, fmt.Errorf("SECURITY ALERT: local policy.cedar integrity violation (expected digest %s, got %s); policy file has been modified or tampered with on disk", pState.Digest, computed)
-					}
+				computed := ComputePolicyDigest(string(policyData), string(schemaData))
+				if computed != pState.Digest && ComputePolicyDigest(string(policyData), "") != pState.Digest {
+					return nil, fmt.Errorf("SECURITY ALERT: local policy.cedar integrity violation (expected digest %s, got %s); policy file has been modified or tampered with on disk", pState.Digest, computed)
 				}
+				break
 			}
 		}
 	}
