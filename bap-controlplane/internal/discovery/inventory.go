@@ -228,11 +228,26 @@ func assetID(instance, key string) string {
 }
 
 // SQL commit precedes cache mutation. No API entry performs filesystem scanning.
+func isHexSuffix(s string) bool {
+	if len(s) != 8 && len(s) != 12 && len(s) != 16 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
 func hostPrefix(instance string) string {
 	if idx := strings.LastIndex(instance, "-"); idx != -1 {
-		return instance[:idx]
+		suffix := instance[idx+1:]
+		if isHexSuffix(suffix) {
+			return instance[:idx]
+		}
 	}
-	return instance
+	return ""
 }
 
 func (s *Inventory) Ingest(instance, owner string, r Report) (bool, error) {
@@ -277,11 +292,13 @@ func (s *Inventory) Ingest(instance, owner string, r Report) (bool, error) {
 
 	// Purge stale/superseded instance assets from the exact same host
 	hPrefix := hostPrefix(instance)
-	for oldID, oldAsset := range s.assets {
-		if oldAsset.InstanceID != instance && hostPrefix(oldAsset.InstanceID) == hPrefix {
-			delete(s.assets, oldID)
-			if s.db != nil {
-				_, _ = s.db.Exec(`DELETE FROM discovery_assets WHERE id = ?`, oldID)
+	if hPrefix != "" {
+		for oldID, oldAsset := range s.assets {
+			if oldAsset.InstanceID != instance && hostPrefix(oldAsset.InstanceID) == hPrefix {
+				delete(s.assets, oldID)
+				if s.db != nil {
+					_, _ = s.db.Exec(`DELETE FROM discovery_assets WHERE id = ?`, oldID)
+				}
 			}
 		}
 	}
@@ -441,7 +458,9 @@ func (s *Inventory) List(instance, kind, state, after string, limit int, revisio
 		}
 		host := a.InstanceID
 		if instance == "" {
-			host = hostPrefix(a.InstanceID)
+			if pfx := hostPrefix(a.InstanceID); pfx != "" {
+				host = pfx
+			}
 		}
 		k := dedupKey{host: host, kind: a.Kind, name: a.Name}
 		existing, ok := latestByEntity[k]
