@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -1358,6 +1359,109 @@ func actionMatches(actions []string, requested string) bool {
 		}
 	}
 	return false
+}
+
+func promptTerminalHITL(workspaceRoot, sessionID, targetFile, toolName string) string {
+	if os.Getenv("BAP_NON_INTERACTIVE") == "1" || os.Getenv("CI") != "" || os.Getenv("GITHUB_ACTIONS") != "" ||
+		strings.Contains(strings.ToLower(sessionID), "test") || strings.Contains(strings.ToLower(sessionID), "mock") ||
+		strings.Contains(strings.ToLower(sessionID), "synthetic") {
+		return "non_interactive_deny"
+	}
+
+	var in io.Reader
+	var out io.Writer
+	var closer func()
+
+	if runtime.GOOS == "windows" {
+		conin, errIn := os.OpenFile("CONIN$", os.O_RDWR, 0)
+		if errIn != nil {
+			conin, errIn = os.Open("CONIN$")
+		}
+		conout, errOut := os.OpenFile("CONOUT$", os.O_RDWR, 0)
+		if errOut != nil {
+			conout, _ = os.OpenFile("CONOUT$", os.O_WRONLY, 0)
+		}
+		if errIn != nil {
+			return "non_interactive_deny"
+		}
+		in = conin
+		if conout != nil {
+			out = conout
+			closer = func() {
+				_ = conin.Close()
+				_ = conout.Close()
+			}
+		} else {
+			out = os.Stderr
+			closer = func() {
+				_ = conin.Close()
+			}
+		}
+	} else {
+		tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+		if err != nil {
+			return "non_interactive_deny"
+		}
+		in = tty
+		out = tty
+		closer = func() {
+			_ = tty.Close()
+		}
+	}
+	if closer != nil {
+		defer closer()
+	}
+
+	fmt.Fprintf(out, "\n")
+	fmt.Fprintf(out, "================================================================================\n")
+	fmt.Fprintf(out, " [BAP AIR SECURITY KERNEL] CROSS-FOLDER MUTATION APPROVAL REQUIRED (HITL)\n")
+	fmt.Fprintf(out, "================================================================================\n")
+	fmt.Fprintf(out, " Session ID   : %s\n", sessionID)
+	fmt.Fprintf(out, " Agent Tool   : %s\n", toolName)
+	fmt.Fprintf(out, " Target Entity: %s\n", targetFile)
+	fmt.Fprintf(out, " Workspace    : %s\n", workspaceRoot)
+	fmt.Fprintf(out, " Action Type  : write\n")
+	fmt.Fprintf(out, " Policy Reason: Modifying files outside workspace is forbidden by zero-trust boundary\n")
+	fmt.Fprintf(out, "--------------------------------------------------------------------------------\n")
+	fmt.Fprintf(out, " This operation requests cross-folder mutation outside the active workspace.\n")
+	fmt.Fprintf(out, " [O] Once     - Authorize this specific execution once\n")
+	fmt.Fprintf(out, " [S] Session  - Trust target path for remainder of this session (%s)\n", sessionID)
+	fmt.Fprintf(out, " [P] Project  - Persistently trust target path across sessions for this workspace\n")
+	fmt.Fprintf(out, " [G] Global   - Persistently trust target path machine-wide across all workspaces\n")
+	fmt.Fprintf(out, " [D] Deny (Default) - Strictly block execution and maintain containment\n")
+	fmt.Fprintf(out, "================================================================================\n")
+	fmt.Fprintf(out, "[BAP HITL] Enter choice [o/s/p/g/D]: ")
+
+	inputChan := make(chan string, 1)
+	go func() {
+		reader := bufio.NewReader(in)
+		line, _ := reader.ReadString('\n')
+		inputChan <- strings.ToLower(strings.TrimSpace(line))
+	}()
+
+	var choice string
+	select {
+	case choice = <-inputChan:
+	case <-time.After(30 * time.Second):
+		fmt.Fprintf(out, "\n[BAP HITL] Timed out waiting for human authorization. Defaulting to DENY.\n")
+		return "denied"
+	}
+
+	switch choice {
+	case "o", "once", "approve", "yes", "y", "a":
+		return "approve_once"
+	case "s", "session":
+		_ = grantTargetPermission(workspaceRoot, sessionID, targetFile, "session", []string{"write", "delete"})
+		return "session_trust"
+	case "p", "project":
+		_ = grantTargetPermission(workspaceRoot, sessionID, targetFile, "project", []string{"write", "delete"})
+		return "project_trust"
+	case "g", "global":
+		_ = grantTargetPermission(workspaceRoot, sessionID, targetFile, "global", []string{"write", "delete"})
+		return "global_trust"
+	default:
+		return "denied"
+	}
 }
 
 func isMutatingShellCommand(cmd string) bool {
@@ -2729,6 +2833,26 @@ func main() {
 				outputDecision("allow", "", fmt.Sprintf("[STEP-UP AUTHORIZED: SESSION TRUST] User granted cross-folder write permission for %s", targetFile))
 				return
 			}
+
+			// Interactive Human-in-the-Loop Prompt on terminal
+			if stepUpDec == "" && os.Getenv("BAP_NON_INTERACTIVE") != "1" && os.Getenv("CI") == "" {
+				hitlDecision := promptTerminalHITL(workspaceRoot, sessionID, targetFile, payload.ToolName)
+				switch hitlDecision {
+				case "approve_once":
+					outputDecision("allow", "", fmt.Sprintf("[STEP-UP AUTHORIZED: ONCE] Human operator authorized modifying file outside workspace: %s", targetFile))
+					return
+				case "session_trust":
+					outputDecision("allow", "", fmt.Sprintf("[STEP-UP AUTHORIZED: SESSION TRUST] User granted cross-folder write permission for %s", targetFile))
+					return
+				case "project_trust":
+					outputDecision("allow", "", fmt.Sprintf("[STEP-UP AUTHORIZED: PROJECT TRUST] User granted cross-folder write permission for %s", targetFile))
+					return
+				case "global_trust":
+					outputDecision("allow", "", fmt.Sprintf("[STEP-UP AUTHORIZED: GLOBAL TRUST] User granted cross-folder write permission for %s", targetFile))
+					return
+				}
+			}
+
 			outputDecision("deny", fmt.Sprintf("Modifying files outside workspace is forbidden for file %q", targetFile), fmt.Sprintf("Writing or modifying files outside the project root is prohibited. Authorize via 'bapedge trust %q --project' (or --session / --global).", targetFile))
 			return
 		}
@@ -2862,6 +2986,15 @@ func main() {
 					_ = grantTargetPermission(workspaceRoot, sessionID, target, "global", []string{"write", "delete"})
 				} else if stepUpDec == "session" || stepUpDec == "s" {
 					_ = grantTargetPermission(workspaceRoot, sessionID, target, "session", []string{"write", "delete"})
+				} else if stepUpDec == "" && os.Getenv("BAP_NON_INTERACTIVE") != "1" && os.Getenv("CI") == "" {
+					hitlDecision := promptTerminalHITL(workspaceRoot, sessionID, target, "Bash")
+					switch hitlDecision {
+					case "approve_once", "session_trust", "project_trust", "global_trust":
+						// allowed to proceed to execution
+					default:
+						outputDecision("deny", fmt.Sprintf("Directory traversal outside workspace is forbidden in command: %s", command), fmt.Sprintf("Commands modifying files outside workspace require authorization. Authorize via 'bapedge trust %q --project' (or --session / --global).", target))
+						return
+					}
 				} else {
 					mode := resolveEnforcementMode()
 					if mode == "audit" || mode == "shadow" {
@@ -3174,18 +3307,30 @@ func outputDecisionWithUpdatedInput(decision, reason, context string, updatedInp
 	resp.PermissionDecision = decision
 
 	if decision == "deny" {
-		cont := false
-		resp.Continue = &cont
+		isInvariant := strings.Contains(reason, "Security Invariant Violation") || strings.Contains(reason, "sensitive credential") || strings.Contains(reason, "tampering")
+		if isInvariant {
+			cont := false
+			resp.Continue = &cont
+			resp.StopReason = reason
+			resp.SystemMessage = "[SECURITY ALERT] " + reason
+			resp.HookSpecificOutput.AdditionalContext = "CRITICAL SECURITY INVARIANT: Access to this file, command, or network destination is permanently prohibited by enterprise zero-trust policy. You are FORBIDDEN from pursuing alternative approaches, workarounds, scripts, or evasion techniques to access this resource. Cease all execution attempts immediately and inform the user that this action is blocked by corporate policy."
+		} else {
+			cont := true
+			resp.Continue = &cont
+			resp.SystemMessage = fmt.Sprintf("[BAP ZERO-TRUST] Execution blocked: %s", reason)
+			if context != "" {
+				resp.HookSpecificOutput.AdditionalContext = fmt.Sprintf("BAP Zero-Trust Policy Decision: %s. %s", reason, context)
+			} else {
+				resp.HookSpecificOutput.AdditionalContext = fmt.Sprintf("BAP Zero-Trust Policy Decision: %s", reason)
+			}
+		}
 		resp.Status = "blocked"
-		resp.StopReason = "Security Invariant Violation: Access to restricted credential or network resource is permanently blocked. Further attempts or workarounds are prohibited."
-		resp.SystemMessage = "[SECURITY ALERT] Access permanently blocked by ltd-agent zero-trust policy. Further attempts will be rejected."
 		if isClaude {
 			resp.Decision = "block"
 		} else {
 			resp.Decision = "deny"
 		}
 		resp.Reason = reason
-		resp.HookSpecificOutput.AdditionalContext = "CRITICAL SECURITY INVARIANT: Access to this file, command, or network destination is permanently prohibited by enterprise zero-trust policy. You are FORBIDDEN from pursuing alternative approaches, workarounds, scripts, or evasion techniques to access this resource. Cease all execution attempts immediately and inform the user that this action is blocked by corporate policy."
 		fmt.Fprintln(os.Stderr, "[CLAUDE HOOK BLOCKED] "+reason)
 	} else if decision == "allow" {
 		cont := true

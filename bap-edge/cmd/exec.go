@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -273,36 +275,79 @@ func promptHumanStepUpApproval(ec *execContext, fullCommand, executable, reason 
 	}
 
 	// 4. Interactive Terminal Check:
-	// If non-interactive (piped stdin, CI, or explicit flag), fail-closed
-	if !isTerminal(os.Stdin) || os.Getenv("BAP_NON_INTERACTIVE") == "1" || ec.forceJSON {
+	// If non-interactive (piped stdin, CI, or explicit flag), try opening the controlling console/tty before failing closed.
+	var termIn io.Reader = os.Stdin
+	var termOut io.Writer = os.Stderr
+	var closer func()
+
+	if !isTerminal(os.Stdin) && os.Getenv("BAP_NON_INTERACTIVE") != "1" && !ec.forceJSON && os.Getenv("CI") == "" && os.Getenv("GITHUB_ACTIONS") == "" {
+		if runtime.GOOS == "windows" {
+			conin, errIn := os.OpenFile("CONIN$", os.O_RDWR, 0)
+			if errIn != nil {
+				conin, errIn = os.Open("CONIN$")
+			}
+			conout, errOut := os.OpenFile("CONOUT$", os.O_RDWR, 0)
+			if errOut != nil {
+				conout, _ = os.OpenFile("CONOUT$", os.O_WRONLY, 0)
+			}
+			if errIn == nil {
+				termIn = conin
+				if conout != nil {
+					termOut = conout
+					closer = func() {
+						_ = conin.Close()
+						_ = conout.Close()
+					}
+				} else {
+					closer = func() {
+						_ = conin.Close()
+					}
+				}
+			}
+		} else {
+			tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+			if err == nil {
+				termIn = tty
+				termOut = tty
+				closer = func() {
+					_ = tty.Close()
+				}
+			}
+		}
+	}
+	if closer != nil {
+		defer closer()
+	}
+
+	if (termIn == os.Stdin && !isTerminal(os.Stdin)) || os.Getenv("BAP_NON_INTERACTIVE") == "1" || ec.forceJSON || os.Getenv("CI") != "" || os.Getenv("GITHUB_ACTIONS") != "" {
 		return "non_interactive_deny"
 	}
 
 	// 5. Interactive Human-in-the-Loop Prompt on terminal
-	fmt.Fprintf(os.Stderr, "\n")
-	fmt.Fprintf(os.Stderr, "================================================================================\n")
+	fmt.Fprintf(termOut, "\n")
+	fmt.Fprintf(termOut, "================================================================================\n")
 	if isCrossFolder {
-		fmt.Fprintf(os.Stderr, " [BAP AIR SECURITY KERNEL] CROSS-FOLDER MUTATION APPROVAL REQUIRED (HITL)\n")
-		fmt.Fprintf(os.Stderr, "================================================================================\n")
-		fmt.Fprintf(os.Stderr, " Session ID   : %s\n", ec.sessionID)
-		fmt.Fprintf(os.Stderr, " Agent Source : %s\n", ec.source)
-		fmt.Fprintf(os.Stderr, " Target Entity: %s\n", trustPath)
-		fmt.Fprintf(os.Stderr, " Action Type  : %s\n", decomp.ActionType)
-		fmt.Fprintf(os.Stderr, " Executable   : %s\n", executable)
-		fmt.Fprintf(os.Stderr, " Command      : %s\n", fullCommand)
-		fmt.Fprintf(os.Stderr, " Policy Reason: %s\n", reason)
-		fmt.Fprintf(os.Stderr, "--------------------------------------------------------------------------------\n")
-		fmt.Fprintf(os.Stderr, " This operation requests cross-folder mutation outside the active workspace.\n")
-		fmt.Fprintf(os.Stderr, " [O] Once     - Authorize this specific execution once\n")
-		fmt.Fprintf(os.Stderr, " [S] Session  - Trust target path for remainder of this session (%s)\n", ec.sessionID)
-		fmt.Fprintf(os.Stderr, " [P] Project  - Persistently trust target path across sessions for this workspace\n")
-		fmt.Fprintf(os.Stderr, " [G] Global   - Persistently trust target path machine-wide across all workspaces\n")
-		fmt.Fprintf(os.Stderr, " [D] Deny (Default) - Strictly block execution and maintain containment\n")
-		fmt.Fprintf(os.Stderr, "================================================================================\n")
-		fmt.Fprintf(os.Stderr, "[BAP HITL] Enter choice [o/s/p/g/D]: ")
+		fmt.Fprintf(termOut, " [BAP AIR SECURITY KERNEL] CROSS-FOLDER MUTATION APPROVAL REQUIRED (HITL)\n")
+		fmt.Fprintf(termOut, "================================================================================\n")
+		fmt.Fprintf(termOut, " Session ID   : %s\n", ec.sessionID)
+		fmt.Fprintf(termOut, " Agent Source : %s\n", ec.source)
+		fmt.Fprintf(termOut, " Target Entity: %s\n", trustPath)
+		fmt.Fprintf(termOut, " Action Type  : %s\n", decomp.ActionType)
+		fmt.Fprintf(termOut, " Executable   : %s\n", executable)
+		fmt.Fprintf(termOut, " Command      : %s\n", fullCommand)
+		fmt.Fprintf(termOut, " Policy Reason: %s\n", reason)
+		fmt.Fprintf(termOut, "--------------------------------------------------------------------------------\n")
+		fmt.Fprintf(termOut, " This operation requests cross-folder mutation outside the active workspace.\n")
+		fmt.Fprintf(termOut, " [O] Once     - Authorize this specific execution once\n")
+		fmt.Fprintf(termOut, " [S] Session  - Trust target path for remainder of this session (%s)\n", ec.sessionID)
+		fmt.Fprintf(termOut, " [P] Project  - Persistently trust target path across sessions for this workspace\n")
+		fmt.Fprintf(termOut, " [G] Global   - Persistently trust target path machine-wide across all workspaces\n")
+		fmt.Fprintf(termOut, " [D] Deny (Default) - Strictly block execution and maintain containment\n")
+		fmt.Fprintf(termOut, "================================================================================\n")
+		fmt.Fprintf(termOut, "[BAP HITL] Enter choice [o/s/p/g/D]: ")
 
 		var input string
-		_, _ = fmt.Fscanln(os.Stdin, &input)
+		_, _ = fmt.Fscanln(termIn, &input)
 		choice := strings.ToLower(strings.TrimSpace(input))
 
 		switch choice {
@@ -328,23 +373,23 @@ func promptHumanStepUpApproval(ec *execContext, fullCommand, executable, reason 
 			return "denied"
 		}
 	} else {
-		fmt.Fprintf(os.Stderr, " [BAP AIR SECURITY KERNEL] HUMAN STEP-UP APPROVAL REQUIRED (HITL)\n")
-		fmt.Fprintf(os.Stderr, "================================================================================\n")
-		fmt.Fprintf(os.Stderr, " Session ID   : %s\n", ec.sessionID)
-		fmt.Fprintf(os.Stderr, " Agent Source : %s\n", ec.source)
-		fmt.Fprintf(os.Stderr, " Executable   : %s\n", executable)
-		fmt.Fprintf(os.Stderr, " Command      : %s\n", fullCommand)
-		fmt.Fprintf(os.Stderr, " Policy Reason: %s\n", reason)
-		fmt.Fprintf(os.Stderr, "--------------------------------------------------------------------------------\n")
-		fmt.Fprintf(os.Stderr, " This operation requires human operator authorization.\n")
-		fmt.Fprintf(os.Stderr, " [A] Approve Once       - Authorize this specific execution once\n")
-		fmt.Fprintf(os.Stderr, " [S] Trust for Session  - Authorize executable for remainder of this session\n")
-		fmt.Fprintf(os.Stderr, " [D] Deny (Default)     - Strictly block execution and record violation\n")
-		fmt.Fprintf(os.Stderr, "================================================================================\n")
-		fmt.Fprintf(os.Stderr, "[BAP HITL] Enter choice [a/s/D]: ")
+		fmt.Fprintf(termOut, " [BAP AIR SECURITY KERNEL] HUMAN STEP-UP APPROVAL REQUIRED (HITL)\n")
+		fmt.Fprintf(termOut, "================================================================================\n")
+		fmt.Fprintf(termOut, " Session ID   : %s\n", ec.sessionID)
+		fmt.Fprintf(termOut, " Agent Source : %s\n", ec.source)
+		fmt.Fprintf(termOut, " Executable   : %s\n", executable)
+		fmt.Fprintf(termOut, " Command      : %s\n", fullCommand)
+		fmt.Fprintf(termOut, " Policy Reason: %s\n", reason)
+		fmt.Fprintf(termOut, "--------------------------------------------------------------------------------\n")
+		fmt.Fprintf(termOut, " This operation requires human operator authorization.\n")
+		fmt.Fprintf(termOut, " [A] Approve Once       - Authorize this specific execution once\n")
+		fmt.Fprintf(termOut, " [S] Trust for Session  - Authorize executable for remainder of this session\n")
+		fmt.Fprintf(termOut, " [D] Deny (Default)     - Strictly block execution and record violation\n")
+		fmt.Fprintf(termOut, "================================================================================\n")
+		fmt.Fprintf(termOut, "[BAP HITL] Enter choice [a/s/D]: ")
 
 		var input string
-		_, _ = fmt.Fscanln(os.Stdin, &input)
+		_, _ = fmt.Fscanln(termIn, &input)
 		choice := strings.ToLower(strings.TrimSpace(input))
 
 		switch choice {

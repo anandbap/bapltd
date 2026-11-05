@@ -32,6 +32,7 @@ def run_interceptor(payload: dict, env=None) -> dict:
     test_env = os.environ.copy()
     test_env["BAP_WORKSPACE_ROOT"] = WORKSPACE_ROOT
     test_env.setdefault("BAP_ENFORCEMENT_MODE", "enforce")
+    test_env.setdefault("BAP_NON_INTERACTIVE", "1")
     if env:
         test_env.update(env)
 
