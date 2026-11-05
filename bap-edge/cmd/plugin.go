@@ -551,7 +551,7 @@ func InspectClaudePlugin(workspace string) types.PluginHealthRecord {
 	manifestPath := filepath.Join(workspace, "plugins", "claude", ".claude-plugin", "plugin.json")
 	rec := types.PluginHealthRecord{
 		Client:        "claude-code",
-		PluginName:    "bap-zero-trust",
+		PluginName:    "BAP-ClaudeCode-Plugin",
 		PluginVersion: "1.0.0",
 		State:         types.PluginStateMissing,
 		ManifestPath:  manifestPath,
@@ -561,9 +561,21 @@ func InspectClaudePlugin(workspace string) types.PluginHealthRecord {
 	rec.AgentDiscovered = isAgentExecutablePresent("claude")
 
 	// 2. Plugin Installed
-	if _, err := os.Stat(manifestPath); err == nil {
+	if data, err := os.ReadFile(manifestPath); err == nil {
 		rec.PluginInstalled = true
 		rec.State = types.PluginStateInstalled
+		var m struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		}
+		if json.Unmarshal(data, &m) == nil {
+			if m.Name != "" {
+				rec.PluginName = m.Name
+			}
+			if m.Version != "" {
+				rec.PluginVersion = m.Version
+			}
+		}
 	}
 
 	// 3. Hook Active & Enforcement Verified from local health records

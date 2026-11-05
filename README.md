@@ -7,6 +7,7 @@
 BAP is an open reference architecture and implementation for governing AI agents (Claude Code, GitHub Copilot CLI, autonomous worker scripts, and MCP toolchains) that execute commands, touch source files, call APIs, and access enterprise resources.
 
 📖 **Core Documentation Links:**
+- [🎮 Claude Code & Codex Zero-Trust Showcase Runbook (`DEMO_CLAUDE_CODEX_ZERO_TRUST.md`)](DEMO_CLAUDE_CODEX_ZERO_TRUST.md) — Step-by-step developer guide with HITL step-up approvals, RFC 8693 STS OBO exchanges, and V3 Cockpit inspection.
 - [🚀 5-Minute Developer Onboarding Guide (`docs/ONBOARDING.md`)](docs/ONBOARDING.md) — Single-click user-mode setup for Claude Code, Antigravity, Copilot, Cursor & Python.
 - [🔌 Native Agent Plugin Architecture (`PLUGIN_ARCHITECTURE.md`)](PLUGIN_ARCHITECTURE.md) — Native Claude Code, GitHub Copilot, Google Antigravity, OpenCode & OpenAI Codex plugin specifications & 5-layer Defense-in-Depth hierarchy.
 - [📰 Launch Blog & Announcement (`docs/BLOG_LAUNCH_ANNOUNCEMENT.md`)](docs/BLOG_LAUNCH_ANNOUNCEMENT.md) — Why Autonomous AI Coding Agents Demand a Bounded Authority Plane.
