@@ -13,7 +13,7 @@ with open(os.path.join(here, "README.md"), encoding="utf-8") as f:
 
 setup(
     name="bap-ltd",
-    version="1.11.0",
+    version="1.11.1",
     description="Bounded Authority Plane (BAP) - Zero-Trust Local Trusted Daemon & Governance for AI Developer Agents",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -22,7 +22,20 @@ setup(
     url="https://bap-controlplane.onrender.com",
     packages=find_packages(include=["bap", "bap.*", "bap_sdk", "bap_sdk.*"]),
     package_data={
-        "bap": ["bin/*/*", "bin/*", "*.py", "*.cedar", "*.json", "*.ps1", "*.bat", "*.sh", "launchers/*"],
+        "bap": [
+            "bin/*/*",
+            "bin/*",
+            "*.py",
+            "*.cedar",
+            "*.json",
+            "*.ps1",
+            "*.bat",
+            "*.sh",
+            "launchers/*",
+            "plugins/**/*",
+            "plugins/*/*/*",
+            "plugins/*/*/*/*",
+        ],
     },
     include_package_data=True,
     python_requires=">=3.8",

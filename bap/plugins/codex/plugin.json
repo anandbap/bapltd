@@ -1,0 +1,27 @@
+{
+  "name": "bap-codex-plugin",
+  "displayName": "BAP Zero-Trust Policy Enforcement for OpenAI Codex",
+  "version": "1.0.0",
+  "description": "BAP Zero-Trust Policy Enforcement and Agent Watch Plugin for OpenAI Codex CLI and Desktop",
+  "publisher": "Bounded Authority Plane (BAP)",
+  "client": "codex",
+  "entrypoint": "hooks.json",
+  "supportedSurfaces": [
+    "cli",
+    "vscode",
+    "jetbrains",
+    "desktop"
+  ],
+  "capabilities": {
+    "blocking": true,
+    "audit": true,
+    "events": [
+      "SessionStart",
+      "UserPromptSubmit",
+      "PreToolUse",
+      "PostToolUse",
+      "Stop",
+      "SessionEnd"
+    ]
+  }
+}

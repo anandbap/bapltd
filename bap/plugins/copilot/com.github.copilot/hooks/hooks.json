@@ -1,0 +1,31 @@
+{
+  "version": "1.0",
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "./scripts/bap-hook-adapter",
+        "args": ["--client", "copilot", "--event", "sessionStart"]
+      }
+    ],
+    "preToolExecution": [
+      {
+        "matcher": "*",
+        "command": "./scripts/bap-hook-adapter",
+        "args": ["--client", "copilot", "--event", "preToolExecution"]
+      }
+    ],
+    "postToolExecution": [
+      {
+        "matcher": "*",
+        "command": "./scripts/bap-hook-adapter",
+        "args": ["--client", "copilot", "--event", "postToolExecution"]
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "./scripts/bap-hook-adapter",
+        "args": ["--client", "copilot", "--event", "sessionEnd"]
+      }
+    ]
+  }
+}

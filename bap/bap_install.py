@@ -1041,71 +1041,230 @@ All terminal and tool commands must be routed through the BAP broker:
 
 
 def install_native_agent_plugins(workspace_root: str, target_dir: str) -> list:
-    """Installs native agent plugins for Claude Code and GitHub Copilot (BAP-806 Layer 1A)."""
-    plugins_src = os.path.join(REPO_ROOT, "plugins")
-    plugins_dst = os.path.join(workspace_root, "plugins")
+    """Installs native agent plugins for Claude Code, GitHub Copilot, Antigravity, OpenCode, and Codex (BAP-806 Layer 1A)."""
+    pkg_dir = os.path.dirname(os.path.abspath(__file__))
+    home = os.path.expanduser("~")
+
+    # Discover any available candidate plugin source tree
+    candidate_sources = [
+        os.path.join(REPO_ROOT, "plugins"),
+        os.path.join(pkg_dir, "plugins"),
+        os.path.join(target_dir, "plugins"),
+        os.path.join(home, ".bap", "plugins"),
+        os.path.join(home, "bin", "plugins"),
+    ]
+    plugins_src = None
+    for cand in candidate_sources:
+        if cand and os.path.isdir(cand) and any(os.path.isdir(os.path.join(cand, sub)) for sub in ("claude", "copilot", "antigravity", "codex", "opencode")):
+            plugins_src = os.path.normpath(cand)
+            break
+
+    # Deploy to workspace, target bin, and ~/.bap/plugins so plugins exist globally and locally
+    destinations = [
+        os.path.normpath(os.path.join(workspace_root, "plugins")),
+        os.path.normpath(os.path.join(target_dir, "plugins")),
+        os.path.normpath(os.path.join(home, ".bap", "plugins")),
+    ]
+    # Remove duplicate destination paths
+    seen_dest = set()
+    clean_destinations = []
+    for d in destinations:
+        dn = d.lower()
+        if dn not in seen_dest:
+            seen_dest.add(dn)
+            clean_destinations.append(d)
+
+    agents = [
+        ("claude", "Claude Code Native Plugin (Layer 1A: In-Harness Extension)"),
+        ("copilot", "GitHub Copilot Native Plugin (Layer 1A: In-Harness Extension)"),
+        ("antigravity", "Google Antigravity Native Plugin (Layer 1A: In-Harness Extension)"),
+        ("opencode", "OpenCode Native Plugin (Layer 1A: In-Harness Extension)"),
+        ("codex", "OpenAI Codex Native Plugin (Layer 1A: In-Harness Extension)"),
+    ]
+
     installed = []
 
-    if os.path.isdir(plugins_src):
-        # 1. Claude Code Native Plugin
-        claude_src = os.path.join(plugins_src, "claude")
-        claude_dst = os.path.join(plugins_dst, "claude")
-        if os.path.isdir(claude_src):
-            try:
-                os.makedirs(claude_dst, exist_ok=True)
-                shutil.copytree(claude_src, claude_dst, dirs_exist_ok=True)
-                installed.append("Claude Code Native Plugin (Layer 1A: In-Harness Extension)")
-                print(f"  {TermColor.GREEN}[+] Native Plugin:{TermColor.RESET} Installed Claude Code plugin at {claude_dst}")
-            except Exception as e:
-                print(f"  {TermColor.YELLOW}[!] Warning:{TermColor.RESET} Could not copy Claude plugin: {e}")
+    # Common hook adapter scripts
+    adapter_cmd_content = """@echo off
+setlocal enabledelayedexpansion
 
-        # 2. GitHub Copilot Native Plugin
-        copilot_src = os.path.join(plugins_src, "copilot")
-        copilot_dst = os.path.join(plugins_dst, "copilot")
-        if os.path.isdir(copilot_src):
-            try:
-                os.makedirs(copilot_dst, exist_ok=True)
-                shutil.copytree(copilot_src, copilot_dst, dirs_exist_ok=True)
-                installed.append("GitHub Copilot Native Plugin (Layer 1A: In-Harness Extension)")
-                print(f"  {TermColor.GREEN}[+] Native Plugin:{TermColor.RESET} Installed GitHub Copilot plugin at {copilot_dst}")
-            except Exception as e:
-                print(f"  {TermColor.YELLOW}[!] Warning:{TermColor.RESET} Could not copy Copilot plugin: {e}")
+set "SCRIPT_DIR=%~dp0"
+for %%I in ("%SCRIPT_DIR%..") do set "PLUGIN_ROOT=%%~fI"
 
-        # 3. Google Antigravity Native Plugin
-        antigravity_src = os.path.join(plugins_src, "antigravity")
-        antigravity_dst = os.path.join(plugins_dst, "antigravity")
-        if os.path.isdir(antigravity_src):
-            try:
-                os.makedirs(antigravity_dst, exist_ok=True)
-                shutil.copytree(antigravity_src, antigravity_dst, dirs_exist_ok=True)
-                installed.append("Google Antigravity Native Plugin (Layer 1A: In-Harness Extension)")
-                print(f"  {TermColor.GREEN}[+] Native Plugin:{TermColor.RESET} Installed Google Antigravity plugin at {antigravity_dst}")
-            except Exception as e:
-                print(f"  {TermColor.YELLOW}[!] Warning:{TermColor.RESET} Could not copy Antigravity plugin: {e}")
+set "BAPEDGE_BIN=bapedge.exe"
+if exist "%PLUGIN_ROOT%\\..\\..\\bapedge.exe" (
+    set "BAPEDGE_BIN=%PLUGIN_ROOT%\\..\\..\\bapedge.exe"
+) else (
+    where bapedge.exe >nul 2>nul
+    if %ERRORLEVEL% equ 0 (
+        set "BAPEDGE_BIN=bapedge.exe"
+    )
+)
 
-        # 4. OpenCode Native Plugin
-        opencode_src = os.path.join(plugins_src, "opencode")
-        opencode_dst = os.path.join(plugins_dst, "opencode")
-        if os.path.isdir(opencode_src):
-            try:
-                os.makedirs(opencode_dst, exist_ok=True)
-                shutil.copytree(opencode_src, opencode_dst, dirs_exist_ok=True)
-                installed.append("OpenCode Native Plugin (Layer 1A: In-Harness Extension)")
-                print(f"  {TermColor.GREEN}[+] Native Plugin:{TermColor.RESET} Installed OpenCode plugin at {opencode_dst}")
-            except Exception as e:
-                print(f"  {TermColor.YELLOW}[!] Warning:{TermColor.RESET} Could not copy OpenCode plugin: {e}")
+"%BAPEDGE_BIN%" plugin adapter %*
+exit /b %ERRORLEVEL%
+"""
 
-        # 5. OpenAI Codex Native Plugin
-        codex_src = os.path.join(plugins_src, "codex")
-        codex_dst = os.path.join(plugins_dst, "codex")
-        if os.path.isdir(codex_src):
-            try:
-                os.makedirs(codex_dst, exist_ok=True)
-                shutil.copytree(codex_src, codex_dst, dirs_exist_ok=True)
-                installed.append("OpenAI Codex Native Plugin (Layer 1A: In-Harness Extension)")
-                print(f"  {TermColor.GREEN}[+] Native Plugin:{TermColor.RESET} Installed OpenAI Codex plugin at {codex_dst}")
-            except Exception as e:
-                print(f"  {TermColor.YELLOW}[!] Warning:{TermColor.RESET} Could not copy Codex plugin: {e}")
+    adapter_sh_content = """#!/usr/bin/env sh
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+BAPEDGE_BIN="bapedge"
+if [ -f "$PLUGIN_ROOT/../../bapedge" ]; then
+    BAPEDGE_BIN="$PLUGIN_ROOT/../../bapedge"
+elif command -v bapedge >/dev/null 2>&1; then
+    BAPEDGE_BIN="bapedge"
+fi
+
+exec "$BAPEDGE_BIN" plugin adapter "$@"
+"""
+
+    def synthesize_plugin(agent_id: str, dst: str):
+        os.makedirs(dst, exist_ok=True)
+        scripts_dir = os.path.join(dst, "scripts")
+        os.makedirs(scripts_dir, exist_ok=True)
+
+        cmd_path = os.path.join(scripts_dir, "bap-hook-adapter.cmd")
+        sh_path = os.path.join(scripts_dir, "bap-hook-adapter")
+        if not os.path.isfile(cmd_path):
+            with open(cmd_path, "w", encoding="utf-8") as f:
+                f.write(adapter_cmd_content)
+        if not os.path.isfile(sh_path):
+            with open(sh_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(adapter_sh_content)
+            if sys.platform != "win32":
+                try:
+                    os.chmod(sh_path, 0o755)
+                except Exception:
+                    pass
+
+        if agent_id == "claude":
+            cp_dir = os.path.join(dst, ".claude-plugin")
+            hk_dir = os.path.join(dst, "hooks")
+            os.makedirs(cp_dir, exist_ok=True)
+            os.makedirs(hk_dir, exist_ok=True)
+            manifest = {
+                "name": "BAP-ClaudeCode-Plugin",
+                "version": "1.0.0",
+                "description": "BAP Zero-Trust Policy Enforcement and Agent Watch Plugin for Anthropic Claude Code CLI",
+                "entrypoint": "hooks/hooks.json",
+                "supportedSurfaces": ["cli", "terminal"],
+                "capabilities": {
+                    "blocking": True,
+                    "audit": True,
+                    "events": ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"]
+                }
+            }
+            with open(os.path.join(cp_dir, "plugin.json"), "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2)
+            hooks_doc = {
+                "description": "BAP Zero-Trust Security Hooks for Claude Code",
+                "hooks": {
+                    "SessionStart": [{"hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/bap-hook-adapter", "args": ["--client", "claude", "--event", "SessionStart"]}]}],
+                    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/bap-hook-adapter", "args": ["--client", "claude", "--event", "UserPromptSubmit"]}]}],
+                    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/bap-hook-adapter", "args": ["--client", "claude", "--event", "PreToolUse"]}]}],
+                    "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/bap-hook-adapter", "args": ["--client", "claude", "--event", "PostToolUse"]}]}],
+                    "Stop": [{"hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/bap-hook-adapter", "args": ["--client", "claude", "--event", "Stop"]}]}],
+                    "SessionEnd": [{"hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/bap-hook-adapter", "args": ["--client", "claude", "--event", "SessionEnd"]}]}],
+                }
+            }
+            with open(os.path.join(hk_dir, "hooks.json"), "w", encoding="utf-8") as f:
+                json.dump(hooks_doc, f, indent=2)
+
+        elif agent_id == "copilot":
+            gh_dir = os.path.join(dst, "com.github.copilot", "hooks")
+            os.makedirs(gh_dir, exist_ok=True)
+            manifest = {
+                "name": "bap-copilot-plugin",
+                "displayName": "BAP Zero-Trust Policy Enforcement for GitHub Copilot",
+                "version": "1.0.0",
+                "description": "BAP Zero-Trust In-Harness Extension for GitHub Copilot CLI and VS Code",
+                "entrypoint": "com.github.copilot/hooks/hooks.json",
+                "capabilities": {"blocking": True, "audit": True}
+            }
+            with open(os.path.join(dst, "plugin.json"), "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2)
+            hooks_doc = {
+                "description": "BAP Zero-Trust Hooks for GitHub Copilot",
+                "hooks": {
+                    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "scripts/bap-hook-adapter", "args": ["--client", "copilot"]}]}]
+                }
+            }
+            with open(os.path.join(gh_dir, "hooks.json"), "w", encoding="utf-8") as f:
+                json.dump(hooks_doc, f, indent=2)
+
+        elif agent_id == "antigravity":
+            manifest = {
+                "name": "bap-antigravity",
+                "version": "1.0.0",
+                "description": "BAP Zero-Trust Shell Governance and Agent Watch for Google Antigravity",
+                "entrypoint": "hooks.json"
+            }
+            with open(os.path.join(dst, "plugin.json"), "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2)
+
+        elif agent_id == "codex":
+            manifest = {
+                "name": "bap-codex-plugin",
+                "version": "1.0.0",
+                "description": "BAP Zero-Trust Policy Enforcement for OpenAI Codex",
+                "entrypoint": "hooks.json"
+            }
+            with open(os.path.join(dst, "plugin.json"), "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2)
+
+        elif agent_id == "opencode":
+            manifest = {
+                "name": "bap-opencode-plugin",
+                "version": "1.0.0",
+                "description": "BAP Zero-Trust Extension for OpenCode Agent",
+                "entrypoint": "index.js"
+            }
+            with open(os.path.join(dst, "plugin.json"), "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2)
+
+    for dst_root in clean_destinations:
+        try:
+            os.makedirs(dst_root, exist_ok=True)
+        except Exception:
+            continue
+
+        for agent_id, label in agents:
+            agent_dst = os.path.join(dst_root, agent_id)
+            agent_src = os.path.join(plugins_src, agent_id) if plugins_src else None
+            installed_ok = False
+
+            if agent_src and os.path.isdir(agent_src) and os.path.normpath(agent_src).lower() != os.path.normpath(agent_dst).lower():
+                try:
+                    os.makedirs(agent_dst, exist_ok=True)
+                    shutil.copytree(agent_src, agent_dst, dirs_exist_ok=True)
+                    installed_ok = True
+                except Exception as e:
+                    pass
+
+            if not installed_ok:
+                try:
+                    synthesize_plugin(agent_id, agent_dst)
+                    installed_ok = True
+                except Exception:
+                    pass
+
+            if installed_ok and dst_root == clean_destinations[0]:
+                installed.append(label)
+                print(f"  {TermColor.GREEN}[+] Native Plugin:{TermColor.RESET} Installed {agent_id} plugin at {agent_dst}")
+
+    # For Claude Code, also install to ~/.claude/plugins/claude if global directory is available
+    if home:
+        claude_global_plugin = os.path.join(home, ".claude", "plugins", "claude")
+        try:
+            os.makedirs(claude_global_plugin, exist_ok=True)
+            claude_src = os.path.join(clean_destinations[0], "claude")
+            if os.path.isdir(claude_src) and os.path.normpath(claude_src).lower() != os.path.normpath(claude_global_plugin).lower():
+                shutil.copytree(claude_src, claude_global_plugin, dirs_exist_ok=True)
+            else:
+                synthesize_plugin("claude", claude_global_plugin)
+        except Exception:
+            pass
 
     return installed
 
@@ -1117,15 +1276,31 @@ def print_defense_layers_report(workspace_root: str, target_dir: str):
     if not os.path.isfile(bapedge_bin):
         bapedge_bin = os.path.join(REPO_ROOT, "bapedge.exe" if sys.platform == "win32" else "bapedge")
 
-    claude_plugin = os.path.isfile(os.path.join(workspace_root, "plugins", "claude", ".claude-plugin", "plugin.json"))
-    copilot_plugin = os.path.isfile(os.path.join(workspace_root, "plugins", "copilot", "plugin.json"))
-    antigravity_plugin = os.path.isfile(os.path.join(workspace_root, "plugins", "antigravity", "plugin.json"))
-    opencode_plugin = os.path.isfile(os.path.join(workspace_root, "plugins", "opencode", "plugin.json"))
-    codex_plugin = os.path.isfile(os.path.join(workspace_root, "plugins", "codex", "plugin.json"))
+    home = os.path.expanduser("~")
+    search_dirs = [
+        os.path.join(workspace_root, "plugins"),
+        os.path.join(target_dir, "plugins"),
+        os.path.join(home, ".bap", "plugins"),
+        os.path.join(home, "bin", "plugins"),
+    ]
+
+    def has_plugin(agent: str, manifest_subpath: str) -> bool:
+        for sd in search_dirs:
+            if os.path.isfile(os.path.join(sd, agent, manifest_subpath)):
+                return True
+        return False
+
+    claude_plugin = has_plugin("claude", os.path.join(".claude-plugin", "plugin.json")) or \
+                    os.path.isfile(os.path.join(home, ".claude", "plugins", "claude", ".claude-plugin", "plugin.json"))
+    copilot_plugin = has_plugin("copilot", "plugin.json")
+    antigravity_plugin = has_plugin("antigravity", "plugin.json")
+    opencode_plugin = has_plugin("opencode", "plugin.json")
+    codex_plugin = has_plugin("codex", "plugin.json")
     has_layer1a = claude_plugin or copilot_plugin or antigravity_plugin or opencode_plugin or codex_plugin
 
     claude_settings = os.path.isfile(os.path.join(workspace_root, ".claude", "settings.json")) or \
-                      os.path.isfile(os.path.join(workspace_root, ".claude", "managed-settings.json"))
+                      os.path.isfile(os.path.join(workspace_root, ".claude", "managed-settings.json")) or \
+                      os.path.isfile(os.path.join(home, ".claude", "settings.json"))
     has_layer1b = claude_settings or os.path.isfile(os.path.join(workspace_root, "GEMINI.md"))
 
     has_layer2 = os.path.isfile(bapedge_bin)

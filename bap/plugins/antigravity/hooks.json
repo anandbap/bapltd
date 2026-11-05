@@ -1,0 +1,43 @@
+{
+  "bap-governance": {
+    "enabled": true,
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "./scripts/bap-hook-adapter --client antigravity --event SessionStart",
+        "timeout": 15
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "run_command|execute_command|terminal_.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/bap-hook-adapter --client antigravity --event PreToolUse",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "run_command|execute_command|terminal_.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/bap-hook-adapter --client antigravity --event PostToolUse",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "./scripts/bap-hook-adapter --client antigravity --event Stop",
+        "timeout": 10
+      }
+    ]
+  }
+}

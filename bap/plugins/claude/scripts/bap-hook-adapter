@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if command -v bapedge >/dev/null 2>&1; then
+    exec bapedge plugin adapter "$@"
+elif command -v bapedge.exe >/dev/null 2>&1; then
+    exec bapedge.exe plugin adapter "$@"
+elif [ -f "$SCRIPT_DIR/../../../bapedge" ]; then
+    exec "$SCRIPT_DIR/../../../bapedge" plugin adapter "$@"
+elif [ -f "$SCRIPT_DIR/../../../bapedge.exe" ]; then
+    exec "$SCRIPT_DIR/../../../bapedge.exe" plugin adapter "$@"
+elif [ -f "$SCRIPT_DIR/../../../cchook-interceptor.exe" ]; then
+    exec "$SCRIPT_DIR/../../../cchook-interceptor.exe" "$@"
+elif [ -f "$SCRIPT_DIR/../../../cchook/interceptor.exe" ]; then
+    exec "$SCRIPT_DIR/../../../cchook/interceptor.exe" "$@"
+else
+    echo '{"status":"deny","reason":"bapedge execution broker binary not found"}'
+    exit 1
+fi

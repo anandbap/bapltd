@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "name": "bap-opencode-plugin",
+  "version": "1.0.0",
+  "description": "BAP Zero-Trust Security & Policy Enforcement Plugin for OpenCode",
+  "main": "index.js",
+  "publisher": "bap-security",
+  "capabilities": {
+    "hooks": true,
+    "tools": true
+  }
+}

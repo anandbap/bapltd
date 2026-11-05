@@ -1,0 +1,80 @@
+{
+  "description": "BAP Zero-Trust Policy Enforcement & Interception Hooks for OpenAI Codex",
+  "version": "1.0.0",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "scripts/bap-hook-adapter",
+            "commandWindows": "scripts\\bap-hook-adapter.cmd",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "scripts/bap-hook-adapter",
+            "commandWindows": "scripts\\bap-hook-adapter.cmd",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "scripts/bap-hook-adapter",
+            "commandWindows": "scripts\\bap-hook-adapter.cmd",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "scripts/bap-hook-adapter",
+            "commandWindows": "scripts\\bap-hook-adapter.cmd",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "scripts/bap-hook-adapter",
+            "commandWindows": "scripts\\bap-hook-adapter.cmd",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "scripts/bap-hook-adapter",
+            "commandWindows": "scripts\\bap-hook-adapter.cmd",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

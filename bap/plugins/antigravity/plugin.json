@@ -1,0 +1,16 @@
+{
+  "name": "bap-antigravity",
+  "displayName": "BAP Zero-Trust Governance",
+  "description": "BAP Zero-Trust Security, Invariant Defense, and Policy Enforcement Plugin for Google Antigravity",
+  "version": "1.0.0",
+  "author": {
+    "name": "BAP Enterprise Security Team"
+  },
+  "homepage": "https://bap.local",
+  "repository": "https://github.com/bapltd/bap-edge",
+  "suggestedPrompts": [
+    "Run tests under BAP Zero-Trust governance",
+    "Inspect active BAP Defense-in-Depth layers",
+    "Check policy enforcement status"
+  ]
+}

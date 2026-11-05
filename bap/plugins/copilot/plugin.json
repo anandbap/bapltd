@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0",
+  "name": "bap-copilot-plugin",
+  "version": "1.0.0",
+  "description": "BAP Zero-Trust Security & Policy Enforcement Plugin for GitHub Copilot",
+  "publisher": "bap-security",
+  "capabilities": {
+    "hooks": true
+  },
+  "hooks": "./com.github.copilot/hooks/hooks.json"
+}

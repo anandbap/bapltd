@@ -548,7 +548,39 @@ func PrintDefenseInDepthLayers(w io.Writer, workspace string) {
 // -----------------------------------------------------------------------------
 
 func InspectClaudePlugin(workspace string) types.PluginHealthRecord {
-	manifestPath := filepath.Join(workspace, "plugins", "claude", ".claude-plugin", "plugin.json")
+	manifestCandidates := []string{
+		filepath.Join(workspace, "plugins", "claude", ".claude-plugin", "plugin.json"),
+		filepath.Join(workspace, ".claude", "plugins", "claude", ".claude-plugin", "plugin.json"),
+		filepath.Join(workspace, ".claude", "plugin.json"),
+	}
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		manifestCandidates = append(manifestCandidates,
+			filepath.Join(home, ".claude", "plugins", "claude", ".claude-plugin", "plugin.json"),
+			filepath.Join(home, ".claude", "plugins", "claude", "plugin.json"),
+			filepath.Join(home, ".bap", "plugins", "claude", ".claude-plugin", "plugin.json"),
+			filepath.Join(home, "bin", "plugins", "claude", ".claude-plugin", "plugin.json"),
+		)
+	}
+	if execPath, err := os.Executable(); err == nil {
+		execDir := filepath.Dir(execPath)
+		manifestCandidates = append(manifestCandidates,
+			filepath.Join(execDir, "plugins", "claude", ".claude-plugin", "plugin.json"),
+		)
+	}
+
+	manifestPath := manifestCandidates[0]
+	installed := false
+	var manifestData []byte
+	for _, p := range manifestCandidates {
+		if data, err := os.ReadFile(p); err == nil {
+			manifestPath = p
+			installed = true
+			manifestData = data
+			break
+		}
+	}
+
 	rec := types.PluginHealthRecord{
 		Client:        "claude-code",
 		PluginName:    "BAP-ClaudeCode-Plugin",
@@ -561,14 +593,14 @@ func InspectClaudePlugin(workspace string) types.PluginHealthRecord {
 	rec.AgentDiscovered = isAgentExecutablePresent("claude")
 
 	// 2. Plugin Installed
-	if data, err := os.ReadFile(manifestPath); err == nil {
+	if installed {
 		rec.PluginInstalled = true
 		rec.State = types.PluginStateInstalled
 		var m struct {
 			Name    string `json:"name"`
 			Version string `json:"version"`
 		}
-		if json.Unmarshal(data, &m) == nil {
+		if json.Unmarshal(manifestData, &m) == nil {
 			if m.Name != "" {
 				rec.PluginName = m.Name
 			}
@@ -600,7 +632,36 @@ func InspectClaudePlugin(workspace string) types.PluginHealthRecord {
 }
 
 func InspectCopilotPlugin(workspace string) types.PluginHealthRecord {
-	manifestPath := filepath.Join(workspace, "plugins", "copilot", "plugin.json")
+	manifestCandidates := []string{
+		filepath.Join(workspace, "plugins", "copilot", "plugin.json"),
+		filepath.Join(workspace, ".vscode", "plugins", "copilot", "plugin.json"),
+		filepath.Join(workspace, ".github", "copilot", "plugin.json"),
+	}
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		manifestCandidates = append(manifestCandidates,
+			filepath.Join(home, ".copilot", "plugins", "copilot", "plugin.json"),
+			filepath.Join(home, ".bap", "plugins", "copilot", "plugin.json"),
+			filepath.Join(home, "bin", "plugins", "copilot", "plugin.json"),
+		)
+	}
+	if execPath, err := os.Executable(); err == nil {
+		execDir := filepath.Dir(execPath)
+		manifestCandidates = append(manifestCandidates,
+			filepath.Join(execDir, "plugins", "copilot", "plugin.json"),
+		)
+	}
+
+	manifestPath := manifestCandidates[0]
+	installed := false
+	for _, p := range manifestCandidates {
+		if _, err := os.Stat(p); err == nil {
+			manifestPath = p
+			installed = true
+			break
+		}
+	}
+
 	rec := types.PluginHealthRecord{
 		Client:        "copilot",
 		PluginName:    "bap-copilot-plugin",
@@ -611,7 +672,7 @@ func InspectCopilotPlugin(workspace string) types.PluginHealthRecord {
 
 	rec.AgentDiscovered = isAgentExecutablePresent("copilot")
 
-	if _, err := os.Stat(manifestPath); err == nil {
+	if installed {
 		rec.PluginInstalled = true
 		rec.State = types.PluginStateInstalled
 	}
@@ -643,7 +704,17 @@ func InspectAntigravityPlugin(workspace string) types.PluginHealthRecord {
 	}
 	home, _ := os.UserHomeDir()
 	if home != "" {
-		manifestCandidates = append(manifestCandidates, filepath.Join(home, ".gemini", "config", "plugins", "bap-antigravity", "plugin.json"))
+		manifestCandidates = append(manifestCandidates,
+			filepath.Join(home, ".gemini", "config", "plugins", "bap-antigravity", "plugin.json"),
+			filepath.Join(home, ".bap", "plugins", "antigravity", "plugin.json"),
+			filepath.Join(home, "bin", "plugins", "antigravity", "plugin.json"),
+		)
+	}
+	if execPath, err := os.Executable(); err == nil {
+		execDir := filepath.Dir(execPath)
+		manifestCandidates = append(manifestCandidates,
+			filepath.Join(execDir, "plugins", "antigravity", "plugin.json"),
+		)
 	}
 
 	manifestPath := manifestCandidates[0]
@@ -696,7 +767,17 @@ func InspectOpenCodePlugin(workspace string) types.PluginHealthRecord {
 	}
 	home, _ := os.UserHomeDir()
 	if home != "" {
-		manifestCandidates = append(manifestCandidates, filepath.Join(home, ".config", "opencode", "plugins", "bap-opencode", "plugin.json"))
+		manifestCandidates = append(manifestCandidates,
+			filepath.Join(home, ".config", "opencode", "plugins", "bap-opencode", "plugin.json"),
+			filepath.Join(home, ".bap", "plugins", "opencode", "plugin.json"),
+			filepath.Join(home, "bin", "plugins", "opencode", "plugin.json"),
+		)
+	}
+	if execPath, err := os.Executable(); err == nil {
+		execDir := filepath.Dir(execPath)
+		manifestCandidates = append(manifestCandidates,
+			filepath.Join(execDir, "plugins", "opencode", "plugin.json"),
+		)
 	}
 
 	manifestPath := manifestCandidates[0]
@@ -749,7 +830,17 @@ func InspectCodexPlugin(workspace string) types.PluginHealthRecord {
 	}
 	home, _ := os.UserHomeDir()
 	if home != "" {
-		manifestCandidates = append(manifestCandidates, filepath.Join(home, ".codex", "plugin.json"))
+		manifestCandidates = append(manifestCandidates,
+			filepath.Join(home, ".codex", "plugin.json"),
+			filepath.Join(home, ".bap", "plugins", "codex", "plugin.json"),
+			filepath.Join(home, "bin", "plugins", "codex", "plugin.json"),
+		)
+	}
+	if execPath, err := os.Executable(); err == nil {
+		execDir := filepath.Dir(execPath)
+		manifestCandidates = append(manifestCandidates,
+			filepath.Join(execDir, "plugins", "codex", "plugin.json"),
+		)
 	}
 
 	manifestPath := manifestCandidates[0]
@@ -984,45 +1075,228 @@ func findRepoRoot(start string) string {
 	return start
 }
 
+func findPluginSource(agent, repoRoot string) string {
+	candidates := []string{
+		filepath.Join(repoRoot, "plugins", agent),
+	}
+	if home, _ := os.UserHomeDir(); home != "" {
+		candidates = append(candidates,
+			filepath.Join(home, ".bap", "plugins", agent),
+			filepath.Join(home, "bin", "plugins", agent),
+		)
+	}
+	if execPath, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(execPath), "plugins", agent))
+	}
+	for _, c := range candidates {
+		if st, err := os.Stat(c); err == nil && st.IsDir() {
+			return c
+		}
+	}
+	return ""
+}
+
+func ensureDefaultAdapterScripts(destDir string) {
+	scriptsDir := filepath.Join(destDir, "scripts")
+	_ = os.MkdirAll(scriptsDir, 0755)
+
+	adapterCmd := filepath.Join(scriptsDir, "bap-hook-adapter.cmd")
+	if _, err := os.Stat(adapterCmd); os.IsNotExist(err) {
+		cmdContent := `@echo off
+setlocal enabledelayedexpansion
+
+set "SCRIPT_DIR=%~dp0"
+for %%I in ("%SCRIPT_DIR%..") do set "PLUGIN_ROOT=%%~fI"
+
+set "BAPEDGE_BIN=bapedge.exe"
+if exist "%PLUGIN_ROOT%\..\..\bapedge.exe" (
+    set "BAPEDGE_BIN=%PLUGIN_ROOT%\..\..\bapedge.exe"
+) else (
+    where bapedge.exe >nul 2>nul
+    if %ERRORLEVEL% equ 0 (
+        set "BAPEDGE_BIN=bapedge.exe"
+    )
+)
+
+"%BAPEDGE_BIN%" plugin adapter %*
+exit /b %ERRORLEVEL%
+`
+		_ = os.WriteFile(adapterCmd, []byte(cmdContent), 0755)
+	}
+
+	adapterSh := filepath.Join(scriptsDir, "bap-hook-adapter")
+	if _, err := os.Stat(adapterSh); os.IsNotExist(err) {
+		shContent := `#!/usr/bin/env sh
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+BAPEDGE_BIN="bapedge"
+if [ -f "$PLUGIN_ROOT/../../bapedge" ]; then
+    BAPEDGE_BIN="$PLUGIN_ROOT/../../bapedge"
+elif command -v bapedge >/dev/null 2>&1; then
+    BAPEDGE_BIN="bapedge"
+fi
+
+exec "$BAPEDGE_BIN" plugin adapter "$@"
+`
+		_ = os.WriteFile(adapterSh, []byte(shContent), 0755)
+	}
+}
+
 func installClaudePlugin(repoRoot, workspace string) error {
 	destDir := filepath.Join(workspace, "plugins", "claude")
-	srcDir := filepath.Join(repoRoot, "plugins", "claude")
-
-	if _, err := os.Stat(srcDir); err != nil {
-		// If srcDir does not exist yet, build files directly
-		return copyDirRecursive(destDir, srcDir)
+	if srcDir := findPluginSource("claude", repoRoot); srcDir != "" && srcDir != destDir {
+		return copyDirRecursive(srcDir, destDir)
 	}
-	return copyDirRecursive(srcDir, destDir)
+
+	_ = os.MkdirAll(filepath.Join(destDir, ".claude-plugin"), 0755)
+	_ = os.MkdirAll(filepath.Join(destDir, "hooks"), 0755)
+	ensureDefaultAdapterScripts(destDir)
+
+	manifestPath := filepath.Join(destDir, ".claude-plugin", "plugin.json")
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		manifest := map[string]any{
+			"name":        "BAP-ClaudeCode-Plugin",
+			"version":     "1.0.0",
+			"description": "BAP Zero-Trust Policy Enforcement and Agent Watch Plugin for Anthropic Claude Code CLI",
+			"entrypoint":  "hooks/hooks.json",
+			"supportedSurfaces": []string{"cli", "terminal"},
+			"capabilities": map[string]any{
+				"blocking": true,
+				"audit":    true,
+				"events":   []string{"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"},
+			},
+		}
+		data, _ := json.MarshalIndent(manifest, "", "  ")
+		_ = os.WriteFile(manifestPath, data, 0644)
+	}
+
+	hooksPath := filepath.Join(destDir, "hooks", "hooks.json")
+	if _, err := os.Stat(hooksPath); os.IsNotExist(err) {
+		hooksDoc := map[string]any{
+			"description": "BAP Zero-Trust Security Hooks for Claude Code",
+			"hooks": map[string]any{
+				"SessionStart": []any{
+					map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/bap-hook-adapter", "args": []string{"--client", "claude", "--event", "SessionStart"}}}},
+				},
+				"UserPromptSubmit": []any{
+					map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/bap-hook-adapter", "args": []string{"--client", "claude", "--event", "UserPromptSubmit"}}}},
+				},
+				"PreToolUse": []any{
+					map[string]any{"matcher": "*", "hooks": []any{map[string]any{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/bap-hook-adapter", "args": []string{"--client", "claude", "--event", "PreToolUse"}}}},
+				},
+				"PostToolUse": []any{
+					map[string]any{"matcher": "*", "hooks": []any{map[string]any{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/bap-hook-adapter", "args": []string{"--client", "claude", "--event", "PostToolUse"}}}},
+				},
+				"Stop": []any{
+					map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/bap-hook-adapter", "args": []string{"--client", "claude", "--event", "Stop"}}}},
+				},
+				"SessionEnd": []any{
+					map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/bap-hook-adapter", "args": []string{"--client", "claude", "--event", "SessionEnd"}}}},
+				},
+			},
+		}
+		data, _ := json.MarshalIndent(hooksDoc, "", "  ")
+		_ = os.WriteFile(hooksPath, data, 0644)
+	}
+	return nil
 }
 
 func installCopilotPlugin(repoRoot, workspace string) error {
 	destDir := filepath.Join(workspace, "plugins", "copilot")
-	srcDir := filepath.Join(repoRoot, "plugins", "copilot")
-
-	if _, err := os.Stat(srcDir); err != nil {
-		return copyDirRecursive(destDir, srcDir)
+	if srcDir := findPluginSource("copilot", repoRoot); srcDir != "" && srcDir != destDir {
+		return copyDirRecursive(srcDir, destDir)
 	}
-	return copyDirRecursive(srcDir, destDir)
+
+	_ = os.MkdirAll(filepath.Join(destDir, "com.github.copilot", "hooks"), 0755)
+	ensureDefaultAdapterScripts(destDir)
+
+	manifestPath := filepath.Join(destDir, "plugin.json")
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		manifest := map[string]any{
+			"name":        "bap-copilot-plugin",
+			"displayName": "BAP Zero-Trust Policy Enforcement for GitHub Copilot",
+			"version":     "1.0.0",
+			"description": "BAP Zero-Trust In-Harness Extension for GitHub Copilot CLI and VS Code",
+			"entrypoint":  "com.github.copilot/hooks/hooks.json",
+			"capabilities": map[string]any{
+				"blocking": true,
+				"audit":    true,
+			},
+		}
+		data, _ := json.MarshalIndent(manifest, "", "  ")
+		_ = os.WriteFile(manifestPath, data, 0644)
+	}
+
+	hooksPath := filepath.Join(destDir, "com.github.copilot", "hooks", "hooks.json")
+	if _, err := os.Stat(hooksPath); os.IsNotExist(err) {
+		hooksDoc := map[string]any{
+			"description": "BAP Zero-Trust Hooks for GitHub Copilot",
+			"hooks": map[string]any{
+				"PreToolUse": []any{
+					map[string]any{
+						"matcher": "*",
+						"hooks": []any{
+							map[string]any{
+								"type":    "command",
+								"command": "scripts/bap-hook-adapter",
+								"args":    []string{"--client", "copilot"},
+							},
+						},
+					},
+				},
+			},
+		}
+		data, _ := json.MarshalIndent(hooksDoc, "", "  ")
+		_ = os.WriteFile(hooksPath, data, 0644)
+	}
+	return nil
 }
 
 func installAntigravityPlugin(repoRoot, workspace string) error {
 	destDir := filepath.Join(workspace, "plugins", "antigravity")
-	srcDir := filepath.Join(repoRoot, "plugins", "antigravity")
-
-	if _, err := os.Stat(srcDir); err != nil {
-		return copyDirRecursive(destDir, srcDir)
+	if srcDir := findPluginSource("antigravity", repoRoot); srcDir != "" && srcDir != destDir {
+		return copyDirRecursive(srcDir, destDir)
 	}
-	return copyDirRecursive(srcDir, destDir)
+
+	_ = os.MkdirAll(destDir, 0755)
+	ensureDefaultAdapterScripts(destDir)
+
+	manifestPath := filepath.Join(destDir, "plugin.json")
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		manifest := map[string]any{
+			"name":        "bap-antigravity",
+			"version":     "1.0.0",
+			"description": "BAP Zero-Trust Shell Governance and Agent Watch for Google Antigravity",
+			"entrypoint":  "hooks.json",
+		}
+		data, _ := json.MarshalIndent(manifest, "", "  ")
+		_ = os.WriteFile(manifestPath, data, 0644)
+	}
+	return nil
 }
 
 func installOpenCodePlugin(repoRoot, workspace string) error {
 	destDir := filepath.Join(workspace, "plugins", "opencode")
-	srcDir := filepath.Join(repoRoot, "plugins", "opencode")
-
-	if _, err := os.Stat(srcDir); err != nil {
-		return copyDirRecursive(destDir, srcDir)
+	if srcDir := findPluginSource("opencode", repoRoot); srcDir != "" && srcDir != destDir {
+		return copyDirRecursive(srcDir, destDir)
 	}
-	return copyDirRecursive(srcDir, destDir)
+
+	_ = os.MkdirAll(destDir, 0755)
+	ensureDefaultAdapterScripts(destDir)
+
+	manifestPath := filepath.Join(destDir, "plugin.json")
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		manifest := map[string]any{
+			"name":        "bap-opencode-plugin",
+			"version":     "1.0.0",
+			"description": "BAP Zero-Trust Extension for OpenCode Agent",
+			"entrypoint":  "index.js",
+		}
+		data, _ := json.MarshalIndent(manifest, "", "  ")
+		_ = os.WriteFile(manifestPath, data, 0644)
+	}
+	return nil
 }
 
 func installCodexPlugin(repoRoot, workspace string) error {
