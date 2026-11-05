@@ -284,18 +284,26 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Add("Vary", "Origin")
 		origin := r.Header.Get("Origin")
 		scheme := "http"
-		if r.TLS != nil {
+		fwdProto := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0])
+		if r.TLS != nil || strings.EqualFold(fwdProto, "https") || strings.EqualFold(r.Header.Get("X-Forwarded-Ssl"), "on") || strings.EqualFold(r.Header.Get("Front-End-Https"), "on") {
 			scheme = "https"
 		}
-		sameOrigin := scheme + "://" + r.Host
+		host := r.Host
+		if fwdHost := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Host"), ",")[0]); fwdHost != "" {
+			host = fwdHost
+		}
+		sameOrigin := scheme + "://" + host
+		isSameOrigin := (origin == sameOrigin) ||
+			(origin == "https://"+host) || (origin == "http://"+host) ||
+			(origin == "https://"+r.Host) || (origin == "http://"+r.Host)
 		if origin != "" {
-			if origin != sameOrigin && !s.allowedOrigins[origin] {
+			if !isSameOrigin && !s.allowedOrigins[origin] {
 				writeError(w, http.StatusForbidden, "Browser origin is not allowed")
 				return
 			}
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-BAP-Admin-Token, Accept")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-BAP-Admin-Token, Accept, X-Forwarded-Proto")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

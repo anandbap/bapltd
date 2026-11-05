@@ -4,7 +4,7 @@
   var api, state = {rows: [], next: '', revision: 0, busy: false, active: false, generation: 0};
   function el(id) { return document.getElementById(id); }
   function text(id, value) { var node = el(id); if (node) node.textContent = value; }
-  function allowed() { return api && api.isAdmin() && api.isLive(); }
+  function allowed() { return Boolean(api && api.isAdmin && api.isAdmin() && (!api.hasAdminToken || api.hasAdminToken()) && api.isLive && api.isLive()); }
   function message(value) { text('discoveryMessage', value); }
   function clear() { state.generation++; state.rows = []; state.next = ''; state.revision = 0; render(); text('discoverySummary', 'Authenticate as admin in Live mode to inspect workstation discovery.'); text('discoveryCoverage','No scan coverage loaded.'); text('discoveryEvidenceBody',''); text('discoveryStorage',''); text('pilotCoverageSummary','Pilot roster not loaded.'); if (el('pilotCoverageRows')) el('pilotCoverageRows').replaceChildren(); el('discoveryDrawer').close(); message('No discovery data loaded.'); }
   function pilotCoverage() {
@@ -59,9 +59,18 @@
       state.next = ''; message(String(error.message).indexOf('409') >= 0 ? 'Inventory changed. Refresh to start a new snapshot.' : 'Discovery unavailable. Showing previously loaded evidence; it may be stale.');
     }).finally(function () { state.busy = false; render(); if (state.reloadPending) {state.reloadPending = false; load(false);} });
   }
-  function post(path, value) { return api.apiFetch('/api/v1/discovery/shadow-it/' + path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(value)}).then(function (r) {return r.json();}); }
+  function post(path, value) {
+    if (!allowed()) {
+      return Promise.reject(new Error('Access Denied: Administrative credential required. Action blocked.'));
+    }
+    return api.apiFetch('/api/v1/discovery/shadow-it/' + path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(value)}).then(function (r) {return r.json();});
+  }
   function rescan() {
-    if (!allowed()) return;
+    if (!allowed()) {
+      message('Access Denied: Administrative credential required. Enter a verified admin token to trigger a scan.');
+      if (api && api.requireAdminLogin) api.requireAdminLogin();
+      return;
+    }
     var instance = el('discoveryFilter_instance_id').value.trim();
     if (!instance && !root.confirm('Queue a metadata discovery scan for every enrolled workstation?')) return;
     post('scan/trigger', instance ? {scope: 'selected', instances: [instance]} : {scope: 'fleet'}).then(function () {message('Scan requested. Offline workstations will receive it on a later authenticated heartbeat. Completion is pending.');}).catch(function (error) {message('Rescan request failed: ' + error.message);});
@@ -75,7 +84,11 @@
     el('discoveryDrawer').showModal();
   }
   function disposition(a, value) {
-    if (!allowed()) return;
+    if (!allowed()) {
+      message('Access Denied: Administrative credential required to record review decisions.');
+      if (api && api.requireAdminLogin) api.requireAdminLogin();
+      return;
+    }
     var reason = root.prompt('Reason (metadata only; do not enter secrets):'); if (!reason || !reason.trim()) return;
     var request = {id: a.id, state: value, reason: reason.trim()};
     if (value === 'exception') { var days = Number(root.prompt('Exception duration in days (1–30):', '7')); if (!Number.isFinite(days) || days < 1 || days > 30) return; request.expires_at = new Date(Date.now() + days * 86400000).toISOString(); }

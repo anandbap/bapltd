@@ -759,6 +759,9 @@
 
   /* ---------- transport & admin auth ---------- */
   function getAdminToken() { return S.adminToken || ''; }
+  function isVerifiedAdmin() {
+    return Boolean(S.adminActive && S.adminToken && typeof S.adminToken === 'string' && S.adminToken.trim().length >= 8);
+  }
   function authHeaders(extra) {
     var h = Object.assign({}, extra || {});
     var tok = getAdminToken();
@@ -770,6 +773,21 @@
   }
   function apiFetch(url, options) {
     options = options || {};
+    var method = (options.method || 'GET').toUpperCase();
+    var isMutation = method === 'POST' || method === 'PUT' || method === 'DELETE' || method === 'PATCH';
+    var isAdminRoute = url.indexOf('/control/') !== -1 ||
+                       url.indexOf('/admin/') !== -1 ||
+                       url.indexOf('/discovery/shadow-it/scan/') !== -1 ||
+                       url.indexOf('/discovery/shadow-it/disposition') !== -1 ||
+                       url.indexOf('/escalation/resolve') !== -1 ||
+                       url.indexOf('/policies/cedar/deploy') !== -1 ||
+                       url.indexOf('/sessions/revoke') !== -1 ||
+                       url.indexOf('/agents/revoke') !== -1;
+
+    if (isAdminRoute && isMutation && !isVerifiedAdmin()) {
+      return Promise.reject(new Error('Access Denied: Administrative credential required. Action blocked without an active verified admin token.'));
+    }
+
     options.headers = authHeaders(options.headers);
     options.credentials = 'same-origin';
     return fetch(url, options).then(function (r) {
@@ -1411,6 +1429,10 @@
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeAll(); });
 
   function openFreeze() {
+    if (!S.adminActive || (typeof isVerifiedAdmin === 'function' && !isVerifiedAdmin())) {
+      openAdminPopover();
+      return;
+    }
     if (S.frozen && S.mode !== 'demo') {
       if (!confirm('Unfreeze all agents? Workstation and session freezes will remain in effect.')) return;
       apiFetch('/api/v1/control/kill-switch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1432,6 +1454,10 @@
   $('mGo').addEventListener('click', function () {
     closeAll();
     if (S.mode === 'demo') { Demo.onFreeze(); return; }
+    if (!S.adminActive || (typeof isVerifiedAdmin === 'function' && !isVerifiedAdmin())) {
+      openAdminPopover();
+      return;
+    }
     var t0 = performance.now();
     apiFetch('/api/v1/control/kill-switch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: true, reason: 'Fleet freeze from V3 executive view' }) })
@@ -1457,7 +1483,10 @@
     var btn = e.target.closest('[data-session-freeze]');
     if (!btn) return;
     if (btn.disabled) return;
-    if (!S.adminActive) { openAdminPopover(); return; }
+    if (!S.adminActive || (typeof isVerifiedAdmin === 'function' && !isVerifiedAdmin())) {
+      openAdminPopover();
+      return;
+    }
     var action = btn.getAttribute('data-session-freeze');
     var target = btn.getAttribute('data-session-id');
     if (!confirm((action === 'freeze' ? 'Freeze' : 'Unfreeze') + ' session ' + target + '? This applies only to this session.')) return;
@@ -2162,7 +2191,7 @@
 
   try { S.sessId = new URLSearchParams(location.search).get('session') || localStorage.getItem('aw3.session') || ''; } catch (_) { S.sessId = ''; }
   $('sessId').value = S.sessId;
-  window.BAPDiscovery.init({getJSON:getJSON,apiFetch:apiFetch,isAdmin:function(){return S.adminActive;},isLive:function(){return S.mode==='live';}});
+  window.BAPDiscovery.init({getJSON:getJSON,apiFetch:apiFetch,isAdmin:function(){return isVerifiedAdmin();},hasAdminToken:function(){return isVerifiedAdmin();},isLive:function(){return S.mode==='live';},requireAdminLogin:openAdminPopover});
   if (location.hash === '#discovery') {
     switchView('discovery');
   } else if (location.hash === '#workstations') {
