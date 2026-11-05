@@ -51,7 +51,17 @@
     message('Loading discovery evidence…');
     return api.getJSON('/api/v1/discovery/shadow-it/findings?' + query.toString()).then(function (page) {
       if (!allowed() || generation !== state.generation) return;
-      state.rows = more ? state.rows.concat(page.findings || []) : (page.findings || []); state.next = page.next_cursor || ''; state.revision = page.revision;
+      var raw = more ? state.rows.concat(page.findings || []) : (page.findings || []);
+      var seen = {};
+      var deduped = [];
+      raw.forEach(function (row) {
+        var k = (row.instance_id || '') + '::' + (row.kind || '') + '::' + (row.name || '');
+        if (!seen[k]) {
+          seen[k] = true;
+          deduped.push(row);
+        }
+      });
+      state.rows = deduped; state.next = page.next_cursor || ''; state.revision = page.revision;
       message(page.total === 0 ? 'No observations match this filter. Check scan coverage before treating this as clean.' : 'Latest inventory snapshot. Presence and invocation are separate evidence.');
       render();
     }).catch(function (error) {

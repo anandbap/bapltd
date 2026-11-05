@@ -2815,10 +2815,25 @@ func (s *Server) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if s.registry != nil {
-		for _, a := range s.registry.List() {
-			if a.InstanceID == req.SessionID && a.Status == types.StatusRevoked {
-				writeError(w, http.StatusForbidden, "Agent instance is revoked by CISO administrator")
-				return
+		targets := []string{req.InstanceID, req.ResourceID, req.Hostname}
+		if req.SessionID != "" {
+			targets = append(targets, req.SessionID)
+		}
+		if claims, err := s.workstationIdentity(r); err == nil && claims != nil {
+			targets = append(targets, claims.InstanceID, claims.AgentID, claims.Sub)
+		}
+		for _, a := range s.registry.ListAll() {
+			for _, t := range targets {
+				if t != "" && (strings.EqualFold(a.AgentID, t) || strings.EqualFold(a.InstanceID, t) || (a.Hostname != "" && strings.EqualFold(a.Hostname, t))) {
+					if a.Status == types.StatusQuarantined {
+						writeError(w, http.StatusForbidden, "New agent sessions forbidden: Workstation is frozen (quarantined) by administrator")
+						return
+					}
+					if a.Status == types.StatusRevoked {
+						writeError(w, http.StatusForbidden, "New agent sessions forbidden: Workstation authority is revoked by administrator")
+						return
+					}
+				}
 			}
 		}
 	}
@@ -3674,28 +3689,36 @@ func (s *Server) handleTargetedKillAgent(w http.ResponseWriter, r *http.Request)
 	if action == "unrevoke" {
 		action = "restore"
 	}
-	// Session freezes must never quarantine the workstation or revoke its user.
-	if action == "freeze" || action == "unfreeze" {
-		if req.Scope != "session" || target == "" || s.sessionStore == nil {
-			writeError(w, http.StatusBadRequest, "Exact session target and scope=session are required")
+	// Sessions can only be stopped; once stopped, they cannot be unstopped or unfrozen.
+	// Only new sessions can be started. Workstations can be quarantined/frozen and unquarantined.
+	if req.Scope == "session" || (action == "stop" && req.Scope != "workstation") || action == "freeze" || action == "unfreeze" {
+		if req.Scope == "session" || (action == "stop" && target != "") {
+			if action == "unfreeze" || action == "restore" {
+				writeError(w, http.StatusBadRequest, "Cannot unfreeze session: Once stopped, a session cannot be resumed; only a new session can be started.")
+				return
+			}
+			if target == "" || s.sessionStore == nil {
+				writeError(w, http.StatusBadRequest, "Exact session target and scope=session are required")
+				return
+			}
+			_, err := s.sessionStore.Get(target)
+			if err != nil {
+				writeError(w, http.StatusNotFound, "Session not found")
+				return
+			}
+			sess, err := s.sessionStore.StopSession(target)
+			if err != nil {
+				writeError(w, http.StatusConflict, err.Error())
+				return
+			}
+			if s.auditStore != nil {
+				s.auditStore.Ingest([]audit.Event{{Source: "bap-controlplane", SessionID: target,
+					Executable: "bapcontrolplane", FullCommand: "STOP_SESSION target=" + target,
+					Decision: "allow", Reason: "Administrator stopped session", Timestamp: time.Now().UTC().Format(time.RFC3339)}})
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"target": target, "scope": "session", "action": "stop", "status": sess.Status, "close_reason": sess.CloseReason})
 			return
 		}
-		_, err := s.sessionStore.Get(target)
-		if err != nil {
-			writeError(w, http.StatusNotFound, "Session not found")
-			return
-		}
-		sess, err := s.sessionStore.SetFrozen(target, action == "freeze")
-		if err != nil {
-			writeError(w, http.StatusConflict, err.Error())
-			return
-		}
-		s.recordRecoveryRestore("session", target, action == "unfreeze")
-		s.auditStore.Ingest([]audit.Event{{Source: "bap-controlplane", SessionID: target,
-			Executable: "bapcontrolplane", FullCommand: strings.ToUpper(action) + "_SESSION target=" + target,
-			Decision: "allow", Reason: "Administrator session " + action, Timestamp: time.Now().UTC().Format(time.RFC3339)}})
-		writeJSON(w, http.StatusOK, map[string]any{"target": target, "scope": "session", "action": action, "status": sess.Status, "close_reason": sess.CloseReason})
-		return
 	}
 	if target == "" || (action != "restore" && action != "revoke" && action != "stop") {
 		writeError(w, http.StatusBadRequest, "Exact target and action (stop, revoke, or restore) are required")

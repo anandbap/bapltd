@@ -36,8 +36,8 @@ async function main() {
   await ctx.loadLive();
   assert.equal(ctx.S.coverage[0].protect, 'Evidence received');
   assert.match(ctx.S.coverage[0].means, /discovery, broker/);
-  assert.match(ctx.S.coverage[0].actionHtml, /Freeze session/);
-  assert.doesNotMatch(ctx.S.coverage[0].surfaceHtml, /data-session-freeze/);
+  assert.match(ctx.S.coverage[0].actionHtml, /Stop session/);
+  assert.doesNotMatch(ctx.S.coverage[0].surfaceHtml, /data-session-stop/);
   assert.doesNotMatch(ctx.S.coverage[0].actionHtml, / disabled/);
   fixtures['/api/v1/sessions'].sessions[0].last_active_at = new Date(Date.now()-60000).toISOString();
   await ctx.loadLive();
@@ -53,10 +53,11 @@ async function main() {
   assert.equal(ctx.S.coverage[0].actionHtml, '');
   ctx.S.adminActive = true;
   fixtures['/api/v1/sessions'].sessions[0].status = 'revoked';
-  fixtures['/api/v1/sessions'].sessions[0].close_reason = 'Frozen by administrator';
+  fixtures['/api/v1/sessions'].sessions[0].close_reason = 'Stopped by administrator';
   await ctx.loadLive();
-  assert.match(ctx.S.coverage[0].actionHtml, /Unfreeze session/);
-  assert.doesNotMatch(ctx.S.coverage[0].actionHtml, / disabled/);
+  assert.equal(ctx.S.coverage[0].report, 'Stopped');
+  assert.match(ctx.S.coverage[0].actionHtml, /Stopped/);
+  assert.doesNotMatch(ctx.S.coverage[0].actionHtml, /Unfreeze/);
 
   // A slow request must finish instead of being invalidated on every poll.
   const originalGetJSON = ctx.getJSON;
@@ -71,11 +72,11 @@ async function main() {
   assert.equal(ctx.liveInFlight, false);
   ctx.getJSON = originalGetJSON;
 
-  vm.runInContext(section("  document.addEventListener('click', function (e) {\n    var btn = e.target.closest('[data-session-freeze]');", '  var liveTimer'), ctx);
+  vm.runInContext(section("  document.addEventListener('click', function (e) {\n    var btn = e.target.closest('[data-session-stop], [data-session-freeze]');", '  var liveTimer'), ctx);
   let calls = 0;
   ctx.loadLive = () => { calls++; };
   ctx.apiFetch = async () => ({ json: async () => ({ status: 'revoked' }) });
-  const attrs = { 'data-session-freeze': 'freeze', 'data-session-id': 'claude' };
+  const attrs = { 'data-session-stop': 'stop', 'data-session-id': 'claude' };
   const button = { getAttribute: key => attrs[key], setAttribute: (key, value) => { attrs[key] = value; } };
   button.disabled = true;
   ctx.clickSession({ target: { closest: () => button } });
@@ -89,8 +90,7 @@ async function main() {
   ctx.S.adminActive = true;
   ctx.clickSession({ target: { closest: () => button } });
   await flush();
-  assert.equal(attrs['data-session-freeze'], 'unfreeze');
-  assert.equal(button.textContent, 'Unfreeze session');
+  assert.equal(calls, 1);
   assert.equal(button.disabled, false);
 
   ctx.getAdminToken = () => '';

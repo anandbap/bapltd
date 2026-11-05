@@ -71,7 +71,28 @@ func (s *Server) handleDiscoveryReport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 503, "Discovery report could not be committed")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"status": "acknowledged", "run_id": report.RunID, "duplicate": duplicate, "durable": false, "server_epoch": s.serverEpoch, "storage": s.inventory.Storage(), "instance_id": claims.InstanceID})
+	if s.auditStore != nil {
+		_, _ = s.auditStore.Ingest([]audit.Event{{
+			EventID:     "discovery-ingest-" + report.RunID,
+			Source:      "controlplane-discovery",
+			Executable:  "discovery.scan",
+			Decision:    "acknowledged",
+			FullCommand: "DISCOVERY_REPORT_RECEIVED instance=" + claims.InstanceID + " run_id=" + report.RunID,
+			Reason:      "Discovery report received and acknowledged for workstation " + claims.InstanceID,
+			Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
+		}})
+	}
+	writeJSON(w, 200, map[string]any{
+		"status":         "acknowledged",
+		"run_id":         report.RunID,
+		"duplicate":      duplicate,
+		"durable":        false,
+		"server_epoch":   s.serverEpoch,
+		"storage":        s.inventory.Storage(),
+		"instance_id":    claims.InstanceID,
+		"received_at":    time.Now().UTC().Format(time.RFC3339),
+		"findings_count": len(report.Observations),
+	})
 }
 func (s *Server) handleDiscoveryTrigger(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {

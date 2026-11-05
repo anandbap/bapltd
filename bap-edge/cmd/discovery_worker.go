@@ -78,7 +78,17 @@ func collectDiscovery(epoch int64) discoverymeta.Report {
 				r.Status = "partial"
 				continue
 			}
-			r.Observations = append(r.Observations, discoverymeta.Observation{Key: "process-" + discoverymeta.ID(fmt.Sprint(p.PID), p.Birth), Scope: scope.ID, Kind: "agent_process", Name: app, Client: app, Evidence: "running", ObservedAt: time.Now().UTC(), PID: p.PID, Birth: p.Birth})
+			r.Observations = append(r.Observations, discoverymeta.Observation{
+				Key:        "process-" + discoverymeta.ID(app),
+				Scope:      scope.ID,
+				Kind:       "agent_process",
+				Name:       app,
+				Client:     app,
+				Evidence:   "running",
+				ObservedAt: time.Now().UTC(),
+				PID:        p.PID,
+				Birth:      p.Birth,
+			})
 		}
 	}
 	r.Scopes = append(r.Scopes, scope)
@@ -234,6 +244,17 @@ func flushDiscovery(ctx context.Context, root, server string) error {
 				err = os.Rename(path, filepath.Join(dir, file.Name()))
 			}
 		}
+		if receiptData, rErr := json.Marshal(map[string]any{
+			"run_id":             report.RunID,
+			"epoch":              report.Epoch,
+			"acknowledged":       true,
+			"status":             ack.Status,
+			"durable":            ack.Durable,
+			"observations_count": len(report.Observations),
+			"received_at":        time.Now().UTC(),
+		}); rErr == nil {
+			_ = os.WriteFile(filepath.Join(root, "latest-receipt.json"), receiptData, 0644)
+		}
 		if err != nil {
 			return err
 		}
@@ -260,6 +281,9 @@ func (s *DaemonServer) runDiscoveryWorker(ctx context.Context) {
 	for {
 		if scan {
 			report := collect(epoch)
+			if rb, err := json.Marshal(report); err == nil {
+				_ = os.WriteFile(filepath.Join(root, "latest-report.json"), rb, 0644)
+			}
 			queueErr := discoverymeta.Queue(root, report)
 			s.mu.Lock()
 			s.discoveryProgress = map[string]any{"scan_epoch": epoch, "scan_status": report.Status, "completed_at": report.CompletedAt, "delivery_state": "pending"}

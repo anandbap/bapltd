@@ -88,6 +88,7 @@ This document represents the complete functional and non-functional requirements
 | `BAP-811` | On-Behalf-Of (OBO) Token Exchange Cockpit Inspector & Git Attestation Proof | **DONE** | Executive Cockpit OBO Dashboard tab in `v3.html`, 5-stage attestation sequence ladder, real-time token binding inspector (`/api/v1/sts/inspector`), and end-to-end verification proving authorized git operations alongside strict zero-trust denial of scope escalation, session hijacking, replay attacks, secret file access, and network exfiltration. |
 | `BAP-812` | Reverse-Proxy Origin Governance & Cockpit Admin Zero-Trust Hardening | **DONE** | Proxied TLS Origin evaluation (`X-Forwarded-Proto`), `isVerifiedAdmin` client-side mutation gate, discovery rescan & session freeze protection verified by `TestBrowserOrigins` and V3 contract tests. |
 | `BAP-813` | V3 Cockpit Navigation Modernization & Workstation Registration Lifecycle Semantics | **DONE** | Sleek icon-matched tabs (`navActivity`, `navWorkstations`, `navDiscovery`, `navOBO`), separation of valid registration (`StatusActive`) from heartbeat connectivity (`IsOnline`), non-destructive idle handling, and clean removal of logged-out workstations. |
+| `BAP-814` | Session Termination Semantics, Edge Freeze Enforcement, Discovery Attestation & Deduplication | **DONE** | Irreversible "Stop session" semantics with no unfreeze, workstation freeze blocking new agent startups (Claude, Codex, Antigravity, Copilot, OpenCode), edge `SESSION_STOP_ENFORCED` delivery reporting, `bap status` Shadow IT tool inspection & scan receipts, and 3-tier discovery deduplication. |
 
 ### MVP exit sequence
 
@@ -4126,6 +4127,45 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - **Registry & Telemetry**: `bap-controlplane/pkg/types/types.go` (`IsOnline` field on `RegisteredAgent`), `bap-controlplane/internal/registry/agent.go` (`ListAll()`, non-destructive `Get()`, `List()`, `Heartbeat()`, `EndSessionAgent()`, `PurgeStale()`).
   - **Revocation Engine**: `bap-controlplane/internal/api/handlers.go` (`handleGetRevocations` using `ListAll()`).
   - **Build & Verification**: `bapcontrolplane.exe` rebuilt, unit tests and Node contract tests passing.
+
+#### Story BAP-814: Session Termination Semantics, Edge Freeze Enforcement, Discovery Attestation & Deduplication
+- **Type**: Story | **Points**: 8 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**:
+  Resolve 3 critical governance bugs across ephemeral agent sessions, central action delivery attestation, workstation freeze enforcement, and Shadow IT discovery deduplication:
+  1. **Stop Session vs. Freeze & Workstation Freeze Enforcing No New Sessions**:
+     - **Session Termination Semantics**: Ephemeral AI agent sessions in the Agent Activity tab can only be **Stopped** (`revoked` / `closed`). Once stopped, a session is terminated forever with no unfreezing or resuming; only a new session can be started. In `v3.html`, the button was updated from "Freeze session" to "Stop session" (`data-session-stop`), rendering a clean `Stopped` status badge when terminated with no unfreeze button. Calling unfreeze on a session endpoint returns HTTP 400.
+     - **Workstation Freeze Enforcement for New Agent Sessions**: When an administrator freezes a registered workstation (`StatusQuarantined`), no new agent sessions (Claude Code, OpenAI Codex, Google Antigravity, GitHub Copilot, OpenCode) are permitted to start. Enforced at both:
+       - **Central Control Plane** (`handleSessionStart` in `handlers.go`): Validates workstation identity, hostname, instance ID, resource ID, and token claims against `types.StatusQuarantined`, rejecting startup with HTTP 403 `New agent sessions forbidden: Workstation is frozen (quarantined) by administrator`.
+       - **Local BAP Edge** (`EnsureSessionStarted` in `session_lifecycle.go`): Evaluates `policy-state.json` `frozen == true` locally and blocks agent startup before spawning background watchers or subagents.
+  2. **Discovery & Stop Action Delivery Reporting**:
+     - **`bap status` Shadow IT Inspection**: `RunStatus` in `bap-edge/cmd/cli_tools.go` now inspects and formats a dedicated `SHADOW IT & TOOL DISCOVERY (Layer 1B)` section in both terminal text and `--json` mode, reporting discovered tools (Claude Code process, Copilot, Antigravity, OpenCode, Codex plugins, MCP servers), last scan epoch, and receipt status.
+     - **Control Plane Discovery Receipt Attestation**: When `/api/v1/discovery/shadow-it/scan` is received, the control plane logs an audit event `DISCOVERY_REPORT_RECEIVED` and returns an acknowledged receipt with timestamp and run ID. The edge records `latest-receipt.json` and reports `ACKNOWLEDGED by Central Control Plane`.
+     - **Session Stop Delivery Attestation**: When a central session stop reaches the edge, `bapedge watch` terminates the workload PID (`killProcessPID`) and immediately emits an authenticated audit event `SESSION_STOP_ENFORCED` back to `/api/v1/audit/ingest`, providing cryptographically attested proof that the central stop action reached the edge and was enforced.
+  3. **Discovery Uniqueness & Deduplication**:
+     - **Stable Process Observation Key**: In `discovery_worker.go`, process observations now use a stable key `"process-" + discoverymeta.ID(app)` instead of ephemeral PID and birth strings, preventing duplicate assets across scan epochs.
+     - **Control Plane Kind Support & Inventory Deduplication**: `inventory.go` `ValidateReport` accepts `agent_plugin`, and `List()` deduplicates findings by `(InstanceID, Kind, Name)` selecting the newest `LastSeen` record.
+     - **Cockpit UI Deduplication**: `discovery.js` filters rows so each distinct `instance_id::kind::name` appears exactly once in the inventory table.
+
+- **Acceptance Criteria**:
+  - `Given` an active agent session in V3 Agent Activity,
+  - `When` the admin stops the session,
+  - `Then` the session terminates permanently, displays `Stopped` with no unfreeze button, and unfreeze requests are rejected.
+  - `Given` a registered workstation frozen by an administrator,
+  - `When` a user or tool attempts to launch a new Claude Code, Codex, Antigravity, Copilot, or OpenCode session,
+  - `Then` session startup is blocked with HTTP 403.
+  - `Given` an operator running `bapedge status` or `bapedge status --json`,
+  - `Then` a dedicated Shadow IT & Tool Discovery section displays all discovered tools, scan epoch, and Control Plane ACK receipt.
+  - `Given` central session termination,
+  - `When` enforced at the edge,
+  - `Then` `SESSION_STOP_ENFORCED` telemetry is logged centrally confirming delivery.
+  - `Given` repeated discovery scans on a workstation,
+  - `Then` zero duplicate rows appear in the discovery inventory.
+
+- **Implementation Evidence**:
+  - **Control Plane API & Registry**: `bap-controlplane/internal/api/handlers.go` (`handleSessionStart` freeze block, `handleTargetedKillAgent` stop session), `bap-controlplane/internal/session/freeze.go` (`StopSession`), `bap-controlplane/internal/discovery/inventory.go` (`agent_plugin` validation, entity deduplication in `List()`), `bap-controlplane/internal/api/discovery_api.go` (`DISCOVERY_REPORT_RECEIVED` audit logging).
+  - **Edge Execution & Lifecycle**: `bap-edge/cmd/session_lifecycle.go` (`isWorkstationFrozenInState`), `bap-edge/cmd/watch.go` (`SESSION_STOP_ENFORCED` delivery attestation), `bap-edge/cmd/discovery_worker.go` (stable key `"process-" + discoverymeta.ID(app)`, `latest-receipt.json`, `latest-report.json`), `bap-edge/cmd/cli_tools.go` (`RunStatus` discovery inspection).
+  - **Dashboard & Contracts**: `bap-controlplane/internal/dashboardui/web/v3.html` (Stop session button & stopped badge), `bap-controlplane/internal/dashboardui/web/discovery.js` (client deduplication), `tests/test_v3_controls.cjs` (Stop session contract verification).
+
 
 
 

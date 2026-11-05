@@ -207,10 +207,10 @@ func ValidateReport(r Report) error {
 			return errors.New("invalid discovery observation")
 		}
 		keys[o.Key] = true
-		if o.Kind != "mcp_config" && o.Kind != "agent_process" && o.Kind != "mcp_call" {
+		if o.Kind != "mcp_config" && o.Kind != "agent_process" && o.Kind != "mcp_call" && o.Kind != "agent_plugin" {
 			return errors.New("unsupported discovery asset kind")
 		}
-		if (o.Kind == "mcp_config" && o.Evidence != "configured") || (o.Kind == "agent_process" && o.Evidence != "running") || (o.Kind == "mcp_call" && o.Evidence != "invocation") {
+		if (o.Kind == "mcp_config" && o.Evidence != "configured") || (o.Kind == "agent_process" && o.Evidence != "running") || (o.Kind == "mcp_call" && o.Evidence != "invocation") || (o.Kind == "agent_plugin" && o.Evidence == "") {
 			return errors.New("evidence does not match asset kind")
 		}
 		if o.Kind == "agent_process" && (o.PID <= 0 || !validID(o.Birth)) {
@@ -411,12 +411,27 @@ func (s *Inventory) List(instance, kind, state, after string, limit int, revisio
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
-	var ids []string
-	for id, a := range s.assets {
+	type dedupKey struct {
+		instance string
+		kind     string
+		name     string
+	}
+	latestByEntity := make(map[dedupKey]Asset)
+	for _, a := range s.assets {
 		if instance != "" && a.InstanceID != instance || kind != "" && a.Kind != kind || state != "" && a.State != state {
 			continue
 		}
-		ids = append(ids, id)
+		k := dedupKey{instance: a.InstanceID, kind: a.Kind, name: a.Name}
+		existing, ok := latestByEntity[k]
+		if !ok || a.LastSeen.After(existing.LastSeen) || (a.State == "present" && existing.State != "present") {
+			latestByEntity[k] = a
+		}
+	}
+	var ids []string
+	filteredAssets := make(map[string]Asset, len(latestByEntity))
+	for _, a := range latestByEntity {
+		ids = append(ids, a.ID)
+		filteredAssets[a.ID] = a
 	}
 	sort.Strings(ids)
 	p.Total = len(ids)
@@ -428,7 +443,7 @@ func (s *Inventory) List(instance, kind, state, after string, limit int, revisio
 			p.Next = p.Findings[len(p.Findings)-1].ID
 			break
 		}
-		p.Findings = append(p.Findings, s.assets[id])
+		p.Findings = append(p.Findings, filteredAssets[id])
 	}
 	p.Count = len(p.Findings)
 	return p, nil

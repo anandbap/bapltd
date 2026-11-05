@@ -1515,23 +1515,20 @@
 
   /* ---------- LIVE mode ---------- */
   document.addEventListener('click', function (e) {
-    var btn = e.target.closest('[data-session-freeze]');
+    var btn = e.target.closest('[data-session-stop], [data-session-freeze]');
     if (!btn) return;
     if (btn.disabled) return;
     if (!S.adminActive || (typeof isVerifiedAdmin === 'function' && !isVerifiedAdmin())) {
       openAdminPopover();
       return;
     }
-    var action = btn.getAttribute('data-session-freeze');
     var target = btn.getAttribute('data-session-id');
-    if (!confirm((action === 'freeze' ? 'Freeze' : 'Unfreeze') + ' session ' + target + '? This applies only to this session.')) return;
+    if (!confirm('Stop session ' + target + '? This will immediately terminate the session; once stopped, it cannot be resumed.')) return;
     btn.disabled = true;
     apiFetch('/api/v1/control/agent/kill', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target: target, action: action, scope: 'session' }) })
+      body: JSON.stringify({ target: target, action: 'stop', scope: 'session' }) })
       .then(function (r) { return r.json(); })
-      .then(function (result) {
-        btn.setAttribute('data-session-freeze', result.status === 'revoked' ? 'unfreeze' : 'freeze');
-        btn.textContent = result.status === 'revoked' ? 'Unfreeze session' : 'Freeze session';
+      .then(function () {
         btn.disabled = false;
         loadLive(true);
       })
@@ -1697,18 +1694,21 @@
               userStr + ' &middot; ' + lastStr +
               '</small>';
 
-            var sessionFrozen = s.status === 'revoked' && s.close_reason === 'Frozen by administrator';
+            var sessionStopped = s.status === 'revoked' || s.status === 'closed';
             var actionHtml = '';
             if (S.adminActive && !/^\[Protected/i.test(s.session_id)) {
-              actionHtml = '<button class="session-freeze-btn" data-admin-control type="button" data-session-id="' + esc(s.session_id) +
-                '" data-session-freeze="' + (sessionFrozen ? 'unfreeze' : 'freeze') + '"' +
-                (!s.isLive && !sessionFrozen ? ' disabled title="Session is offline"' : '') + '>' +
-                (sessionFrozen ? 'Unfreeze session' : 'Freeze session') + '</button>';
+              if (sessionStopped) {
+                actionHtml = '<span class="sess-pill" style="color:var(--ink-3);font-size:11.5px;font-weight:600">Stopped</span>';
+              } else {
+                actionHtml = '<button class="session-freeze-btn" data-admin-control type="button" data-session-id="' + esc(s.session_id) +
+                  '" data-session-stop="stop"' +
+                  (!s.isLive ? ' disabled title="Session is offline"' : '') + '>Stop session</button>';
+              }
             }
 
             var isLive = s.isLive;
-            var reportText = sessionFrozen ? 'Frozen' : (isLive ? 'Live' : 'Offline');
-            var reportClass = isLive ? 'g' : 'off';
+            var reportText = sessionStopped ? 'Stopped' : (isLive ? 'Live' : 'Offline');
+            var reportClass = sessionStopped ? 'off' : (isLive ? 'g' : 'off');
             var reasonClean = s.close_reason ? ('Session ' + s.close_reason) : 'Session ended';
             var layers = s.reporting_layers || [];
             var toolEvidence = layers.some(function (layer) { return /^(broker|mcp|shim|hook)$/.test(layer); });

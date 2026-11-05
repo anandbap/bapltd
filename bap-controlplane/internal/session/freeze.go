@@ -5,7 +5,26 @@ import (
 	"time"
 )
 
-const FrozenReason = "Frozen by administrator"
+const (
+	FrozenReason  = "Frozen by administrator"
+	StoppedReason = "Stopped by administrator"
+)
+
+// StopSession permanently terminates a session. Once stopped, it cannot be resumed.
+func (s *Store) StopSession(id string) (*Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.sessions[id]
+	if !ok {
+		return nil, fmt.Errorf("session not found")
+	}
+	sess.Status, sess.CloseReason = "revoked", StoppedReason
+	sess.LastActiveAt = time.Now().UTC()
+	s.saveSessionToDB(sess)
+	cp := *sess
+	cp.Events = nil
+	return &cp, nil
+}
 
 // SetFrozen changes only this session. A stale heartbeat does not remove the
 // administrator's ability to block its next execution.

@@ -714,6 +714,18 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string, instanceIDOp
 				fmt.Fprintf(os.Stderr, "[bapedge watch] ⚡ Terminating revoked agent workload (PID: %d)...\n", watchPID)
 				killProcessPID(watchPID)
 			}
+			// Immediately attest and report back to control plane that central stop action reached edge and was enforced
+			stopAttest := []map[string]any{{
+				"event_id":     fmt.Sprintf("ev-stop-enforced-%s-%d", sessionID, time.Now().UnixNano()),
+				"session_id":   sessionID,
+				"source":       appID,
+				"executable":   "bapedge.exe",
+				"full_command": "SESSION_STOP_ENFORCED",
+				"decision":     "deny",
+				"reason":       fmt.Sprintf("Central stop session action reached edge: terminated workload PID %d (%s)", watchPID, reason),
+				"timestamp":    time.Now().UTC().Format(time.RFC3339Nano),
+			}}
+			_ = postJSONQuick(serverURL+"/api/v1/audit/ingest", stopAttest)
 			cleanupSessionMarker(sessionID, watchPID)
 			return
 		}

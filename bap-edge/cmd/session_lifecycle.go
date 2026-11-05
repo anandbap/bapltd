@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -100,6 +101,10 @@ func EnsureSessionStarted(sessionID, appID string, clientPID int, initialPrompt 
 
 	if isSessionRevokedInState(sessionID) {
 		return fmt.Errorf("Session startup BLOCKED: session %s is revoked by enterprise policy", sessionID)
+	}
+
+	if isWorkstationFrozenInState() {
+		return fmt.Errorf("Session startup BLOCKED: Workstation is frozen (quarantined) by administrator. No new agent sessions may start.")
 	}
 
 	// 3. Resolve Control Plane Endpoint
@@ -330,5 +335,25 @@ func isAgentSource(source string) bool {
 		norm == "opencode" || norm == "open-code" ||
 		norm == "codex" || norm == "openai-codex" ||
 		norm == "cursor" || norm == "gemini"
+}
+
+func isWorkstationFrozenInState() bool {
+	var data []byte
+	for _, cand := range []string{filepath.Join(".bap", "policy-state.json"), "policy-state.json", filepath.Join("..", ".bap", "policy-state.json"), filepath.Join("..", "policy-state.json")} {
+		if d, e := os.ReadFile(cand); e == nil {
+			data = d
+			break
+		}
+	}
+	if len(data) == 0 {
+		return false
+	}
+	var st struct {
+		Frozen bool `json:"frozen"`
+	}
+	if json.Unmarshal(data, &st) == nil && st.Frozen {
+		return true
+	}
+	return false
 }
 

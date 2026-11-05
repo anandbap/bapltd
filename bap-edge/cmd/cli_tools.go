@@ -18,6 +18,7 @@ import (
 	"bap-edge/internal/audit"
 	"bap-edge/internal/authz"
 	"bap-edge/internal/config"
+	discoverymeta "bap-edge/internal/discovery"
 	"bap-edge/internal/httptransport"
 	"bap-edge/internal/policystore"
 	"bap-edge/internal/state"
@@ -466,7 +467,54 @@ func RunStatus(args []string) error {
 		}
 	}
 
-	// 5. Inspect Policy Bundle
+	// 5. Inspect Shadow IT & Tool Discovery (Layer 1B)
+	discoveryDir := filepath.Join(state.Dir(), "discovery")
+	var discReceipt struct {
+		RunID             string    `json:"run_id"`
+		Epoch             int64     `json:"epoch"`
+		Acknowledged      bool      `json:"acknowledged"`
+		Status            string    `json:"status"`
+		Durable           bool      `json:"durable"`
+		ObservationsCount int       `json:"observations_count"`
+		ReceivedAt        time.Time `json:"received_at"`
+	}
+	receiptAcked := false
+	if rData, rErr := os.ReadFile(filepath.Join(discoveryDir, "latest-receipt.json")); rErr == nil {
+		if json.Unmarshal(rData, &discReceipt) == nil && discReceipt.Acknowledged {
+			receiptAcked = true
+		}
+	}
+	var discReport discoverymeta.Report
+	if repData, repErr := os.ReadFile(filepath.Join(discoveryDir, "latest-report.json")); repErr == nil {
+		_ = json.Unmarshal(repData, &discReport)
+	}
+	if len(discReport.Observations) == 0 {
+		discReport = collectDiscovery(discReceipt.Epoch)
+	}
+	type discItem struct {
+		Kind     string `json:"kind"`
+		Name     string `json:"name"`
+		Client   string `json:"client"`
+		Evidence string `json:"evidence"`
+		PID      int    `json:"pid,omitempty"`
+	}
+	var discoveredItems []discItem
+	seenDisc := make(map[string]bool)
+	for _, o := range discReport.Observations {
+		k := o.Kind + "::" + o.Name
+		if !seenDisc[k] {
+			seenDisc[k] = true
+			discoveredItems = append(discoveredItems, discItem{
+				Kind:     o.Kind,
+				Name:     o.Name,
+				Client:   o.Client,
+				Evidence: o.Evidence,
+				PID:      o.PID,
+			})
+		}
+	}
+
+	// 6. Inspect Policy Bundle
 	pStore := policystore.New(policystore.DefaultPolicyDir())
 	pState, pErr := pStore.LoadState()
 	policyVersion := uint64(0)
@@ -585,6 +633,14 @@ func RunStatus(args []string) error {
 			"plugins": map[string]any{
 				"active_count": activePluginCount,
 				"items":        plugins,
+			},
+			"discovery": map[string]any{
+				"total_discovered":     len(discoveredItems),
+				"last_scan_epoch":      discReport.Epoch,
+				"receipt_acknowledged": receiptAcked,
+				"receipt_run_id":       discReceipt.RunID,
+				"receipt_time":         discReceipt.ReceivedAt,
+				"items":                discoveredItems,
 			},
 			"policy": map[string]any{
 				"version":     policyVersion,
@@ -713,6 +769,40 @@ func RunStatus(args []string) error {
 		}
 	} else {
 		fmt.Println("    (No native agent plugins detected in workspace; run 'bap install' to install)")
+	}
+
+	// 2B. Inspect Discovered Shadow IT & Tools (Layer 1B)
+	fmt.Println("\n  SHADOW IT & TOOL DISCOVERY (Layer 1B - Unmanaged Detection):")
+	if len(discoveredItems) > 0 {
+		fmt.Printf("    • Discovered Assets:  %d asset(s) observed on workstation\n", len(discoveredItems))
+		for _, it := range discoveredItems {
+			pidStr := ""
+			if it.PID > 0 {
+				pidStr = fmt.Sprintf(" (PID: %d)", it.PID)
+			}
+			clientStr := ""
+			if it.Client != "" && it.Client != it.Name {
+				clientStr = fmt.Sprintf(" [Client: %s]", it.Client)
+			}
+			fmt.Printf("      - [%-13s] %-20s Evidence: %s%s%s\n", it.Kind, it.Name, it.Evidence, clientStr, pidStr)
+		}
+	} else {
+		fmt.Println("    • Discovered Assets:  0 unmanaged assets detected")
+	}
+	if discReport.Epoch > 0 || discReceipt.Epoch > 0 {
+		epVal := discReport.Epoch
+		if epVal <= 0 {
+			epVal = discReceipt.Epoch
+		}
+		fmt.Printf("    • Last Scan Epoch:    epoch %d\n", epVal)
+	}
+	if receiptAcked {
+		fmt.Printf("    • Scan Receipt:       ACKNOWLEDGED by Central Control Plane (RunID: %s, Received: %s)\n",
+			discReceipt.RunID, discReceipt.ReceivedAt.Format(time.RFC3339))
+	} else if cpConnected {
+		fmt.Printf("    • Scan Receipt:       PENDING upload to Control Plane (%d observation(s) spooled locally)\n", len(discoveredItems))
+	} else {
+		fmt.Printf("    • Scan Receipt:       QUEUED LOCALLY (%d observation(s) spooled locally; control plane offline)\n", len(discoveredItems))
 	}
 
 	// 3. Inspect Cached Cedar Policy Bundle
