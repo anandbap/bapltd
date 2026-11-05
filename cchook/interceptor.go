@@ -2190,9 +2190,16 @@ func isSessionRevoked(serverURL, sessionID string) (bool, string) {
 				if currentUser == "" {
 					currentUser = os.Getenv("USER")
 				}
-				userMatch := info.UserID != "" && strings.EqualFold(info.UserID, currentUser)
-				sessMatch := info.SessionID != "" && (strings.EqualFold(info.SessionID, sessionID) || strings.Contains(strings.ToLower(sessionID), strings.ToLower(info.SessionID)))
-				if userMatch || sessMatch || (info.SessionID == "" && info.UserID == "") {
+				if info.SessionID != "" {
+					if sessionID != "" && (strings.EqualFold(info.SessionID, sessionID) || strings.Contains(strings.ToLower(sessionID), strings.ToLower(info.SessionID))) {
+						reason := info.Reason
+						if reason == "" {
+							reason = fmt.Sprintf("Session %q authority revoked by administrator", sessionID)
+						}
+						return true, reason
+					}
+					// Marker is specific to a different session; do not block this session
+				} else if info.UserID == "" || strings.EqualFold(info.UserID, currentUser) {
 					reason := info.Reason
 					if reason == "" {
 						reason = "User access revoked by security administrator (local tombstone marker active)"

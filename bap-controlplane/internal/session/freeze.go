@@ -18,7 +18,7 @@ func (s *Store) StopSession(id string) (*Session, error) {
 	if !ok {
 		return nil, fmt.Errorf("session not found")
 	}
-	sess.Status, sess.CloseReason = "revoked", StoppedReason
+	sess.Status, sess.CloseReason = "closed", StoppedReason
 	sess.LastActiveAt = time.Now().UTC()
 	s.saveSessionToDB(sess)
 	cp := *sess

@@ -48,7 +48,7 @@ def main():
     port = 62411
     admin_token = "test-admin-secret-token"
     cp_proc = subprocess.Popen(
-        ["bapcontrolplane.exe", "--port", str(port), "--admin-token", admin_token],
+        ["bapcontrolplane.exe", "--port", str(port), "--admin-token", admin_token, "--db", "memory"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL
     )
@@ -69,7 +69,7 @@ def main():
             "user_id": "testuser",
             "hostname": "TEST-HOST",
             "client_pid": 99999
-        })
+        }, headers={"Authorization": f"Bearer {admin_token}"})
         assert code == 200, f"Expected 200, got {code}: {data}"
         print("[PASS] 2. User 'testuser' started session successfully")
 
@@ -91,7 +91,7 @@ def main():
             "user_id": "testuser",
             "hostname": "TEST-HOST",
             "client_pid": 99999
-        })
+        }, headers={"Authorization": f"Bearer {admin_token}"})
         assert code == 200, f"Expected 200, got {code}: {data}"
         print("[PASS] 4. User 'testuser' can start new session after Stop Session")
 
@@ -118,7 +118,7 @@ def main():
             "app_id": "claude-code",
             "user_id": "testuser",
             "hostname": "TEST-HOST"
-        })
+        }, headers={"Authorization": f"Bearer {admin_token}"})
         assert code == 403, f"Expected 403 Forbidden for revoked user, got {code}: {data}"
         print("[PASS] 7. Blocked: User 'testuser' strictly forbidden (403) from starting new session")
 
@@ -151,7 +151,7 @@ def main():
             "app_id": "claude-code",
             "user_id": "testuser",
             "hostname": "TEST-HOST"
-        })
+        }, headers={"Authorization": f"Bearer {admin_token}"})
         assert code == 200, f"Expected 200, got {code}: {data}"
         print("[PASS] 10. User 'testuser' can successfully start sessions after Restore Access")
 

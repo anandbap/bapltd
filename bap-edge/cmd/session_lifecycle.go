@@ -84,10 +84,17 @@ func EnsureSessionStarted(sessionID, appID string, clientPID int, initialPrompt 
 	for _, cand := range []string{".bap-revoked", "../.bap-revoked"} {
 		if data, err := os.ReadFile(cand); err == nil {
 			var info struct {
-				UserID string `json:"user_id"`
-				Reason string `json:"reason"`
+				SessionID string `json:"session_id"`
+				UserID    string `json:"user_id"`
+				Reason    string `json:"reason"`
 			}
 			if json.Unmarshal(data, &info) == nil {
+				if info.SessionID != "" {
+					if sessionID != "" && strings.EqualFold(info.SessionID, sessionID) {
+						return fmt.Errorf("Session startup BLOCKED: session %s is revoked", sessionID)
+					}
+					continue
+				}
 				if info.UserID == "" || strings.EqualFold(info.UserID, username) {
 					reason := info.Reason
 					if reason == "" {

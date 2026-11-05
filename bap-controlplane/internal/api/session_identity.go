@@ -55,6 +55,32 @@ func (s *Server) requireSessionIdentity(next http.HandlerFunc) http.HandlerFunc 
 		}
 		claims, err := s.workstationIdentity(r)
 		if err != nil {
+			if r.URL.Path == "/api/v1/sessions/start" && r.Body != nil {
+				raw, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 10<<20))
+				if readErr == nil {
+					var probe struct {
+						SessionID string `json:"session_id"`
+						UserID    string `json:"user_id"`
+						UserEmail string `json:"user_email"`
+					}
+					if json.Unmarshal(raw, &probe) == nil {
+						if s.policyStore != nil && s.policyStore.GetBundle().KillSwitch {
+							writeError(w, http.StatusForbidden, "New agent sessions are forbidden: CISO emergency kill-switch is active across the fleet")
+							return
+						}
+						if s.sessionStore != nil {
+							if s.sessionStore.IsUserRevoked(probe.UserID) || s.sessionStore.IsUserRevoked(probe.UserEmail) {
+								writeError(w, http.StatusForbidden, "User access has been revoked by administrator")
+								return
+							}
+							if s.sessionStore.IsRevoked(probe.SessionID) {
+								writeError(w, http.StatusForbidden, "Session authority for "+probe.SessionID+" is revoked")
+								return
+							}
+						}
+					}
+				}
+			}
 			writeError(w, 401, "Valid enrolled workstation credential required")
 			return
 		}

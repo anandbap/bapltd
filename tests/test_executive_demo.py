@@ -153,6 +153,12 @@ class TestExecutiveDemo(unittest.TestCase):
                     cls._spawned_server.kill()
                 except Exception:
                     pass
+        for f in [".bap-session.json", ".bap-revoked", "../.bap-revoked"]:
+            if os.path.exists(f):
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
 
     def api_request(self, method: str, path: str, payload: dict = None) -> tuple[int, dict, dict]:
         url = f"{self.server_url}{path}"
