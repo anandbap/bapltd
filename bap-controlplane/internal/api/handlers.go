@@ -2688,7 +2688,7 @@ func (s *Server) handleGetRevocations(w http.ResponseWriter, r *http.Request) {
 	var quarantinedAgents []string
 	var revokedAgents []string
 	if s.registry != nil {
-		for _, a := range s.registry.List() {
+		for _, a := range s.registry.ListAll() {
 			if a.Status == types.StatusDeregistered {
 				if a.AgentID != "" {
 					deregisteredAgents = append(deregisteredAgents, a.AgentID)

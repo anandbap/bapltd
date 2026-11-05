@@ -74,16 +74,11 @@ func (s *Store) Get(agentID string) (*types.RegisteredAgent, error) {
 	copy.AllowedBinaryHashes = append([]string(nil), agent.AllowedBinaryHashes...)
 	copy.PermittedScopes = append([]string(nil), agent.PermittedScopes...)
 	copy.Subagents = append([]string(nil), agent.Subagents...)
-	if copy.Status == types.StatusActive {
-		lastAct := copy.CreatedAt
-		if copy.LastHeartbeatAt != nil {
-			lastAct = *copy.LastHeartbeatAt
-		}
-		elapsed := time.Since(lastAct)
-		if elapsed > 15*time.Minute {
-			copy.Status = types.StatusOffline
-		}
+	lastAct := copy.CreatedAt
+	if copy.LastHeartbeatAt != nil {
+		lastAct = *copy.LastHeartbeatAt
 	}
+	copy.IsOnline = (copy.Status == types.StatusActive) && (time.Since(lastAct) <= 15*time.Minute)
 	return &copy, nil
 }
 
@@ -372,12 +367,22 @@ func (s *Store) Heartbeat(agentID string) error {
 
 	agent, exists := s.agents[agentID]
 	if !exists {
+		for _, a := range s.agents {
+			if a.InstanceID == agentID {
+				agent = a
+				exists = true
+				break
+			}
+		}
+	}
+	if !exists {
 		return fmt.Errorf("agent %q not found", agentID)
 	}
-	if agent.Status == types.StatusRevoked {
-		return fmt.Errorf("agent %q is revoked", agentID)
+	if agent.Status == types.StatusRevoked || agent.Status == types.StatusQuarantined || agent.Status == types.StatusDeregistered {
+		return fmt.Errorf("agent %q is administratively blocked", agentID)
 	}
 	now := time.Now()
+	agent.Status = types.StatusActive
 	agent.LastHeartbeatAt = &now
 	return nil
 }
@@ -392,6 +397,29 @@ func (s *Store) RecordGrant(agentID string) {
 	}
 }
 
+// ListAll returns all registered agents in the store, including deregistered and superseded tombstones.
+// Used internally by revocation engines and audit exporters.
+func (s *Store) ListAll() []*types.RegisteredAgent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	now := time.Now()
+	list := make([]*types.RegisteredAgent, 0, len(s.agents))
+	for _, a := range s.agents {
+		copy := *a
+		copy.AllowedBinaryHashes = append([]string(nil), a.AllowedBinaryHashes...)
+		copy.PermittedScopes = append([]string(nil), a.PermittedScopes...)
+		copy.Subagents = append([]string(nil), a.Subagents...)
+		lastAct := copy.CreatedAt
+		if copy.LastHeartbeatAt != nil {
+			lastAct = *copy.LastHeartbeatAt
+		}
+		copy.IsOnline = (copy.Status == types.StatusActive) && (now.Sub(lastAct) <= 15*time.Minute)
+		list = append(list, &copy)
+	}
+	return list
+}
+
 func (s *Store) List() []*types.RegisteredAgent {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -399,23 +427,18 @@ func (s *Store) List() []*types.RegisteredAgent {
 	now := time.Now()
 	list := make([]*types.RegisteredAgent, 0, len(s.agents))
 	for _, a := range s.agents {
-		if a.SupersededBy != "" {
+		if a.SupersededBy != "" || a.Status == types.StatusDeregistered {
 			continue
 		}
 		copy := *a
 		copy.AllowedBinaryHashes = append([]string(nil), a.AllowedBinaryHashes...)
 		copy.PermittedScopes = append([]string(nil), a.PermittedScopes...)
 		copy.Subagents = append([]string(nil), a.Subagents...)
-		if copy.Status == types.StatusActive {
-			lastAct := copy.CreatedAt
-			if copy.LastHeartbeatAt != nil {
-				lastAct = *copy.LastHeartbeatAt
-			}
-			elapsed := now.Sub(lastAct)
-			if elapsed > 15*time.Minute {
-				copy.Status = types.StatusOffline
-			}
+		lastAct := copy.CreatedAt
+		if copy.LastHeartbeatAt != nil {
+			lastAct = *copy.LastHeartbeatAt
 		}
+		copy.IsOnline = (copy.Status == types.StatusActive) && (now.Sub(lastAct) <= 15*time.Minute)
 		list = append(list, &copy)
 	}
 	return list
@@ -430,7 +453,7 @@ func (s *Store) ListVisible(maxAge time.Duration, isUserRevoked func(string) boo
 	now := time.Now()
 	list := make([]*types.RegisteredAgent, 0, len(s.agents))
 	for _, a := range s.agents {
-		if a.SupersededBy != "" {
+		if a.SupersededBy != "" || a.Status == types.StatusDeregistered {
 			continue
 		}
 		isRevoked := a.Status == types.StatusRevoked || a.Status == types.StatusQuarantined || (isUserRevoked != nil && isUserRevoked(a.OwnerEmail))
@@ -447,16 +470,11 @@ func (s *Store) ListVisible(maxAge time.Duration, isUserRevoked func(string) boo
 		copy.AllowedBinaryHashes = append([]string(nil), a.AllowedBinaryHashes...)
 		copy.PermittedScopes = append([]string(nil), a.PermittedScopes...)
 		copy.Subagents = append([]string(nil), a.Subagents...)
-		if copy.Status == types.StatusActive {
-			lastAct := copy.CreatedAt
-			if copy.LastHeartbeatAt != nil {
-				lastAct = *copy.LastHeartbeatAt
-			}
-			elapsed := now.Sub(lastAct)
-			if elapsed > 15*time.Minute {
-				copy.Status = types.StatusOffline
-			}
+		lastAct := copy.CreatedAt
+		if copy.LastHeartbeatAt != nil {
+			lastAct = *copy.LastHeartbeatAt
 		}
+		copy.IsOnline = (copy.Status == types.StatusActive) && (now.Sub(lastAct) <= 15*time.Minute)
 		list = append(list, &copy)
 	}
 	return list
@@ -641,9 +659,7 @@ func (s *Store) EndSessionAgent(appID, instanceID string) {
 			}
 			isWorkstation := strings.Contains(strings.ToLower(a.AppID), "workstation") || a.DeviceType != "" || a.AuthMode == "oidc"
 			if instanceID != "" && (a.InstanceID == instanceID || a.AgentID == instanceID) {
-				if isWorkstation {
-					a.Status = types.StatusOffline
-				} else {
+				if !isWorkstation {
 					a.Status = types.StatusDeregistered
 				}
 			}
@@ -652,7 +668,7 @@ func (s *Store) EndSessionAgent(appID, instanceID string) {
 }
 
 // PurgeStale marks active agents whose last heartbeat/activity exceeds maxIdle.
-// Workstation agents are transitioned to offline, while ephemeral session agents are deregistered.
+// Workstation agents retain valid active enrollment, while ephemeral session agents are deregistered.
 func (s *Store) PurgeStale(maxIdle time.Duration) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -670,12 +686,10 @@ func (s *Store) PurgeStale(maxIdle time.Duration) int {
 					continue
 				}
 				isWorkstation := strings.Contains(strings.ToLower(a.AppID), "workstation") || a.DeviceType != "" || a.AuthMode == "oidc"
-				if isWorkstation {
-					a.Status = types.StatusOffline
-				} else {
+				if !isWorkstation {
 					a.Status = types.StatusDeregistered
+					count++
 				}
-				count++
 			}
 		}
 	}

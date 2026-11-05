@@ -52,6 +52,7 @@ type RegisteredAgent struct {
 	AgentName           string      `json:"agent_name"`
 	EnvProfile          EnvProfile  `json:"env_profile"`
 	Status              AgentStatus `json:"status"`
+	IsOnline            bool        `json:"is_online"`
 	AllowedBinaryHashes []string    `json:"allowed_binary_hashes,omitempty"`
 	EnrolledBinaryHash  string      `json:"enrolled_binary_hash,omitempty"`
 	PublicKey           string      `json:"public_key,omitempty"`

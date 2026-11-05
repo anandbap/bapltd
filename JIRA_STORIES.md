@@ -86,6 +86,8 @@ This document represents the complete functional and non-functional requirements
 | `BAP-809` | Universal Lifecycle Auto-Session-Start & Attestation for IDE & CLI Coding Agents | **DONE** | Universal lazy session initialization (`EnsureSessionStarted`), hierarchical SPIFFE SVID minting, Control Plane enrollment (`/api/v1/sessions/start`), background heartbeat watcher spawning, and graceful teardown (`/api/v1/sessions/end`) across all 5 agent platforms (Claude, Copilot, Antigravity, OpenCode, Codex) in both raw CLI and IDE Chat/Tool modes. |
 | `BAP-810` | RFC 8693 OAuth 2.0 Security Token Service (STS) & Zero Standing Privilege Credential Translation | **DONE** | Standard RFC 8693 token exchange (`/api/v1/sts/token`), multi-gate Cedar policy evaluation, monotonic scope attenuation, anti-escalation hard-gating (`admin:org`, `delete_repo` blocked), atomic single-use grant burning, and session-bound downstream credentials (`saas-github-*`) with 5-min bounded TTL. |
 | `BAP-811` | On-Behalf-Of (OBO) Token Exchange Cockpit Inspector & Git Attestation Proof | **DONE** | Executive Cockpit OBO Dashboard tab in `v3.html`, 5-stage attestation sequence ladder, real-time token binding inspector (`/api/v1/sts/inspector`), and end-to-end verification proving authorized git operations alongside strict zero-trust denial of scope escalation, session hijacking, replay attacks, secret file access, and network exfiltration. |
+| `BAP-812` | Reverse-Proxy Origin Governance & Cockpit Admin Zero-Trust Hardening | **DONE** | Proxied TLS Origin evaluation (`X-Forwarded-Proto`), `isVerifiedAdmin` client-side mutation gate, discovery rescan & session freeze protection verified by `TestBrowserOrigins` and V3 contract tests. |
+| `BAP-813` | V3 Cockpit Navigation Modernization & Workstation Registration Lifecycle Semantics | **DONE** | Sleek icon-matched tabs (`navActivity`, `navWorkstations`, `navDiscovery`, `navOBO`), separation of valid registration (`StatusActive`) from heartbeat connectivity (`IsOnline`), non-destructive idle handling, and clean removal of logged-out workstations. |
 
 ### MVP exit sequence
 
@@ -4057,5 +4059,74 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - **Cockpit UI**: `bap-controlplane/internal/dashboardui/web/v3.html` (View 4 tab, ladder diagram, KPI cards, `renderOBOExchanges()`).
   - **Dashboard Server & Tests**: `bap-controlplane/internal/dashboardui/server.go`, `bap-controlplane/internal/dashboardui/server_test.go`.
   - **Verification Script & Receipts**: `scripts/verify_sts_obo_exchange.py`, BAP Broker receipts.
+
+#### Story BAP-812: Reverse-Proxy Origin Governance, TLS Edge Normalization & Cockpit Zero-Trust Admin Tamper-Proofing
+- **Type**: Story | **Points**: 5 | **Priority**: P0 - Blocker | **Status**: `DONE`
+- **Description**:
+  Resolve reverse-proxy TLS termination browser origin rejections (`HTTP 403: Browser origin is not allowed`) across hosted cloud environments (Render, Cloudflare, AWS ALB) and enforce comprehensive multi-layer zero-trust admin tamper-proofing across the Agent Watch V3 Executive Cockpit:
+  1. **Reverse-Proxy Edge TLS & Origin Normalization**:
+     - Browser-originated `POST` requests (`scan/trigger`, `agent/kill`, `kill-switch`) automatically attach `Origin: https://<domain>`. When deployed behind edge TLS-terminating proxies where backend containers receive unencrypted HTTP (`r.TLS == nil`), naive origin comparisons fail.
+     - Updated `bap-controlplane/internal/api/handlers.go` (`Handler()`) to evaluate reverse-proxy headers (`X-Forwarded-Proto`, `X-Forwarded-Host`, `r.Host`).
+     - Correctly recognizes same-origin HTTPS requests from authenticated cockpit dashboards while strictly enforcing HTTP 403 blocks against untrusted third-party origins (`evil.com`, `null`, `*`).
+  2. **Cockpit UI Zero-Trust Admin Tamper-Proofing**:
+     - Eliminates client-side state manipulation vulnerability (e.g. toggling `S.adminActive = true` or unhiding buttons in DevTools) via `isVerifiedAdmin()` gate requiring verified, cryptographically non-empty token state.
+     - `apiFetch` client-side interceptor halts all administrative mutations (`/control/`, `/admin/`, `/discovery/shadow-it/scan/`, `/discovery/shadow-it/disposition`, etc.) before any network packet is dispatched if no valid token exists.
+     - Hardens `discovery.js` `rescan()` and `disposition()` to require verified token authentication, providing clear operator feedback when unauthenticated.
+     - Hardens fleet-wide freeze (`freezeBtn`, `mGo`) and session freeze (`data-session-freeze`) against unauthorized DevTools triggering.
+  3. **Server-Side Constant-Time Zero-Trust Boundary**:
+     - Re-affirms backend enforcement via `s.requireAdminAuth` and `subtle.ConstantTimeCompare`, rejecting unauthenticated or forged requests with `401 Unauthorized` / `403 Forbidden` and logging `UNAUTHORIZED_ADMIN` audit alerts.
+
+- **Acceptance Criteria**:
+  - `Given` an enterprise administrator accesses the Agent Watch V3 dashboard on a cloud-hosted URL (`https://bap-controlplane.onrender.com`),
+  - `When` the administrator activates the verified admin token and clicks "Request scan",
+  - `Then` the request succeeds with HTTP 202 (`discovery.rescan` queued) without triggering `HTTP 403: Browser origin is not allowed`.
+  - `When` the administrator freezes or unfreezes a session,
+  - `Then` the request succeeds with HTTP 200 without origin denial.
+  - `When` an unauthorized user manipulates DOM attributes or JavaScript state in DevTools without a valid admin token,
+  - `Then` `apiFetch` client-side gate blocks the request, and the server rejects any raw requests with HTTP 401/403.
+  - `When` `TestBrowserOrigins` and Node contract test suites run,
+  - `Then` all assertions pass cleanly.
+
+- **Implementation Evidence**:
+  - **Origin Normalization**: `bap-controlplane/internal/api/handlers.go` (`Handler()` reverse-proxy TLS & host resolution).
+  - **Cockpit Hardening**: `bap-controlplane/internal/dashboardui/web/v3.html` (`isVerifiedAdmin`, `apiFetch` admin mutation gate, freeze action guards).
+  - **Discovery Hardening**: `bap-controlplane/internal/dashboardui/web/discovery.js` (`allowed()`, `rescan()` token requirement).
+  - **Tests & Verification**: `bap-controlplane/internal/api/security_test.go` (`TestBrowserOrigins`), `tests/test_v3_controls.cjs`, `tests/test_v3_discovery.cjs`, `tests/test_activity_metrics.cjs`.
+
+#### Story BAP-813: V3 Cockpit Navigation Modernization & Workstation Registration Lifecycle Semantics
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**:
+  Modernize the top navigation bar of the Agent Watch V3 Executive Cockpit (`v3.html`) and resolve registration vs. connection lifecycle state confusion across edge upgrades, daemon idle periods, and workstation logouts:
+  1. **Cockpit Top Navigation Bar Modernization**:
+     - Replaced verbose, awkwardly wrapped tab button labels with sleek, concise, and icon-matched tabs:
+       - `#navActivity`: `🤖 Agent Activity` (preserving tooltip and accessibility text for `AI Agent Activity`).
+       - `#navWorkstations`: `💻 Registered Agents` (preserving tooltip and accessibility text for `Governed Workstations` with live count badge `#navWsCount`).
+       - `#navDiscovery`: `🔍 Discovery & Coverage` (consistent search icon and professional casing).
+       - `#navOBO`: `🔐 STS & OBO Tokens` (consistent lock icon and live count badge `#navOboCount`).
+     - Refined `.view-nav`, `button`, and `.badge-count` CSS styling for a high-polish pill aesthetic, subtle active elevation shadow, and responsive padding.
+  2. **Workstation Registration Validity vs Connection Heartbeat Semantics**:
+     - Separated device **Registration Validity** (`types.StatusActive`, Enrolled / Governed) from temporary **Telemetry Connection State** (`is_online`: recent heartbeat within 15 minutes).
+     - Eliminated harmful mutations where `Get()`, `List()`, `ListVisible()`, `EndSessionAgent()`, and `PurgeStale()` overwrote an active workstation's enrollment status to `offline`, which caused subsequent execution grant requests to be falsely rejected with HTTP 403 `Agent is not active (current status: offline)`.
+     - In `v3.html`, workstations now clearly render as `🟢 Online · Governed` (when actively communicating) or `⚪ Offline (Idle) · Governed` (when machine is asleep or daemon idle), while keeping full governance controls (`Freeze` and `Deregister`) active without showing an incorrect "Restore" button.
+  3. **Workstation Logout & Fleet Cleanup**:
+     - When a workstation is logged off (`bap logout` / deregister), `s.registry.List()` and `v3.html` immediately remove the deregistered entity from the active governed fleet view, preventing clutter and ensuring subsequent logins cleanly establish a fresh active registration.
+     - Central revocation engine (`handleGetRevocations`) reads `s.registry.ListAll()`, ensuring edge daemons receive deregistered target IDs to purge local credentials.
+
+- **Acceptance Criteria**:
+  - `Given` an operator accesses the V3 Cockpit,
+  - `When` viewing the top navigation menu,
+  - `Then` all four tabs display concise, professional, icon-matched labels with balanced pill counters.
+  - `When` a developer upgrades `bapedge` via `bap install` and logs in,
+  - `Then` the workstation registration remains completely valid (`Active / Governed`), displaying `Online` when heartbeat is fresh and `Offline (Idle)` when idle, without invalidating execution grants.
+  - `When` a user runs `bap logout` or an admin deregisters a machine,
+  - `Then` the workstation is cleanly removed from the active registered agents list, and central revocation caches broadcast the deregistration.
+
+- **Implementation Evidence**:
+  - **Cockpit UI & Styling**: `bap-controlplane/internal/dashboardui/web/v3.html` (`.view-nav` CSS, modernized tab buttons, `renderRegisteredAgents` online/offline & logout lifecycle).
+  - **Registry & Telemetry**: `bap-controlplane/pkg/types/types.go` (`IsOnline` field on `RegisteredAgent`), `bap-controlplane/internal/registry/agent.go` (`ListAll()`, non-destructive `Get()`, `List()`, `Heartbeat()`, `EndSessionAgent()`, `PurgeStale()`).
+  - **Revocation Engine**: `bap-controlplane/internal/api/handlers.go` (`handleGetRevocations` using `ListAll()`).
+  - **Build & Verification**: `bapcontrolplane.exe` rebuilt, unit tests and Node contract tests passing.
+
+
 
 
