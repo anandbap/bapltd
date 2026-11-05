@@ -457,6 +457,10 @@ func writeSessionMarker(sessionID, serverURL, appID, username, hostname, initial
 	if len(instanceIDOpt) > 0 {
 		instID = instanceIDOpt[0]
 	}
+	promptCount := 0
+	if strings.TrimSpace(initialPrompt) != "" {
+		promptCount = 1
+	}
 	marker := map[string]any{
 		"process_birth": processBirth(watchPID),
 		"session_id":    sessionID,
@@ -467,6 +471,8 @@ func writeSessionMarker(sessionID, serverURL, appID, username, hostname, initial
 		"user":          username,
 		"hostname":      hostname,
 		"user_prompt":   initialPrompt,
+		"prompt_count":  promptCount,
+		"reporting_layer": "plugin",
 		"started_at":    time.Now().UTC(),
 	}
 	if data, err := json.MarshalIndent(marker, "", "  "); err == nil {

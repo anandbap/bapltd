@@ -977,8 +977,13 @@
       li.tabIndex = 0; li.setAttribute('role', 'button');
       li.className = f.blocked ? 'blocked-row' : 'clickable';
       var ini = String(f.who).split(' · ')[0].split(/\s+/).map(function (w) { return w.charAt(0); }).join('').slice(0, 2).toUpperCase();
+      var askHtml = esc(f.ask);
+      if (f.isMasked) {
+        askHtml = '<span style="color:var(--ink-2);font-weight:500">' + esc(f.ask) + '</span> ' +
+          '<button type="button" class="convo-unlock-link" style="font-size:11px;padding:1px 7px;margin-left:4px" onclick="openAdminPopover();event.stopPropagation();" title="Prompt text is masked for privacy. Click to unlock with Admin Token">Unlock Prompt</button>';
+      }
       li.innerHTML = '<div class="row"><div class="av" aria-hidden="true">' + esc(ini) + '</div><div><div class="who">' + esc(f.who) + '</div>' +
-        '<div class="ask">' + esc(f.ask) + (f.blocked ? '<span class="chip no">Blocked</span>' : (f.shadow ? '<span class="chip wr">Flagged</span>' : (f.unknown ? '<span class="chip wr">Not evaluated</span>' : '<span class="chip ok">Allowed</span>'))) + '</div>' +
+        '<div class="ask">' + askHtml + (f.blocked ? '<span class="chip no">Blocked</span>' : (f.shadow ? '<span class="chip wr">Flagged</span>' : (f.unknown ? '<span class="chip wr">Not evaluated</span>' : '<span class="chip ok">Allowed</span>'))) + '</div>' +
         '<div class="did">' + esc(f.did) + (f.blocked ? ' &mdash; <u>see the proof</u>' : ' <span class="open-hint">&mdash; click for every prompt and reply</span>') + '</div></div></div>';
       var open = function () { if (f.blocked && stories[f.storyId]) { openStory(f.storyId, f.sessionId); } else { openConvo(f); } };
       li.addEventListener('click', open);
@@ -1531,13 +1536,14 @@
 
         // Build comprehensive Agent Session registry
         var sessionMap = {};
-        sessionList.forEach(function (s) {
+        sessionList.forEach(function (s, sIdx) {
           if (isSim(s)) return;
           var sid = s.session_id;
           if (!sid) return;
+          var mapKey = (String(sid).indexOf('[Protected') === 0) ? ('prot-sess-' + (s.app_id || 'agent') + '-' + sIdx) : sid;
           var t = Date.parse(s.last_active_at || s.started_at) || 0;
           var app = s.app_id || 'claude-code';
-          sessionMap[sid] = {
+          sessionMap[mapKey] = {
             session_id: sid,
             app_id: app,
             agent_name: s.agent_name || (app === 'claude-code' ? 'Claude Code' : (app === 'antigravity' ? 'Google Antigravity' : (app === 'copilot' ? 'GitHub Copilot' : app))),
@@ -1552,7 +1558,7 @@
           };
         });
 
-        agents.forEach(function (a) {
+        agents.forEach(function (a, aIdx) {
           if (isSim(a)) return;
           var sid = a.session_id;
           var t = a._t || Date.parse(a.timestamp) || 0;
@@ -1561,14 +1567,15 @@
           var user = a.user_id || a.user || a.operator || '';
           var actStatus = (a.action_status || '').toLowerCase();
           var isClosedAct = actStatus === 'completed' || actStatus === 'closed' || actStatus === 'ended' || actStatus === 'terminated';
+          var mapKey = (sid && String(sid).indexOf('[Protected') === 0) ? ('prot-sess-' + (app || 'agent') + '-' + aIdx) : sid;
 
-          if (sid && sessionMap[sid]) {
-            if (!sessionMap[sid].hostname && host) sessionMap[sid].hostname = host;
-            if (!sessionMap[sid].user && user) sessionMap[sid].user = user;
+          if (mapKey && sessionMap[mapKey]) {
+            if (!sessionMap[mapKey].hostname && host) sessionMap[mapKey].hostname = host;
+            if (!sessionMap[mapKey].user && user) sessionMap[mapKey].user = user;
             // The session store owns lifecycle state; activity can be older.
-          } else if (sid) {
-            sessionMap[sid] = {
-              session_id: sid,
+          } else if (mapKey) {
+            sessionMap[mapKey] = {
+              session_id: sid || mapKey,
               app_id: app,
               agent_name: a.agent_type || (app === 'claude-code' ? 'Claude Code' : (app === 'antigravity' ? 'Google Antigravity' : app)),
               hostname: host,
@@ -1696,8 +1703,19 @@
             };
           }
           var clean = function (v) { return v && String(v).indexOf('[Protected') !== 0 && !/^na$/i.test(String(v).trim()) ? v : ''; };
+          var isProtectedPrompt = (a.prompt && String(a.prompt).indexOf('[Protected') === 0) ||
+                                  (a.prompt_summary && String(a.prompt_summary).indexOf('[Protected') === 0) ||
+                                  (a.user_prompt && String(a.user_prompt).indexOf('[Protected') === 0);
+          var rawAsk = clean(a.prompt || a.mission || a.prompt_summary || a.user_prompt);
+          var askDisplay = rawAsk;
+          if (!rawAsk && isProtectedPrompt) {
+            askDisplay = '🔒 ' + (a.intent_category || a.intent || 'Classified Work');
+          } else if (!rawAsk) {
+            askDisplay = a.intent_category || a.intent || 'Task in progress';
+          }
           return { who: clean(a.operator || a.user || a.user_id || a.owner) ? (clean(a.operator || a.user || a.user_id || a.owner) + ' · ' + (a.agent_type || a.agent_id || a.application || 'agent')) : (a.agent_type || clean(a.agent_id) || a.application || 'Agent'),
-                   ask: clean(a.prompt || a.mission || a.prompt_summary) || a.intent_category || a.intent || 'Task in progress',
+                   ask: askDisplay,
+                   isMasked: !rawAsk && isProtectedPrompt,
                    did: a.last_action || a.action || a.tool || (a.action_status ? 'Status: ' + a.action_status : 'Working'),
                    blocked: isBlocked,
                    shadow: !isBlocked && isShadow(a),

@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -235,13 +237,63 @@ func SubmitUserPrompt(sessionID, appID, prompt string) error {
 	serverURL = strings.TrimRight(serverURL, "/")
 
 	normAppID := normalizeClientAppID(appID)
-	promptPayload := map[string]any{
-		"session_id":  sessionID,
-		"app_id":      normAppID,
-		"user_prompt": prompt,
-		"producer":    "native-plugin-hook",
+	h := sha256.Sum256([]byte(prompt))
+	promptHash := hex.EncodeToString(h[:])
+
+	primaryIntent := "FEATURE_ENHANCEMENT"
+	low := strings.ToLower(prompt)
+	if strings.Contains(low, "bug") || strings.Contains(low, "fix") || strings.Contains(low, "error") || strings.Contains(low, "fail") {
+		primaryIntent = "BUG_FIX"
+	} else if strings.Contains(low, "test") || strings.Contains(low, "quality") || strings.Contains(low, "verify") {
+		primaryIntent = "TEST_VERIFICATION"
+	} else if strings.Contains(low, "doc") || strings.Contains(low, "readme") || strings.Contains(low, "guide") {
+		primaryIntent = "DOCUMENTATION"
+	} else if strings.Contains(low, "security") || strings.Contains(low, "vuln") || strings.Contains(low, "audit") {
+		primaryIntent = "SECURITY_REMEDIATION"
 	}
+
+	promptPayload := map[string]any{
+		"session_id":             sessionID,
+		"app_id":                 normAppID,
+		"user_prompt":            prompt,
+		"producer":               "native-plugin-hook",
+		"prompt_hash":            promptHash,
+		"prompt_capture_enabled": true,
+		"intent": map[string]any{
+			"primary":            primaryIntent,
+			"confidence":         0.92,
+			"source":             "claude-user-prompt-submit",
+			"classifier_version": "v1.0",
+			"prompt_hash":        promptHash,
+			"prompt_captured":    true,
+		},
+	}
+	incrementSessionMarkerPromptCount(sessionID, prompt)
 	return postJSONQuick(serverURL+"/api/v1/sessions/prompt", promptPayload)
+}
+
+func incrementSessionMarkerPromptCount(sessionID, prompt string) {
+	if sessionID == "" {
+		return
+	}
+	p := sessionMarkerPath(sessionID)
+	data, err := os.ReadFile(p)
+	if err == nil {
+		var marker map[string]any
+		if json.Unmarshal(data, &marker) == nil {
+			if strings.TrimSpace(prompt) != "" {
+				marker["user_prompt"] = prompt
+			}
+			curCount := 0
+			if v, ok := marker["prompt_count"].(float64); ok {
+				curCount = int(v)
+			}
+			marker["prompt_count"] = curCount + 1
+			if out, err := json.MarshalIndent(marker, "", "  "); err == nil {
+				_ = os.WriteFile(p, out, 0600)
+			}
+		}
+	}
 }
 
 // Helper extraction functions

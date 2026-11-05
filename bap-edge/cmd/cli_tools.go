@@ -21,6 +21,7 @@ import (
 	"bap-edge/internal/httptransport"
 	"bap-edge/internal/policystore"
 	"bap-edge/internal/state"
+	"bap-edge/pkg/types"
 	"bap-edge/pkg/version"
 )
 
@@ -359,17 +360,47 @@ func RunStatus(args []string) error {
 		}
 	}
 
-	// 4. Inspect Active Sessions
+	// 4. Inspect Native Agent Plugins (Layer 1A)
+	workspace := authz.GetWorkspaceRoot()
+	if workspace == "" {
+		workspace, _ = os.Getwd()
+	}
+	plugins := []types.PluginHealthRecord{
+		InspectClaudePlugin(workspace),
+		InspectCopilotPlugin(workspace),
+		InspectAntigravityPlugin(workspace),
+		InspectOpenCodePlugin(workspace),
+		InspectCodexPlugin(workspace),
+	}
+	pluginByApp := make(map[string]types.PluginHealthRecord)
+	activePluginCount := 0
+	for _, p := range plugins {
+		pluginByApp[strings.ToLower(p.Client)] = p
+		if p.Client == "claude-code" {
+			pluginByApp["claude"] = p
+		}
+		if p.Client == "antigravity" {
+			pluginByApp["gemini"] = p
+		}
+		if p.PluginInstalled {
+			activePluginCount++
+		}
+	}
+
+	// 5. Inspect Active Sessions
 	sessionDirs := []string{state.SessionsDir(), filepath.Join(".bap", "sessions")}
 	activeCount := 0
 	staleCount := 0
+	totalPrompts := 0
 	seenSessionIDs := make(map[string]bool)
 	type sessionDetail struct {
-		SessionID string `json:"session_id"`
-		AppID     string `json:"app_id"`
-		PID       int    `json:"pid"`
-		Status    string `json:"status"`
-		Uptime    string `json:"uptime"`
+		SessionID   string `json:"session_id"`
+		AppID       string `json:"app_id"`
+		PID         int    `json:"pid"`
+		Status      string `json:"status"`
+		Uptime      string `json:"uptime"`
+		Plugin      string `json:"plugin"`
+		PromptCount int    `json:"prompt_count"`
 	}
 	var sessionList []sessionDetail
 
@@ -385,10 +416,13 @@ func RunStatus(args []string) error {
 				continue
 			}
 			var sInfo struct {
-				SessionID string    `json:"session_id"`
-				PID       int       `json:"pid"`
-				AppID     string    `json:"app_id"`
-				StartedAt time.Time `json:"started_at"`
+				SessionID      string    `json:"session_id"`
+				PID            int       `json:"pid"`
+				AppID          string    `json:"app_id"`
+				ReportingLayer string    `json:"reporting_layer"`
+				PromptCount    int       `json:"prompt_count"`
+				UserPrompt     string    `json:"user_prompt"`
+				StartedAt      time.Time `json:"started_at"`
 			}
 			if json.Unmarshal(data, &sInfo) == nil && sInfo.SessionID != "" {
 				if seenSessionIDs[sInfo.SessionID] {
@@ -404,12 +438,29 @@ func RunStatus(args []string) error {
 					activeCount++
 				}
 				age := time.Since(sInfo.StartedAt).Round(time.Second)
+				pluginLabel := "Active"
+				if pRec, ok := pluginByApp[strings.ToLower(sInfo.AppID)]; ok && pRec.PluginInstalled {
+					if pRec.EnforcementVerified {
+						pluginLabel = "Active (Verified)"
+					} else {
+						pluginLabel = "Installed"
+					}
+				} else if sInfo.ReportingLayer != "" {
+					pluginLabel = sInfo.ReportingLayer
+				}
+				pCount := sInfo.PromptCount
+				if pCount <= 0 && strings.TrimSpace(sInfo.UserPrompt) != "" {
+					pCount = 1
+				}
+				totalPrompts += pCount
 				sessionList = append(sessionList, sessionDetail{
-					SessionID: sInfo.SessionID,
-					AppID:     sInfo.AppID,
-					PID:       sInfo.PID,
-					Status:    statusStr,
-					Uptime:    age.String(),
+					SessionID:   sInfo.SessionID,
+					AppID:       sInfo.AppID,
+					PID:         sInfo.PID,
+					Status:      statusStr,
+					Uptime:      age.String(),
+					Plugin:      pluginLabel,
+					PromptCount: pCount,
 				})
 			}
 		}
@@ -489,6 +540,13 @@ func RunStatus(args []string) error {
 		}
 	}
 
+	layer1JSONStatus := "NOT_OBSERVED"
+	layer1Desc := "NOT_OBSERVED - verify approval and received callbacks"
+	if activePluginCount > 0 {
+		layer1JSONStatus = "ACTIVE"
+		layer1Desc = fmt.Sprintf("ACTIVE (%d native agent plugin(s) installed and active)", activePluginCount)
+	}
+
 	// JSON output mode
 	if *jsonFlag {
 		statusOutput := map[string]any{
@@ -526,9 +584,14 @@ func RunStatus(args []string) error {
 				"department": creds.Department,
 			},
 			"sessions": map[string]any{
-				"active_count": activeCount,
-				"stale_count":  staleCount,
-				"items":        sessionList,
+				"active_count":  activeCount,
+				"stale_count":   staleCount,
+				"total_prompts": totalPrompts,
+				"items":         sessionList,
+			},
+			"plugins": map[string]any{
+				"active_count": activePluginCount,
+				"items":        plugins,
 			},
 			"policy": map[string]any{
 				"version":     policyVersion,
@@ -558,9 +621,9 @@ func RunStatus(args []string) error {
 				"layers": []map[string]any{
 					{
 						"layer":       "Layer 1",
-						"name":        "Process Interception Hooks",
-						"status":      "NOT_OBSERVED",
-						"description": "Hook configuration and trust do not prove callback execution",
+						"name":        "Native Hooks & Agent Plugins",
+						"status":      layer1JSONStatus,
+						"description": layer1Desc,
 					},
 					{
 						"layer":       "Layer 2",
@@ -633,14 +696,33 @@ func RunStatus(args []string) error {
 	fmt.Println("  ACTIVE SESSIONS:")
 	if len(sessionList) > 0 {
 		for _, s := range sessionList {
-			fmt.Printf("    • [%s] Session: %-25s App: %-12s PID: %-7d Uptime: %s\n",
-				s.Status, s.SessionID, s.AppID, s.PID, s.Uptime)
+			fmt.Printf("    • [%s] Session: %-25s App: %-12s PID: %-7d Uptime: %-8s Plugin: %-18s Prompts: %d\n",
+				s.Status, s.SessionID, s.AppID, s.PID, s.Uptime, s.Plugin, s.PromptCount)
 		}
 	} else {
 		fmt.Println("    (No local agent sessions currently active)")
 	}
 
-	// 2. Inspect Cached Cedar Policy Bundle
+	// 2. Inspect Native Agent Plugins (Layer 1A)
+	fmt.Println("\n  NATIVE AGENT PLUGINS (Layer 1A - In-Harness Extension):")
+	if activePluginCount > 0 {
+		for _, p := range plugins {
+			if p.PluginInstalled {
+				enf := "Unverified"
+				if p.EnforcementVerified {
+					enf = "Verified (Active)"
+				} else if p.HookActive {
+					enf = "Hook Active"
+				}
+				fmt.Printf("    • %-14s %-22s Version: %-6s State: %-10s Enforcement: %s\n",
+					p.Client, p.PluginName, p.PluginVersion, p.State, enf)
+			}
+		}
+	} else {
+		fmt.Println("    (No native agent plugins detected in workspace; run 'bap install' to install)")
+	}
+
+	// 3. Inspect Cached Cedar Policy Bundle
 	fmt.Println("\n  POLICY BUNDLE & ZERO-TRUST CACHE:")
 	if policyVersion > 0 {
 		fmt.Printf("    • Version:        v%d\n", policyVersion)
@@ -654,15 +736,15 @@ func RunStatus(args []string) error {
 		fmt.Println("    • Status:         No cached policy found (Default baseline active)")
 	}
 
-	// 3. Inspect 5-Layer Defense-in-Depth Compliance
+	// 4. Inspect 5-Layer Defense-in-Depth Compliance
 	fmt.Println("\n  5-LAYER DEFENSE-IN-DEPTH COMPLIANCE STATUS:")
-	fmt.Println("    Layer 1 (Native Hooks): NOT_OBSERVED - verify approval and received callbacks")
+	fmt.Printf("    Layer 1 (Native Hooks & Plugins): %s\n", layer1Desc)
 	fmt.Println("    Layer 2 (BAP MCP): NOT_OBSERVED - verify calls routed through BAP tools")
 	fmt.Println("    Layer 3 (Terminal Shims): NOT_OBSERVED - verify actual shim-routed commands")
 	fmt.Println("    Layer 4 (Broker): AVAILABLE - OS-wide enforcement is not attested here")
 	fmt.Println("    Layer 5 (Gateway PEP): NOT_OBSERVED - verify protected resource events")
 
-	// 4. Telemetry & Offline Spool
+	// 5. Telemetry & Offline Spool
 	fmt.Println("\n  TELEMETRY & OFFLINE RESILIENCE:")
 	if autoSweepTriggered {
 		fmt.Printf("    • Auto-Sync:      ⚡ Auto-triggered sweep: %d pending audit record(s) synced to Control Plane\n", autoSweepResult.FlushedAuditCount)
@@ -673,6 +755,7 @@ func RunStatus(args []string) error {
 		fmt.Printf("    • Auto-Sync:      ⏸️  Deferred (%s; sync delegated to active instance)\n", otherStatus.Description)
 	}
 	fmt.Printf("    • Logged Events:  %d total (Allowed: %d, Denied: %d)\n", totalLogged, allowedCount, deniedCount)
+	fmt.Printf("    • Prompts Count:  %d observed across active sessions\n", totalPrompts)
 	if totalLogged == 0 {
 		fmt.Println("    • Spool Backlog:  0 pending entries (All audit logs ingested by Control Plane)")
 	} else {

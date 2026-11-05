@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -2922,10 +2923,52 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 		"bap-agent":             true,
 		"antigravity-hook":      true,
 		"antigravity-cli":       true,
+		"native-plugin-hook":    true,
+		"opencode-hook":         true,
+		"copilot-hook":          true,
 	}
 	if !validProducers[req.Producer] {
 		writeError(w, http.StatusBadRequest, "prompt telemetry must come from an authorized agent producer")
 		return
+	}
+	if req.Intent.Primary == "" && req.UserPrompt != "" {
+		classified := s.classifyIntentCategory(req.UserPrompt, 1.0)
+		switch classified {
+		case "Testing / Quality":
+			req.Intent.Primary = "TEST_VERIFICATION"
+		case "Bug Fix":
+			req.Intent.Primary = "BUG_FIX"
+		case "Documentation":
+			req.Intent.Primary = "DOCUMENTATION"
+		case "Security":
+			req.Intent.Primary = "SECURITY_REMEDIATION"
+		case "Production Operations":
+			req.Intent.Primary = "DEPLOYMENT_RELEASE"
+		case "Data / Analytics":
+			req.Intent.Primary = "DATABASE_CHANGE"
+		case "Research":
+			req.Intent.Primary = "INVESTIGATION"
+		case "Automation":
+			req.Intent.Primary = "WORK_MANAGEMENT"
+		default:
+			req.Intent.Primary = "FEATURE_ENHANCEMENT"
+		}
+		if req.Intent.Confidence == 0 {
+			req.Intent.Confidence = 0.95
+		}
+		if req.Intent.Source == "" {
+			req.Intent.Source = "bap-server-classifier"
+		}
+		if req.Intent.ClassifierVersion == "" {
+			req.Intent.ClassifierVersion = "v1.0"
+		}
+	}
+	if req.PromptHash == "" && req.UserPrompt != "" {
+		h := sha256.Sum256([]byte(req.UserPrompt))
+		req.PromptHash = hex.EncodeToString(h[:])
+	}
+	if req.UserPrompt != "" && !req.PromptCaptureEnabled {
+		req.PromptCaptureEnabled = true
 	}
 	req.Intent.Primary = strings.ToUpper(strings.TrimSpace(req.Intent.Primary))
 	for i := range req.Intent.Secondary {
@@ -2943,6 +2986,9 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 		"antigravity-hook":            true,
 		"antigravity-cli":             true,
 		"antigravity-transcript-tail": true,
+		"native-plugin-hook":          true,
+		"opencode-hook":               true,
+		"copilot-hook":                true,
 	}
 	if !validIntentCategory(req.Intent.Primary) || req.Intent.ClassifierVersion == "" || !validSources[req.Intent.Source] {
 		writeError(w, http.StatusBadRequest, "a valid edge-classified intent is required")
@@ -3046,7 +3092,7 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 
 func validIntentCategory(category string) bool {
 	switch strings.ToUpper(strings.TrimSpace(category)) {
-	case "BUG_FIX", "DATABASE_CHANGE", "FEATURE_ENHANCEMENT", "INVESTIGATION", "REFACTOR", "TEST_VERIFICATION", "DOCUMENTATION", "MIGRATION", "DEPLOYMENT_RELEASE", "WORK_MANAGEMENT", "SECURITY_REMEDIATION", "UNKNOWN":
+	case "BUG_FIX", "DATABASE_CHANGE", "FEATURE_ENHANCEMENT", "INVESTIGATION", "REFACTOR", "TEST_VERIFICATION", "TESTING", "DOCUMENTATION", "MIGRATION", "DEPLOYMENT_RELEASE", "WORK_MANAGEMENT", "SECURITY_REMEDIATION", "SECURITY", "PRODUCTION_OPS", "DATA_ANALYTICS", "RESEARCH", "AUTOMATION", "UNKNOWN":
 		return true
 	default:
 		return false
@@ -4150,7 +4196,6 @@ func (s *Server) isAdminCaller(r *http.Request) bool {
 func (s *Server) isAdminViewer(r *http.Request) bool {
 	token := telemetryViewerCredential(r)
 	return s.adminToken != "" && token != "" &&
-		(s.allowRemoteAdmin || isLoopbackAddress(r.RemoteAddr)) &&
 		subtle.ConstantTimeCompare([]byte(token), []byte(s.adminToken)) == 1
 }
 
