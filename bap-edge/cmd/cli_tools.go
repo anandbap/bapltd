@@ -540,13 +540,6 @@ func RunStatus(args []string) error {
 		}
 	}
 
-	layer1JSONStatus := "NOT_OBSERVED"
-	layer1Desc := "NOT_OBSERVED - verify approval and received callbacks"
-	if activePluginCount > 0 {
-		layer1JSONStatus = "ACTIVE"
-		layer1Desc = fmt.Sprintf("ACTIVE (%d native agent plugin(s) installed and active)", activePluginCount)
-	}
-
 	// JSON output mode
 	if *jsonFlag {
 		statusOutput := map[string]any{
@@ -621,9 +614,9 @@ func RunStatus(args []string) error {
 				"layers": []map[string]any{
 					{
 						"layer":       "Layer 1",
-						"name":        "Native Hooks & Agent Plugins",
-						"status":      layer1JSONStatus,
-						"description": layer1Desc,
+						"name":        "Process Interception Hooks",
+						"status":      "NOT_OBSERVED",
+						"description": "Hook configuration and trust do not prove callback execution",
 					},
 					{
 						"layer":       "Layer 2",
@@ -738,7 +731,7 @@ func RunStatus(args []string) error {
 
 	// 4. Inspect 5-Layer Defense-in-Depth Compliance
 	fmt.Println("\n  5-LAYER DEFENSE-IN-DEPTH COMPLIANCE STATUS:")
-	fmt.Printf("    Layer 1 (Native Hooks & Plugins): %s\n", layer1Desc)
+	fmt.Println("    Layer 1 (Native Hooks): NOT_OBSERVED - verify approval and received callbacks")
 	fmt.Println("    Layer 2 (BAP MCP): NOT_OBSERVED - verify calls routed through BAP tools")
 	fmt.Println("    Layer 3 (Terminal Shims): NOT_OBSERVED - verify actual shim-routed commands")
 	fmt.Println("    Layer 4 (Broker): AVAILABLE - OS-wide enforcement is not attested here")
