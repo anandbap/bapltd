@@ -921,6 +921,29 @@ func RunExec(args []string) {
 	}
 
 	if *sessionFlag == "" {
+		// Check if a native hook marker exists for ppid or observed process
+		for _, checkPID := range []int{ppid, observed.PID} {
+			if checkPID <= 0 {
+				continue
+			}
+			for _, dir := range []string{state.SessionsDir(), filepath.Join(".bap", "sessions")} {
+				if data, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("pid-%d.json", checkPID))); err == nil {
+					var native struct {
+						SessionID string `json:"session_id"`
+					}
+					if json.Unmarshal(data, &native) == nil && native.SessionID != "" {
+						*sessionFlag = native.SessionID
+						break
+					}
+				}
+			}
+			if *sessionFlag != "" {
+				break
+			}
+		}
+	}
+
+	if *sessionFlag == "" {
 		prefix := *sourceFlag
 		if prefix == "" {
 			prefix = "cli"

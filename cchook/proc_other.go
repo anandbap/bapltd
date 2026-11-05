@@ -39,3 +39,26 @@ func getParentPID(pid int) int {
 	}
 	return 0
 }
+
+func getProcessBirth(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return ""
+	}
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return ""
+	}
+	idx := bytes.LastIndexByte(stat, ')')
+	if idx == -1 || len(stat) <= idx+2 {
+		return ""
+	}
+	fields := strings.Fields(string(stat[idx+2:]))
+	if len(fields) < 20 {
+		return ""
+	}
+	return strings.TrimSpace(string(boot)) + ":" + fields[19]
+}

@@ -239,9 +239,24 @@ func (s *DaemonServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (s *DaemonServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 
+	type sessionDetailItem struct {
+		SessionID      string    `json:"session_id"`
+		AppID          string    `json:"app_id"`
+		PID            int       `json:"pid"`
+		AttachedAt     time.Time `json:"attached_at"`
+		ReportingLayer string    `json:"reporting_layer"`
+	}
 	var sessionList []string
-	for sid := range s.sessions {
+	var sessionDetails []sessionDetailItem
+	for sid, sess := range s.sessions {
 		sessionList = append(sessionList, sid)
+		sessionDetails = append(sessionDetails, sessionDetailItem{
+			SessionID:      sess.SessionID,
+			AppID:          sess.AppID,
+			PID:            sess.PID,
+			AttachedAt:     sess.AttachedAt,
+			ReportingLayer: sess.ReportingLayer,
+		})
 	}
 	connected, latencyMs := s.cpConnected, s.cpLatencyMs
 	discoveryProgress := s.discoveryProgress
@@ -296,6 +311,7 @@ func (s *DaemonServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"agents_attached": map[string]any{
 			"count":    len(sessionList),
 			"sessions": sessionList,
+			"details":  sessionDetails,
 		},
 		"telemetry": map[string]any{
 			"backlog_oldest_event_at": oldest, "backlog_oldest_age_ms": oldestAge,

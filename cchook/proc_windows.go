@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"syscall"
 	"unsafe"
 )
@@ -56,4 +57,29 @@ func getParentPID(pid int) int {
 		}
 	}
 	return 0
+}
+
+func getProcessBirth(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	procOpenProcess := kernel32.NewProc("OpenProcess")
+	procCloseHandle := kernel32.NewProc("CloseHandle")
+
+	hProcess, _, _ := procOpenProcess.Call(0x1000, 0, uintptr(pid)) // PROCESS_QUERY_LIMITED_INFORMATION
+	if hProcess == 0 {
+		hProcess, _, _ = procOpenProcess.Call(0x0400, 0, uintptr(pid)) // PROCESS_QUERY_INFORMATION
+	}
+	if hProcess == 0 {
+		return ""
+	}
+	defer procCloseHandle.Call(hProcess)
+
+	var birth, exit, kernel, user syscall.Filetime
+	ok, _, _ := kernel32.NewProc("GetProcessTimes").Call(hProcess, uintptr(unsafe.Pointer(&birth)), uintptr(unsafe.Pointer(&exit)), uintptr(unsafe.Pointer(&kernel)), uintptr(unsafe.Pointer(&user)))
+	if ok == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%08x%08x", birth.HighDateTime, birth.LowDateTime)
 }

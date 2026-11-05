@@ -37,7 +37,7 @@ func observedCaller(parent int, processes []agentProcess) (agentProcess, bool) {
 			break
 		}
 		if agentApp(p.Name) != "" && p.Birth != "" {
-			return p, true
+			return findRootAgentProcess(p, byPID), true
 		}
 		if p.ParentPID == parent {
 			break
@@ -45,6 +45,26 @@ func observedCaller(parent int, processes []agentProcess) (agentProcess, bool) {
 		parent = p.ParentPID
 	}
 	return agentProcess{}, false
+}
+
+// findRootAgentProcess walks up the process hierarchy to find the top-most
+// process belonging to the same agent application. This ensures child worker/shim
+// processes (e.g. claude.exe launcher spawning claude.exe worker) are deduplicated
+// under a single canonical agent workload.
+func findRootAgentProcess(p agentProcess, byPID map[int]agentProcess) agentProcess {
+	curr := p
+	app := agentApp(p.Name)
+	if app == "" {
+		return p
+	}
+	for depth := 0; depth < 16; depth++ {
+		parent, ok := byPID[curr.ParentPID]
+		if !ok || curr.ParentPID == curr.PID || agentApp(parent.Name) != app {
+			break
+		}
+		curr = parent
+	}
+	return curr
 }
 
 // Process metadata only: never read an agent's environment, memory or transcript.
@@ -73,12 +93,38 @@ func observedSessionID(host string, p agentProcess) string {
 	return fmt.Sprintf("observed-%s-%x", agentApp(p.Name), sum[:12])
 }
 
+type agentWorkloadTree struct {
+	root agentProcess
+	pids []int
+}
+
 // Independently observe named agent processes even when native hooks are not
 // trusted. Presence is evidence only; this path never issues execution grants.
 func (s *DaemonServer) reconcileObservedProcesses(processes []agentProcess, host string) {
-	current := make(map[string]bool)
+	byPID := make(map[int]agentProcess, len(processes))
 	for _, p := range processes {
-		if id := observedSessionID(host, p); id != "" {
+		byPID[p.PID] = p
+	}
+
+	treesByRootPID := make(map[int]*agentWorkloadTree)
+	for _, p := range processes {
+		if agentApp(p.Name) == "" || p.PID <= 0 {
+			continue
+		}
+		root := findRootAgentProcess(p, byPID)
+		tree, exists := treesByRootPID[root.PID]
+		if !exists {
+			tree = &agentWorkloadTree{root: root, pids: []int{root.PID}}
+			treesByRootPID[root.PID] = tree
+		}
+		if p.PID != root.PID {
+			tree.pids = append(tree.pids, p.PID)
+		}
+	}
+
+	current := make(map[string]bool)
+	for _, tree := range treesByRootPID {
+		if id := observedSessionID(host, tree.root); id != "" {
 			current[id] = true
 		}
 	}
@@ -91,30 +137,76 @@ func (s *DaemonServer) reconcileObservedProcesses(processes []agentProcess, host
 		}
 	}
 	s.mu.Unlock()
-	for _, p := range processes {
-		id := observedSessionID(host, p)
+
+	type nativeSessionInfo struct {
+		SessionID string `json:"session_id"`
+		ServerURL string `json:"server_url"`
+		Birth     string `json:"process_birth"`
+		PID       int    `json:"pid"`
+	}
+
+	checkNativeMarker := func(pid int, expectedBirth string) (nativeSessionInfo, bool) {
+		var native nativeSessionInfo
+		dirs := []string{state.SessionsDir(), filepath.Join(".bap", "sessions")}
+		for _, dir := range dirs {
+			markerPath := filepath.Join(dir, fmt.Sprintf("pid-%d.json", pid))
+			data, err := os.ReadFile(markerPath)
+			if err != nil {
+				continue
+			}
+			if json.Unmarshal(data, &native) == nil && native.SessionID != "" && native.PID == pid {
+				if native.ServerURL != "" && strings.TrimRight(native.ServerURL, "/") != strings.TrimRight(s.state.ServerURL, "/") {
+					continue
+				}
+				if native.Birth != "" && native.Birth != expectedBirth {
+					continue
+				}
+				return native, true
+			}
+		}
+		return nativeSessionInfo{}, false
+	}
+
+	for _, tree := range treesByRootPID {
+		id := observedSessionID(host, tree.root)
 		if id == "" {
 			continue
 		}
-		var native struct {
-			SessionID string `json:"session_id"`
-			ServerURL string `json:"server_url"`
-			Birth     string `json:"process_birth"`
-			PID       int    `json:"pid"`
+
+		// Check if any process in the tree matches a native session marker
+		var adoptedNative *nativeSessionInfo
+		for _, pid := range tree.pids {
+			pObj := byPID[pid]
+			if native, ok := checkNativeMarker(pid, pObj.Birth); ok {
+				adoptedNative = &native
+				break
+			}
 		}
-		data, err := os.ReadFile(filepath.Join(state.SessionsDir(), fmt.Sprintf("pid-%d.json", p.PID)))
-		if err == nil && json.Unmarshal(data, &native) == nil && native.SessionID != "" && native.PID == p.PID && native.Birth == p.Birth && strings.TrimRight(native.ServerURL, "/") == strings.TrimRight(s.state.ServerURL, "/") {
+
+		if adoptedNative != nil {
 			s.mu.Lock()
 			delete(s.sessions, id)
-			s.sessions[native.SessionID] = AttachedSession{SessionID: native.SessionID, AppID: agentApp(p.Name), PID: p.PID, AttachedAt: time.Now().UTC(), ReportingLayer: "launcher"}
+			s.sessions[adoptedNative.SessionID] = AttachedSession{
+				SessionID:      adoptedNative.SessionID,
+				AppID:          agentApp(tree.root.Name),
+				PID:            tree.root.PID,
+				AttachedAt:     time.Now().UTC(),
+				ReportingLayer: "launcher",
+			}
 			s.mu.Unlock()
 			continue
 		}
+
 		s.mu.Lock()
 		already := false
 		for _, attached := range s.sessions {
-			if attached.PID == p.PID && attached.SessionID != id && attached.ReportingLayer != "discovery" {
-				already = true
+			for _, pid := range tree.pids {
+				if attached.PID == pid && attached.SessionID != id && attached.ReportingLayer != "discovery" {
+					already = true
+					break
+				}
+			}
+			if already {
 				break
 			}
 		}
@@ -122,14 +214,29 @@ func (s *DaemonServer) reconcileObservedProcesses(processes []agentProcess, host
 			already = true
 		}
 		if !already {
-			s.sessions[id] = AttachedSession{SessionID: id, AppID: agentApp(p.Name), PID: p.PID, AttachedAt: time.Now().UTC(), ReportingLayer: "discovery"}
+			s.sessions[id] = AttachedSession{
+				SessionID:      id,
+				AppID:          agentApp(tree.root.Name),
+				PID:            tree.root.PID,
+				AttachedAt:     time.Now().UTC(),
+				ReportingLayer: "discovery",
+			}
 		}
 		s.mu.Unlock()
 		if already {
 			continue
 		}
-		entry := audit.AuditEntry{EventID: "presence-" + id, SessionID: id, Timestamp: time.Now().UTC(), Source: agentApp(p.Name), ClientPID: p.PID,
-			ReportingLayer: "discovery", Decision: "observed", Reason: "Process observed; native hooks and prompt capture are not confirmed"}
+
+		entry := audit.AuditEntry{
+			EventID:        "presence-" + id,
+			SessionID:      id,
+			Timestamp:      time.Now().UTC(),
+			Source:         agentApp(tree.root.Name),
+			ClientPID:      tree.root.PID,
+			ReportingLayer: "discovery",
+			Decision:       "observed",
+			Reason:         "Process observed; native hooks and prompt capture are not confirmed",
+		}
 		if audit.Log(&entry, "") != nil {
 			s.mu.Lock()
 			delete(s.sessions, id) // retry local persistence on the next scan

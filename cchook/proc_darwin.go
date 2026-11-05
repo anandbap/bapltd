@@ -41,3 +41,7 @@ func getParentPID(pid int) int {
 	}
 	return parent
 }
+
+func getProcessBirth(pid int) string {
+	return processField(pid, "lstart")
+}

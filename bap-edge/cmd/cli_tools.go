@@ -467,6 +467,101 @@ func RunStatus(args []string) error {
 		}
 	}
 
+	// 5a. Query active daemon attached sessions (including observed Shadow IT sessions)
+	if daemonActive {
+		if ds, err := ReadDaemonState(); err == nil && ds != nil && ds.URL != "" {
+			client := &http.Client{Timeout: 800 * time.Millisecond}
+			if resp, err := client.Get(ds.URL + "/status"); err == nil {
+				var dStatus struct {
+					AgentsAttached struct {
+						Details []struct {
+							SessionID      string    `json:"session_id"`
+							AppID          string    `json:"app_id"`
+							PID            int       `json:"pid"`
+							AttachedAt     time.Time `json:"attached_at"`
+							ReportingLayer string    `json:"reporting_layer"`
+						} `json:"details"`
+						Sessions []string `json:"sessions"`
+					} `json:"agents_attached"`
+				}
+				if json.NewDecoder(resp.Body).Decode(&dStatus) == nil {
+					for _, dSess := range dStatus.AgentsAttached.Details {
+						if dSess.SessionID == "" || seenSessionIDs[dSess.SessionID] {
+							continue
+						}
+						seenSessionIDs[dSess.SessionID] = true
+						alive := isProcessAlive(dSess.PID)
+						statusStr := "ACTIVE"
+						if !alive {
+							statusStr = "ORPHANED/STALE (Process Dead)"
+							staleCount++
+						} else {
+							activeCount++
+						}
+						pluginLabel := "Discovery Observed (Shadow IT)"
+						if dSess.ReportingLayer != "" && dSess.ReportingLayer != "discovery" {
+							pluginLabel = dSess.ReportingLayer
+						}
+						age := time.Since(dSess.AttachedAt).Round(time.Second)
+						sessionList = append(sessionList, sessionDetail{
+							SessionID:   dSess.SessionID,
+							AppID:       dSess.AppID,
+							PID:         dSess.PID,
+							Status:      statusStr,
+							Uptime:      age.String(),
+							Plugin:      pluginLabel,
+							PromptCount: 0,
+						})
+					}
+				}
+				resp.Body.Close()
+			}
+		}
+	} else {
+		// When running standalone without daemon, inspect running processes for unmanaged agents
+		if procs, err := listAgentProcesses(); err == nil {
+			byPID := make(map[int]agentProcess, len(procs))
+			for _, p := range procs {
+				byPID[p.PID] = p
+			}
+			host := observationHost()
+			for _, p := range procs {
+				if agentApp(p.Name) == "" || p.PID <= 0 {
+					continue
+				}
+				root := findRootAgentProcess(p, byPID)
+				if root.PID != p.PID {
+					continue // only canonical root process
+				}
+				id := observedSessionID(host, root)
+				if id == "" || seenSessionIDs[id] {
+					continue
+				}
+				already := false
+				for _, sess := range sessionList {
+					if sess.PID == root.PID {
+						already = true
+						break
+					}
+				}
+				if already {
+					continue
+				}
+				seenSessionIDs[id] = true
+				activeCount++
+				sessionList = append(sessionList, sessionDetail{
+					SessionID:   id,
+					AppID:       agentApp(root.Name),
+					PID:         root.PID,
+					Status:      "ACTIVE",
+					Uptime:      "N/A (Observed)",
+					Plugin:      "Discovery Observed (Shadow IT)",
+					PromptCount: 0,
+				})
+			}
+		}
+	}
+
 	// 5. Inspect Shadow IT & Tool Discovery (Layer 1B)
 	discoveryDir := filepath.Join(state.Dir(), "discovery")
 	var discReceipt struct {

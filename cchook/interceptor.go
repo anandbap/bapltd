@@ -1845,6 +1845,40 @@ func sessionMarkerPathForPID(pid int) string {
 	return filepath.Join(".bap", "sessions", fmt.Sprintf("pid-%d.json", pid))
 }
 
+func writePIDMarkers(sessionID, serverURL, appID, callerPath, callerHash string, targetPID, rawPPID int) {
+	writeSinglePIDMarker := func(pid int) {
+		if pid <= 0 {
+			return
+		}
+		birth := getProcessBirth(pid)
+		marker := map[string]any{
+			"session_id":    sessionID,
+			"server_url":    serverURL,
+			"pid":           pid,
+			"process_birth": birth,
+			"app_id":        appID,
+			"caller_path":   callerPath,
+			"caller_hash":   callerHash,
+			"started_at":    time.Now().UTC(),
+		}
+		if data, err := json.MarshalIndent(marker, "", "  "); err == nil {
+			pMarker := sessionMarkerPathForPID(pid)
+			_ = os.MkdirAll(filepath.Dir(pMarker), 0700)
+			_ = os.WriteFile(pMarker, data, 0600)
+			if home, err := os.UserHomeDir(); err == nil && home != "" {
+				_ = os.MkdirAll(filepath.Join(home, ".bapstate", "sessions"), 0700)
+				_ = os.WriteFile(filepath.Join(home, ".bapstate", "sessions", fmt.Sprintf("pid-%d.json", pid)), data, 0600)
+			}
+			_ = os.WriteFile(filepath.Join(".bap", "session.json"), data, 0600)
+			_ = os.Remove(".bap-session.json")
+		}
+	}
+	writeSinglePIDMarker(targetPID)
+	if rawPPID > 0 && rawPPID != targetPID {
+		writeSinglePIDMarker(rawPPID)
+	}
+}
+
 func resolveSessionID(payload HookPayload) string {
 	if sessionID := os.Getenv("BAP_SESSION_ID"); sessionID != "" {
 		return sessionID
@@ -2063,25 +2097,7 @@ func handleSessionStartHook(payload HookPayload) {
 		}
 	}
 
-	marker := map[string]any{
-		"session_id":  sessionID,
-		"server_url":  serverURL,
-		"pid":         targetPID,
-		"app_id":      appID,
-		"caller_path": caller.BinaryPath,
-		"caller_hash": caller.BinaryHash,
-		"started_at":  time.Now().UTC(),
-	}
-	if data, err := json.MarshalIndent(marker, "", "  "); err == nil {
-		pMarker := sessionMarkerPathForPID(targetPID)
-		_ = os.MkdirAll(filepath.Dir(pMarker), 0700)
-		_ = os.WriteFile(pMarker, data, 0600)
-		if targetPID != rawPPID {
-			_ = os.WriteFile(sessionMarkerPathForPID(rawPPID), data, 0600)
-		}
-		_ = os.WriteFile(filepath.Join(".bap", "session.json"), data, 0600)
-		_ = os.Remove(".bap-session.json")
-	}
+	writePIDMarkers(sessionID, serverURL, appID, caller.BinaryPath, caller.BinaryHash, targetPID, rawPPID)
 
 	// Launch detached bapedge watch thread if not already managed by launcher
 	ltdBin := findBinary("bapedge.exe")
@@ -2368,27 +2384,7 @@ func ensureSessionAndWatcher(sessionID, serverURL string) {
 	}
 
 	// 1. Write PID markers immediately so all concurrent/child hooks share this session
-	marker := map[string]any{
-		"session_id":  sessionID,
-		"server_url":  serverURL,
-		"pid":         targetPID,
-		"app_id":      caller.AppID,
-		"caller_path": caller.BinaryPath,
-		"caller_hash": caller.BinaryHash,
-		"started_at":  time.Now().UTC(),
-	}
-	if data, err := json.MarshalIndent(marker, "", "  "); err == nil {
-		_ = os.MkdirAll(filepath.Join(".bap", "sessions"), 0700)
-		_ = os.WriteFile(sessionMarkerPathForPID(targetPID), data, 0600)
-		if targetPID != rawPPID && rawPPID > 0 {
-			_ = os.WriteFile(sessionMarkerPathForPID(rawPPID), data, 0600)
-		}
-		_ = os.WriteFile(filepath.Join(".bap", "session.json"), data, 0600)
-		if home, err := os.UserHomeDir(); err == nil && home != "" {
-			_ = os.MkdirAll(filepath.Join(home, ".bapstate", "sessions"), 0700)
-			_ = os.WriteFile(filepath.Join(home, ".bapstate", "sessions", fmt.Sprintf("pid-%d.json", targetPID)), data, 0600)
-		}
-	}
+	writePIDMarkers(sessionID, serverURL, caller.AppID, caller.BinaryPath, caller.BinaryHash, targetPID, rawPPID)
 
 	// 2. Register session immediately with control plane
 	startPayload := map[string]any{
@@ -2796,15 +2792,7 @@ func main() {
 			}
 		}
 		targetPID, caller := resolveAgentProcess(ppid)
-		sessionBytes := []byte(fmt.Sprintf(`{"session_id":"%s","server_url":"%s","pid":%d,"app_id":"%s"}`, sessionID, serverURL, targetPID, caller.AppID))
-		pMarker := sessionMarkerPathForPID(targetPID)
-		_ = os.MkdirAll(filepath.Dir(pMarker), 0700)
-		_ = os.WriteFile(pMarker, sessionBytes, 0600)
-		if targetPID != ppid {
-			_ = os.WriteFile(sessionMarkerPathForPID(ppid), sessionBytes, 0600)
-		}
-		_ = os.WriteFile(filepath.Join(".bap", "session.json"), sessionBytes, 0600)
-		_ = os.Remove(".bap-session.json")
+		writePIDMarkers(sessionID, serverURL, caller.AppID, caller.BinaryPath, caller.BinaryHash, targetPID, ppid)
 		ltdBin := findBinary("bapedge.exe")
 		if ltdBin == "" {
 			ltdBin = findBinary("bapedge")
