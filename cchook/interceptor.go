@@ -2986,7 +2986,13 @@ func main() {
 		if lookPath, err := exec.LookPath(baseName); err == nil && lookPath != "" {
 			execBin = baseName
 		} else {
-			execBin = filepath.ToSlash(ltdBin)
+			if abs, err := filepath.Abs(ltdBin); err == nil {
+				execBin = abs
+			}
+			isBash := strings.EqualFold(payload.ToolName, "bash") || strings.EqualFold(payload.ToolName, "sh") || strings.EqualFold(payload.ToolName, "zsh")
+			if isBash {
+				execBin = filepath.ToSlash(execBin)
+			}
 			if strings.Contains(execBin, " ") {
 				if strings.EqualFold(payload.ToolName, "powershell") || strings.EqualFold(payload.ToolName, "pwsh") {
 					execBin = `& "` + execBin + `"`
@@ -3025,6 +3031,9 @@ func main() {
 func findBinary(name string) string {
 	// 1. Check current working directory
 	if _, err := os.Stat(name); err == nil {
+		if abs, err := filepath.Abs(name); err == nil {
+			return abs
+		}
 		if runtime.GOOS == "windows" {
 			return ".\\" + name
 		}
@@ -3032,6 +3041,9 @@ func findBinary(name string) string {
 	}
 	// 2. Check parent directory (e.g. repo root if running from cchook/)
 	if _, err := os.Stat(filepath.Join("..", name)); err == nil {
+		if abs, err := filepath.Abs(filepath.Join("..", name)); err == nil {
+			return abs
+		}
 		return filepath.Join("..", name)
 	}
 	// 2b. Check permanent user home and Program Files directories

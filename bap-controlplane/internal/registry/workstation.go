@@ -2,6 +2,7 @@ package registry
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -57,6 +58,9 @@ func (s *Store) EnrollWorkstation(req types.RegisteredAgent) (*types.RegisteredA
 		}
 	}
 	now := time.Now()
+	if primary == nil && len(matches) > 0 {
+		primary = matches[0]
+	}
 	if primary == nil {
 		id := make([]byte, 6)
 		if _, err := rand.Read(id); err != nil {
@@ -69,11 +73,14 @@ func (s *Store) EnrollWorkstation(req types.RegisteredAgent) (*types.RegisteredA
 		}
 	}
 	if primary.InstanceID == "" {
-		id := make([]byte, 4)
-		if _, err := rand.Read(id); err != nil {
-			return nil, err
+		if req.InstanceID != "" {
+			primary.InstanceID = req.InstanceID
+		} else if len(matches) > 0 && matches[0].InstanceID != "" {
+			primary.InstanceID = matches[0].InstanceID
+		} else {
+			h := sha256.Sum256([]byte(strings.ToLower(req.Hostname) + ":" + strings.ToLower(req.UserEmail)))
+			primary.InstanceID = fmt.Sprintf("%s-%s", strings.ToLower(req.Hostname), hex.EncodeToString(h[:4]))
 		}
-		primary.InstanceID = fmt.Sprintf("%s-%s", strings.ToLower(req.Hostname), hex.EncodeToString(id))
 	}
 	s.removeIdentityLocked(primary)
 	primary.SPIFFEID = fmt.Sprintf("spiffe://%s/app/%s/instance/%s", s.trustDomain, strings.ToLower(primary.AppID), primary.InstanceID)

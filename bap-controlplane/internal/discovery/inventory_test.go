@@ -116,6 +116,91 @@ func TestDiscoveryInventoryPersistenceLifecycleAndReplay(t *testing.T) {
 		t.Fatal("replay after restart was not idempotent")
 	}
 }
+
+func TestDiscoveryInventoryDedupesAcrossSupersededHostInstanceIDs(t *testing.T) {
+	s, err := NewInventory(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t1 := time.Now().Add(-2 * time.Hour)
+	t2 := time.Now()
+
+	// 1. Old instance reports claude-code and bap-zero-trust
+	report1 := Report{
+		Version:     1,
+		RunID:       "run-old",
+		StartedAt:   t1,
+		CompletedAt: t1,
+		Status:      "complete",
+		Scopes:      []ScopeResult{{ID: "agent-processes", Status: "complete"}, {ID: "native-mcp", Status: "complete"}},
+		Observations: []Observation{
+			{Key: "process-claude-code", Scope: "agent-processes", Kind: "agent_process", Name: "claude-code", Client: "claude-code", PID: 1234, Birth: "birth-1", Evidence: "running", ObservedAt: t1},
+			{Key: "mcp-bap-zero-trust", Scope: "native-mcp", Kind: "mcp_config", Name: "bap-zero-trust", Client: "vscode", Evidence: "configured", ObservedAt: t1},
+		},
+	}
+	if _, err := s.Ingest("desktop-c8lejnu-5276747e", "alice@example.com", report1); err != nil {
+		t.Fatal(err)
+	}
+
+	// Old instance then sends a scan where claude-code is not running (marked not_seen)
+	report1Stale := Report{
+		Version:     1,
+		RunID:       "run-old-stale",
+		StartedAt:   t1.Add(time.Minute),
+		CompletedAt: t1.Add(time.Minute),
+		Status:      "complete",
+		Scopes:      []ScopeResult{{ID: "agent-processes", Status: "complete"}, {ID: "native-mcp", Status: "complete"}},
+		Observations: []Observation{
+			{Key: "mcp-bap-zero-trust", Scope: "native-mcp", Kind: "mcp_config", Name: "bap-zero-trust", Client: "vscode", Evidence: "configured", ObservedAt: t1.Add(time.Minute)},
+		},
+	}
+	if _, err := s.Ingest("desktop-c8lejnu-5276747e", "alice@example.com", report1Stale); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. New instance on the same host reports current live state: claude-code is running (present)
+	report2 := Report{
+		Version:     1,
+		RunID:       "run-new",
+		StartedAt:   t2,
+		CompletedAt: t2,
+		Status:      "complete",
+		Scopes:      []ScopeResult{{ID: "agent-processes", Status: "complete"}, {ID: "native-mcp", Status: "complete"}},
+		Observations: []Observation{
+			{Key: "process-claude-code", Scope: "agent-processes", Kind: "agent_process", Name: "claude-code", Client: "claude-code", PID: 5678, Birth: "birth-2", Evidence: "running", ObservedAt: t2},
+			{Key: "mcp-bap-zero-trust", Scope: "native-mcp", Kind: "mcp_config", Name: "bap-zero-trust", Client: "vscode", Evidence: "configured", ObservedAt: t2},
+		},
+	}
+	if _, err := s.Ingest("desktop-c8lejnu-f210c4fe", "alice@example.com", report2); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Query the global inventory list (instance = "")
+	page, err := s.List("", "", "", "", 50, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	claudeCount := 0
+	var claudeAsset Asset
+	for _, a := range page.Findings {
+		if a.Name == "claude-code" {
+			claudeCount++
+			claudeAsset = a
+		}
+	}
+
+	if claudeCount != 1 {
+		t.Fatalf("expected exactly 1 claude-code finding across same host, got %d", claudeCount)
+	}
+	if claudeAsset.State != "present" {
+		t.Fatalf("expected claude-code state to be 'present', got %q", claudeAsset.State)
+	}
+	if claudeAsset.InstanceID != "desktop-c8lejnu-f210c4fe" {
+		t.Fatalf("expected claude-code instance to be the active 'desktop-c8lejnu-f210c4fe', got %q", claudeAsset.InstanceID)
+	}
+}
 func TestDiscoveryValidationAndCoverage(t *testing.T) {
 	s, _ := NewInventory(nil)
 	now := time.Now().UTC()

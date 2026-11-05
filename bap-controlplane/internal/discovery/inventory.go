@@ -228,6 +228,13 @@ func assetID(instance, key string) string {
 }
 
 // SQL commit precedes cache mutation. No API entry performs filesystem scanning.
+func hostPrefix(instance string) string {
+	if idx := strings.LastIndex(instance, "-"); idx != -1 {
+		return instance[:idx]
+	}
+	return instance
+}
+
 func (s *Inventory) Ingest(instance, owner string, r Report) (bool, error) {
 	if err := ValidateReport(r); err != nil {
 		return false, err
@@ -266,6 +273,17 @@ func (s *Inventory) Ingest(instance, owner string, r Report) (bool, error) {
 	}
 	if len(s.assets)+newAssets > 20000 || len(s.latest) >= 2000 && s.latest[instance].RunID == "" {
 		return false, errors.New("discovery inventory capacity reached")
+	}
+
+	// Purge stale/superseded instance assets from the exact same host
+	hPrefix := hostPrefix(instance)
+	for oldID, oldAsset := range s.assets {
+		if oldAsset.InstanceID != instance && hostPrefix(oldAsset.InstanceID) == hPrefix {
+			delete(s.assets, oldID)
+			if s.db != nil {
+				_, _ = s.db.Exec(`DELETE FROM discovery_assets WHERE id = ?`, oldID)
+			}
+		}
 	}
 	changes := map[string]Asset{}
 	present := map[string]bool{}
@@ -412,16 +430,20 @@ func (s *Inventory) List(instance, kind, state, after string, limit int, revisio
 		limit = 50
 	}
 	type dedupKey struct {
-		instance string
-		kind     string
-		name     string
+		host string
+		kind string
+		name string
 	}
 	latestByEntity := make(map[dedupKey]Asset)
 	for _, a := range s.assets {
 		if instance != "" && a.InstanceID != instance || kind != "" && a.Kind != kind || state != "" && a.State != state {
 			continue
 		}
-		k := dedupKey{instance: a.InstanceID, kind: a.Kind, name: a.Name}
+		host := a.InstanceID
+		if instance == "" {
+			host = hostPrefix(a.InstanceID)
+		}
+		k := dedupKey{host: host, kind: a.Kind, name: a.Name}
 		existing, ok := latestByEntity[k]
 		if !ok || a.LastSeen.After(existing.LastSeen) || (a.State == "present" && existing.State != "present") {
 			latestByEntity[k] = a
