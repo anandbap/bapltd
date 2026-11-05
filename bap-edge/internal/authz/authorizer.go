@@ -370,6 +370,16 @@ func (a *Authorizer) evaluateAtomicNode(executable, fullCommand, args, workspace
 	}
 
 	decomp := Decompose(executable, fullCommand, args)
+	if strings.Contains(fullCommand, ">") {
+		parts := strings.Split(fullCommand, ">")
+		redirTarget := strings.TrimSpace(strings.Trim(parts[len(parts)-1], "\"'`"))
+		if redirTarget != "" && !strings.HasPrefix(redirTarget, "&") {
+			decomp.ActionType = "write"
+			decomp.CanonicalAction = "fs:file:write"
+			decomp.TargetEntity = redirTarget
+			decomp.CanonicalResource = "file://" + filepath.ToSlash(redirTarget)
+		}
+	}
 	if decomp.TargetEntity != "" && decomp.TargetEntity != "local" && decomp.TargetEntity != "stdin" && (decomp.ActionType == "read" || decomp.ActionType == "write" || decomp.ActionType == "delete") {
 		resolved := ResolveCanonicalPath(decomp.TargetEntity, workspaceRoot)
 		if resolved != "" {
@@ -382,6 +392,9 @@ func (a *Authorizer) evaluateAtomicNode(executable, fullCommand, args, workspace
 	}
 
 	effectiveEscapesWorkspace := escapesWorkspace
+	if escapesWorkspace && (decomp.ActionType == "read" || decomp.ActionType == "inspect" || decomp.ActionType == "info") {
+		effectiveEscapesWorkspace = false
+	}
 	checkTarget := canonicalTarget
 	if checkTarget == "" {
 		checkTarget = decomp.TargetEntity
@@ -653,9 +666,11 @@ permit (
         "find", "which", "where", "less",
         "clear", "cls", "true", "false", "test", "date", "uname", "hostname", "env",
         "tar", "zip", "unzip", "gzip", "gunzip",
-        "select-object", "where-object", "select-string", "sort-object", "measure-object", "get-content", "out-string",
+        "select-object", "where-object", "select-string", "sls", "sort-object", "measure-object", "get-content", "get-childitem", "gci", "out-string",
+        "test-path", "copy-item", "cpi", "move-item", "mi", "remove-item", "ri", "new-item", "ni", "set-content", "sc", "add-content", "ac", "out-file", "write-output", "write-host", "format-table", "ft", "format-list", "fl",
         "taskkill", "kill", "pkill", "killall",
-        "bapedge", "ltd-agent"
+        "get-acl", "get-command", "resolve-path", "icacls", "attrib",
+        "bapedge", "ltd-agent", "bapcontrolplane", "bapgateway", "bapmcp", "bap", "bapdashboard"
     ].contains(context.executable)
 };
 
@@ -664,7 +679,8 @@ forbid (
     action == Action::"Execute",
     resource == Command::"CLI"
 ) when {
-    context.escapes_workspace == true
+    context.escapes_workspace == true &&
+    (context.action_type == "write" || context.action_type == "delete" || context.action_type == "tamper")
 };
 
 forbid (

@@ -1472,7 +1472,7 @@ func isMutatingShellCommand(cmd string) bool {
 	destructive := []string{
 		"rm ", "rm -", "del ", "erase ", "remove-item", "unlink", "rmdir", "rd /", "rd ",
 		"mkdir ", "md ", "touch ", "cp ", "copy ", "mv ", "move ", "ren ", "rename ",
-		"set-content", "out-file", "add-content",
+		"set-content", "out-file", "add-content", "new-item", "sc ", "ac ", "ni ", "tee ",
 	}
 	for _, d := range destructive {
 		if strings.Contains(lower, d) {
@@ -2987,9 +2987,11 @@ func main() {
 				} else if stepUpDec == "session" || stepUpDec == "s" {
 					_ = grantTargetPermission(workspaceRoot, sessionID, target, "session", []string{"write", "delete"})
 				} else if stepUpDec == "" && os.Getenv("BAP_NON_INTERACTIVE") != "1" && os.Getenv("CI") == "" {
-					hitlDecision := promptTerminalHITL(workspaceRoot, sessionID, target, "Bash")
+					hitlDecision := promptTerminalHITL(workspaceRoot, sessionID, target, payload.ToolName)
 					switch hitlDecision {
-					case "approve_once", "session_trust", "project_trust", "global_trust":
+					case "approve_once":
+						_ = grantTargetPermission(workspaceRoot, sessionID, target, "session", []string{"write", "delete"})
+					case "session_trust", "project_trust", "global_trust":
 						// allowed to proceed to execution
 					default:
 						outputDecision("deny", fmt.Sprintf("Directory traversal outside workspace is forbidden in command: %s", command), fmt.Sprintf("Commands modifying files outside workspace require authorization. Authorize via 'bapedge trust %q --project' (or --session / --global).", target))
@@ -3152,6 +3154,40 @@ func main() {
 		if reason == "" {
 			reason = "Command execution denied by bapedge Cedar security policy"
 		}
+
+		// If denial was triggered by escaping workspace, prompt interactive terminal HITL if in interactive session
+		if checkCommandWorkspaceEscape(workspaceRoot, command) || strings.Contains(strings.ToLower(reason), "escapes_workspace") || strings.Contains(strings.ToLower(reason), "outside workspace") || strings.Contains(strings.ToLower(reason), "policy2") {
+			target := extractCommandTarget(command)
+			if target == "" {
+				target = command
+			}
+			stepUpDec := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_STEPUP_DECISION")))
+			if stepUpDec == "" && os.Getenv("BAP_NON_INTERACTIVE") != "1" && os.Getenv("CI") == "" {
+				hitlDecision := promptTerminalHITL(workspaceRoot, sessionID, target, payload.ToolName)
+				switch hitlDecision {
+				case "approve_once", "session_trust", "project_trust", "global_trust":
+					_ = grantTargetPermission(workspaceRoot, sessionID, target, "session", []string{"write", "delete"})
+					caller := inspectCallerProcess(ppid)
+					callerSource := caller.AppID
+					if callerSource == "" {
+						callerSource = "claude-code"
+					}
+					shellArg := ""
+					if strings.EqualFold(payload.ToolName, "powershell") || strings.EqualFold(payload.ToolName, "pwsh") {
+						shellArg = " --shell powershell"
+					}
+					execBin := ltdBin
+					baseName := filepath.Base(ltdBin)
+					if lookPath, err := exec.LookPath(baseName); err == nil && lookPath != "" {
+						execBin = baseName
+					}
+					rewritten := fmt.Sprintf(`%s exec%s --session-id "%s" --source "%s" --cmd-b64 "%s"`, execBin, shellArg, sessionID, callerSource, cmdB64)
+					outputDecisionWithUpdatedInput("allow", "", fmt.Sprintf("[STEP-UP AUTHORIZED] Human operator authorized execution: %s", command), &ToolInput{Command: rewritten})
+					return
+				}
+			}
+		}
+
 		contextMsg := reason
 		if execResp.Suggestion != "" {
 			contextMsg = fmt.Sprintf("%s. SUGGESTION: %s", reason, execResp.Suggestion)

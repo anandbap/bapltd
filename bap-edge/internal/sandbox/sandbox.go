@@ -96,6 +96,15 @@ func ParseCommand(cmdStr string) (string, string) {
 		}
 	}
 
+	rawLower := strings.ToLower(rawExec)
+	if strings.HasPrefix(rawLower, "$") || strings.Contains(rawLower, "=") ||
+		strings.HasPrefix(rawLower, "@") || strings.HasPrefix(rawLower, "{") ||
+		strings.HasPrefix(rawLower, "#") || strings.HasPrefix(rawLower, "//") ||
+		strings.HasPrefix(rawLower, "---") || strings.HasPrefix(rawLower, "===") ||
+		strings.HasPrefix(rawLower, "***") || strings.HasPrefix(rawLower, "###") {
+		return "write-output", args
+	}
+
 	// Normalize directory separators and extract base executable name
 	normalized := strings.ReplaceAll(rawExec, "\\", "/")
 	base := path.Base(normalized)

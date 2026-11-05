@@ -41,8 +41,9 @@ const (
 )
 
 type token struct {
-	typ   TokenType
-	value string
+	typ      TokenType
+	value    string
+	isQuoted bool
 }
 
 // ParseAST parses a raw shell command string into an ASTPipeline of ASTNodes.
@@ -73,32 +74,57 @@ func ParseAST(fullCommand string) (*ASTPipeline, error) {
 		if len(args) > 0 {
 			rawArg := args[0]
 			cleanArg := rawArg
-			// Strip leading parenthesis, quotes, or PowerShell syntax ONLY if starting with parenthesis
-			if strings.HasPrefix(rawArg, "(") {
-				cleanArg = strings.TrimLeft(rawArg, "([{\"'$@&")
-				if idx := strings.IndexAny(cleanArg, ")."); idx != -1 {
-					cleanArg = cleanArg[:idx]
-				}
-			}
-			target := rawArg
-			if cleanArg != "" {
-				target = cleanArg
-			}
-			normPath := strings.ReplaceAll(target, "\\", "/")
-			exec = path.Base(strings.TrimSuffix(normPath, ".exe"))
 			fullCmd = strings.Join(args, " ")
 
-			// Recognize PowerShell / script string literal expressions or decorative banners
-			// e.g. "--- EXEs (recursive) ---", "=== Status ===", calculated property hash tables @{...}, or bare string output
-			lowerExec := strings.ToLower(exec)
-			if strings.HasPrefix(lowerExec, "---") || strings.HasPrefix(lowerExec, "===") ||
-				strings.HasPrefix(lowerExec, "***") || strings.HasPrefix(lowerExec, "###") ||
-				strings.HasPrefix(lowerExec, "#") || strings.HasPrefix(lowerExec, "//") ||
-				strings.HasPrefix(lowerExec, "@") || strings.HasPrefix(lowerExec, "{") ||
-				strings.Contains(lowerExec, "=") || strings.HasPrefix(lowerExec, "$") ||
-				strings.Contains(exec, " ") ||
-				(len(args) == 1 && (strings.HasPrefix(fullCmd, "\"") || strings.HasPrefix(fullCmd, "'"))) {
-				exec = "write-output"
+			if rawArg == "&" && len(args) > 1 {
+				args = args[1:]
+				rawArg = args[0]
+				cleanArg = rawArg
+			}
+
+			lowerRaw := strings.ToLower(rawArg)
+			if strings.HasPrefix(lowerRaw, "$") || strings.Contains(lowerRaw, "=") ||
+				strings.HasPrefix(lowerRaw, "@") || strings.HasPrefix(lowerRaw, "{") ||
+				strings.HasPrefix(lowerRaw, "#") || strings.HasPrefix(lowerRaw, "//") ||
+				strings.HasPrefix(lowerRaw, "---") || strings.HasPrefix(lowerRaw, "===") ||
+				strings.HasPrefix(lowerRaw, "***") || strings.HasPrefix(lowerRaw, "###") ||
+				(len(args) == 1 && (currentTokens[0].isQuoted || strings.HasPrefix(fullCmd, "\"") || strings.HasPrefix(fullCmd, "'"))) {
+				if strings.HasPrefix(lowerRaw, "$") && len(args) > 1 {
+					subCmd := strings.ToLower(args[1])
+					if subCmd == "status" || subCmd == "branch" || subCmd == "log" || subCmd == "diff" || subCmd == "checkout" || subCmd == "add" || subCmd == "commit" {
+						exec = "git"
+					} else {
+						exec = "write-output"
+					}
+				} else {
+					exec = "write-output"
+				}
+			} else {
+				// Strip leading parenthesis, quotes, or PowerShell syntax ONLY if starting with parenthesis
+				if strings.HasPrefix(rawArg, "(") {
+					cleanArg = strings.TrimLeft(rawArg, "([{\"'$@&")
+					if idx := strings.IndexAny(cleanArg, ")."); idx != -1 {
+						cleanArg = cleanArg[:idx]
+					}
+				}
+				target := rawArg
+				if cleanArg != "" {
+					target = cleanArg
+				}
+				normPath := strings.ReplaceAll(target, "\\", "/")
+				exec = path.Base(strings.TrimSuffix(normPath, ".exe"))
+
+				// Recognize PowerShell / script string literal expressions or decorative banners
+				lowerExec := strings.ToLower(exec)
+				if strings.HasPrefix(lowerExec, "---") || strings.HasPrefix(lowerExec, "===") ||
+					strings.HasPrefix(lowerExec, "***") || strings.HasPrefix(lowerExec, "###") ||
+					strings.HasPrefix(lowerExec, "#") || strings.HasPrefix(lowerExec, "//") ||
+					strings.HasPrefix(lowerExec, "@") || strings.HasPrefix(lowerExec, "{") ||
+					strings.Contains(lowerExec, "=") || strings.HasPrefix(lowerExec, "$") ||
+					strings.Contains(exec, " ") ||
+					(len(args) == 1 && (strings.HasPrefix(fullCmd, "\"") || strings.HasPrefix(fullCmd, "'"))) {
+					exec = "write-output"
+				}
 			}
 		}
 
@@ -306,6 +332,7 @@ func tokenizeShell(cmd string) []token {
 		braceDepth := 0
 		parenDepth := 0
 		bracketDepth := 0
+		wasQuoted := false
 
 		for i < n {
 			c := runes[i]
@@ -352,6 +379,9 @@ func tokenizeShell(cmd string) []token {
 			}
 
 			if c == '\'' {
+				if wordBuilder.Len() == 0 {
+					wasQuoted = true
+				}
 				// Single quoted literal string
 				if braceDepth > 0 || parenDepth > 0 || bracketDepth > 0 {
 					wordBuilder.WriteRune(c)
@@ -371,6 +401,9 @@ func tokenizeShell(cmd string) []token {
 			}
 
 			if c == '"' {
+				if wordBuilder.Len() == 0 {
+					wasQuoted = true
+				}
 				// Double quoted string (preserves content, allows \" and nested substitutions)
 				if braceDepth > 0 || parenDepth > 0 || bracketDepth > 0 {
 					wordBuilder.WriteRune(c)
@@ -403,7 +436,7 @@ func tokenizeShell(cmd string) []token {
 
 		val := wordBuilder.String()
 		if val != "" {
-			tokens = append(tokens, token{typ: TokenWord, value: val})
+			tokens = append(tokens, token{typ: TokenWord, value: val, isQuoted: wasQuoted})
 		}
 	}
 
