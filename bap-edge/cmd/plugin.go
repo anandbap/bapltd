@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"bap-edge/internal/authz"
 	"bap-edge/internal/state"
 	"bap-edge/pkg/types"
 )
@@ -547,26 +548,48 @@ func PrintDefenseInDepthLayers(w io.Writer, workspace string) {
 // Inspection & Health Detection
 // -----------------------------------------------------------------------------
 
+func isGlobalOrCurrentWorkspace(workspace string) bool {
+	if workspace == "" || workspace == "." {
+		return true
+	}
+	wsRoot := authz.GetWorkspaceRoot()
+	if wsRoot != "" && filepath.Clean(workspace) == filepath.Clean(wsRoot) {
+		return true
+	}
+	if cwd, err := os.Getwd(); err == nil && filepath.Clean(workspace) == filepath.Clean(cwd) {
+		return true
+	}
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		if filepath.Clean(workspace) == filepath.Clean(home) || filepath.Clean(workspace) == filepath.Clean(filepath.Join(home, "bin")) {
+			return true
+		}
+	}
+	return false
+}
+
 func InspectClaudePlugin(workspace string) types.PluginHealthRecord {
 	manifestCandidates := []string{
 		filepath.Join(workspace, "plugins", "claude", ".claude-plugin", "plugin.json"),
 		filepath.Join(workspace, ".claude", "plugins", "claude", ".claude-plugin", "plugin.json"),
 		filepath.Join(workspace, ".claude", "plugin.json"),
 	}
-	home, _ := os.UserHomeDir()
-	if home != "" {
-		manifestCandidates = append(manifestCandidates,
-			filepath.Join(home, ".claude", "plugins", "claude", ".claude-plugin", "plugin.json"),
-			filepath.Join(home, ".claude", "plugins", "claude", "plugin.json"),
-			filepath.Join(home, ".bap", "plugins", "claude", ".claude-plugin", "plugin.json"),
-			filepath.Join(home, "bin", "plugins", "claude", ".claude-plugin", "plugin.json"),
-		)
-	}
-	if execPath, err := os.Executable(); err == nil {
-		execDir := filepath.Dir(execPath)
-		manifestCandidates = append(manifestCandidates,
-			filepath.Join(execDir, "plugins", "claude", ".claude-plugin", "plugin.json"),
-		)
+	if isGlobalOrCurrentWorkspace(workspace) {
+		home, _ := os.UserHomeDir()
+		if home != "" {
+			manifestCandidates = append(manifestCandidates,
+				filepath.Join(home, ".claude", "plugins", "claude", ".claude-plugin", "plugin.json"),
+				filepath.Join(home, ".claude", "plugins", "claude", "plugin.json"),
+				filepath.Join(home, ".bap", "plugins", "claude", ".claude-plugin", "plugin.json"),
+				filepath.Join(home, "bin", "plugins", "claude", ".claude-plugin", "plugin.json"),
+			)
+		}
+		if execPath, err := os.Executable(); err == nil {
+			execDir := filepath.Dir(execPath)
+			manifestCandidates = append(manifestCandidates,
+				filepath.Join(execDir, "plugins", "claude", ".claude-plugin", "plugin.json"),
+			)
+		}
 	}
 
 	manifestPath := manifestCandidates[0]
@@ -637,19 +660,21 @@ func InspectCopilotPlugin(workspace string) types.PluginHealthRecord {
 		filepath.Join(workspace, ".vscode", "plugins", "copilot", "plugin.json"),
 		filepath.Join(workspace, ".github", "copilot", "plugin.json"),
 	}
-	home, _ := os.UserHomeDir()
-	if home != "" {
-		manifestCandidates = append(manifestCandidates,
-			filepath.Join(home, ".copilot", "plugins", "copilot", "plugin.json"),
-			filepath.Join(home, ".bap", "plugins", "copilot", "plugin.json"),
-			filepath.Join(home, "bin", "plugins", "copilot", "plugin.json"),
-		)
-	}
-	if execPath, err := os.Executable(); err == nil {
-		execDir := filepath.Dir(execPath)
-		manifestCandidates = append(manifestCandidates,
-			filepath.Join(execDir, "plugins", "copilot", "plugin.json"),
-		)
+	if isGlobalOrCurrentWorkspace(workspace) {
+		home, _ := os.UserHomeDir()
+		if home != "" {
+			manifestCandidates = append(manifestCandidates,
+				filepath.Join(home, ".copilot", "plugins", "copilot", "plugin.json"),
+				filepath.Join(home, ".bap", "plugins", "copilot", "plugin.json"),
+				filepath.Join(home, "bin", "plugins", "copilot", "plugin.json"),
+			)
+		}
+		if execPath, err := os.Executable(); err == nil {
+			execDir := filepath.Dir(execPath)
+			manifestCandidates = append(manifestCandidates,
+				filepath.Join(execDir, "plugins", "copilot", "plugin.json"),
+			)
+		}
 	}
 
 	manifestPath := manifestCandidates[0]
@@ -702,19 +727,21 @@ func InspectAntigravityPlugin(workspace string) types.PluginHealthRecord {
 		filepath.Join(workspace, "plugins", "antigravity", "plugin.json"),
 		filepath.Join(workspace, ".agents", "plugins", "bap-antigravity", "plugin.json"),
 	}
-	home, _ := os.UserHomeDir()
-	if home != "" {
-		manifestCandidates = append(manifestCandidates,
-			filepath.Join(home, ".gemini", "config", "plugins", "bap-antigravity", "plugin.json"),
-			filepath.Join(home, ".bap", "plugins", "antigravity", "plugin.json"),
-			filepath.Join(home, "bin", "plugins", "antigravity", "plugin.json"),
-		)
-	}
-	if execPath, err := os.Executable(); err == nil {
-		execDir := filepath.Dir(execPath)
-		manifestCandidates = append(manifestCandidates,
-			filepath.Join(execDir, "plugins", "antigravity", "plugin.json"),
-		)
+	if isGlobalOrCurrentWorkspace(workspace) {
+		home, _ := os.UserHomeDir()
+		if home != "" {
+			manifestCandidates = append(manifestCandidates,
+				filepath.Join(home, ".gemini", "config", "plugins", "bap-antigravity", "plugin.json"),
+				filepath.Join(home, ".bap", "plugins", "antigravity", "plugin.json"),
+				filepath.Join(home, "bin", "plugins", "antigravity", "plugin.json"),
+			)
+		}
+		if execPath, err := os.Executable(); err == nil {
+			execDir := filepath.Dir(execPath)
+			manifestCandidates = append(manifestCandidates,
+				filepath.Join(execDir, "plugins", "antigravity", "plugin.json"),
+			)
+		}
 	}
 
 	manifestPath := manifestCandidates[0]
@@ -765,19 +792,21 @@ func InspectOpenCodePlugin(workspace string) types.PluginHealthRecord {
 		filepath.Join(workspace, "plugins", "opencode", "plugin.json"),
 		filepath.Join(workspace, ".opencode", "plugins", "bap-opencode", "plugin.json"),
 	}
-	home, _ := os.UserHomeDir()
-	if home != "" {
-		manifestCandidates = append(manifestCandidates,
-			filepath.Join(home, ".config", "opencode", "plugins", "bap-opencode", "plugin.json"),
-			filepath.Join(home, ".bap", "plugins", "opencode", "plugin.json"),
-			filepath.Join(home, "bin", "plugins", "opencode", "plugin.json"),
-		)
-	}
-	if execPath, err := os.Executable(); err == nil {
-		execDir := filepath.Dir(execPath)
-		manifestCandidates = append(manifestCandidates,
-			filepath.Join(execDir, "plugins", "opencode", "plugin.json"),
-		)
+	if isGlobalOrCurrentWorkspace(workspace) {
+		home, _ := os.UserHomeDir()
+		if home != "" {
+			manifestCandidates = append(manifestCandidates,
+				filepath.Join(home, ".config", "opencode", "plugins", "bap-opencode", "plugin.json"),
+				filepath.Join(home, ".bap", "plugins", "opencode", "plugin.json"),
+				filepath.Join(home, "bin", "plugins", "opencode", "plugin.json"),
+			)
+		}
+		if execPath, err := os.Executable(); err == nil {
+			execDir := filepath.Dir(execPath)
+			manifestCandidates = append(manifestCandidates,
+				filepath.Join(execDir, "plugins", "opencode", "plugin.json"),
+			)
+		}
 	}
 
 	manifestPath := manifestCandidates[0]
@@ -828,19 +857,21 @@ func InspectCodexPlugin(workspace string) types.PluginHealthRecord {
 		filepath.Join(workspace, "plugins", "codex", "plugin.json"),
 		filepath.Join(workspace, ".codex", "plugin.json"),
 	}
-	home, _ := os.UserHomeDir()
-	if home != "" {
-		manifestCandidates = append(manifestCandidates,
-			filepath.Join(home, ".codex", "plugin.json"),
-			filepath.Join(home, ".bap", "plugins", "codex", "plugin.json"),
-			filepath.Join(home, "bin", "plugins", "codex", "plugin.json"),
-		)
-	}
-	if execPath, err := os.Executable(); err == nil {
-		execDir := filepath.Dir(execPath)
-		manifestCandidates = append(manifestCandidates,
-			filepath.Join(execDir, "plugins", "codex", "plugin.json"),
-		)
+	if isGlobalOrCurrentWorkspace(workspace) {
+		home, _ := os.UserHomeDir()
+		if home != "" {
+			manifestCandidates = append(manifestCandidates,
+				filepath.Join(home, ".codex", "plugin.json"),
+				filepath.Join(home, ".bap", "plugins", "codex", "plugin.json"),
+				filepath.Join(home, "bin", "plugins", "codex", "plugin.json"),
+			)
+		}
+		if execPath, err := os.Executable(); err == nil {
+			execDir := filepath.Dir(execPath)
+			manifestCandidates = append(manifestCandidates,
+				filepath.Join(execDir, "plugins", "codex", "plugin.json"),
+			)
+		}
 	}
 
 	manifestPath := manifestCandidates[0]
