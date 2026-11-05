@@ -56,6 +56,7 @@ type Session struct {
 	GrantID         string   `json:"grant_id,omitempty"`
 	Lineage         []string `json:"lineage,omitempty"`
 	LineageTree     string   `json:"lineage_tree,omitempty"`
+	ReconciledTo    string   `json:"reconciled_to,omitempty"`
 }
 
 // IntentContext is mission context produced deterministically at BAP Edge.
@@ -411,6 +412,7 @@ func (s *Store) Start(req SessionStartRequest) (*Session, error) {
 			existing.PromptCount++
 			s.recordIntentLocked(existing.SessionID, existing.Intent.Primary, now)
 		}
+		s.reconcileObservedSessionsLocked(existing.ClientPID, existing.Hostname, existing.InstanceID, existing.SessionID, existing)
 		s.saveSessionToDB(existing)
 		return existing, nil
 	}
@@ -496,8 +498,32 @@ func (s *Store) Start(req SessionStartRequest) (*Session, error) {
 	s.sessions[sessionID] = sess
 	s.order = append(s.order, sessionID)
 	addReportingLayer(sess, req.ReportingLayer)
+	s.reconcileObservedSessionsLocked(sess.ClientPID, sess.Hostname, sess.InstanceID, sess.SessionID, sess)
 	s.saveSessionToDB(sess)
 	return sess, nil
+}
+
+func (s *Store) reconcileObservedSessionsLocked(clientPID int, hostname, instanceID, managedSessionID string, targetSess *Session) {
+	if clientPID <= 0 || strings.HasPrefix(managedSessionID, "observed-") {
+		return
+	}
+	for _, obs := range s.sessions {
+		if strings.HasPrefix(obs.SessionID, "observed-") && obs.ClientPID == clientPID {
+			sameHost := obs.Hostname == "" || hostname == "" || strings.EqualFold(obs.Hostname, hostname)
+			sameInst := obs.InstanceID == "" || instanceID == "" || strings.EqualFold(obs.InstanceID, instanceID)
+			if sameHost && sameInst {
+				obs.Status = "reconciled"
+				obs.CloseReason = fmt.Sprintf("Reconciled with bapedge: matched PID %d -> %s", clientPID, managedSessionID)
+				obs.ReconciledTo = managedSessionID
+				if targetSess != nil {
+					for _, l := range obs.ReportingLayers {
+						addReportingLayer(targetSess, l)
+					}
+				}
+				s.saveSessionToDB(obs)
+			}
+		}
+	}
 }
 
 // End marks a session as closed.

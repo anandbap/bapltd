@@ -6,8 +6,6 @@ import (
 	"bap-edge/internal/state"
 	"bap-edge/pkg/version"
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,12 +71,7 @@ func (s *Store) Directory() string {
 
 // ComputeDigest computes SHA-256 over cedarCode + schemaJSON
 func ComputeDigest(cedarCode, schemaJSON string) string {
-	h := sha256.New()
-	h.Write([]byte(cedarCode))
-	if schemaJSON != "" {
-		h.Write([]byte(schemaJSON))
-	}
-	return hex.EncodeToString(h.Sum(nil))
+	return authz.ComputePolicyDigest(cedarCode, schemaJSON)
 }
 
 // Accept stores and atomically updates the local policy cache
@@ -137,7 +130,8 @@ func (s *Store) LoadState() (PolicyState, error) {
 	return state, nil
 }
 
-// Current returns the cached policy path and verifies kill-switch is not active.
+// Current returns the cached policy path and verifies kill-switch is not active
+// and cryptographic SHA-256 digest integrity is intact.
 // If the cache directory is uninitialized, it falls back to checking local search paths.
 func (s *Store) Current() (string, string, PolicyState, error) {
 	state, err := s.LoadState()
@@ -147,11 +141,23 @@ func (s *Store) Current() (string, string, PolicyState, error) {
 		}
 
 		cedarPath := filepath.Join(s.directory, "policy.cedar")
-		if _, err := os.Stat(cedarPath); err == nil {
+		if data, err := os.ReadFile(cedarPath); err == nil {
 			schemaPath := filepath.Join(s.directory, "schema.json")
-			if _, err := os.Stat(schemaPath); err != nil {
+			var schemaData []byte
+			if sData, sErr := os.ReadFile(schemaPath); sErr == nil {
+				schemaData = sData
+			} else {
 				schemaPath = ""
 			}
+
+			// Cryptographic anti-tamper verification
+			if state.Digest != "" {
+				computed := ComputeDigest(string(data), string(schemaData))
+				if computed != state.Digest && ComputeDigest(string(data), "") != state.Digest {
+					return "", "", state, fmt.Errorf("%w: cached policy.cedar has been tampered with or modified locally (expected %s, got %s)", ErrDigestMismatch, state.Digest, computed)
+				}
+			}
+
 			return cedarPath, schemaPath, state, nil
 		}
 	}

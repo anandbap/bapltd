@@ -2,6 +2,8 @@ package authz
 
 import (
 	"bap-edge/internal/state"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -47,6 +49,16 @@ func (a *Authorizer) GetIdentity() PrincipalIdentity {
 	return a.identity
 }
 
+// ComputePolicyDigest computes SHA-256 over cedarCode + schemaJSON
+func ComputePolicyDigest(cedarCode, schemaJSON string) string {
+	h := sha256.New()
+	h.Write([]byte(cedarCode))
+	if schemaJSON != "" {
+		h.Write([]byte(schemaJSON))
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // NewAuthorizer loads the Cedar policy and optional schema from specified or standard locations.
 func NewAuthorizer(policyPath string) (*Authorizer, error) {
 	resolvedPolicyPath, err := findFile(policyPath, "policy.cedar")
@@ -58,21 +70,36 @@ func NewAuthorizer(policyPath string) (*Authorizer, error) {
 		return nil, fmt.Errorf("policy.cedar not available: zero-trust policy file missing; bapedge fail-closed")
 	}
 
-	// Check if kill-switch is active in policy-state.json
+	// Check if kill-switch is active or policy-state has digest to verify anti-tamper
 	policyDir := filepath.Dir(resolvedPolicyPath)
 	candidates := []string{
 		filepath.Join(policyDir, ".bap", "policy-state.json"),
 		filepath.Join(policyDir, "policy-state.json"),
+		filepath.Join(state.PolicyDir(), "policy-state.json"),
 		filepath.Join(".bap", "policy-state.json"),
 		"policy-state.json",
 	}
 	for _, statePath := range candidates {
 		if stateData, stateErr := os.ReadFile(statePath); stateErr == nil {
-			var state struct {
-				KillSwitch bool `json:"kill_switch"`
+			var pState struct {
+				KillSwitch bool   `json:"kill_switch"`
+				Digest     string `json:"digest"`
 			}
-			if json.Unmarshal(stateData, &state) == nil && state.KillSwitch {
-				return nil, fmt.Errorf("emergency kill-switch is active; all executions are blocked")
+			if json.Unmarshal(stateData, &pState) == nil {
+				if pState.KillSwitch {
+					return nil, fmt.Errorf("emergency kill-switch is active; all executions are blocked")
+				}
+				if pState.Digest != "" {
+					schemaPathCandidate := filepath.Join(policyDir, "schema.json")
+					var schemaData []byte
+					if resolvedSchemaPath, sErr := findFile(schemaPathCandidate, "schema.json"); sErr == nil {
+						schemaData, _ = os.ReadFile(resolvedSchemaPath)
+					}
+					computed := ComputePolicyDigest(string(policyData), string(schemaData))
+					if computed != pState.Digest && ComputePolicyDigest(string(policyData), "") != pState.Digest {
+						return nil, fmt.Errorf("SECURITY ALERT: local policy.cedar integrity violation (expected digest %s, got %s); policy file has been modified or tampered with on disk", pState.Digest, computed)
+					}
+				}
 			}
 		}
 	}

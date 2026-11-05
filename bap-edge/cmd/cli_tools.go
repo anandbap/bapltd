@@ -579,6 +579,18 @@ func RunStatus(args []string) error {
 			receiptAcked = true
 		}
 	}
+	type receiptHistoryItem struct {
+		RunID             string    `json:"run_id"`
+		Epoch             int64     `json:"epoch"`
+		Acknowledged      bool      `json:"acknowledged"`
+		Status            string    `json:"status"`
+		ObservationsCount int       `json:"observations_count"`
+		ReceivedAt        time.Time `json:"received_at"`
+	}
+	var receiptHistory []receiptHistoryItem
+	if hData, hErr := os.ReadFile(filepath.Join(discoveryDir, "receipts-history.json")); hErr == nil {
+		_ = json.Unmarshal(hData, &receiptHistory)
+	}
 	var discReport discoverymeta.Report
 	if repData, repErr := os.ReadFile(filepath.Join(discoveryDir, "latest-report.json")); repErr == nil {
 		_ = json.Unmarshal(repData, &discReport)
@@ -735,6 +747,7 @@ func RunStatus(args []string) error {
 				"receipt_acknowledged": receiptAcked,
 				"receipt_run_id":       discReceipt.RunID,
 				"receipt_time":         discReceipt.ReceivedAt,
+				"receipt_history":      receiptHistory,
 				"items":                discoveredItems,
 			},
 			"policy": map[string]any{
@@ -898,6 +911,17 @@ func RunStatus(args []string) error {
 		fmt.Printf("    • Scan Receipt:       PENDING upload to Control Plane (%d observation(s) spooled locally)\n", len(discoveredItems))
 	} else {
 		fmt.Printf("    • Scan Receipt:       QUEUED LOCALLY (%d observation(s) spooled locally; control plane offline)\n", len(discoveredItems))
+	}
+	if len(receiptHistory) > 0 {
+		fmt.Printf("    • Receipt History (Top %d):\n", len(receiptHistory))
+		for _, rh := range receiptHistory {
+			ackStr := "PENDING"
+			if rh.Acknowledged {
+				ackStr = "ACK"
+			}
+			fmt.Printf("      - [%-7s] RunID: %-36s Epoch: %-2d Obs: %-2d (%s)\n",
+				ackStr, rh.RunID, rh.Epoch, rh.ObservationsCount, rh.ReceivedAt.Format("15:04:05 MST"))
+		}
 	}
 
 	// 3. Inspect Cached Cedar Policy Bundle

@@ -4167,6 +4167,45 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - **Dashboard & Contracts**: `bap-controlplane/internal/dashboardui/web/v3.html` (Stop session button & stopped badge), `bap-controlplane/internal/dashboardui/web/discovery.js` (client deduplication), `tests/test_v3_controls.cjs` (Stop session contract verification).
   - **CI Test Suite Stabilization**: Fixed lifecycle matrix hook tests (`test_agent_lifecycle_matrix.py`), executive demo stop controls (`test_executive_demo.py`), stop/revoke/restore lifecycle (`test_stop_revoke_lifecycle.py`), and verified 100% clean passes across Go (40+ packages), Node (3 contract suites), and Python suites.
 
+#### Story BAP-815: Multi-Agent Process Tree Deduplication, PID-Based Session Reconciliation, Scan Receipt Rolling History & Local Policy Anti-Tamper Enforcement
+- **Type**: Story | **Points**: 8 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**:
+  Resolve duplicate observed session IDs, unify multi-agent process trees with edge broker tracking, build top 8 rolling scan receipt history, and cryptographically tamper-proof local Cedar policies:
+  1. **Multi-Agent Process Tree Deduplication & Native Session Adoption**:
+     - **Broad Multi-Agent App Support**: Extended `bap-edge/cmd/agent_observation.go` `agentApp()` to recognize Claude Code (`claude`, `claude-code`), Google Antigravity (`antigravity`, `agy`), OpenCode (`opencode`, `open-code`), OpenAI Codex (`codex`, `openai-codex`), GitHub Copilot (`copilot`, `github-copilot`), Cursor, and Gemini CLI agents.
+     - **Process Hierarchy Deduplication**: AI agent CLIs (especially Claude Code) spawn child processes (e.g. node parent, child worker, sub-shell wrappers). Added ancestor inspection (`hasAncestorWithExe`) in `agent_observation.go` so child processes in the same process tree are deduplicated to the root agent PID, eliminating the duplicate `observed-` session cards previously generated.
+     - **Native Session Adoption**: When an agent runs under `bapedge` governance, the session marker in `.bapstate/sessions/<session_id>.json` indexes the process ID. The observation scanner checks active session markers and skips processes already actively governed by `bapedge`.
+  2. **PID-Based Session Reconciliation & Matched Status Display**:
+     - **Control Plane Ingestion Reconciliation**: In `bap-controlplane/internal/session/store.go` and `bap-controlplane/internal/session/reporting_identity.go`, implemented deterministic PID-based reconciliation. When an `observed-` session and a managed session share the same `ClientPID` on the same workstation/instance, or when `bapedge exec` broker events arrive for that PID, the observed session is reconciled (`Status = "reconciled"`, `ReconciledTo = managedSessionID`), preventing idle timeout decay from marking active governed agents as `Offline`.
+     - **V3 Cockpit Live Reconciliation**: Updated `v3.html` to build a live PID index `managedByPID[host::client_pid]`. Reconciled cards display a prominent `Matched with bapedge` badge and `Reconciled` status. Standalone observed sessions with active broker telemetry render as `Live · Matched with bapedge`.
+  3. **Scan Receipt Top-8 Rolling History**:
+     - **Edge Rolling History Storage**: In `bap-edge/cmd/discovery_worker.go`, added `recordScanReceipt` to maintain rolling top 8 scan receipt history in `.bapstate/receipts-history.json`, recording receipt ID, run ID, scan timestamp, tool count, and control plane acknowledgment status.
+     - **CLI Status & JSON Output**: In `bap-edge/cmd/cli_tools.go`, updated `RunStatus` to read `receipts-history.json`, expose `receipt_history` in `--json`, and format a clean top-8 rolling receipt history table in `bap status`.
+  4. **Cryptographic Anti-Tamper Verification for Local Policy**:
+     - **Cryptographic Digest Enforcement**: Local `policy.cedar` and `schema.json` are written with restricted `0600` file permissions in `.bapstate/policy/` and `.bap/`.
+     - **Fail-Closed Validation**: In `bap-edge/internal/authz/authorizer.go` (`NewAuthorizer`) and `bap-edge/internal/policystore/store.go` (`Current()`), the SHA-256 digest of `policy.cedar` (and `schema.json`) is computed and validated against `policy-state.json`. If an attacker or local process tampers with `policy.cedar` on disk without a valid control plane bundle signature, authorizer initialization fails closed with `SECURITY ALERT: local policy.cedar integrity violation`, completely blocking unauthorized execution.
+
+- **Acceptance Criteria**:
+  - `Given` an agent (Claude Code, Antigravity, OpenCode, Codex, Copilot) running on a workstation,
+  - `When` the discovery scanner runs,
+  - `Then` child processes in the agent's process tree are deduplicated to the root PID, generating at most 1 observed entry.
+  - `Given` an observed session backed by `bapedge` broker execution on the same PID,
+  - `When` telemetry is ingested or displayed in the V3 Cockpit,
+  - `Then` the session is marked `Matched with bapedge` and `Reconciled` rather than going offline.
+  - `Given` a workstation performing discovery scans,
+  - `When` running `bap status` or `bap status --json`,
+  - `Then` a rolling history of the top 8 scan receipts is maintained and displayed with timestamps and acknowledgment statuses.
+  - `Given` a locally stored `policy.cedar`,
+  - `When` an attacker or rogue script modifies the file on disk,
+  - `Then` `NewAuthorizer` and `policystore.Current()` detect the SHA-256 mismatch and fail closed with a security alert, rejecting all executions.
+
+- **Implementation Evidence**:
+  - **Deduplication & Recognition**: `bap-edge/cmd/agent_observation.go` (`agentApp` recognition, `hasAncestorWithExe` process tree dedup, native session adoption), `bap-edge/cmd/agent_observation_test.go` (`TestMultiAgentObservationRecognition`, `TestProcessTreeDeduplication`).
+  - **PID Reconciliation**: `bap-controlplane/internal/session/store.go` (`ReconciledTo`, `reconcileObservedSessionsLocked`), `bap-controlplane/internal/session/reporting_identity.go` (`ReserveReportingSessions`), `bap-controlplane/internal/session/pid_reconciliation_test.go` (`TestPIDReconciliation_BidirectionalOrder`), `bap-controlplane/internal/dashboardui/web/v3.html` (`managedByPID`, `Matched with bapedge` badge).
+  - **Top-8 Receipt History**: `bap-edge/cmd/discovery_worker.go` (`recordScanReceipt`, `receipts-history.json`), `bap-edge/cmd/cli_tools.go` (`receipt_history` in `bap status` and `--json`).
+  - **Anti-Tamper Integrity**: `bap-edge/internal/authz/authorizer.go` (`ComputePolicyDigest`, SHA-256 verification in `NewAuthorizer`), `bap-edge/internal/policystore/store.go` (integrity verification in `Current()`), `bap-edge/internal/authz/tamper_test.go` (`TestAuthorizer_TamperDetection`), `bap-edge/internal/policystore/store_test.go` (tamper detection test).
+
+
 
 
 

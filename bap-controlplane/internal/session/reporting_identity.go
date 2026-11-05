@@ -37,9 +37,25 @@ func (s *Store) ReserveReportingSessions(events []audit.Event, svid func(string)
 		if app == "" {
 			app = "agent"
 		}
+		status := "active"
+		closeReason := ""
+		reconciledTo := ""
+		if ev.ClientPID > 0 && len(ev.SessionID) > 9 && ev.SessionID[:9] == "observed-" {
+			for _, managed := range s.sessions {
+				if (len(managed.SessionID) <= 9 || managed.SessionID[:9] != "observed-") && managed.ClientPID == ev.ClientPID && (managed.Status == "active" || managed.Status == "closed") {
+					sameInst := managed.InstanceID == "" || ev.InstanceID == "" || managed.InstanceID == ev.InstanceID
+					if sameInst {
+						reconciledTo = managed.SessionID
+						status = "reconciled"
+						closeReason = fmt.Sprintf("Reconciled with bapedge: matched PID %d -> %s", ev.ClientPID, reconciledTo)
+						break
+					}
+				}
+			}
+		}
 		sess := &Session{SessionID: ev.SessionID, AppID: app, InstanceID: ev.InstanceID, ResourceID: ev.InstanceID,
 			WorkstationSPIFFEID: ev.SPIFFEID, SessionSVID: svid(ev.SessionID), UserID: ev.UserID, UserEmail: ev.UserEmail, SPIFFEID: ev.SPIFFEID,
-			ClientPID: ev.ClientPID, StartedAt: at, LastActiveAt: at, Status: "active"}
+			ClientPID: ev.ClientPID, StartedAt: at, LastActiveAt: at, Status: status, CloseReason: closeReason, ReconciledTo: reconciledTo}
 		s.sessions[ev.SessionID] = sess
 		s.order = append(s.order, ev.SessionID)
 	}

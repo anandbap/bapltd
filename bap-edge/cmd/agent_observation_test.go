@@ -199,3 +199,30 @@ func TestObservedProcessTreeCollapsesChildWorkers(t *testing.T) {
 		t.Fatalf("observed session %s was not removed after native adoption", expectedID)
 	}
 }
+
+func TestMultiAgentObservationRecognition(t *testing.T) {
+	agents := []struct {
+		binaryName  string
+		expectedApp string
+	}{
+		{"claude.exe", "claude-code"},
+		{"claude-code.exe", "claude-code"},
+		{"agy.exe", "antigravity"},
+		{"antigravity.exe", "antigravity"},
+		{"codex.exe", "codex"},
+		{"openai-codex.exe", "codex"},
+		{"copilot.exe", "copilot"},
+		{"github-copilot.exe", "copilot"},
+		{"opencode.exe", "opencode"},
+		{"open-code.exe", "opencode"},
+		{"cursor.exe", "cursor"},
+		{"gemini.exe", "gemini"},
+	}
+
+	for _, tc := range agents {
+		got := agentApp(tc.binaryName)
+		if got != tc.expectedApp {
+			t.Errorf("agentApp(%q) = %q, expected %q", tc.binaryName, got, tc.expectedApp)
+		}
+	}
+}

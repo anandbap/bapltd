@@ -75,6 +75,15 @@ func TestPolicyStore_AcceptAndCurrent(t *testing.T) {
 	if err := store.Accept(olderBundle); err == nil {
 		t.Fatalf("expected rollback error, got nil")
 	}
+
+	// On-disk tamper detection: modify policy.cedar directly on disk
+	tamperedCedar := `permit(principal, action, resource); // tampered line`
+	if err := os.WriteFile(cedarPath, []byte(tamperedCedar), 0600); err != nil {
+		t.Fatalf("failed to write tampered cedar: %v", err)
+	}
+	if _, _, _, err := store.Current(); err == nil {
+		t.Fatalf("expected ErrDigestMismatch when policy.cedar is tampered on disk, got nil")
+	}
 }
 
 func TestPolicyStore_OfflineFallback(t *testing.T) {

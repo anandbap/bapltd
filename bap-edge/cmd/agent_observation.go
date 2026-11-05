@@ -76,10 +76,17 @@ type agentProcess struct {
 func agentApp(name string) string {
 	name = strings.TrimSuffix(strings.ToLower(filepath.Base(name)), ".exe")
 	switch name {
-	case "codex", "claude", "claude-code", "antigravity", "copilot", "cursor", "gemini":
-		if name == "claude" {
-			return "claude-code"
-		}
+	case "claude", "claude-code":
+		return "claude-code"
+	case "antigravity", "agy":
+		return "antigravity"
+	case "opencode", "open-code":
+		return "opencode"
+	case "codex", "openai-codex":
+		return "codex"
+	case "copilot", "github-copilot":
+		return "copilot"
+	case "cursor", "gemini":
 		return name
 	}
 	return ""

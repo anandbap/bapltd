@@ -244,7 +244,7 @@ func flushDiscovery(ctx context.Context, root, server string) error {
 				err = os.Rename(path, filepath.Join(dir, file.Name()))
 			}
 		}
-		if receiptData, rErr := json.Marshal(map[string]any{
+		recordScanReceipt(root, map[string]any{
 			"run_id":             report.RunID,
 			"epoch":              report.Epoch,
 			"acknowledged":       true,
@@ -252,14 +252,46 @@ func flushDiscovery(ctx context.Context, root, server string) error {
 			"durable":            ack.Durable,
 			"observations_count": len(report.Observations),
 			"received_at":        time.Now().UTC(),
-		}); rErr == nil {
-			_ = os.WriteFile(filepath.Join(root, "latest-receipt.json"), receiptData, 0644)
-		}
+		})
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// recordScanReceipt saves the receipt to latest-receipt.json and maintains a rolling
+// history of the top 8 recent scan receipt IDs in receipts-history.json.
+func recordScanReceipt(root string, receipt map[string]any) {
+	receiptData, err := json.Marshal(receipt)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(root, "latest-receipt.json"), receiptData, 0644)
+
+	historyPath := filepath.Join(root, "receipts-history.json")
+	var history []map[string]any
+	if data, hErr := os.ReadFile(historyPath); hErr == nil {
+		_ = json.Unmarshal(data, &history)
+	}
+
+	runID, _ := receipt["run_id"].(string)
+	var filtered []map[string]any
+	for _, item := range history {
+		if id, ok := item["run_id"].(string); ok && id == runID {
+			continue // deduplicate
+		}
+		filtered = append(filtered, item)
+	}
+
+	updated := append([]map[string]any{receipt}, filtered...)
+	if len(updated) > 8 {
+		updated = updated[:8]
+	}
+
+	if histData, hErr := json.MarshalIndent(updated, "", "  "); hErr == nil {
+		_ = os.WriteFile(historyPath, histData, 0644)
+	}
 }
 
 func (s *DaemonServer) runDiscoveryWorker(ctx context.Context) {
@@ -284,6 +316,15 @@ func (s *DaemonServer) runDiscoveryWorker(ctx context.Context) {
 			if rb, err := json.Marshal(report); err == nil {
 				_ = os.WriteFile(filepath.Join(root, "latest-report.json"), rb, 0644)
 			}
+			recordScanReceipt(root, map[string]any{
+				"run_id":             report.RunID,
+				"epoch":              report.Epoch,
+				"acknowledged":       false,
+				"status":             "queued_locally",
+				"durable":            false,
+				"observations_count": len(report.Observations),
+				"received_at":        time.Now().UTC(),
+			})
 			queueErr := discoverymeta.Queue(root, report)
 			s.mu.Lock()
 			s.discoveryProgress = map[string]any{"scan_epoch": epoch, "scan_status": report.Status, "completed_at": report.CompletedAt, "delivery_state": "pending"}

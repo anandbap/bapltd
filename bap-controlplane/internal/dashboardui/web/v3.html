@@ -1606,6 +1606,8 @@
           var app = s.app_id || 'claude-code';
           sessionMap[mapKey] = {
             session_id: sid,
+            client_pid: s.client_pid || 0,
+            reconciled_to: s.reconciled_to || '',
             app_id: app,
             agent_name: s.agent_name || (app === 'claude-code' ? 'Claude Code' : (app === 'antigravity' ? 'Google Antigravity' : (app === 'copilot' ? 'GitHub Copilot' : app))),
             hostname: s.hostname || '',
@@ -1645,6 +1647,29 @@
               close_reason: isClosedAct ? (a.action || 'Exited') : '',
               _t: t
             };
+          }
+        });
+
+        // Reconcile observed sessions with managed sessions by Process ID (PID)
+        var managedByPID = {};
+        Object.keys(sessionMap).forEach(function (k) {
+          var s = sessionMap[k];
+          if (s.client_pid > 0 && String(s.session_id).indexOf('observed-') !== 0 && s.status !== 'revoked') {
+            var hostKey = (s.hostname || 'default').toLowerCase() + '::' + s.client_pid;
+            managedByPID[hostKey] = s;
+          }
+        });
+
+        Object.keys(sessionMap).forEach(function (k) {
+          var s = sessionMap[k];
+          if (s.client_pid > 0 && String(s.session_id).indexOf('observed-') === 0) {
+            var hostKey = (s.hostname || 'default').toLowerCase() + '::' + s.client_pid;
+            var nativeMatch = managedByPID[hostKey];
+            if (nativeMatch) {
+              s.status = 'reconciled';
+              s.reconciled_to = nativeMatch.session_id;
+              s.close_reason = 'Reconciled with bapedge: matched PID ' + s.client_pid + ' -> ' + nativeMatch.session_id;
+            }
           }
         });
 
@@ -1695,10 +1720,18 @@
               '</small>';
 
             var sessionStopped = s.status === 'revoked' || s.status === 'closed';
+            var sessionReconciled = s.status === 'reconciled' || !!s.reconciled_to;
+            var layers = s.reporting_layers || [];
+            var isBackedByBroker = layers.indexOf('broker') !== -1;
+            var toolEvidence = layers.some(function (layer) { return /^(broker|mcp|shim|hook)$/.test(layer); });
+            var isObserved = String(s.session_id).indexOf('observed-') === 0;
+
             var actionHtml = '';
             if (S.adminActive && !/^\[Protected/i.test(s.session_id)) {
               if (sessionStopped) {
                 actionHtml = '<span class="sess-pill" style="color:var(--ink-3);font-size:11.5px;font-weight:600">Stopped</span>';
+              } else if (sessionReconciled) {
+                actionHtml = '<span class="sess-pill" style="color:var(--ok);font-size:11.5px;font-weight:600">Reconciled</span>';
               } else {
                 actionHtml = '<button class="session-freeze-btn" data-admin-control type="button" data-session-id="' + esc(s.session_id) +
                   '" data-session-stop="stop"' +
@@ -1707,22 +1740,52 @@
             }
 
             var isLive = s.isLive;
-            var reportText = sessionStopped ? 'Stopped' : (isLive ? 'Live' : 'Offline');
-            var reportClass = sessionStopped ? 'off' : (isLive ? 'g' : 'off');
-            var reasonClean = s.close_reason ? ('Session ' + s.close_reason) : 'Session ended';
-            var layers = s.reporting_layers || [];
-            var toolEvidence = layers.some(function (layer) { return /^(broker|mcp|shim|hook)$/.test(layer); });
-            var means = (layers.length ? 'Reported layers: ' + layers.map(esc).join(', ') + '. ' : 'Reporting coverage has not been confirmed. ') +
-              (s.prompt_available ? 'Prompt text reported.' : (s.prompt_capture_disabled ? 'Prompt capture disabled by policy.' : 'Prompt text not reported.'));
-            if (!isLive) means += ' ' + esc(reasonClean) + '.';
+            var reportText = 'Offline';
+            var reportClass = 'off';
+            var protectText = 'Coverage unknown';
+            var protectClass = 'off';
+            var means = '';
+
+            if (sessionReconciled) {
+              protectText = 'Matched with bapedge';
+              protectClass = 'g';
+              reportText = 'Reconciled';
+              reportClass = 'g';
+              means = 'Process ID ' + (s.client_pid || '') + ' matched & reconciled with bapedge session ' + esc(s.reconciled_to || s.session_id) + '.';
+            } else if (sessionStopped) {
+              protectText = toolEvidence ? 'Governed' : 'Stopped';
+              protectClass = toolEvidence ? 'g' : 'off';
+              reportText = 'Stopped';
+              reportClass = 'off';
+              means = s.close_reason ? ('Session ' + s.close_reason + '.') : 'Session stopped by administrator.';
+            } else if (isObserved && isBackedByBroker) {
+              protectText = 'Matched with bapedge';
+              protectClass = 'g';
+              reportText = isLive ? 'Live' : 'Matched (Idle)';
+              reportClass = 'g';
+              means = 'Process ID ' + (s.client_pid || '') + ' matched with bapedge broker. Commands evaluated against Cedar invariants.';
+            } else if (isLive) {
+              protectText = toolEvidence ? 'Evidence received' : (layers.indexOf('discovery') !== -1 ? 'Discovered' : 'Coverage unknown');
+              protectClass = toolEvidence ? 'g' : 'off';
+              reportText = 'Live';
+              reportClass = 'g';
+              means = (layers.length ? 'Reported layers: ' + layers.map(esc).join(', ') + '. ' : 'Reporting coverage has not been confirmed. ') +
+                (s.prompt_available ? 'Prompt text reported.' : (s.prompt_capture_disabled ? 'Prompt capture disabled by policy.' : 'Prompt text not reported.'));
+            } else {
+              protectText = toolEvidence ? 'Evidence received' : (layers.indexOf('discovery') !== -1 ? 'Discovered' : 'Coverage unknown');
+              protectClass = toolEvidence ? 'g' : 'off';
+              reportText = 'Offline';
+              reportClass = 'off';
+              means = 'Session ended or timed out.' + (s.close_reason ? ' ' + s.close_reason + '.' : '');
+            }
 
             return {
               surfaceHtml: surfaceHtml,
               actionHtml: actionHtml,
               surface: appPretty,
               detail: s.session_id + ' on ' + host,
-              protect: toolEvidence ? 'Evidence received' : (layers.indexOf('discovery') !== -1 ? 'Discovered' : 'Coverage unknown'),
-              pc: toolEvidence ? 'g' : 'off',
+              protect: protectText,
+              pc: protectClass,
               report: reportText,
               rc: reportClass,
               means: means,
