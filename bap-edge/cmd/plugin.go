@@ -1143,10 +1143,31 @@ exec "$BAPEDGE_BIN" plugin adapter "$@"
 	}
 }
 
+func replicatePluginGlobally(agent, srcDir string) {
+	home, _ := os.UserHomeDir()
+	if home == "" {
+		return
+	}
+	globalDirs := []string{
+		filepath.Join(home, ".bap", "plugins", agent),
+		filepath.Join(home, "bin", "plugins", agent),
+	}
+	if agent == "claude" {
+		globalDirs = append(globalDirs, filepath.Join(home, ".claude", "plugins", "claude"))
+	}
+	for _, gd := range globalDirs {
+		if gd != srcDir {
+			_ = copyDirRecursive(srcDir, gd)
+		}
+	}
+}
+
 func installClaudePlugin(repoRoot, workspace string) error {
 	destDir := filepath.Join(workspace, "plugins", "claude")
 	if srcDir := findPluginSource("claude", repoRoot); srcDir != "" && srcDir != destDir {
-		return copyDirRecursive(srcDir, destDir)
+		_ = copyDirRecursive(srcDir, destDir)
+		replicatePluginGlobally("claude", destDir)
+		return nil
 	}
 
 	_ = os.MkdirAll(filepath.Join(destDir, ".claude-plugin"), 0755)
@@ -1199,13 +1220,16 @@ func installClaudePlugin(repoRoot, workspace string) error {
 		data, _ := json.MarshalIndent(hooksDoc, "", "  ")
 		_ = os.WriteFile(hooksPath, data, 0644)
 	}
+	replicatePluginGlobally("claude", destDir)
 	return nil
 }
 
 func installCopilotPlugin(repoRoot, workspace string) error {
 	destDir := filepath.Join(workspace, "plugins", "copilot")
 	if srcDir := findPluginSource("copilot", repoRoot); srcDir != "" && srcDir != destDir {
-		return copyDirRecursive(srcDir, destDir)
+		_ = copyDirRecursive(srcDir, destDir)
+		replicatePluginGlobally("copilot", destDir)
+		return nil
 	}
 
 	_ = os.MkdirAll(filepath.Join(destDir, "com.github.copilot", "hooks"), 0755)
@@ -1250,13 +1274,16 @@ func installCopilotPlugin(repoRoot, workspace string) error {
 		data, _ := json.MarshalIndent(hooksDoc, "", "  ")
 		_ = os.WriteFile(hooksPath, data, 0644)
 	}
+	replicatePluginGlobally("copilot", destDir)
 	return nil
 }
 
 func installAntigravityPlugin(repoRoot, workspace string) error {
 	destDir := filepath.Join(workspace, "plugins", "antigravity")
 	if srcDir := findPluginSource("antigravity", repoRoot); srcDir != "" && srcDir != destDir {
-		return copyDirRecursive(srcDir, destDir)
+		_ = copyDirRecursive(srcDir, destDir)
+		replicatePluginGlobally("antigravity", destDir)
+		return nil
 	}
 
 	_ = os.MkdirAll(destDir, 0755)
@@ -1273,13 +1300,16 @@ func installAntigravityPlugin(repoRoot, workspace string) error {
 		data, _ := json.MarshalIndent(manifest, "", "  ")
 		_ = os.WriteFile(manifestPath, data, 0644)
 	}
+	replicatePluginGlobally("antigravity", destDir)
 	return nil
 }
 
 func installOpenCodePlugin(repoRoot, workspace string) error {
 	destDir := filepath.Join(workspace, "plugins", "opencode")
 	if srcDir := findPluginSource("opencode", repoRoot); srcDir != "" && srcDir != destDir {
-		return copyDirRecursive(srcDir, destDir)
+		_ = copyDirRecursive(srcDir, destDir)
+		replicatePluginGlobally("opencode", destDir)
+		return nil
 	}
 
 	_ = os.MkdirAll(destDir, 0755)
@@ -1296,6 +1326,7 @@ func installOpenCodePlugin(repoRoot, workspace string) error {
 		data, _ := json.MarshalIndent(manifest, "", "  ")
 		_ = os.WriteFile(manifestPath, data, 0644)
 	}
+	replicatePluginGlobally("opencode", destDir)
 	return nil
 }
 

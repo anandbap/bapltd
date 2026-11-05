@@ -11,9 +11,18 @@ here = os.path.abspath(os.path.dirname(__file__))
 with open(os.path.join(here, "README.md"), encoding="utf-8") as f:
     long_description = f.read()
 
+# Dynamically collect all files under bap/plugins, explicitly capturing hidden dot-directories like .claude-plugin
+plugin_files = []
+bap_plugins_dir = os.path.join(here, "bap", "plugins")
+if os.path.isdir(bap_plugins_dir):
+    for root, dirs, files in os.walk(bap_plugins_dir):
+        for f in files:
+            rel = os.path.relpath(os.path.join(root, f), os.path.join(here, "bap"))
+            plugin_files.append(rel.replace("\\", "/"))
+
 setup(
     name="bap-ltd",
-    version="1.11.1",
+    version="1.11.2",
     description="Bounded Authority Plane (BAP) - Zero-Trust Local Trusted Daemon & Governance for AI Developer Agents",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -35,7 +44,7 @@ setup(
             "plugins/**/*",
             "plugins/*/*/*",
             "plugins/*/*/*/*",
-        ],
+        ] + plugin_files,
     },
     include_package_data=True,
     python_requires=">=3.8",

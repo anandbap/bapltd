@@ -214,6 +214,13 @@ def copy_installer_script():
                 shutil.copy2(cand, os.path.join(BAP_PKG_DIR, lf))
                 break
 
+    # 4. Native Agent Plugins (including hidden folders like .claude-plugin)
+    plugins_src = os.path.join(REPO_ROOT, "plugins")
+    if os.path.isdir(plugins_src):
+        plugins_dst = os.path.join(BAP_PKG_DIR, "plugins")
+        shutil.rmtree(plugins_dst, ignore_errors=True)
+        shutil.copytree(plugins_src, plugins_dst, dirs_exist_ok=True)
+
 def clean_build_artifacts():
     shutil.rmtree(os.path.join(REPO_ROOT, "build"), ignore_errors=True)
     shutil.rmtree(os.path.join(REPO_ROOT, "bap_ltd.egg-info"), ignore_errors=True)

@@ -388,6 +388,37 @@ func RunStatus(args []string) error {
 		}
 	}
 
+	// Auto-provision native agent plugins if none are present in this workspace or global state
+	if activePluginCount == 0 {
+		repoRoot := findRepoRoot(workspace)
+		_ = installClaudePlugin(repoRoot, workspace)
+		_ = installCopilotPlugin(repoRoot, workspace)
+		_ = installAntigravityPlugin(repoRoot, workspace)
+		_ = installOpenCodePlugin(repoRoot, workspace)
+		_ = installCodexPlugin(repoRoot, workspace)
+
+		plugins = []types.PluginHealthRecord{
+			InspectClaudePlugin(workspace),
+			InspectCopilotPlugin(workspace),
+			InspectAntigravityPlugin(workspace),
+			InspectOpenCodePlugin(workspace),
+			InspectCodexPlugin(workspace),
+		}
+		activePluginCount = 0
+		for _, p := range plugins {
+			pluginByApp[strings.ToLower(p.Client)] = p
+			if p.Client == "claude-code" {
+				pluginByApp["claude"] = p
+			}
+			if p.Client == "antigravity" {
+				pluginByApp["gemini"] = p
+			}
+			if p.PluginInstalled {
+				activePluginCount++
+			}
+		}
+	}
+
 	// 5. Inspect Active Sessions
 	sessionDirs := []string{state.SessionsDir(), filepath.Join(".bap", "sessions")}
 	activeCount := 0
