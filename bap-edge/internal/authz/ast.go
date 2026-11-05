@@ -129,6 +129,9 @@ func ParseAST(fullCommand string) (*ASTPipeline, error) {
 
 		// Recursively extract subshell substitutions from full command and arguments
 		subCmds := extractSubshells(fullCmd)
+		if IsControlKeyword(exec) || (len(args) > 0 && IsControlKeyword(args[0])) {
+			subCmds = append(subCmds, extractScriptBlocks(fullCmd)...)
+		}
 		for _, sc := range subCmds {
 			if scAST, err := ParseAST(sc); err == nil && scAST != nil {
 				node.SubCommands = append(node.SubCommands, scAST.Nodes...)
@@ -407,6 +410,75 @@ func tokenizeShell(cmd string) []token {
 	return tokens
 }
 
+// IsControlKeyword returns true if the executable token is a shell control flow keyword.
+func IsControlKeyword(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "if", "then", "else", "elif", "fi", "for", "foreach", "while", "until", "do", "done", "try", "catch", "finally", "switch", "case", "esac":
+		return true
+	default:
+		return false
+	}
+}
+
+// extractScriptBlocks extracts top-level { ... } blocks from a control statement.
+func extractScriptBlocks(s string) []string {
+	var blocks []string
+	runes := []rune(s)
+	n := len(runes)
+	i := 0
+	for i < n {
+		if runes[i] == '\'' {
+			i++
+			for i < n && runes[i] != '\'' {
+				i++
+			}
+			if i < n && runes[i] == '\'' {
+				i++
+			}
+			continue
+		}
+		if runes[i] == '"' {
+			i++
+			for i < n && runes[i] != '"' {
+				if runes[i] == '\\' && i+1 < n {
+					i += 2
+					continue
+				}
+				i++
+			}
+			if i < n && runes[i] == '"' {
+				i++
+			}
+			continue
+		}
+		if runes[i] == '{' && (i == 0 || runes[i-1] != '$') {
+			i++
+			depth := 1
+			var inner strings.Builder
+			for i < n && depth > 0 {
+				if runes[i] == '{' {
+					depth++
+				} else if runes[i] == '}' {
+					depth--
+					if depth == 0 {
+						i++
+						break
+					}
+				}
+				inner.WriteRune(runes[i])
+				i++
+			}
+			cmd := strings.TrimSpace(inner.String())
+			if cmd != "" {
+				blocks = append(blocks, cmd)
+			}
+			continue
+		}
+		i++
+	}
+	return blocks
+}
+
 // extractSubshells scans a command string for subshell command substitutions:
 // 1. $(command ...) with balanced parenthesis
 // 2. `command ...` with backtick matching
@@ -424,6 +496,61 @@ func extractSubshells(s string) []string {
 				i++
 			}
 			if i < n && runes[i] == '\'' {
+				i++
+			}
+			continue
+		}
+
+		// Double quote literal block: check for $(...) or `...` inside double quotes
+		if runes[i] == '"' {
+			i++
+			for i < n && runes[i] != '"' {
+				if runes[i] == '\\' && i+1 < n {
+					i += 2
+					continue
+				}
+				if runes[i] == '$' && i+1 < n && runes[i+1] == '(' {
+					i += 2
+					depth := 1
+					var inner strings.Builder
+					for i < n && depth > 0 && runes[i] != '"' {
+						if runes[i] == '(' {
+							depth++
+						} else if runes[i] == ')' {
+							depth--
+							if depth == 0 {
+								i++
+								break
+							}
+						}
+						inner.WriteRune(runes[i])
+						i++
+					}
+					cmd := strings.TrimSpace(inner.String())
+					if cmd != "" {
+						subs = append(subs, cmd)
+					}
+					continue
+				}
+				if runes[i] == '`' {
+					i++
+					var inner strings.Builder
+					for i < n && runes[i] != '`' && runes[i] != '"' {
+						inner.WriteRune(runes[i])
+						i++
+					}
+					if i < n && runes[i] == '`' {
+						i++
+					}
+					cmd := strings.TrimSpace(inner.String())
+					if cmd != "" {
+						subs = append(subs, cmd)
+					}
+					continue
+				}
+				i++
+			}
+			if i < n && runes[i] == '"' {
 				i++
 			}
 			continue

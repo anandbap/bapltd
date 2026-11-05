@@ -19,6 +19,7 @@ permit (
         "ls", "dir", "mkdir", "echo", "pwd", "cat", "type", "printenv", "whoami",
         "cd", "chdir", "pushd", "popd", "exit",
         "cmd", "powershell", "pwsh", "bash", "sh", "zsh",
+        "if", "then", "else", "elif", "fi", "for", "foreach", "while", "until", "do", "done", "try", "catch", "finally", "switch",
         "grep", "findstr", "head", "tail", "wc", "sort", "uniq", "more",
         "sed", "awk", "cut", "tr", "diff", "patch", "tee", "touch",
         "cp", "mv", "copy", "move", "rm", "del", "rmdir", "erase",

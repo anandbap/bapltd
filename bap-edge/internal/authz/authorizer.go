@@ -341,6 +341,10 @@ func (a *Authorizer) evaluateAtomicNode(executable, fullCommand, args, workspace
 	normalizedFull := strings.ToLower(fullCommand)
 	normalizedArgs := strings.ToLower(args)
 
+	if IsControlKeyword(executable) || IsControlKeyword(normalizedExec) {
+		return true, "", nil
+	}
+
 	principalUID := cedar.NewEntityUID("Agent", "Local")
 
 	// Construct Principal attributes record including authenticated corporate identity claims

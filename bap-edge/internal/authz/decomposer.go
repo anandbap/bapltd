@@ -38,6 +38,15 @@ func Decompose(executable, fullCommand, args string) DecomposedAction {
 		tokens = []string{exec}
 	}
 
+	if IsControlKeyword(exec) {
+		return DecomposedAction{
+			CanonicalAction:   "cli:" + exec + ":exec",
+			CanonicalResource: "system://local",
+			ActionType:        "exec",
+			TargetEntity:      exec,
+		}
+	}
+
 	switch exec {
 	case "git":
 		return decomposeGit(tokens)

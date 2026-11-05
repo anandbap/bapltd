@@ -1015,14 +1015,37 @@ func unwrapBrokerCommand(command, expectedSessionID string) (string, bool, error
 			return rawInner, false, nil
 		}
 	}
-	validSource := len(fields) > 3 && (isClaudeApp(fields[3]) || fields[3] == "copilot" || fields[3] == "antigravity" || fields[3] == "codex" || fields[3] == "cursor")
-	if len(fields) != 8 || fields[1] != "exec" || fields[2] != "--source" || !validSource || fields[4] != "--session-id" || fields[6] != "--cmd-b64" {
+	if strings.ContainsAny(command, ";&|") {
+		return "", true, fmt.Errorf("untrusted BAPEdge invocation: chained command operators are not permitted")
+	}
+	var sourceVal, sessionVal, b64Val string
+	hasExec := false
+	for i := 1; i < len(fields); i++ {
+		if fields[i] == "exec" {
+			hasExec = true
+		} else if fields[i] == "--source" && i+1 < len(fields) {
+			sourceVal = fields[i+1]
+			i++
+		} else if fields[i] == "--session-id" && i+1 < len(fields) {
+			sessionVal = fields[i+1]
+			i++
+		} else if fields[i] == "--cmd-b64" && i+1 < len(fields) {
+			b64Val = fields[i+1]
+			i++
+		} else if (fields[i] == "--shell" || fields[i] == "--caller-binary" || fields[i] == "--caller-hash") && i+1 < len(fields) {
+			i++
+		} else {
+			return "", true, fmt.Errorf("untrusted BAPEdge invocation: unexpected argument %q", fields[i])
+		}
+	}
+	validSource := isClaudeApp(sourceVal) || sourceVal == "copilot" || sourceVal == "antigravity" || sourceVal == "codex" || sourceVal == "cursor"
+	if !hasExec || !validSource || sessionVal == "" || b64Val == "" {
 		return "", true, fmt.Errorf("untrusted BAPEdge invocation: expected the broker-owned exec wrapper")
 	}
-	if expectedSessionID == "" || fields[5] != expectedSessionID {
+	if expectedSessionID == "" || sessionVal != expectedSessionID {
 		return "", true, fmt.Errorf("untrusted BAPEdge invocation: session binding mismatch")
 	}
-	payload, err := base64.StdEncoding.DecodeString(fields[7])
+	payload, err := base64.StdEncoding.DecodeString(b64Val)
 	if err != nil {
 		return "", true, fmt.Errorf("untrusted BAPEdge invocation: invalid command payload")
 	}
@@ -2958,7 +2981,21 @@ func main() {
 		if strings.EqualFold(payload.ToolName, "powershell") || strings.EqualFold(payload.ToolName, "pwsh") {
 			shellArg = " --shell powershell"
 		}
-		rewritten := fmt.Sprintf(`%s exec%s --source %s --session-id %s --cmd-b64 %s`, ltdBin, shellArg, callerSource, sessionID, cmdB64)
+		execBin := ltdBin
+		baseName := filepath.Base(ltdBin)
+		if lookPath, err := exec.LookPath(baseName); err == nil && lookPath != "" {
+			execBin = baseName
+		} else {
+			execBin = filepath.ToSlash(ltdBin)
+			if strings.Contains(execBin, " ") {
+				if strings.EqualFold(payload.ToolName, "powershell") || strings.EqualFold(payload.ToolName, "pwsh") {
+					execBin = `& "` + execBin + `"`
+				} else {
+					execBin = `"` + execBin + `"`
+				}
+			}
+		}
+		rewritten := fmt.Sprintf(`%s exec%s --source %s --session-id %s --cmd-b64 %s`, execBin, shellArg, callerSource, sessionID, cmdB64)
 		if caller.BinaryPath != "" {
 			rewritten = fmt.Sprintf(`%s --caller-binary "%s"`, rewritten, caller.BinaryPath)
 		}

