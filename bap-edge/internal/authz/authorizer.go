@@ -58,6 +58,12 @@ func ComputePolicyDigest(cedarCode, schemaJSON string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// ValidatePolicySyntax checks whether the given Cedar policy string has valid syntax.
+func ValidatePolicySyntax(cedarCode string) error {
+	_, err := cedar.NewPolicySetFromBytes("policy.cedar", []byte(cedarCode))
+	return err
+}
+
 // NewAuthorizer loads the Cedar policy and optional schema from specified or standard locations.
 func NewAuthorizer(policyPath string) (*Authorizer, error) {
 	resolvedPolicyPath, err := findFile(policyPath, "policy.cedar")

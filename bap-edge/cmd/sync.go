@@ -4,9 +4,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"bap-edge/internal/audit"
+	"bap-edge/internal/authz"
 	"bap-edge/internal/config"
 	"bap-edge/internal/policystore"
 )
@@ -65,6 +67,19 @@ func RunSync(args []string) error {
 	fmt.Printf("Rules Digest:     %s\n", bundle.Digest)
 	fmt.Printf("Cache Location:   %s\n", *policyDir)
 	fmt.Printf("Kill Switch:      %v\n", bundle.KillSwitch)
+
+	// Reconcile and update workspace policy.cedar and content pins if bundle has policy
+	if !isFallback && bundle.PolicyCedar != "" {
+		if ws := authz.GetWorkspaceRoot(); ws != "" {
+			wsPolicy := filepath.Join(ws, "policy.cedar")
+			if fileExists(wsPolicy) {
+				_ = os.WriteFile(wsPolicy, []byte(bundle.PolicyCedar), 0644)
+				_, _, _ = reconcilePolicyPin(wsPolicy)
+			}
+		}
+		cachedPolicy := filepath.Join(*policyDir, "policy.cedar")
+		_, _, _ = reconcilePolicyPin(cachedPolicy)
+	}
 	if isFallback {
 		fmt.Printf("Telemetry Spool:  Offline (%d event(s) buffered in %s)\n", pendingSpoolCount, auditLogPath)
 	} else {
