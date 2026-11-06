@@ -91,6 +91,8 @@ This document represents the complete functional and non-functional requirements
 | `BAP-814` | Session Termination Semantics, Edge Freeze Enforcement, Discovery Attestation & Deduplication | **DONE** | Irreversible "Stop session" semantics with no unfreeze, workstation freeze blocking new agent startups (Claude, Codex, Antigravity, Copilot, OpenCode), edge `SESSION_STOP_ENFORCED` delivery reporting, `bap status` Shadow IT tool inspection & scan receipts, and 3-tier discovery deduplication. |
 | `BAP-815` | Multi-Agent Process Tree Deduplication, PID-Based Session Reconciliation, Scan Receipt Rolling History & Local Policy Anti-Tamper Enforcement | **DONE** | Ancestor inspection deduplicating child process trees to root PID, deterministic PID-based session reconciliation in store and cockpit, rolling top-8 discovery receipts in `bap status`, and SHA-256 tamper-evident integrity fail-closed gates for local `policy.cedar`. |
 | `BAP-816` | PowerShell AST Semantic Classification, Variable Path Tracking, Cross-Platform Child Console Attachment, & V3 Activity Decision Styling | **DONE** | Full classification for PowerShell pipeline cmdlets (`Out-Null`, `Join-Path`, `Tee-Object`, etc.), variable path tracking (`$p = ...`), property member expression classification (`$p.Path`), cross-platform child console binding (`AttachConsole` / `CONIN$` on Windows, `/dev/tty` on Unix) for HITL step-up in piped hook subprocesses, and high-contrast green/red decision styling in V3 Cockpit. |
+| `BAP-817` | Boundary & Capability-Based Cedar Policy Evolution & Automated Audit-to-Policy Mining | **PLANNED** | Evolves Policy 1 permit baseline from static string arrays to semantic execution classes (`toolchain`, `shell_builtin`), preserves declarative Forbid invariants (Policies 2–7) for boundary defense, and introduces an automated audit-to-policy synthesizer to generate scoped Cedar policies from observed agent traces. |
+| `BAP-818` | AWS Dogwood Policy Engine Integration for Temporal & Stateful Multi-Turn Agent Governance | **PLANNED** | Integrates AWS Dogwood (Metric First-Order Temporal Logic extension to Cedar) into the Control Plane for declarative cumulative session token/denial budgets, time-bounded step-up delegation lifetimes, multi-turn tool-chaining invariants, and automatic lowering to Cedar runtime contexts. |
 
 ### MVP exit sequence
 
@@ -4253,6 +4255,78 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - **Console Attachment**: `bap-edge/cmd/console_windows.go`, `bap-edge/cmd/console_unix.go`, `bap-edge/cmd/exec.go`, `cchook/console_windows.go`, `cchook/console_unix.go`, `cchook/interceptor.go`.
   - **Cockpit Visuals**: `bap-controlplane/internal/dashboardui/web/v3.html` (line 1120 `Agent action` green/red styling).
   - **Binaries**: Rebuilt `bapedge.exe` (root, `dist/`, `bap/bin/`), `interceptor.exe` (root, `dist/`, `bap/bin/`), `cchook-interceptor.exe` (root, `dist/`), and `claude-client/interceptor.exe`.
+
+#### Story BAP-817: Boundary & Capability-Based Cedar Policy Evolution & Automated Audit-to-Policy Mining
+- **Type**: Architecture Spike / Story | **Points**: 13 | **Priority**: P1 - High | **Status**: `PLANNED`
+- **Description**:
+  Evolve BAP's authorization strategy from brittle shell token allowlisting to robust, capability- and boundary-based policy enforcement, and build an automated audit-to-policy synthesizer:
+  1. **From Token Allowlisting to Capability & Execution Classes**:
+     - *Problem*: Enumerating discrete cmdlet string names (`Out-Null`, `Tee-Object`, `Join-Path`, `Split-Path`) in Policy 1 creates an endless combinatorial game against generative LLMs that invent novel syntax, resulting in false-positive denials.
+     - *Solution*: Leverage Cedar's strict deny-overrides architecture. Retain all declarative Forbid invariants (Policies 2–7 for workspace escaping write, credential access, curl exfiltration, raw sockets, unapproved installers, mirror bypass, and canary honeytokens) as inviolable security boundaries.
+     - *Evolution of Policy 1*: Transition Policy 1 from an explicit 80+ string array to semantic execution classes populated by `bap-edge/internal/authz/classifier.go`:
+       ```cedar
+       permit (
+           principal == Agent::"Local",
+           action == Action::"Execute",
+           resource == Command::"CLI"
+       ) when {
+           ["toolchain", "shell_builtin", "script_runtime"].contains(context.executable_class)
+       };
+       ```
+     - Non-destructive shell utilities, formatting pipelines, and language expressions are permitted by class, while all destructive or escaping actions remain strictly intercepted by the forbid policies.
+  2. **Automated Audit-to-Policy Synthesizer**:
+     - Provide a policy mining pipeline (`bapedge policy mine --session <id>` and `/api/v1/policy/synthesize`) that parses `.bapstate/audit.jsonl` traces collected during `audit` mode runs.
+     - Automatically groups observed agent operations by `canonical_resource` and `canonical_action`.
+     - Synthesizes candidate scoped Cedar policies (e.g. scoping access to necessary sibling directories or specific build tasks).
+     - Surfaces candidate policy recommendations in the V3 Cockpit with one-click **"Review & Promote to Enforce"** workflow.
+
+- **Acceptance Criteria**:
+  - `Given` an agent executing novel, harmless shell syntax or pipeline cmdlets,
+  - `When` evaluated by BAPEdge,
+  - `Then` the command is permitted under semantic execution classes without requiring manual token updates.
+  - `Given` any command attempting to write outside workspace, read `.env`, or bypass corporate mirrors,
+  - `When` evaluated,
+  - `Then` Cedar Forbid policies (Policies 2–7) unconditionally deny execution regardless of permit classification.
+  - `Given` an agent session executed in `audit` mode,
+  - `When` running the policy synthesizer,
+  - `Then` a valid Cedar policy candidate is generated from observed resources with zero manual regex authoring.
+
+- **Implementation Evidence**:
+  - **Target Architecture**: Documented in `ARCHITECTURE.md` (Section 3.2.10) and `docs/EXECUTION_MODEL.md` (Section 2.7).
+  - **Classifier Primitives**: `bap-edge/internal/authz/classifier.go` (`ActionType`, `IsExpression`, `CanonicalAction`).
+  - **Audit Telemetry Source**: `.bapstate/audit.jsonl` and `/api/v1/sessions/transcript`.
+
+---
+
+#### Story BAP-818: AWS Dogwood Policy Engine Integration for Temporal & Stateful Multi-Turn Agent Governance
+- **Type**: Architecture Spike / Story | **Points**: 13 | **Priority**: P1 - High | **Status**: `PLANNED`
+- **Description**:
+  Integrate AWS Dogwood (Metric First-Order Temporal Logic extension to Cedar) into the Central Control Plane to natively govern multi-turn agent workflows, cumulative risk budgets, and ephemeral delegation lifetimes:
+  1. **Temporal Logic for Autonomous Agent Trajectories**:
+     - *Problem*: Cedar is stateless and point-in-time ("Can principal $P$ execute action $A$ on resource $R$ right now?"). Multi-step agent governance currently relies on ad-hoc edge JSON state files (`.bap/risk_state.json`, `sessionRiskState`).
+     - *Solution*: Adopt Dogwood to express declarative temporal policies over event histories:
+       - **Cumulative Denial Budgets**: Block further tool use if an agent triggers $> 3$ policy denials in a single session.
+       - **Time-Bounded Step-Up Authorization**: Allow cross-folder mutations only if preceded by an interactive human step-up grant within the last 15 minutes in the active session.
+       - **Tool-Chaining Invariants**: Require an inspection/read tool call before permitting an irreversible write or migration tool call.
+  2. **Control Plane Compilation & Runtime Lowering**:
+     - Central Control Plane hosts the master Dogwood policy bundle.
+     - Dogwood policies lower/compile down to standard Cedar evaluation contexts with stateful context slots (`context.session_denial_count`, `context.grant_age_seconds`, `context.prior_actions`).
+     - Edge daemons evaluate compiled Cedar in sub-2ms, maintaining offline speed while the Control Plane manages stateful temporal invariants.
+
+- **Acceptance Criteria**:
+  - `Given` a Dogwood policy enforcing maximum denial limits,
+  - `When` an agent triggers repeated denials,
+  - `Then` subsequent actions are blocked declaratively by policy without custom script checks.
+  - `Given` an approved HITL step-up grant,
+  - `When` evaluated within the time window,
+  - `Then` Dogwood authorizes the dependent action and automatically expires when the temporal window lapses.
+  - `Given` a multi-agent workflow,
+  - `When` a tool sequence violates chaining constraints,
+  - `Then` execution fails closed with a clear structural sequence violation reason.
+
+- **Implementation Evidence**:
+  - **Architecture Specification**: `ARCHITECTURE.md` (Section 3.2.11) and `docs/EXECUTION_MODEL.md` (Section 2.9).
+  - **Pre-existing State Primitives**: `bap-edge/cmd/exec.go` (`sessionRiskState`), `bap-controlplane/internal/hitl/escalation.go`, `bap-gateway/internal/tokenexchange/exchange.go`.
 
 
 
