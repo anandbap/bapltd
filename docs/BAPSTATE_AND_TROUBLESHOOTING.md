@@ -632,5 +632,17 @@ The Claude Code PreToolUse hook (or Antigravity/Copilot hook) intercepts and blo
    Run `bapedge status` to trigger an automatic sweep of the spool backlog into the central ledger.
 3. **Verify Dashboard**:
    Refresh the V3 dashboard. The blocked row will show `<span class="chip no">Blocked</span>` and display the sealed cryptographic receipt.
+4. **Step-Up Authorization for Cross-Workspace Traversal**:
+   When the hook blocks directory traversal outside the workspace, authorize the target path:
+   ```powershell
+   # In terminal or via chat prefix '!' inside Claude Code:
+   ! bapedge trust "..\prod-cluster" --project
+   ```
+   Verify active authorization grants across session, project, and global scopes:
+   ```powershell
+   bapedge permissions
+   # or: bap permissions
+   ```
+
 
 

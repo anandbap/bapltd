@@ -130,10 +130,12 @@ Navigate to your project workspace:
 cd C:\Users\User\pyprj\bapltd
 
 # For Claude Code CLI:
-bapedge setup --app=claude-code
+bap setup --app=claude-code
+# (or: bapedge setup --app=claude-code)
 
 # For OpenAI Codex CLI:
-bapedge setup --app=codex
+bap setup --app=codex
+# (or: bapedge setup --app=codex)
 ```
 
 This automatically stages:
@@ -171,11 +173,12 @@ Launch your agent in your terminal:
 
 ```powershell
 # Launch Claude Code under BAP governance:
-claude --plugin-dir ./plugins/claude
-# (or use the launcher: bap claude)
+bap claude
+# (or: bapedge claude, or: claude --plugin-dir ./plugins/claude)
 
-# Or launch OpenAI Codex:
+# Or launch OpenAI Codex under BAP governance:
 bap codex
+# (or: bapedge codex)
 ```
 
 In the agent REPL console, run the following conversational prompts sequentially. **No raw curl commands are used.**

@@ -21,25 +21,36 @@ Usage: bap <command> [options]
 Commands:
   install       Run single-click user-mode onboarding installer
   uninstall     Cleanly remove BAP binaries, PATH entries, and agent hooks
+  setup         Configure workspace governance & install native plugins for AI agents (--app=...)
+  claude        Launch Claude Code CLI in active zero-trust transactional sandbox
+  codex         Launch OpenAI Codex CLI in active zero-trust transactional sandbox
   login         Authenticate workstation session with corporate SSO (Google / GitHub / Entra / Okta)
   logout        Deregister workstation and clear authenticated corporate session
   launch        Start developer cockpit, verify hooks & monitor agents
   doctor        Run comprehensive pre-flight diagnostic health check
   status        Check health of local edge daemon and central control plane
+  review        Review recent agent sessions, policy decisions, and performance
+  trust <path>  Authorize cross-workspace path (--project, --session, or --global)
+  permissions   List active cross-workspace path authorizations
+  why <cmd>     Explain Cedar policy decision for a command
   daemon <cmd>  Manage background supervisor daemon (start, stop, status)
   exec <cmd>    Execute a shell command under Zero-Trust Cedar invariants
+  check <cmd>   Evaluate command against policy in decision-only mode
   pin <subcmd>  Manage cryptographic content pins (scan, list, verify)
   version       Display current BAP version
 
 Examples:
   bap install
+  bap setup --app=claude-code
+  bap setup --app=codex
+  bap claude
+  bap codex
+  bap trust "../prod-cluster" --project
+  bap permissions
   bap login
-  bap uninstall
   bap doctor
-  bap launch
   bap status
   bap exec "npm test"
-  bap pin verify
 """
 
 def get_platform_id() -> str:
@@ -161,6 +172,83 @@ def bapedge_proxy():
         print("    Please run 'bap install' to download and set up the local BAP Edge engine.")
         sys.exit(1)
 
+def run_claude_fallback(args):
+    cwd = os.getcwd()
+    candidates = [
+        os.path.join(cwd, "run_claude_bap.ps1"),
+        os.path.join(cwd, "run_claude_bap.bat"),
+        os.path.join(cwd, "bap", "launchers", "run_claude_bap.ps1"),
+        os.path.join(cwd, "bap", "launchers", "run_claude_bap.bat"),
+        os.path.join(cwd, "run_claude_bap.sh"),
+        os.path.join(cwd, "bap", "launchers", "run_claude_bap.sh"),
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            if c.endswith(".ps1"):
+                sys.exit(subprocess.call(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", c] + args))
+            elif c.endswith(".sh"):
+                sys.exit(subprocess.call(["bash", c] + args))
+            else:
+                sys.exit(subprocess.call([c] + args))
+    claude = shutil.which("claude") or shutil.which("claude.cmd")
+    if not claude:
+        print("[!] Claude Code CLI not found. Please install with 'npm install -g @anthropic-ai/claude-code'")
+        sys.exit(1)
+    env = os.environ.copy()
+    env["LTD_SOURCE"] = "claude-code"
+    plugin_dir = os.path.join(cwd, "plugins", "claude")
+    claude_args = [claude]
+    if os.path.isdir(plugin_dir) and not any(a.startswith("--plugin-dir") for a in args):
+        claude_args.extend(["--plugin-dir", plugin_dir])
+    claude_args.extend(args)
+    sys.exit(subprocess.call(claude_args, env=env))
+
+def run_codex_fallback(args):
+    cwd = os.getcwd()
+    candidates = [
+        os.path.join(cwd, "run_codex_cli_bap.ps1"),
+        os.path.join(cwd, "run_codex_cli_bap.bat"),
+        os.path.join(cwd, "bap", "launchers", "run_codex_cli_bap.ps1"),
+        os.path.join(cwd, "bap", "launchers", "run_codex_cli_bap.bat"),
+        os.path.join(cwd, "run_codex_cli_bap.sh"),
+        os.path.join(cwd, "bap", "launchers", "run_codex_cli_bap.sh"),
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            if c.endswith(".ps1"):
+                sys.exit(subprocess.call(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", c] + args))
+            elif c.endswith(".sh"):
+                sys.exit(subprocess.call(["bash", c] + args))
+            else:
+                sys.exit(subprocess.call([c] + args))
+    codex = shutil.which("codex") or shutil.which("codex.cmd")
+    if not codex:
+        print("[!] OpenAI Codex CLI not found. Please install with 'npm install -g @openai/codex'")
+        sys.exit(1)
+    env = os.environ.copy()
+    env["LTD_SOURCE"] = "codex"
+    sys.exit(subprocess.call([codex] + args, env=env))
+
+def run_review_fallback(args):
+    cwd = os.getcwd()
+    candidates = [
+        os.path.join(cwd, "review_session.ps1"),
+        os.path.join(cwd, "scripts", "review_session.ps1"),
+        os.path.join(cwd, "review_session.bat"),
+        os.path.join(cwd, "review_session.sh"),
+        os.path.join(cwd, "scripts", "review_session.sh"),
+    ]
+    if sys.platform == "win32":
+        for c in candidates:
+            if os.path.isfile(c) and c.endswith(".ps1"):
+                sys.exit(subprocess.call(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", c] + args))
+    else:
+        for c in candidates:
+            if os.path.isfile(c) and c.endswith(".sh"):
+                sys.exit(subprocess.call(["bash", c] + args))
+    print("[!] review_session script not found.")
+    sys.exit(1)
+
 def main():
     if len(sys.argv) < 2:
         print(USAGE)
@@ -175,9 +263,34 @@ def main():
     elif cmd in ["-v", "--version", "version"]:
         print(f"bap version {__version__}")
         sys.exit(0)
-    elif cmd in ["install", "setup"]:
+    elif cmd == "install":
         sys.argv = [sys.argv[0]] + rest
         install_main()
+    elif cmd == "setup":
+        bapedge = find_bapedge()
+        if not os.path.isfile(bapedge):
+            print(f"[!] bapedge binary not found. Please run 'bap install' first.")
+            sys.exit(1)
+        sub_cmd = [bapedge, "setup"] + rest
+        sys.exit(subprocess.call(sub_cmd))
+    elif cmd in ["claude", "claude-code"]:
+        bapedge = find_bapedge()
+        if os.path.isfile(bapedge):
+            sys.exit(subprocess.call([bapedge, "claude"] + rest))
+        else:
+            run_claude_fallback(rest)
+    elif cmd in ["codex", "openai-codex"]:
+        bapedge = find_bapedge()
+        if os.path.isfile(bapedge):
+            sys.exit(subprocess.call([bapedge, "codex"] + rest))
+        else:
+            run_codex_fallback(rest)
+    elif cmd in ["review", "sessions", "history"]:
+        bapedge = find_bapedge()
+        if os.path.isfile(bapedge):
+            sys.exit(subprocess.call([bapedge, "review"] + rest))
+        else:
+            run_review_fallback(rest)
     elif cmd in ["uninstall", "remove"]:
         sys.argv = [sys.argv[0], "--uninstall"] + rest
         install_main()

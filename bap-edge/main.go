@@ -37,6 +37,9 @@ Zero-Trust Governance & HITL Authorization:
   stepup       Task-scoped HITL step-up escalation with approval fatigue throttling (BAP-565)
 
 Execution & Protocol Integration:
+  claude       Launch Claude Code CLI in active zero-trust transactional sandbox
+  codex        Launch OpenAI Codex CLI in active zero-trust transactional sandbox
+  review       Inspect recent agent sessions, policy decisions, and performance
   plugin       Manage native agent plugins for Claude Code & Copilot (BAP-806)
   exec         Evaluate command against Cedar policy and run in sandboxed kernel namespace
   check        Evaluate command against Cedar policy in decision-only mode (zero execution side effects)
@@ -164,6 +167,21 @@ func main() {
 	case "serve":
 		if err := cmd.RunServe(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error running server: %v\n", err)
+			os.Exit(1)
+		}
+	case "claude", "claude-code":
+		if err := cmd.RunClaude(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error running Claude: %v\n", err)
+			os.Exit(1)
+		}
+	case "codex", "openai-codex":
+		if err := cmd.RunCodex(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error running Codex: %v\n", err)
+			os.Exit(1)
+		}
+	case "review", "sessions":
+		if err := cmd.RunReview(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error running review: %v\n", err)
 			os.Exit(1)
 		}
 	case "plugin":

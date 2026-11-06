@@ -1515,7 +1515,7 @@ catch {
 finally {
     # Gracefully notify the BAP control plane that this session has ended
     if (-not [string]::IsNullOrWhiteSpace($BapEdgeBin) -and -not [string]::IsNullOrWhiteSpace($ServerUrl) -and -not [string]::IsNullOrWhiteSpace($SessionId)) {
-        & $BapEdgeBin session-end --server $ServerUrl --session-id $SessionId 2>$null
+        try { & $BapEdgeBin session-end --server $ServerUrl --session-id $SessionId 2>&1 | Out-Null } catch {}
     }
 
     # Acquire transient lock for multi-session reference-counted teardown
