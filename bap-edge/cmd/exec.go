@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"bap-edge/internal/antibypass"
@@ -279,7 +280,7 @@ func promptHumanStepUpApproval(ec *execContext, fullCommand, executable, reason 
 	var termOut io.Writer = os.Stderr
 	var closer func()
 
-	if !isTerminal(os.Stdin) && os.Getenv("BAP_NON_INTERACTIVE") != "1" && !ec.forceJSON && os.Getenv("CI") == "" && os.Getenv("GITHUB_ACTIONS") == "" {
+	if !isTerminal(os.Stdin) && !isAgentEnvironment(ec.source) && os.Getenv("BAP_NON_INTERACTIVE") != "1" && !ec.forceJSON && os.Getenv("CI") == "" && os.Getenv("GITHUB_ACTIONS") == "" {
 		in, out, cleanup, err := attachParentConsole()
 		if err == nil && in != nil {
 			termIn = in
@@ -293,7 +294,7 @@ func promptHumanStepUpApproval(ec *execContext, fullCommand, executable, reason 
 		defer closer()
 	}
 
-	if (termIn == os.Stdin && !isTerminal(os.Stdin)) || os.Getenv("BAP_NON_INTERACTIVE") == "1" || ec.forceJSON || os.Getenv("CI") != "" || os.Getenv("GITHUB_ACTIONS") != "" {
+	if (termIn == os.Stdin && !isTerminal(os.Stdin)) || isAgentEnvironment(ec.source) || os.Getenv("BAP_NON_INTERACTIVE") == "1" || ec.forceJSON || os.Getenv("CI") != "" || os.Getenv("GITHUB_ACTIONS") != "" {
 		return "non_interactive_deny"
 	}
 
@@ -1495,11 +1496,36 @@ func quoteArg(arg string) string {
 	return arg
 }
 
+var (
+	lastRevocationSync     time.Time
+	lastRevocationSyncMux  sync.Mutex
+	revocationSyncInterval = 60 * time.Second
+)
+
 func syncRevocationsFast(serverURL, policyPath string) {
 	if serverURL == "" || os.Getenv("BAP_OFFLINE") == "1" || os.Getenv("BAP_TEST_MODE") == "1" {
 		return
 	}
-	client := httptransport.New(3 * time.Second)
+
+	statePath := filepath.Join(".bap", "policy-state.json")
+	if policyPath != "" && filepath.Dir(policyPath) != "." && filepath.Dir(policyPath) != "" {
+		statePath = filepath.Join(filepath.Dir(policyPath), "policy-state.json")
+	}
+
+	lastRevocationSyncMux.Lock()
+	if !lastRevocationSync.IsZero() && time.Since(lastRevocationSync) < revocationSyncInterval {
+		lastRevocationSyncMux.Unlock()
+		return
+	}
+	if fi, err := os.Stat(statePath); err == nil && time.Since(fi.ModTime()) < revocationSyncInterval {
+		lastRevocationSync = time.Now()
+		lastRevocationSyncMux.Unlock()
+		return
+	}
+	lastRevocationSync = time.Now()
+	lastRevocationSyncMux.Unlock()
+
+	client := httptransport.New(1 * time.Second)
 	resp, err := client.Get(serverURL + "/api/v1/control/revocations")
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return
@@ -1516,7 +1542,10 @@ func syncRevocationsFast(serverURL, policyPath string) {
 	if credsData, err := os.ReadFile(state.CredentialsPath()); err == nil {
 		var creds StoredCredentials
 		if json.Unmarshal(credsData, &creds) == nil && creds.AgentID != "" {
-			targets = []string{creds.AgentID, creds.InstanceID, creds.UserEmail}
+			targets = []string{creds.AgentID}
+			if creds.UserEmail != "" && creds.UserEmail != "NA" {
+				targets = append(targets, creds.UserEmail)
+			}
 			for _, t := range targets {
 				if t == "" {
 					continue
@@ -1537,10 +1566,6 @@ func syncRevocationsFast(serverURL, policyPath string) {
 
 	// Update policy-state.json inside .bap/ to avoid littering the workspace
 	_ = os.MkdirAll(".bap", 0700)
-	statePath := filepath.Join(".bap", "policy-state.json")
-	if policyPath != "" && filepath.Dir(policyPath) != "." && filepath.Dir(policyPath) != "" {
-		statePath = filepath.Join(filepath.Dir(policyPath), "policy-state.json")
-	}
 	// Clean up legacy root policy-state.json if it exists
 	if _, err := os.Stat("policy-state.json"); err == nil {
 		_ = os.Remove("policy-state.json")

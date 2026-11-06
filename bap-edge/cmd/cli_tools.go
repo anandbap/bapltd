@@ -1258,6 +1258,7 @@ func PerformSweep(serverURL string, force bool) (SweepResult, error) {
 	var res SweepResult
 	sessionSweepDirs := []string{state.SessionsDir(), filepath.Join(".bap", "sessions")}
 
+	controlPlaneOffline := false
 	for _, sessionsDir := range sessionSweepDirs {
 		entries, _ := os.ReadDir(sessionsDir)
 		for _, entry := range entries {
@@ -1281,11 +1282,15 @@ func PerformSweep(serverURL string, force bool) (SweepResult, error) {
 					if sInfo.SessionID != "" {
 						_ = os.Remove(sessionMarkerPath(sInfo.SessionID))
 						// Inform control plane of crash recovery
-						sweepPayload := map[string]any{
-							"session_id": sInfo.SessionID,
-							"reason":     "orphaned_crash_detected_by_edge_sweep",
+						if !controlPlaneOffline {
+							sweepPayload := map[string]any{
+								"session_id": sInfo.SessionID,
+								"reason":     "orphaned_crash_detected_by_edge_sweep",
+							}
+							if err := postJSONQuick(serverURL+"/api/v1/control/sweep", sweepPayload); err != nil {
+								controlPlaneOffline = true
+							}
 						}
-						_ = postJSONQuick(serverURL+"/api/v1/control/sweep", sweepPayload)
 					}
 					if sInfo.PID > 0 {
 						_ = os.Remove(sessionPIDMarkerPath(sInfo.PID))
@@ -1297,7 +1302,16 @@ func PerformSweep(serverURL string, force bool) (SweepResult, error) {
 	}
 
 	// 2. Sweep dead PID files, orphaned locks, dead shims, and stale temp files
-	stateDirs := []string{state.Dir(), ".bap"}
+	wsRoot := authz.GetWorkspaceRoot()
+	seenStateDirs := make(map[string]bool)
+	var stateDirs []string
+	for _, d := range []string{state.Dir(), ".bap", ".bapstate", filepath.Join(wsRoot, ".bap"), filepath.Join(wsRoot, ".bapstate")} {
+		cleanD := filepath.Clean(d)
+		if d != "" && !seenStateDirs[cleanD] {
+			seenStateDirs[cleanD] = true
+			stateDirs = append(stateDirs, d)
+		}
+	}
 	for _, sDir := range stateDirs {
 		entries, _ := os.ReadDir(sDir)
 		for _, entry := range entries {

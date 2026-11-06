@@ -221,37 +221,46 @@ In the agent REPL console, run the following conversational prompts sequentially
 - **Agent Action**: Claude attempts to execute:
   `echo '{"cluster":"prod-east","db":"postgres"}' > ../prod-cluster/config.json`
 - **BAP Enforcement**: Path analysis detects that the target path escapes the workspace root (`escapes_workspace=true`).
-- **Interactive Terminal Prompt (HITL)**:
-  BAP halts execution and prompts the engineer interactively:
+- **Zero-Trust Boundary Containment (Claude Code Hook)**:
+  Because Claude Code operates as an interactive agent harness with its own terminal TUI, BAP's policy hook immediately fails closed (<15ms) without hanging the TTY, returning structured Cedar violation guidance into Claude's chat:
+  ```text
+  [BAP ZERO-TRUST] Execution blocked: Directory traversal outside workspace is forbidden in command: echo test > ../prod-cluster/config.json
+  Commands modifying files outside workspace require authorization. Authorize via 'bapedge trust "../prod-cluster/config.json" --session' (or set BAP_STEPUP_DECISION=session).
+  ```
+- **Agent Response in Chat**:
+  Claude reports the enterprise security boundary:
+  *"I cannot write to `../prod-cluster/config.json` because modifying files outside the workspace is prohibited by enterprise zero-trust policy. Please authorize this cross-folder target by running: `bapedge trust ../prod-cluster/config.json --session` in your terminal."*
 
-```text
-================================================================================
- [BAP AIR SECURITY KERNEL] CROSS-FOLDER MUTATION APPROVAL REQUIRED (HITL)
-================================================================================
- Session ID   : sess-claude-8443
- Agent Source : claude-code
- Target Entity: C:\Users\User\pyprj\prod-cluster\config.json
- Action Type  : write
- Executable   : echo
- Command      : echo '{"cluster":"prod-east"...}' > ../prod-cluster/config.json
- Policy Reason: Denial triggered by: policy policy1 (escapes_workspace=true)
---------------------------------------------------------------------------------
- This operation requests cross-folder mutation outside the active workspace.
- [O] Once     - Authorize this specific execution once
- [S] Session  - Trust target path for remainder of this session
- [P] Project  - Persistently trust target path across sessions for this workspace
- [G] Global   - Persistently trust target path machine-wide across all workspaces
- [D] Deny (Default) - Strictly block execution and maintain containment
-================================================================================
-[BAP HITL] Enter choice [o/s/p/g/D]: 
-```
+- **Engineer Step-Up Authorization**:
+  Run in your terminal (or split pane):
+  ```powershell
+  bapedge trust ../prod-cluster/config.json --session
+  ```
+  *(Or run `bapedge exec "echo test > ../prod-cluster/config.json"` directly to experience the interactive terminal prompt:)*
+  ```text
+  ================================================================================
+   [BAP AIR SECURITY KERNEL] CROSS-FOLDER MUTATION APPROVAL REQUIRED (HITL)
+  ================================================================================
+   Session ID   : sess-claude-8443
+   Agent Source : cli
+   Target Entity: C:\Users\User\pyprj\prod-cluster\config.json
+   Action Type  : write
+   Command      : echo '{"cluster":"prod-east"...}' > ../prod-cluster/config.json
+   Policy Reason: Denial triggered by: policy policy1 (escapes_workspace=true)
+  --------------------------------------------------------------------------------
+   [O] Once     - Authorize this specific execution once
+   [S] Session  - Trust target path for remainder of this session
+   [P] Project  - Persistently trust target path across sessions for this workspace
+   [G] Global   - Persistently trust target path machine-wide across all workspaces
+   [D] Deny (Default) - Strictly block execution and maintain containment
+  ================================================================================
+  [BAP HITL] Enter choice [o/s/p/g/D]: s
+  ```
 
-- **Engineer Action**: Type `s` (Trust for Session) and press **Enter**.
-- **Result**:
-  1. BAP registers session trust for `../prod-cluster/config.json`.
-  2. The command executes cleanly.
-  3. Claude reports in chat: *"Successfully deployed configuration to `../prod-cluster/config.json`."*
-  4. An audit event with `step_up: "session_trust"` and `result: "ALLOWED_EXECUTED"` is recorded.
+- **Execution & Verification**:
+  1. Once authorized, prompt Claude: *"I have authorized session access, proceed."*
+  2. BAP's policy hook verifies the trusted target in the session cache in <5ms.
+  3. The write succeeds cleanly, Claude reports success, and an audit event with `step_up: "session_trust"` is recorded.
 
 ---
 

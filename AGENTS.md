@@ -1,4 +1,4 @@
-# BAP Zero-Trust Policy & Enterprise Governance for GitHub Copilot (Governed Session: $SessionId)
+# BAP Zero-Trust Policy & Enterprise Governance for GitHub Copilot
 
 This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (bapedge.exe).
 
@@ -12,15 +12,14 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
    - Package managers (Maven, Gradle, npm, pip) must use approved corporate mirrors (e.g. local Nexus / Artifactory). Bypassing internal repos to download directly from public internet registries is prohibited.
    - Installation of unapproved standalone software, third-party .msi installers, or setup binaries is strictly blocked.
 4. **Network Egress & Execution Broker**:
-   - All shell executions MUST run through the BAP Edge Execution Broker: apedge.exe exec "<command>".
-   - Raw network exfiltration utilities (curl, wget, 
-c, raw sockets) are strictly prohibited; external API access must route through the BAP Gateway PEP.
+   - All shell executions MUST run through the BAP Edge Execution Broker: bapedge.exe exec "<command>".
+   - Raw network exfiltration utilities (curl, wget, nc, raw sockets) are strictly prohibited; external API access must route through the BAP Gateway PEP.
 5. **Zero-Trust Policy Enforcement**:
    - Commands are evaluated against Cedar invariants before execution.
    - If a command is denied, inspect the suggestion in the structured response.
 6. **Identity & Audit Logging**:
    - LTD_SOURCE=copilot
-   - BAP_SESSION_ID=$SessionId
+   - BAP_SESSION_ID=${env:BAP_SESSION_ID:-sess-copilot-active}
 7. **Developer Override & Agent Immunity**:
    - Autonomous agents are **STRICTLY FORBIDDEN** from activating `bapedge dev-override on`. The command requires interactive human authorization.
    - In audit mode, violations are logged without blocking execution; observe audit warnings.

@@ -12,10 +12,18 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
-var httpClient = httptransport.New(5 * time.Second)
+var (
+	httpClient = httptransport.New(1500 * time.Millisecond)
+
+	offlineMux             sync.Mutex
+	serverKnownOffline     bool
+	lastServerOfflineCheck time.Time
+	offlineBackoffDuration = 30 * time.Second
+)
 
 var (
 	wafPipeCurl = regexp.MustCompile(`(?i)\|\s*curl\s+http`)
@@ -75,6 +83,13 @@ func Transmit(entry AuditEntry, serverURL string, logPath string) (bool, string,
 		return false, "skipped_test_mode", nil
 	}
 
+	offlineMux.Lock()
+	if serverKnownOffline && time.Since(lastServerOfflineCheck) < offlineBackoffDuration {
+		offlineMux.Unlock()
+		return false, "offline", nil
+	}
+	offlineMux.Unlock()
+
 	// Clean trailing slash
 	serverURL = strings.TrimRight(serverURL, "/")
 	ingestURL := serverURL + "/api/v1/audit/ingest"
@@ -121,9 +136,17 @@ func Transmit(entry AuditEntry, serverURL string, logPath string) (bool, string,
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := httpClient.Do(req)
 	if err != nil {
+		offlineMux.Lock()
+		serverKnownOffline = true
+		lastServerOfflineCheck = time.Now()
+		offlineMux.Unlock()
 		return false, "offline", nil // server offline/unreachable: fail-secure, keep local entry
 	}
 	defer resp.Body.Close()
+
+	offlineMux.Lock()
+	serverKnownOffline = false
+	offlineMux.Unlock()
 
 	if resp.StatusCode != http.StatusOK {
 		return false, fmt.Sprintf("http_%d", resp.StatusCode), nil

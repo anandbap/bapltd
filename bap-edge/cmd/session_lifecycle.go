@@ -167,11 +167,8 @@ func EnsureSessionStarted(sessionID, appID string, clientPID int, initialPrompt 
 	}
 
 	body, _ := json.Marshal(startPayload)
-	client := httptransport.New(3 * time.Second)
+	client := httptransport.New(800 * time.Millisecond)
 	resp, err := client.Post(serverURL+"/api/v1/sessions/start", "application/json", bytes.NewReader(body))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[EnsureSessionStarted] POST %s/api/v1/sessions/start error: %v\n", serverURL, err)
-	}
 	if err == nil && resp != nil {
 		defer resp.Body.Close()
 		if resp.StatusCode == http.StatusForbidden {

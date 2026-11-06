@@ -877,7 +877,7 @@ func pulseHeartbeat(serverURL, sessionID string) (string, string, int64) {
 }
 
 func postJSONQuick(url string, payload any) error {
-	return postJSONWithRetry(url, payload, 3, 200*time.Millisecond)
+	return postJSONWithRetry(url, payload, 2, 100*time.Millisecond)
 }
 
 func postJSONWithRetry(url string, payload any, maxAttempts int, initialBackoff time.Duration) error {
@@ -885,7 +885,7 @@ func postJSONWithRetry(url string, payload any, maxAttempts int, initialBackoff 
 	if err != nil {
 		return err
 	}
-	client := httptransport.New(3 * time.Second)
+	client := httptransport.New(1 * time.Second)
 	var lastErr error
 	backoff := initialBackoff
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -898,12 +898,16 @@ func postJSONWithRetry(url string, payload any, maxAttempts int, initialBackoff 
 			lastErr = fmt.Errorf("HTTP status %d", resp.StatusCode)
 		} else {
 			lastErr = err
+			errStr := strings.ToLower(err.Error())
+			// Fast-fail on fatal network errors: no DNS host, connection refused, offline sandbox
+			if strings.Contains(errStr, "no such host") || strings.Contains(errStr, "connection refused") || strings.Contains(errStr, "network is unreachable") {
+				break
+			}
 		}
 		if attempt < maxAttempts {
 			time.Sleep(backoff)
 			backoff *= 2
 		}
 	}
-	fmt.Fprintf(os.Stderr, "[bapedge watch] Error posting to %s after %d attempts: %v\n", url, maxAttempts, lastErr)
 	return lastErr
 }
