@@ -23,7 +23,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"time"
 )
@@ -1373,57 +1372,17 @@ func promptTerminalHITL(workspaceRoot, sessionID, targetFile, toolName string) s
 	var out io.Writer
 	var closer func()
 
-	if runtime.GOOS == "windows" {
-		kernel32 := syscall.NewLazyDLL("kernel32.dll")
-		procAttachConsole := kernel32.NewProc("AttachConsole")
-		procFreeConsole := kernel32.NewProc("FreeConsole")
-		ret, _, _ := procAttachConsole.Call(uintptr(0xFFFFFFFF)) // ATTACH_PARENT_PROCESS
-		attached := ret != 0
-
-		conin, errIn := os.OpenFile("CONIN$", os.O_RDWR, 0)
-		if errIn != nil {
-			conin, errIn = os.Open("CONIN$")
-		}
-		conout, errOut := os.OpenFile("CONOUT$", os.O_RDWR, 0)
-		if errOut != nil {
-			conout, _ = os.OpenFile("CONOUT$", os.O_WRONLY, 0)
-		}
-		if errIn != nil {
-			if attached {
-				procFreeConsole.Call()
-			}
-			return "non_interactive_deny"
-		}
-		in = conin
-		if conout != nil {
-			out = conout
-			closer = func() {
-				_ = conin.Close()
-				_ = conout.Close()
-				if attached {
-					procFreeConsole.Call()
-				}
-			}
-		} else {
-			out = os.Stderr
-			closer = func() {
-				_ = conin.Close()
-				if attached {
-					procFreeConsole.Call()
-				}
-			}
-		}
-	} else {
-		tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-		if err != nil {
-			return "non_interactive_deny"
-		}
-		in = tty
-		out = tty
-		closer = func() {
-			_ = tty.Close()
-		}
+	conIn, conOut, cleanup, errAttach := attachParentConsole()
+	if errAttach != nil || conIn == nil {
+		return "non_interactive_deny"
 	}
+	in = conIn
+	if conOut != nil {
+		out = conOut
+	} else {
+		out = os.Stderr
+	}
+	closer = cleanup
 	if closer != nil {
 		defer closer()
 	}

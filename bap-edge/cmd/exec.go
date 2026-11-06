@@ -13,9 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"bap-edge/internal/antibypass"
@@ -282,52 +280,13 @@ func promptHumanStepUpApproval(ec *execContext, fullCommand, executable, reason 
 	var closer func()
 
 	if !isTerminal(os.Stdin) && os.Getenv("BAP_NON_INTERACTIVE") != "1" && !ec.forceJSON && os.Getenv("CI") == "" && os.Getenv("GITHUB_ACTIONS") == "" {
-		if runtime.GOOS == "windows" {
-			kernel32 := syscall.NewLazyDLL("kernel32.dll")
-			procAttachConsole := kernel32.NewProc("AttachConsole")
-			procFreeConsole := kernel32.NewProc("FreeConsole")
-			ret, _, _ := procAttachConsole.Call(uintptr(0xFFFFFFFF)) // ATTACH_PARENT_PROCESS
-			attached := ret != 0
-
-			conin, errIn := os.OpenFile("CONIN$", os.O_RDWR, 0)
-			if errIn != nil {
-				conin, errIn = os.Open("CONIN$")
+		in, out, cleanup, err := attachParentConsole()
+		if err == nil && in != nil {
+			termIn = in
+			if out != nil {
+				termOut = out
 			}
-			conout, errOut := os.OpenFile("CONOUT$", os.O_RDWR, 0)
-			if errOut != nil {
-				conout, _ = os.OpenFile("CONOUT$", os.O_WRONLY, 0)
-			}
-			if errIn == nil {
-				termIn = conin
-				if conout != nil {
-					termOut = conout
-					closer = func() {
-						_ = conin.Close()
-						_ = conout.Close()
-						if attached {
-							procFreeConsole.Call()
-						}
-					}
-				} else {
-					closer = func() {
-						_ = conin.Close()
-						if attached {
-							procFreeConsole.Call()
-						}
-					}
-				}
-			} else if attached {
-				procFreeConsole.Call()
-			}
-		} else {
-			tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-			if err == nil {
-				termIn = tty
-				termOut = tty
-				closer = func() {
-					_ = tty.Close()
-				}
-			}
+			closer = cleanup
 		}
 	}
 	if closer != nil {
