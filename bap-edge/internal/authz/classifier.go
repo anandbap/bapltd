@@ -8,16 +8,52 @@ import (
 
 // CommandClassification represents the semantic classification of a shell token/statement.
 type CommandClassification struct {
-	CanonicalExec string // Canonical executable name (e.g. "git", "python", "Select-Object", "write-output")
-	ActionType    string // "read", "write", "delete", "exec", "admin"
-	IsControl     bool   // true if this is a shell control flow statement (if, for, while, try, etc.)
-	IsExpression  bool   // true if this is an in-memory language expression (variable assignment, math, literal)
-	IsAliased     bool   // true if resolved through an alias (e.g. ? -> where-object, gc -> get-content)
+	CanonicalExec   string // Canonical executable name (e.g. "git", "python", "Select-Object", "write-output")
+	ActionType      string // "read", "write", "delete", "exec", "admin"
+	IsControl       bool   // true if this is a shell control flow statement (if, for, while, try, etc.)
+	IsExpression    bool   // true if this is an in-memory language expression (variable assignment, math, literal)
+	IsAliased       bool   // true if resolved through an alias (e.g. ? -> where-object, gc -> get-content)
+	ExecutableClass string // "toolchain", "shell_builtin", "script_runtime", "expression", "filesystem", "system_utility"
 }
 
 // ClassifyCommand deterministically resolves any raw shell token or compound statement
 // across PowerShell, POSIX shells, and CMD into a canonical executable and semantic action.
 func ClassifyCommand(rawExec string, args []string, fullCmd string, isQuoted bool) CommandClassification {
+	res := classifyCommandRaw(rawExec, args, fullCmd, isQuoted)
+	if res.ExecutableClass == "" {
+		res.ExecutableClass = resolveExecutableClass(res.CanonicalExec, res.ActionType, res.IsExpression, res.IsControl)
+	}
+	return res
+}
+
+func resolveExecutableClass(name, actionType string, isExpr, isControl bool) string {
+	if isExpr {
+		return "expression"
+	}
+	if isControl {
+		return "shell_builtin"
+	}
+	lower := strings.ToLower(name)
+	switch lower {
+	case "git", "go", "npm", "npx", "yarn", "pnpm", "node", "pytest", "python", "python3", "py", "pip", "pip3", "mvn", "gradle", "cargo", "java", "javac":
+		return "toolchain"
+	case "bash", "sh", "zsh", "powershell", "pwsh", "cmd":
+		return "script_runtime"
+	case "ls", "dir", "mkdir", "echo", "pwd", "cat", "type", "printenv", "whoami", "cd", "chdir", "pushd", "popd", "exit",
+		"where-object", "foreach-object", "select-object", "sort-object", "group-object", "measure-object", "format-table", "format-list", "format-wide", "select-string", "sls",
+		"get-content", "gc", "set-content", "sc", "add-content", "ac", "get-childitem", "gci", "remove-item", "ri", "new-item", "ni", "move-item", "mi", "copy-item", "cpi",
+		"clear", "cls", "test-path", "resolve-path", "join-path", "split-path", "get-location", "get-acl", "get-command", "get-member", "get-help", "start-sleep", "sleep", "measure-command", "get-date",
+		"out-string", "out-null", "out-default", "out-host", "convertto-json", "convertfrom-json", "tee-object", "tee", "out-file", "write-output", "write-host":
+		return "shell_builtin"
+	case "cp", "mv", "copy", "move", "rm", "del", "erase", "rmdir", "unlink", "touch":
+		return "filesystem"
+	case "taskkill", "kill", "pkill", "killall", "hostname", "uname", "date", "env", "tar", "zip", "unzip", "gzip", "gunzip", "bapedge", "ltd-agent", "bapcontrolplane", "bapgateway", "bapmcp", "bap", "bapdashboard":
+		return "system_utility"
+	}
+	return ""
+}
+
+func classifyCommandRaw(rawExec string, args []string, fullCmd string, isQuoted bool) CommandClassification {
 	clean := strings.TrimSpace(rawExec)
 	if clean == "" && len(args) > 0 {
 		clean = strings.TrimSpace(args[0])

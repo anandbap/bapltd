@@ -64,6 +64,9 @@ func RunTrust(args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to grant permission: %w", err)
 	}
+	if scope == "session" && *sessionIDFlag != "default" && *sessionIDFlag != "" {
+		_ = authz.GrantPermission(workspaceRoot, "default", absPath, scope, actionsList)
+	}
 
 	if *jsonFlag {
 		fmt.Printf(`{"status":"ok","path":%q,"scope":%q,"actions":%v}`+"\n", absPath, scope, actionsList)

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -190,6 +191,74 @@ func handleRequest(w *bufio.Writer, req JSONRPCRequest, authorizer *authz.Author
 					Properties: map[string]interface{}{},
 				},
 			},
+			{
+				Name: "bap_write_file",
+				Description: "Writes content directly to a file under active BAP Zero-Trust boundary governance. " +
+					"Bypasses shell command generation and syntax permutations. Cross-folder writes are strictly evaluated against workspace boundaries and active permissions.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]interface{}{
+						"path": map[string]string{
+							"type":        "string",
+							"description": "Target file path relative to workspace or absolute",
+						},
+						"content": map[string]string{
+							"type":        "string",
+							"description": "Full file content to write",
+						},
+					},
+					Required: []string{"path", "content"},
+				},
+			},
+			{
+				Name: "bap_read_file",
+				Description: "Reads file contents under active BAP Zero-Trust credential shielding (.env, .ssh, .aws forbidden).",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]interface{}{
+						"path": map[string]string{
+							"type":        "string",
+							"description": "File path to read",
+						},
+					},
+					Required: []string{"path"},
+				},
+			},
+			{
+				Name: "bap_edit_file",
+				Description: "Performs exact string replacement in a file under active BAP Zero-Trust governance.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]interface{}{
+						"path": map[string]string{
+							"type":        "string",
+							"description": "Target file path",
+						},
+						"old_string": map[string]string{
+							"type":        "string",
+							"description": "Exact text to replace",
+						},
+						"new_string": map[string]string{
+							"type":        "string",
+							"description": "Replacement text",
+						},
+					},
+					Required: []string{"path", "old_string", "new_string"},
+				},
+			},
+			{
+				Name: "bap_list_dir",
+				Description: "Lists files and directories under active BAP Zero-Trust governance.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]interface{}{
+						"path": map[string]string{
+							"type":        "string",
+							"description": "Directory path to inspect (defaults to '.')",
+						},
+					},
+				},
+			},
 		}
 		sendResult(w, req.ID, map[string]interface{}{"tools": tools})
 
@@ -235,6 +304,22 @@ func handleRequest(w *bufio.Writer, req JSONRPCRequest, authorizer *authz.Author
 
 		case "bap_status":
 			res := getStatus(cfg)
+			sendResult(w, req.ID, res)
+
+		case "bap_write_file":
+			res := handleWriteFile(params.Arguments, cfg)
+			sendResult(w, req.ID, res)
+
+		case "bap_read_file":
+			res := handleReadFile(params.Arguments)
+			sendResult(w, req.ID, res)
+
+		case "bap_edit_file":
+			res := handleEditFile(params.Arguments, cfg)
+			sendResult(w, req.ID, res)
+
+		case "bap_list_dir":
+			res := handleListDir(params.Arguments)
 			sendResult(w, req.ID, res)
 
 		default:
@@ -537,4 +622,227 @@ func sendToolError(w *bufio.Writer, id interface{}, message string) {
 		IsError: true,
 	}
 	sendResult(w, id, result)
+}
+
+func handleWriteFile(args map[string]interface{}, cfg ServerConfig) CallToolResult {
+	pathVal, _ := args["path"].(string)
+	contentVal, _ := args["content"].(string)
+	if strings.TrimSpace(pathVal) == "" {
+		return CallToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "Parameter 'path' is required"}},
+			IsError: true,
+		}
+	}
+	workspaceRoot := authz.GetWorkspaceRoot()
+	var absPath string
+	if filepath.IsAbs(pathVal) {
+		absPath = filepath.Clean(pathVal)
+	} else {
+		absPath = filepath.Clean(filepath.Join(workspaceRoot, pathVal))
+	}
+
+	// 1. Check secret paths (.env, .ssh, ~/.aws)
+	if isSecret, reason := authz.IsForbiddenSecretPath(absPath); isSecret {
+		return CallToolResult{
+			Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("[BAP ZERO-TRUST] Security Invariant Violation: Access to sensitive credential stores is strictly forbidden: %s", reason)}},
+			IsError: true,
+		}
+	}
+
+	// 2. Check workspace escape
+	if workspaceRoot != "" && authz.IsPathOutsideWorkspaceCanonical(workspaceRoot, absPath) {
+		if auth, _ := authz.IsTargetAuthorized(workspaceRoot, cfg.SessionID, absPath, "write"); !auth {
+			return CallToolResult{
+				Content: []ContentBlock{{
+					Type: "text",
+					Text: fmt.Sprintf("[BAP ZERO-TRUST] Execution blocked: Directory traversal outside workspace is forbidden for path: %s\nCommands modifying files outside workspace require authorization. To authorize this path, run: ! bapedge trust %q --project (or --session).", pathVal, pathVal),
+				}},
+				IsError: true,
+			}
+		}
+	}
+
+	// 3. Write file
+	dir := filepath.Dir(absPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return CallToolResult{
+			Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("Failed to create parent directory: %v", err)}},
+			IsError: true,
+		}
+	}
+	if err := os.WriteFile(absPath, []byte(contentVal), 0644); err != nil {
+		return CallToolResult{
+			Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("Failed to write file: %v", err)}},
+			IsError: true,
+		}
+	}
+
+	// 4. Emit Audit Telemetry
+	startTime := time.Now()
+	uID, uEmail, spiffeID := "developer", "developer@enterprise.local", "spiffe://enterprise.local/agent/mcp"
+	if cfg.IdentityResolver != nil {
+		uID, uEmail, spiffeID = cfg.IdentityResolver()
+	}
+	auditEntry := audit.AuditEntry{
+		ReportingLayer: "mcp",
+		SessionID:      cfg.SessionID,
+		UserID:         uID,
+		UserEmail:      uEmail,
+		SPIFFEID:       spiffeID,
+		Timestamp:      startTime.UTC(),
+		Source:         "mcp-file-tool",
+		ClientPID:      os.Getpid(),
+		Executable:     "bap_write_file",
+		Arguments:      pathVal,
+		FullCommand:    fmt.Sprintf("bap_write_file %s (%d bytes)", pathVal, len(contentVal)),
+		Decision:       "allow",
+		DurationMs:     1,
+		ExitCode:       0,
+	}
+	_ = audit.Log(&auditEntry, cfg.AuditLogPath)
+	_, _, _ = audit.Transmit(auditEntry, cfg.ServerURL, cfg.AuditLogPath)
+
+	return CallToolResult{
+		Content: []ContentBlock{{
+			Type: "text",
+			Text: fmt.Sprintf("Successfully wrote %d bytes to %s", len(contentVal), absPath),
+		}},
+		IsError: false,
+	}
+}
+
+func handleReadFile(args map[string]interface{}) CallToolResult {
+	pathVal, _ := args["path"].(string)
+	if strings.TrimSpace(pathVal) == "" {
+		return CallToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "Parameter 'path' is required"}},
+			IsError: true,
+		}
+	}
+	workspaceRoot := authz.GetWorkspaceRoot()
+	var absPath string
+	if filepath.IsAbs(pathVal) {
+		absPath = filepath.Clean(pathVal)
+	} else {
+		absPath = filepath.Clean(filepath.Join(workspaceRoot, pathVal))
+	}
+	if isSecret, reason := authz.IsForbiddenSecretPath(absPath); isSecret {
+		return CallToolResult{
+			Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("[BAP ZERO-TRUST] Security Invariant Violation: Access to sensitive credential stores is strictly forbidden: %s", reason)}},
+			IsError: true,
+		}
+	}
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return CallToolResult{
+			Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("Failed to read file: %v", err)}},
+			IsError: true,
+		}
+	}
+	return CallToolResult{
+		Content: []ContentBlock{{
+			Type: "text",
+			Text: string(data),
+		}},
+		IsError: false,
+	}
+}
+
+func handleEditFile(args map[string]interface{}, cfg ServerConfig) CallToolResult {
+	pathVal, _ := args["path"].(string)
+	oldStr, _ := args["old_string"].(string)
+	newStr, _ := args["new_string"].(string)
+	if strings.TrimSpace(pathVal) == "" || oldStr == "" {
+		return CallToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "Parameters 'path' and 'old_string' are required"}},
+			IsError: true,
+		}
+	}
+	workspaceRoot := authz.GetWorkspaceRoot()
+	var absPath string
+	if filepath.IsAbs(pathVal) {
+		absPath = filepath.Clean(pathVal)
+	} else {
+		absPath = filepath.Clean(filepath.Join(workspaceRoot, pathVal))
+	}
+	if isSecret, reason := authz.IsForbiddenSecretPath(absPath); isSecret {
+		return CallToolResult{
+			Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("[BAP ZERO-TRUST] Security Invariant Violation: Access to sensitive credential stores is strictly forbidden: %s", reason)}},
+			IsError: true,
+		}
+	}
+	if workspaceRoot != "" && authz.IsPathOutsideWorkspaceCanonical(workspaceRoot, absPath) {
+		if auth, _ := authz.IsTargetAuthorized(workspaceRoot, cfg.SessionID, absPath, "write"); !auth {
+			return CallToolResult{
+				Content: []ContentBlock{{
+					Type: "text",
+					Text: fmt.Sprintf("[BAP ZERO-TRUST] Execution blocked: Directory traversal outside workspace is forbidden for path: %s\nCommands modifying files outside workspace require authorization. To authorize this path, run: ! bapedge trust %q --project (or --session).", pathVal, pathVal),
+				}},
+				IsError: true,
+			}
+		}
+	}
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return CallToolResult{
+			Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("Failed to read file for editing: %v", err)}},
+			IsError: true,
+		}
+	}
+	content := string(data)
+	if !strings.Contains(content, oldStr) {
+		return CallToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "old_string not found in target file"}},
+			IsError: true,
+		}
+	}
+	updated := strings.Replace(content, oldStr, newStr, 1)
+	if err := os.WriteFile(absPath, []byte(updated), 0644); err != nil {
+		return CallToolResult{
+			Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("Failed to save edited file: %v", err)}},
+			IsError: true,
+		}
+	}
+	return CallToolResult{
+		Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("Successfully edited %s", absPath)}},
+		IsError: false,
+	}
+}
+
+func handleListDir(args map[string]interface{}) CallToolResult {
+	pathVal, _ := args["path"].(string)
+	if pathVal == "" {
+		pathVal = "."
+	}
+	workspaceRoot := authz.GetWorkspaceRoot()
+	var absPath string
+	if filepath.IsAbs(pathVal) {
+		absPath = filepath.Clean(pathVal)
+	} else {
+		absPath = filepath.Clean(filepath.Join(workspaceRoot, pathVal))
+	}
+	entries, err := os.ReadDir(absPath)
+	if err != nil {
+		return CallToolResult{
+			Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("Failed to list directory: %v", err)}},
+			IsError: true,
+		}
+	}
+	var lines []string
+	for _, e := range entries {
+		info, _ := e.Info()
+		size := int64(0)
+		if info != nil {
+			size = info.Size()
+		}
+		typeStr := "file"
+		if e.IsDir() {
+			typeStr = "dir"
+		}
+		lines = append(lines, fmt.Sprintf("%-6s %10d %s", typeStr, size, e.Name()))
+	}
+	return CallToolResult{
+		Content: []ContentBlock{{Type: "text", Text: strings.Join(lines, "\n")}},
+		IsError: false,
+	}
 }

@@ -292,3 +292,34 @@ BAP provides a decoupled, two-tier execution architecture to guarantee both **fa
 | **Fleet Observability** | Visible on command / heartbeat intervals. | Continuously reported with live heartbeat pulses. |
 | **Remote Freeze Sync** | Synchronized during pre-flight command checks. | Synchronized in real time (within 3 seconds). |
 | **Remote Deregistration** | Local credentials erased on next command attempt. | Local credentials erased immediately on poll. |
+
+---
+
+## 9. Capability-Based Policy Evolution & Governed MCP Acceleration (BAP-817 & BAP-820)
+
+### 9.1 Overcoming the Shell Permutation Combinatorial Game (BAP-817)
+Early policy engines attempted to allowlist individual shell binary and cmdlet names (`Out-Null`, `Tee-Object`, `New-Item`, `Set-Content`). When generative AI coding models compose multi-command deployment scripts, they invent countless syntactic permutations (piping through `Out-Null`, piping JSON directly to `Set-Content`, or using formatting pipelines).
+
+BAP-817 eliminates this combinatorial deadlock by pairing Cedar's strict deny-overrides architecture with semantic execution classes:
+1. **Inviolable Invariant Boundaries (Forbid Policies 2–7)**:
+   - Forbid modifying files escaping the workspace root without explicit authorization.
+   - Forbid accessing credential stores (`.env`, `~/.aws`, `~/.ssh`).
+   - Forbid raw socket creation, unapproved curl egress, and corporate mirror bypass.
+2. **Capability-Based Permitting (Policy 1)**:
+   - Evaluates commands by their semantic execution class (`context.executable_class`):
+     - `toolchain` (compiler, package managers, test runners)
+     - `shell_builtin` (navigation, environment inspection, pipeline formatting)
+     - `script_runtime` (shells, interpreters)
+     - `expression` (in-memory variable assignments, math, member access)
+     - `filesystem` (file creation, modification within authorized boundaries)
+     - `system_utility` (process inspection, compression)
+3. Non-destructive commands, formatting utilities, and standard deployment steps are permitted automatically, while destructive or out-of-workspace operations are unconditionally intercepted by the boundary policies.
+
+### 9.2 Native Governed MCP File Tools (BAP-820)
+To eliminate raw shell script generation entirely for file mutations, `bapmcp` provides native Model Context Protocol tools:
+- `bap_write_file`: Writes structured file contents directly to disk after validating workspace escape and credential access.
+- `bap_read_file`: Reads files safely under credential shielding.
+- `bap_edit_file`: Performs surgical string replacements on disk.
+- `bap_list_dir`: Inspects workspace directories without shell tools.
+
+By routing file operations through typed JSON-RPC parameters, AI agents bypass shell string escaping, terminal pipe wrapping, and AST classification completely. Cross-folder mutations outside the workspace are verified against active project, session, and global permissions via `IsTargetAuthorized`, ensuring seamless step-up governance without shell traps.

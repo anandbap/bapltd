@@ -33,7 +33,10 @@ permit (
         "get-acl", "get-command", "resolve-path", "join-path", "split-path", "icacls", "attrib",
         "out-null", "out-default", "out-host", "convertto-json", "convertfrom-json", "tee-object", "start-sleep", "measure-command", "get-date",
         "bapedge", "ltd-agent", "bapcontrolplane", "bapgateway", "bapmcp", "bap", "bapdashboard"
-    ].contains(context.executable)
+    ].contains(context.executable) ||
+    [
+        "toolchain", "shell_builtin", "script_runtime", "expression", "filesystem", "system_utility"
+    ].contains(context.executable_class)
 };
 
 // 2. Forbid Policy: Mutating or Destructive Actions Outside Workspace Boundary

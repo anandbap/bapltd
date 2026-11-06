@@ -1851,7 +1851,7 @@
         S.rows = agents.map(function (a) {
           var isBlocked = !isShadow(a) && (/deny|denied|block/i.test(a.policy_decision || '') || /^(denied|blocked)$/i.test(a.action_status || '') || a.outcome_category === 'Blocked');
           var storyId = a.session_id || a.agent_id || 'live-story';
-          if (isBlocked && !stories[storyId]) {
+          if (isBlocked) {
             stories[storyId] = {
               title: 'Blocked ' + (a.action || a.tool || 'risky action'),
               steps: [

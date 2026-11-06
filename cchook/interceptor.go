@@ -1235,6 +1235,17 @@ func isTargetAuthorized(workspaceRoot, sessionID, targetPath, action string) (bo
 		if checkFile(sessPath, "session") {
 			return true, "session"
 		}
+		if safeID != "default" {
+			defaultPath := filepath.Join(workspaceRoot, ".bap", "approvals_default.json")
+			if checkFile(defaultPath, "session") {
+				return true, "session"
+			}
+		}
+	} else {
+		defaultPath := filepath.Join(workspaceRoot, ".bap", "approvals_default.json")
+		if checkFile(defaultPath, "session") {
+			return true, "session"
+		}
 	}
 
 	// 2. Project scope
@@ -2858,7 +2869,7 @@ func main() {
 				}
 			}
 
-			outputDecision("deny", fmt.Sprintf("Modifying files outside workspace is forbidden for file %q", targetFile), fmt.Sprintf("Writing or modifying files outside the project root is prohibited. Authorize via 'bapedge trust %q --project' (or --session / --global).", targetFile))
+			outputDecision("deny", fmt.Sprintf("Modifying files outside workspace is forbidden for file %q. To authorize this path, run: ! bapedge trust %q --project", targetFile, targetFile), fmt.Sprintf("Writing or modifying files outside the project root is prohibited. To authorize this path, run: ! bapedge trust %q --project (or --session / --global).", targetFile))
 			return
 		}
 
@@ -2999,7 +3010,7 @@ func main() {
 					case "session_trust", "project_trust", "global_trust":
 						// allowed to proceed to execution
 					default:
-						outputDecision("deny", fmt.Sprintf("Directory traversal outside workspace is forbidden in command: %s", command), fmt.Sprintf("Commands modifying files outside workspace require authorization. Authorize via 'bapedge trust %q --session' (or --project / --global), or set BAP_STEPUP_DECISION=session.", target))
+						outputDecision("deny", fmt.Sprintf("Directory traversal outside workspace is forbidden in command: %s. To authorize this path, run: ! bapedge trust %q --project", command, target), fmt.Sprintf("Commands modifying files outside workspace require authorization. To authorize this path, run: ! bapedge trust %q --project (or --session / --global).", target))
 						return
 					}
 				} else {
@@ -3008,7 +3019,7 @@ func main() {
 						hookLog("AUDIT MODE allowed workspace traversal (session %s): %s", sessionID, target)
 						fmt.Fprintf(os.Stderr, "[BAP AUDIT MODE] Directory traversal outside workspace detected: %s. Execution permitted in audit mode.\n", target)
 					} else {
-						outputDecision("deny", fmt.Sprintf("Directory traversal outside workspace is forbidden in command: %s", command), fmt.Sprintf("Commands modifying files outside workspace require authorization. Authorize via 'bapedge trust %q --session' (or --project / --global), or set BAP_STEPUP_DECISION=session.", target))
+						outputDecision("deny", fmt.Sprintf("Directory traversal outside workspace is forbidden in command: %s. To authorize this path, run: ! bapedge trust %q --project", command, target), fmt.Sprintf("Commands modifying files outside workspace require authorization. To authorize this path, run: ! bapedge trust %q --project (or --session / --global).", target))
 						return
 					}
 				}

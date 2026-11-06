@@ -1262,6 +1262,43 @@ Developer tooling utilizes divergent JSON output schemas:
 - **Generic CLI & IDE Agents**: Standard schema expecting `decision: "allow" | "deny"`.
 - **Interceptors (`interceptor.exe`, `cchook-interceptor.exe`)**: Automatically detect caller binary variants (`claude`, `claude-code`, `claudecode`, wrapper batch files) and synthesize exact matching response schemas, preventing `Hook JSON output validation failed` errors while preserving invariant Cedar policy enforcement.
 
+---
+
+## 16. Capability-Based Policy Evolution, Governed MCP Tools & Kernel Filesystem Boundary (Epic 44 — `BAP-817`–`BAP-822`)
+
+### 16.1. Capability-Based Policy Evolution & Semantic Execution Classes (BAP-817)
+To resolve the brittle token-allowlist "cat-and-mouse" combinatorial game against generative coding models:
+- **Cedar Deny-Overrides Alignment**: BAP preserves declarative `forbid` rules (Policies 2–7) as inviolable security invariants (workspace escaping writes, credential stores, raw sockets, curl exfiltration, untrusted package mirrors, canary honeytokens).
+- **Execution Class Permitting**: Policy 1 evolves from an enumerated token array to semantic execution classes:
+  $$\text{context.executable\_class} \in \{\text{"toolchain"}, \text{"shell\_builtin"}, \text{"script\_runtime"}, \text{"expression"}, \text{"filesystem"}, \text{"system\_utility"}\}$$
+- **PowerShell & POSIX AST Classification**: `ClassifyCommand` in `bap-edge/internal/authz/classifier.go` resolves cmdlet aliases, pipelines (`Out-Null`, `Tee-Object`, `Select-Object`), and in-memory variable expressions into their canonical execution classes, eliminating false-positive token rejections during multi-step migration deployments.
+
+### 16.2. Native Governed Model Context Protocol (MCP) File Operations (BAP-820)
+To eliminate 90% of fragile raw shell generation and command-line quoting permutations:
+- **Governed File Tools**: `bapmcp` exposes structured JSON-RPC tools (`bap_write_file`, `bap_read_file`, `bap_edit_file`, `bap_list_dir`).
+- **Structured Boundary Evaluation**: Every file operation processes typed parameters (`path`, `content`), canonicalizes paths relative to the active workspace, inspects credential stores (`.env`, `.ssh`, `.aws`), and checks `IsTargetAuthorized` across Session, Project, and Global stores before invoking OS I/O.
+- **Instant Audit Telemetry**: Operations emit structured audit entries directly to the local ledger and Control Plane with zero shell parsing overhead.
+
+### 16.3. AWS Dogwood Temporal Multi-Turn Governance (BAP-818)
+To govern multi-turn agent workflows and temporal delegation lifetimes:
+- **Metric First-Order Temporal Logic (MFOTL)**: Central Control Plane defines declarative temporal rules over session event sequences:
+  - Cumulative denial budgets: $\square (\text{denial\_count} \le 3)$
+  - Time-bounded step-up delegation: $\text{action} \to \lozenge_{[-15m, 0]} \text{HITL\_Approve}$
+  - Tool-chaining constraints: $\text{Migrate} \to \lozenge_{[-5m, 0]} \text{Inspect}$
+- **Runtime Lowering**: The Control Plane lowers temporal policies into stateful Cedar evaluation context slots (`context.session_denial_count`, `context.grant_age_seconds`), retaining sub-2ms edge evaluation.
+
+### 16.4. Kernel-Level Filesystem Virtualization & Restricted Tokens (BAP-819)
+- **Windows Write-Restricted SIDs**: `CreateRestrictedToken` applies `DISABLE_MAX_PRIVILEGE` and restricts write access strictly to `$WORKSPACE_ROOT` and `%TEMP%\bap_*`, returning native NT kernel `ACCESS_DENIED` on escaping file writes.
+- **Linux Landlock LSM**: Establishes Landlock rulesets restricting `LANDLOCK_ACCESS_FS_WRITE` to the approved workspace prior to process execution.
+
+### 16.5. JWS Policy Streaming & In-Memory Hot-Reload (BAP-821)
+- **RFC 7515 JWS Policy Bundles**: Authoritative policy bundles (`policy.cedar`, `schema.json`) are signed with the Control Plane enterprise key.
+- **Live SSE Streaming**: Edge daemons subscribe to `/api/v1/control/policy-stream` and hot-reload verified policies in-memory within 500ms without disk hash mismatch locks.
+
+### 16.6. Interactive Policy Studio & Explainer Engine (BAP-822)
+- **V3 Cockpit Policy Studio**: Interactive visual simulator for testing agent commands against live policies with full AST breakdown.
+- **"Why Was It Blocked?" Modal**: 1-click verdict explanation in the Activity feed mapping blocked operations to Cedar rule IDs, evaluated invariants, and suggested remediation (`bapedge trust <path> --project`).
+
 
 
 

@@ -453,6 +453,7 @@ func (a *Authorizer) evaluateAtomicNode(executable, fullCommand, args, workspace
 		cedar.String("resource_canonical"): cedar.String(decomp.CanonicalResource),
 		cedar.String("action_type"):        cedar.String(decomp.ActionType),
 		cedar.String("target_entity"):      cedar.String(decomp.TargetEntity),
+		cedar.String("executable_class"):   cedar.String(classification.ExecutableClass),
 	}
 
 	req := cedar.Request{
@@ -733,6 +734,11 @@ const defaultBaselineSchema = `{
               "full_command": { "type": "String", "required": true },
               "args": { "type": "String", "required": false },
               "escapes_workspace": { "type": "Boolean", "required": false },
+              "executable_class": { "type": "String", "required": false },
+              "action_type": { "type": "String", "required": false },
+              "action_canonical": { "type": "String", "required": false },
+              "resource_canonical": { "type": "String", "required": false },
+              "target_entity": { "type": "String", "required": false },
               "department": { "type": "String", "required": false },
               "user_email": { "type": "String", "required": false },
               "groups": { "type": "Set", "element": { "type": "String" }, "required": false }

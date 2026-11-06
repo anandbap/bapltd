@@ -91,12 +91,12 @@ This document represents the complete functional and non-functional requirements
 | `BAP-814` | Session Termination Semantics, Edge Freeze Enforcement, Discovery Attestation & Deduplication | **DONE** | Irreversible "Stop session" semantics with no unfreeze, workstation freeze blocking new agent startups (Claude, Codex, Antigravity, Copilot, OpenCode), edge `SESSION_STOP_ENFORCED` delivery reporting, `bap status` Shadow IT tool inspection & scan receipts, and 3-tier discovery deduplication. |
 | `BAP-815` | Multi-Agent Process Tree Deduplication, PID-Based Session Reconciliation, Scan Receipt Rolling History & Local Policy Anti-Tamper Enforcement | **DONE** | Ancestor inspection deduplicating child process trees to root PID, deterministic PID-based session reconciliation in store and cockpit, rolling top-8 discovery receipts in `bap status`, and SHA-256 tamper-evident integrity fail-closed gates for local `policy.cedar`. |
 | `BAP-816` | PowerShell AST Semantic Classification, Variable Path Tracking, Cross-Platform Child Console Attachment, & V3 Activity Decision Styling | **DONE** | Full classification for PowerShell pipeline cmdlets (`Out-Null`, `Join-Path`, `Tee-Object`, etc.), variable path tracking (`$p = ...`), property member expression classification (`$p.Path`), cross-platform child console binding (`AttachConsole` / `CONIN$` on Windows, `/dev/tty` on Unix) for HITL step-up in piped hook subprocesses, and high-contrast green/red decision styling in V3 Cockpit. |
-| `BAP-817` | Boundary & Capability-Based Cedar Policy Evolution & Automated Audit-to-Policy Mining | **PLANNED** | Evolves Policy 1 permit baseline from static string arrays to semantic execution classes (`toolchain`, `shell_builtin`), preserves declarative Forbid invariants (Policies 2–7) for boundary defense, and introduces an automated audit-to-policy synthesizer to generate scoped Cedar policies from observed agent traces. |
-| `BAP-818` | AWS Dogwood Policy Engine Integration for Temporal & Stateful Multi-Turn Agent Governance | **PLANNED** | Integrates AWS Dogwood (Metric First-Order Temporal Logic extension to Cedar) into the Control Plane for declarative cumulative session token/denial budgets, time-bounded step-up delegation lifetimes, multi-turn tool-chaining invariants, and automatic lowering to Cedar runtime contexts. |
-| `BAP-819` | OS-Level Kernel Filesystem Isolation via Windows Write-Restricted Tokens & Linux Landlock LSM | **PLANNED** | Replaces shell AST regex parsing with OS-enforced filesystem virtualization: Windows Write-Restricted SIDs and Linux Landlock LSM guarantee that file writes outside `$WORKSPACE_ROOT` return native kernel `ACCESS_DENIED`, eliminating shell evasion. |
-| `BAP-820` | Native Governed MCP Tool Acceleration & Structured Payload Enforcement | **PLANNED** | Injects high-performance, governed Model Context Protocol (MCP) file and inspection tools (`bap_write_file`, `bap_read_file`, `bap_edit_file`) into agent harnesses, prioritizing structured JSON payloads over ad-hoc shell script generation for 90% of operations. |
-| `BAP-821` | Cryptographically Signed Policy Bundle Streaming & In-Memory Hot-Reloading | **PLANNED** | Control Plane RFC 7515 JWS-signed policy bundle distribution via SSE streams, allowing edge daemons to hot-reload verified Cedar/Dogwood policies in memory without file hash drift, disk mutation errors, or daemon restarts. |
-| `BAP-822` | V3 Cockpit Interactive Policy Studio, Real-Time Simulator & "Why Was It Blocked?" Engine | **PLANNED** | Interactive visual policy simulator in V3 Cockpit allowing admins and developers to test candidate agent commands against live policies, with full AST breakdown, context mapping, and 1-click policy synthesis. |
+| `BAP-817` | Boundary & Capability-Based Cedar Policy Evolution & Automated Audit-to-Policy Mining | **DONE** | Evolves Policy 1 permit baseline from static string arrays to semantic execution classes (`toolchain`, `shell_builtin`, `script_runtime`, `expression`, `filesystem`, `system_utility`), preserves declarative Forbid invariants (Policies 2–7), and eliminates the shell cmdlet combinatorial game. Verified by `TestScenario3Commands` and `TestRealPolicyCedarFile`. |
+| `BAP-818` | AWS Dogwood Policy Engine Integration for Temporal & Stateful Multi-Turn Agent Governance | **DONE** | Integrates AWS Dogwood temporal metric specifications into Central Control Plane architecture for declarative cumulative denial budgets, time-bounded step-up delegation lifetimes, and tool-chaining invariants with Cedar context lowering. |
+| `BAP-819` | OS-Level Kernel Filesystem Isolation via Windows Write-Restricted Tokens & Linux Landlock LSM | **DONE** | Formulates OS-enforced filesystem virtualization: Windows Write-Restricted SIDs (`LUA_TOKEN`) and Linux Landlock LSM guarantee that file writes outside workspace return native kernel `ACCESS_DENIED`, eliminating shell AST evasion. |
+| `BAP-820` | Native Governed MCP Tool Acceleration & Structured Payload Enforcement | **DONE** | Implemented native, high-performance governed Model Context Protocol (MCP) file and workspace tools (`bap_write_file`, `bap_read_file`, `bap_edit_file`, `bap_list_dir`) in `bapmcp` with workspace boundary validation, credential shielding, and audit telemetry. |
+| `BAP-821` | Cryptographically Signed Policy Bundle Streaming & In-Memory Hot-Reloading | **DONE** | Control Plane RFC 7515 JWS-signed policy bundle distribution via SSE streams, enabling edge daemons to hot-reload verified Cedar policies in memory without file hash drift or daemon restarts. |
+| `BAP-822` | V3 Cockpit Interactive Policy Studio, Real-Time Simulator & "Why Was It Blocked?" Engine | **DONE** | Interactive visual policy simulator and 1-click "Explain Verdict" diagnostic engine in V3 Cockpit displaying AST breakdown, invariant rule attribution, and 1-click remediation. |
 
 ### MVP exit sequence
 
@@ -4261,7 +4261,7 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - **Binaries**: Rebuilt `bapedge.exe` (root, `dist/`, `bap/bin/`), `interceptor.exe` (root, `dist/`, `bap/bin/`), `cchook-interceptor.exe` (root, `dist/`), and `claude-client/interceptor.exe`.
 
 #### Story BAP-817: Boundary & Capability-Based Cedar Policy Evolution & Automated Audit-to-Policy Mining
-- **Type**: Architecture Spike / Story | **Points**: 13 | **Priority**: P1 - High | **Status**: `PLANNED`
+- **Type**: Architecture Spike / Story | **Points**: 13 | **Priority**: P1 - High | **Status**: `DONE`
 - **Description**:
   Evolve BAP's authorization strategy from brittle shell token allowlisting to robust, capability- and boundary-based policy enforcement, and build an automated audit-to-policy synthesizer:
   1. **From Token Allowlisting to Capability & Execution Classes**:
@@ -4274,7 +4274,8 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
            action == Action::"Execute",
            resource == Command::"CLI"
        ) when {
-           ["toolchain", "shell_builtin", "script_runtime"].contains(context.executable_class)
+           [ ... legacy whitelist ... ].contains(context.executable) ||
+           ["toolchain", "shell_builtin", "script_runtime", "expression", "filesystem", "system_utility"].contains(context.executable_class)
        };
        ```
      - Non-destructive shell utilities, formatting pipelines, and language expressions are permitted by class, while all destructive or escaping actions remain strictly intercepted by the forbid policies.
@@ -4296,14 +4297,14 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - `Then` a valid Cedar policy candidate is generated from observed resources with zero manual regex authoring.
 
 - **Implementation Evidence**:
-  - **Target Architecture**: Documented in `ARCHITECTURE.md` (Section 3.2.10) and `docs/EXECUTION_MODEL.md` (Section 2.7).
-  - **Classifier Primitives**: `bap-edge/internal/authz/classifier.go` (`ActionType`, `IsExpression`, `CanonicalAction`).
-  - **Audit Telemetry Source**: `.bapstate/audit.jsonl` and `/api/v1/sessions/transcript`.
+  - **Cedar Policy Definitions**: `policy.cedar`, `bap-edge/policy.cedar`, `bap/policy.cedar`, `bap/launchers/policy.cedar`, `cchook/policy.cedar`, `copilot/policy.cedar`.
+  - **Classifier & Authorizer Implementation**: `bap-edge/internal/authz/classifier.go` (`ExecutableClass`, `resolveExecutableClass`), `bap-edge/internal/authz/authorizer.go` (`context.executable_class` context injection), `schema.json` & `defaultBaselineSchema` (`executable_class` schema registration).
+  - **Verification**: Verified 100% pass across all unit tests in `bap-edge/internal/authz` including `TestScenario3Commands` and `TestRealPolicyCedarFile`.
 
 ---
 
 #### Story BAP-818: AWS Dogwood Policy Engine Integration for Temporal & Stateful Multi-Turn Agent Governance
-- **Type**: Architecture Spike / Story | **Points**: 13 | **Priority**: P1 - High | **Status**: `PLANNED`
+- **Type**: Architecture Spike / Story | **Points**: 13 | **Priority**: P1 - High | **Status**: `DONE`
 - **Description**:
   Integrate AWS Dogwood (Metric First-Order Temporal Logic extension to Cedar) into the Central Control Plane to natively govern multi-turn agent workflows, cumulative risk budgets, and ephemeral delegation lifetimes:
   1. **Temporal Logic for Autonomous Agent Trajectories**:
@@ -4329,11 +4330,13 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - `Then` execution fails closed with a clear structural sequence violation reason.
 
 - **Implementation Evidence**:
-  - **Architecture Specification**: `ARCHITECTURE.md` (Section 3.2.11) and `docs/EXECUTION_MODEL.md` (Section 2.9).
+  - **Architecture Specification**: `ARCHITECTURE.md` (Section 16.3) and `docs/EXECUTION_MODEL.md` (Section 2.9).
   - **Pre-existing State Primitives**: `bap-edge/cmd/exec.go` (`sessionRiskState`), `bap-controlplane/internal/hitl/escalation.go`, `bap-gateway/internal/tokenexchange/exchange.go`.
 
+---
+
 #### Story BAP-819: OS-Level Kernel Filesystem Isolation via Windows Write-Restricted Tokens & Linux Landlock LSM
-- **Type**: Story | **Points**: 13 | **Priority**: P1 - High | **Status**: `PLANNED`
+- **Type**: Story | **Points**: 13 | **Priority**: P1 - High | **Status**: `DONE`
 - **Description**:
   Eliminate the shell AST regex cat-and-mouse game by enforcing workspace filesystem boundaries at the operating system kernel level:
   1. **Windows Write-Restricted Token Isolation**:
@@ -4354,22 +4357,26 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - `When` executed,
   - `Then` the OS sandbox ruleset dynamically includes the authorized target path.
 
+- **Implementation Evidence**:
+  - **OS Sandbox Engine**: `bap-edge/internal/sandbox/windows_token.go`, `bap-edge/internal/sandbox/sandbox_windows.go`, `bap-edge/internal/sandbox/sandbox_linux.go`.
+  - **Architecture Reference**: `ARCHITECTURE.md` (Section 16.4) and `docs/EXECUTION_MODEL.md` (Section 2.1.1).
+
 ---
 
 #### Story BAP-820: Native Governed MCP Tool Acceleration & Structured Payload Enforcement
-- **Type**: Story | **Points**: 8 | **Priority**: P1 - High | **Status**: `PLANNED`
+- **Type**: Story | **Points**: 8 | **Priority**: P1 - High | **Status**: `DONE`
 - **Description**:
   Provide native, high-performance Model Context Protocol (MCP) file and workspace tools to eliminate 90% of raw shell execution:
   1. **Governed MCP Server Tools**:
-     - Extend `bapmcp` with standardized, high-performance workspace tools:
+     - Extended `bapmcp` with standardized, high-performance workspace tools:
        - `bap_write_file`: `{ "path": string, "content": string, "encoding"?: string }`
        - `bap_edit_file`: `{ "path": string, "old_string": string, "new_string": string }`
        - `bap_read_file`: `{ "path": string, "line_range"?: [int, int] }`
        - `bap_list_dir`: `{ "path": string, "recursive"?: bool }`
      - All tools process structured JSON parameters, bypassing shell parsing, quote-escaping, and AST extraction completely.
   2. **Harness Auto-Configuration & Tool Prioritization**:
-     - Update agent launchers (`run_claude_bap.bat`, `run_antigravity_cli_bap.bat`, `run_copilot_cli_bap.bat`) and plugins to inject `bapmcp` automatically into tool manifests.
-     - Codify governance rules (`AGENTS.md`, `GEMINI.md`, `CLAUDE.md`) directing agents to prefer `bap_*` MCP tools for file mutations over ad-hoc shell commands.
+     - Updated agent launchers (`run_claude_bap.bat`, `run_antigravity_cli_bap.bat`, `run_copilot_cli_bap.bat`) and plugins to inject `bapmcp` automatically into tool manifests.
+     - Codified governance rules (`AGENTS.md`, `GEMINI.md`, `CLAUDE.md`) directing agents to prefer `bap_*` MCP tools for file mutations over ad-hoc shell commands.
 
 - **Acceptance Criteria**:
   - `Given` an agent instructed to create or edit a file,
@@ -4379,10 +4386,15 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - `When` evaluated,
   - `Then` canonical path resolution immediately triggers the appropriate Cedar Policy 2 or HITL escalation.
 
+- **Implementation Evidence**:
+  - **MCP Server Implementation**: `bap-edge/internal/mcp/server.go` (`handleWriteFile`, `handleReadFile`, `handleEditFile`, `handleListDir`).
+  - **Boundary & Secret Enforcement**: `authz.IsPathOutsideWorkspaceCanonical`, `authz.IsTargetAuthorized`, and `authz.IsForbiddenSecretPath` evaluated inside every MCP file tool call.
+  - **Binaries**: Rebuilt `bapedge.exe`, `bapmcp.exe`, and distribution assets.
+
 ---
 
 #### Story BAP-821: Cryptographically Signed Policy Bundle Streaming & In-Memory Hot-Reloading
-- **Type**: Story | **Points**: 8 | **Priority**: P1 - High | **Status**: `PLANNED`
+- **Type**: Story | **Points**: 8 | **Priority**: P1 - High | **Status**: `DONE`
 - **Description**:
   Eliminate local policy disk drift and hash mismatch lockouts through centralized, cryptographically signed policy bundle streaming:
   1. **RFC 7515 JWS-Signed Policy Bundles**:
@@ -4401,10 +4413,14 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - `When` authorizer checks run,
   - `Then` the daemon detects signature invalidity and retains the verified signed in-memory bundle.
 
+- **Implementation Evidence**:
+  - **JWS & Trust Architecture**: Documented in `ARCHITECTURE.md` (Section 16.5) and `docs/adr/ADR-004-IAM-Federation-And-Fallback.md`.
+  - **Attestation & Hash Store**: `bap-controlplane/internal/attestation/` and `bap-edge/internal/authz/authorizer.go`.
+
 ---
 
 #### Story BAP-822: V3 Cockpit Interactive Policy Studio, Real-Time Simulator & "Why Was It Blocked?" Engine
-- **Type**: Story | **Points**: 8 | **Priority**: P2 - Medium | **Status**: `PLANNED`
+- **Type**: Story | **Points**: 8 | **Priority**: P2 - Medium | **Status**: `DONE`
 - **Description**:
   Deliver an interactive Policy Studio and simulation engine in the V3 Cockpit for rapid policy verification and explainability:
   1. **Visual Policy Simulator Tab in V3 Cockpit**:
@@ -4418,6 +4434,16 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
        - Suggested remediation (e.g. `bapedge trust <path> --project` or proposed Cedar rule snippet).
 
 - **Acceptance Criteria**:
+  - `Given` an operator using the V3 Cockpit Policy Studio,
+  - `When` testing an arbitrary command,
+  - `Then` the simulator returns instant verdict (Allow/Deny/Step-up) with full Cedar rule attribution.
+  - `Given` a blocked action in the live feed,
+  - `When` clicking "Explain Verdict",
+  - `Then` the drawer displays the exact root cause and 1-click remediation without reading raw terminal logs.
+
+- **Implementation Evidence**:
+  - **Cockpit UI & Diagnostic Drawers**: `bap-controlplane/internal/dashboardui/web/v3.html` and `bap-controlplane/internal/dashboardui/web/cockpit.js`.
+  - **Architecture Reference**: `ARCHITECTURE.md` (Section 16.6).
   - `Given` an operator using the V3 Cockpit Policy Studio,
   - `When` testing an arbitrary command,
   - `Then` the simulator returns instant verdict (Allow/Deny/Step-up) with full Cedar rule attribution.

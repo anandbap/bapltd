@@ -557,3 +557,80 @@ BAP includes built-in anti-tampering heuristics to prevent compromised AI agents
    bapedge dev-override off
    ```
 
+---
+
+### Playbook 12: Troubleshooting Hook vs Dashboard Telemetry Discrepancies ("Not Evaluated" or "Allowed" when Hook Blocked)
+
+**Symptom**:
+The Claude Code PreToolUse hook (or Antigravity/Copilot hook) intercepts and blocks a tool execution (such as `New-Item -Path ..\prod-cluster` with a directory traversal error), but the Agent Watch V3 Cockpit UI shows:
+- **`Not evaluated`** (yellow badge) on the prompt card.
+- **`Allowed`** (green badge) on a prompt card when an action in that turn was actually denied.
+- Zero blocked actions listed in the Executive Summary KPI card.
+
+**Root Causes**:
+1. **Hook vs Broker Layer Decoupling**: When a tool is blocked in `PreToolUse`, the command is stopped *before* it is ever launched on the host. Because `bapedge exec` is never invoked, broker-layer execution records are not created. The denial must be reported by the **hook layer** (`reporting_layer: "hook"`).
+2. **Missing or Filtered Hook Telemetry**: If the hook interceptor does not capture the full command or skips spooling for shell tool denials, zero audit events are written to `.bapstate/audit.jsonl` or spooled to `.bapstate/hook-evidence/`.
+3. **Session Turn Telemetry Gap**: If the Control Plane receives a `UserPromptSubmit` event (updating `promptTime`) but receives no corresponding hook denial event for the subsequent tool call, the session evaluator evaluates the prompt as having no recorded decision (`PolicyDecision: "UNKNOWN"`), rendering `Not evaluated`. If an earlier turn had an allowed command, it may evaluate the previous allowed event instead.
+
+**Diagnostic Commands**:
+
+1. **Inspect Local Audit Ledger for Recent Denials**:
+   Query `.bapstate/audit.jsonl` to verify if the hook denial was recorded:
+   ```powershell
+   Get-Content "$HOME\.bapstate\audit.jsonl" -Tail 15 | ConvertFrom-Json | Select-Object timestamp, reporting_layer, source, decision, executable, full_command, reason | Format-Table -AutoSize
+   ```
+   *Expected Output*: You should see a row with `reporting_layer = "hook"`, `decision = "deny"`, and the blocked command or traversal target.
+
+2. **Inspect Hook Evidence Spool Queue**:
+   Check if uncollected spool records are waiting in `.bapstate/hook-evidence/`:
+   ```powershell
+   Get-ChildItem "$HOME\.bapstate\hook-evidence\*.json" -ErrorAction SilentlyContinue | ForEach-Object { Get-Content $_.FullName | ConvertFrom-Json } | Select-Object event_id, session_id, reporting_layer, decision, full_command
+   ```
+   *Note*: When the `bapedge daemon` is running, it automatically drains this queue every cycle.
+
+3. **Check Active Session Trusts & Approvals**:
+   Verify whether the target directory or file has an active `--session`, `--project`, or `--global` grant:
+   ```powershell
+   # Inspect current session approval state
+   Get-Content .bap\approvals_*.json -ErrorAction SilentlyContinue
+   
+   # Or query active approvals via bapedge
+   .\bapedge.exe trust list
+   ```
+
+4. **Simulate Cedar Authorizer Directly on Host**:
+   Test how the Cedar policy authorizer evaluates a command without executing:
+   ```powershell
+   # Test via bapedge check
+   .\bapedge.exe check "New-Item -ItemType Directory -Path ..\prod-cluster"
+   
+   # Test via decision-only broker
+   .\bapedge.exe exec --decision-only -- "New-Item -ItemType Directory -Path ..\prod-cluster"
+   ```
+
+5. **Query Live Telemetry from the Control Plane**:
+   Verify what the Control Plane currently reports for active sessions and live activities:
+   ```powershell
+   # Check live activities feed
+   Invoke-RestMethod -Uri "http://localhost:8080/api/activity/live" | Select-Object -ExpandProperty activities | Select-Object session_id, application, policy_decision, outcome_category, action, action_status | Format-Table -AutoSize
+   
+   # Check session detail
+   Invoke-RestMethod -Uri "http://localhost:8080/api/v1/sessions" | Select-Object -ExpandProperty sessions | Select-Object session_id, app_id, status, denied_count, prompt_count | Format-Table -AutoSize
+   ```
+
+**Resolution Playbook**:
+1. **Rebuild and Update Hook Interceptor**:
+   Ensure `interceptor.exe` is updated in all active hook locations:
+   ```powershell
+   cd cchook
+   go build -buildvcs=false -o ..\interceptor.exe .
+   Copy-Item ..\interceptor.exe .claude\hooks\interceptor.exe -Force
+   Copy-Item ..\interceptor.exe dist\windows-amd64\interceptor.exe -Force
+   Copy-Item ..\interceptor.exe bap\bin\windows-amd64\interceptor.exe -Force
+   ```
+2. **Force Spool Queue Drain**:
+   Run `bapedge status` to trigger an automatic sweep of the spool backlog into the central ledger.
+3. **Verify Dashboard**:
+   Refresh the V3 dashboard. The blocked row will show `<span class="chip no">Blocked</span>` and display the sealed cryptographic receipt.
+
+

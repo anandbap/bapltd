@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"bap-controlplane/internal/audit"
 	"bap-controlplane/internal/session"
 	"bap-controlplane/pkg/types"
 )
@@ -1468,6 +1469,25 @@ func (s *Server) handleActivityIngest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.IngestActivity(&event)
+	if event.SessionID != "" {
+		auditEvt := audit.Event{
+			EventID:        event.TraceID,
+			SessionID:      event.SessionID,
+			Timestamp:      event.Timestamp,
+			Source:         event.Application,
+			Decision:       strings.ToLower(event.PolicyDecision),
+			ReportingLayer: "hook",
+			FullCommand:    event.Action,
+			Executable:     event.Tool,
+			Reason:         event.DeviationReason,
+		}
+		if s.sessionStore != nil {
+			s.sessionStore.RecordEvent(event.SessionID, auditEvt)
+		}
+		if s.auditStore != nil {
+			_, _ = s.auditStore.Ingest([]audit.Event{auditEvt})
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":      "ingested",
 		"session_id":  event.SessionID,

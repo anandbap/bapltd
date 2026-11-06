@@ -2310,6 +2310,10 @@ func (s *Server) handleAuditIngest(w http.ResponseWriter, r *http.Request) {
 					s.registry.EnsureSessionAgent(enrolled.AppID, enrolled.InstanceID, enrolled.SPIFFEID, enrolled.UserEmail, "", enrolled.AgentName)
 					s.registry.EnsureSessionAgent(ev.Source, enrolled.InstanceID, enrolled.SPIFFEID, enrolled.UserEmail, "")
 				}
+				if sess, err := s.sessionStore.Get(ev.SessionID); err == nil && sess != nil {
+					actEv := s.sessionToActivityEvent(sess)
+					s.IngestActivity(actEv)
+				}
 			}
 		}
 	}

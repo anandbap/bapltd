@@ -164,6 +164,15 @@ func IsTargetAuthorized(workspaceRoot, sessionID, targetPath, action string) (bo
 				return true, "session"
 			}
 		}
+		// Also check default session approvals if specific session ID did not match
+		if sessionID != "default" {
+			defaultFile := GetSessionPermissionsPath(workspaceRoot, "default")
+			for _, p := range readPermissionsFile(defaultFile) {
+				if IsPathCovered(p.Path, cleanTarget) && actionMatches(p.Actions, normAction) {
+					return true, "session"
+				}
+			}
+		}
 	}
 
 	// 2. Check Project Scope
