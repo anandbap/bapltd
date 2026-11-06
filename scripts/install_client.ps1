@@ -1,7 +1,8 @@
 # BAP Client One-Click Developer Installer
 param(
     [string]$TargetDir = (Join-Path $env:USERPROFILE "bin"),
-    [switch]$Force = $false
+    [switch]$Force = $false,
+    [switch]$Debug = $false
 )
 
 $ErrorActionPreference = 'Stop'
@@ -48,6 +49,39 @@ foreach ($f in $clientFiles) {
     } else {
         Write-Warning "Source file not found: $f"
     }
+}
+
+if ($Debug) {
+    Write-Host "`n[*] Deploying Debugging & Diagnostic Utilities (-Debug active)..." -ForegroundColor Cyan
+    $debugFiles = @(
+        "review_session.ps1",
+        "review_session.bat",
+        "review_session.sh",
+        "watch_session.ps1",
+        "watch_session.bat",
+        "watch_session.sh",
+        "verify_sts_obo_exchange.py",
+        "verify_sts.bat",
+        "verify_sts.sh",
+        "check_stale_copies.ps1",
+        "check_stale_copies.bat",
+        "check_stale_copies.sh"
+    )
+    foreach ($df in $debugFiles) {
+        $src = Join-Path (Join-Path $repoRoot "scripts") $df
+        if (-not (Test-Path -LiteralPath $src)) {
+            $src = Join-Path $repoRoot $df
+        }
+        if (Test-Path -LiteralPath $src) {
+            $dst = Join-Path $TargetDir $df
+            Copy-Item -LiteralPath $src -Destination $dst -Force
+            $size = (Get-Item -LiteralPath $dst).Length
+            Write-Host ("  [+] Installed Debug Tool: {0,-22} ({1:N0} bytes)" -f $df, $size) -ForegroundColor Green
+            $installedCount++
+        }
+    }
+} else {
+    Write-Host "`n[*] Standard Install: Debugging scripts omitted by default. (Pass -Debug to deploy review/watch/sts/stale-check tools)" -ForegroundColor DarkGray
 }
 
 Write-Host "`n[*] Configuring Environment PATH..."

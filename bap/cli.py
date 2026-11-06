@@ -19,7 +19,7 @@ USAGE = f"""BAP Zero-Trust Governance CLI (v{__version__})
 Usage: bap <command> [options]
 
 Commands:
-  install       Run single-click user-mode onboarding installer
+  install [--debug] Run single-click user-mode onboarding installer (--debug installs review/watch/sts tools)
   uninstall     Cleanly remove BAP binaries, PATH entries, and agent hooks
   setup         Configure workspace governance & install native plugins for AI agents (--app=...)
   claude        Launch Claude Code CLI in active zero-trust transactional sandbox
@@ -238,6 +238,14 @@ def run_review_fallback(args):
         os.path.join(cwd, "review_session.sh"),
         os.path.join(cwd, "scripts", "review_session.sh"),
     ]
+    bapedge = find_bapedge()
+    if bapedge and os.path.isfile(bapedge):
+        bDir = os.path.dirname(bapedge)
+        candidates.extend([
+            os.path.join(bDir, "review_session.ps1"),
+            os.path.join(bDir, "review_session.bat"),
+            os.path.join(bDir, "review_session.sh"),
+        ])
     if sys.platform == "win32":
         for c in candidates:
             if os.path.isfile(c) and c.endswith(".ps1"):
@@ -246,7 +254,7 @@ def run_review_fallback(args):
         for c in candidates:
             if os.path.isfile(c) and c.endswith(".sh"):
                 sys.exit(subprocess.call(["bash", c] + args))
-    print("[!] review_session script not found.")
+    print("[!] review_session script not found.\n    To install session review and debugging scripts, run: bap install --debug")
     sys.exit(1)
 
 def main():

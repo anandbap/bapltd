@@ -16,6 +16,9 @@ param(
     [Parameter(Position = 0)]
     [string]$TargetSession,
 
+    [Parameter(Position = 1)]
+    [string]$Path,
+
     [int]$Limit = 10,
 
     [switch]$NonInteractive
@@ -28,16 +31,41 @@ function Iif($condition, $trueValue, $falseValue) {
 }
 
 function Find-AuditLedgers {
-    $candidates = @(
+    param([string]$ExplicitPath)
+
+    $candidates = @()
+
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitPath)) {
+        if (Test-Path -LiteralPath $ExplicitPath) {
+            $item = Get-Item -LiteralPath $ExplicitPath
+            if ($item.PSIsContainer) {
+                $candidates += (Join-Path $ExplicitPath ".bapstate\audit.jsonl")
+                $candidates += (Join-Path $ExplicitPath "audit.jsonl")
+            } else {
+                $candidates += $ExplicitPath
+            }
+        }
+    }
+
+    if ($env:BAP_STATE_DIR) {
+        $candidates += (Join-Path $env:BAP_STATE_DIR "audit.jsonl")
+    }
+
+    $candidates += @(
         (Join-Path (Get-Location) ".bapstate\audit.jsonl"),
         (Join-Path (Get-Location) "audit.jsonl"),
         (Join-Path (Get-Location) "ltd-audit.jsonl"),
         (Join-Path $env:USERPROFILE ".bapstate\audit.jsonl"),
         (Join-Path $env:USERPROFILE ".ltd\audit.jsonl")
     )
-    if ($env:BAP_STATE_DIR) {
-        $candidates = @((Join-Path $env:BAP_STATE_DIR "audit.jsonl")) + $candidates
-    }
+
+    # Search immediate sibling workspaces if current workspace has no records
+    try {
+        $siblingDirs = Get-ChildItem -Path ".." -Directory -ErrorAction SilentlyContinue | Select-Object -First 10
+        foreach ($sd in $siblingDirs) {
+            $candidates += (Join-Path $sd.FullName ".bapstate\audit.jsonl")
+        }
+    } catch {}
 
     $found = @()
     foreach ($c in $candidates) {
@@ -57,6 +85,7 @@ function Load-SessionData {
 
     $sessions = [System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[psobject]]]::new()
 
+    # 1. Parse JSON lines from audit ledgers
     foreach ($p in $LedgerPaths) {
         try {
             $lines = [System.IO.File]::ReadAllLines($p)
@@ -66,12 +95,45 @@ function Load-SessionData {
                     try {
                         $evt = $trimmed | ConvertFrom-Json
                         $sid = [string]$evt.session_id
-                        if (-not [string]::IsNullOrWhiteSpace($sid)) {
-                            if (-not $sessions.ContainsKey($sid)) {
-                                $sessions[$sid] = [System.Collections.Generic.List[psobject]]::new()
+                        if ([string]::IsNullOrWhiteSpace($sid)) {
+                            if ($evt.receipt -and -not [string]::IsNullOrWhiteSpace($evt.receipt.session_id)) {
+                                $sid = [string]$evt.receipt.session_id
+                            } else {
+                                $sid = "sess-adhoc-unassigned"
                             }
-                            $sessions[$sid].Add($evt)
                         }
+                        if (-not $sessions.ContainsKey($sid)) {
+                            $sessions[$sid] = [System.Collections.Generic.List[psobject]]::new()
+                        }
+                        $sessions[$sid].Add($evt)
+                    } catch {}
+                }
+            }
+        } catch {}
+    }
+
+    # 2. Check hook-evidence spool directories for any undrained hook evidence
+    $evidenceDirs = @(
+        (Join-Path (Get-Location) ".bapstate\hook-evidence"),
+        (Join-Path $env:USERPROFILE ".bapstate\hook-evidence")
+    )
+    if ($env:BAP_STATE_DIR) {
+        $evidenceDirs = @((Join-Path $env:BAP_STATE_DIR "hook-evidence")) + $evidenceDirs
+    }
+    foreach ($ed in $evidenceDirs) {
+        try {
+            if (Test-Path -LiteralPath $ed -ErrorAction SilentlyContinue) {
+                $evidenceFiles = Get-ChildItem -Path $ed -Filter "*.json" -ErrorAction SilentlyContinue
+                foreach ($ef in $evidenceFiles) {
+                    try {
+                        $content = [System.IO.File]::ReadAllText($ef.FullName)
+                        $evt = $content | ConvertFrom-Json
+                        $sid = [string]$evt.session_id
+                        if ([string]::IsNullOrWhiteSpace($sid)) { $sid = "sess-hook-spool" }
+                        if (-not $sessions.ContainsKey($sid)) {
+                            $sessions[$sid] = [System.Collections.Generic.List[psobject]]::new()
+                        }
+                        $sessions[$sid].Add($evt)
                     } catch {}
                 }
             }
@@ -269,7 +331,7 @@ function Show-SessionDetail {
 
 # --- Main Flow ---
 
-$script:activeLedgers = Find-AuditLedgers
+$script:activeLedgers = Find-AuditLedgers -ExplicitPath $Path
 if ($script:activeLedgers.Count -eq 0) {
     Write-Host "`n[!] No BAP audit ledger found. Have you executed any governed agent sessions?" -ForegroundColor Red
     Write-Host "    Expected locations: .bapstate\audit.jsonl or %USERPROFILE%\.bapstate\audit.jsonl`n" -ForegroundColor Gray
@@ -278,7 +340,20 @@ if ($script:activeLedgers.Count -eq 0) {
 
 $sessionsDict = Load-SessionData -LedgerPaths $script:activeLedgers
 if ($sessionsDict.Keys.Count -eq 0) {
-    Write-Host "`n[*] Audit ledgers found, but no sessions recorded yet.`n" -ForegroundColor Yellow
+    Write-Host "`n[*] Audit ledger found, but no sessions recorded yet." -ForegroundColor Yellow
+    foreach ($al in $script:activeLedgers) {
+        $fileSize = 0
+        try { $fileSize = (Get-Item -LiteralPath $al).Length } catch {}
+        Write-Host "    - Location: $al ($fileSize bytes)" -ForegroundColor DarkGray
+    }
+    Write-Host "`n  Why? This occurs on a fresh or newly upgraded installation where the BAP ledger" -ForegroundColor White
+    Write-Host "  has been initialized cleanly, but no governed agent actions have been run yet." -ForegroundColor White
+    Write-Host "`n  Run any of the following to produce your first governed session:" -ForegroundColor Cyan
+    Write-Host "    1. bap claude (or bap codex)          - Launch an interactive governed agent session" -ForegroundColor Gray
+    Write-Host "    2. bap exec `"git status`"               - Execute a command through the BAP Zero-Trust broker" -ForegroundColor Gray
+    Write-Host "    3. powershell -File .\tests\test_claude_holistic.ps1  - Run the automated test suite" -ForegroundColor Gray
+    Write-Host "`n  If you ran your agent in a specific workspace directory, specify it directly:" -ForegroundColor White
+    Write-Host "     .\review_session.ps1 -Path `"C:\path\to\workspace`"`n" -ForegroundColor Cyan
     exit 0
 }
 

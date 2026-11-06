@@ -3,6 +3,10 @@
 # Deploys BAP Zero-Trust binaries and global hooks for all agents (Antigravity & Claude).
 # Defaults to %USERPROFILE%\.bap\bin unless %ProgramFiles%\BAP is writable.
 
+param(
+    [switch]$Debug = $false
+)
+
 $ErrorActionPreference = "Stop"
 
 $repoRoot = (Get-Item -Path $PSScriptRoot).Parent.FullName
@@ -71,6 +75,39 @@ foreach ($a in $assets) {
         Copy-Item -Path $src -Destination (Join-Path $installDir $a) -Force
         Write-Host "  [+] Copied $a" -ForegroundColor Gray
     }
+}
+
+# Optional Debugging & Session Review utilities (-Debug flag)
+if ($Debug) {
+    Write-Host ">>> Deploying BAP Debugging & Diagnostic Utilities (-Debug active)..." -ForegroundColor Cyan
+    $debugFiles = @(
+        "review_session.ps1",
+        "review_session.bat",
+        "review_session.sh",
+        "watch_session.ps1",
+        "watch_session.bat",
+        "watch_session.sh",
+        "verify_sts_obo_exchange.py",
+        "verify_sts.bat",
+        "verify_sts.sh",
+        "check_stale_copies.ps1",
+        "check_stale_copies.bat",
+        "check_stale_copies.sh",
+        "bap_doctor.ps1",
+        "supervise_controlplane.ps1"
+    )
+    foreach ($df in $debugFiles) {
+        $src = Join-Path (Join-Path $repoRoot "scripts") $df
+        if (-not (Test-Path $src)) {
+            $src = Join-Path $repoRoot $df
+        }
+        if (Test-Path $src) {
+            Copy-Item -Path $src -Destination (Join-Path $binDir $df) -Force
+            Write-Host "  [+] Copied Debug Tool: $df" -ForegroundColor Green
+        }
+    }
+} else {
+    Write-Host "[*] Standard Production Mode: Debugging scripts omitted by default. (Pass -Debug to deploy review/watch/sts/stale-check tools)" -ForegroundColor DarkGray
 }
 
 # 3. Register PATH Environment Variable

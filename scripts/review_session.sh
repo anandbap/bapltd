@@ -39,16 +39,34 @@ RED = "\033[91m"
 GRAY = "\033[90m"
 RESET = "\033[0m"
 
-def find_audit_files():
-    candidates = [
+def find_audit_files(explicit_path=""):
+    candidates = []
+    if explicit_path:
+        if os.path.isdir(explicit_path):
+            candidates.append(os.path.join(explicit_path, ".bapstate", "audit.jsonl"))
+            candidates.append(os.path.join(explicit_path, "audit.jsonl"))
+        elif os.path.isfile(explicit_path):
+            candidates.append(explicit_path)
+
+    if os.environ.get("BAP_STATE_DIR"):
+        candidates.append(os.path.join(os.environ["BAP_STATE_DIR"], "audit.jsonl"))
+
+    candidates.extend([
         os.path.join(os.getcwd(), ".bapstate", "audit.jsonl"),
         os.path.join(os.getcwd(), "audit.jsonl"),
         os.path.join(os.getcwd(), "ltd-audit.jsonl"),
         os.path.expanduser("~/.bapstate/audit.jsonl"),
         os.path.expanduser("~/.ltd/audit.jsonl")
-    ]
-    if os.environ.get("BAP_STATE_DIR"):
-        candidates.insert(0, os.path.join(os.environ["BAP_STATE_DIR"], "audit.jsonl"))
+    ])
+
+    # Sibling workspaces check
+    try:
+        parent = os.path.abspath(os.path.join(os.getcwd(), ".."))
+        for entry in os.listdir(parent)[:10]:
+            sibling = os.path.join(parent, entry, ".bapstate", "audit.jsonl")
+            candidates.append(sibling)
+    except Exception:
+        pass
 
     found = []
     for c in candidates:
@@ -58,6 +76,7 @@ def find_audit_files():
 
 def load_sessions(files):
     sessions = {}
+    # 1. Parse JSON lines from audit files
     for path in files:
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -67,7 +86,38 @@ def load_sessions(files):
                         try:
                             evt = json.loads(line)
                             sid = str(evt.get("session_id", "")).strip()
-                            if sid:
+                            if not sid:
+                                rcpt = evt.get("receipt", {})
+                                if isinstance(rcpt, dict) and rcpt.get("session_id"):
+                                    sid = str(rcpt.get("session_id")).strip()
+                                else:
+                                    sid = "sess-adhoc-unassigned"
+                            if sid not in sessions:
+                                sessions[sid] = []
+                            sessions[sid].append(evt)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+    # 2. Check hook-evidence spool directories
+    evidence_dirs = [
+        os.path.join(os.getcwd(), ".bapstate", "hook-evidence"),
+        os.path.expanduser("~/.bapstate/hook-evidence")
+    ]
+    if os.environ.get("BAP_STATE_DIR"):
+        evidence_dirs.insert(0, os.path.join(os.environ["BAP_STATE_DIR"], "hook-evidence"))
+
+    for ed in evidence_dirs:
+        try:
+            if os.path.isdir(ed):
+                for fname in os.listdir(ed):
+                    if fname.endswith(".json"):
+                        fpath = os.path.join(ed, fname)
+                        try:
+                            with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                                evt = json.load(f)
+                                sid = str(evt.get("session_id", "")).strip() or "sess-hook-spool"
                                 if sid not in sessions:
                                     sessions[sid] = []
                                 sessions[sid].append(evt)
@@ -75,6 +125,7 @@ def load_sessions(files):
                             pass
         except Exception:
             pass
+
     return sessions
 
 def format_ts(iso_str):
@@ -228,14 +279,47 @@ def print_detail(s):
     print(f"{CYAN}{'=' * 104}{RESET}\n")
 
 def main():
-    files = find_audit_files()
+    explicit_path = ""
+    target_arg = ""
+
+    # Check for path parameter (e.g. -p <path> or --path <path>)
+    args = sys.argv[1:]
+    idx = 0
+    while idx < len(args):
+        a = args[idx]
+        if a in ("-p", "--path") and idx + 1 < len(args):
+            explicit_path = args[idx + 1]
+            idx += 2
+        elif not target_arg and not a.startswith("-"):
+            target_arg = a
+            idx += 1
+        else:
+            idx += 1
+
+    files = find_audit_files(explicit_path)
     if not files:
-        print(f"\n{RED}[!] No BAP audit ledger found. Have you executed any governed agent sessions?{RESET}\n")
+        print(f"\n{RED}[!] No BAP audit ledger found. Have you executed any governed agent sessions?{RESET}")
+        print(f"{GRAY}    Expected locations: .bapstate/audit.jsonl or ~/.bapstate/audit.jsonl{RESET}\n")
         sys.exit(0)
 
     sessions = load_sessions(files)
     if not sessions:
-        print(f"\n{YELLOW}[*] Audit ledgers found, but no sessions recorded yet.{RESET}\n")
+        print(f"\n{YELLOW}[*] Audit ledger found, but no sessions recorded yet.{RESET}")
+        for f in files:
+            size = 0
+            try:
+                size = os.path.getsize(f)
+            except Exception:
+                pass
+            print(f"{GRAY}    - Location: {f} ({size} bytes){RESET}")
+        print(f"\n  {WHITE}Why? This occurs on a fresh or newly upgraded installation where the BAP ledger{RESET}")
+        print(f"  {WHITE}has been initialized cleanly, but no governed agent actions have been run yet.{RESET}")
+        print(f"\n  {CYAN}Run any of the following to produce your first governed session:{RESET}")
+        print(f"{GRAY}    1. bap claude (or bap codex)          - Launch an interactive governed agent session{RESET}")
+        print(f"{GRAY}    2. bap exec \"git status\"               - Execute a command through the BAP Zero-Trust broker{RESET}")
+        print(f"{GRAY}    3. ./tests/test_claude_holistic.sh    - Run the automated test suite{RESET}")
+        print(f"\n  {WHITE}If you ran your agent in a specific workspace directory, specify it directly:{RESET}")
+        print(f"     {CYAN}./review_session.sh --path /path/to/workspace{RESET}\n")
         sys.exit(0)
 
     # Sort sessions by latest event timestamp
@@ -243,8 +327,8 @@ def main():
     summaries = [summarize(sid, sessions[sid]) for sid in sorted_sids[:10]]
 
     # If argument provided directly
-    if len(sys.argv) > 1 and sys.argv[1].strip():
-        target = sys.argv[1].strip()
+    if target_arg:
+        target = target_arg
         match = None
         if target.isdigit():
             idx = int(target) - 1

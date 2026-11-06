@@ -353,5 +353,29 @@ class TestBAPInstallMultiPlatform(unittest.TestCase):
         with patch("sys.platform", "darwin"):
             self.assertTrue(bap_cli.is_real_binary(real_edge))
 
+    def test_debug_flag_controls_diagnostic_scripts_deployment(self):
+        """Verify that debugging scripts (bap review, watch_session, verify_sts, check_stale_copies)
+        are only deployed when --debug is active, and omitted in default minimal installs."""
+        test_bin_default = os.path.join(self.temp_dir, "bin_default")
+        test_bin_debug = os.path.join(self.temp_dir, "bin_debug")
+        os.makedirs(test_bin_default, exist_ok=True)
+        os.makedirs(test_bin_debug, exist_ok=True)
+
+        # 1. Default install (without debug scripts)
+        bap_install.install_core_binaries(test_bin_default)
+        self.assertFalse(os.path.isfile(os.path.join(test_bin_default, "review_session.ps1")))
+        self.assertFalse(os.path.isfile(os.path.join(test_bin_default, "watch_session.ps1")))
+        self.assertFalse(os.path.isfile(os.path.join(test_bin_default, "check_stale_copies.ps1")))
+        self.assertFalse(os.path.isfile(os.path.join(test_bin_default, "verify_sts_obo_exchange.py")))
+
+        # 2. Debug install (--debug active)
+        deployed_count = bap_install.install_debug_scripts(test_bin_debug)
+        self.assertGreater(deployed_count, 0)
+        self.assertTrue(os.path.isfile(os.path.join(test_bin_debug, "review_session.ps1")))
+        self.assertTrue(os.path.isfile(os.path.join(test_bin_debug, "watch_session.ps1")))
+        self.assertTrue(os.path.isfile(os.path.join(test_bin_debug, "check_stale_copies.ps1")))
+        self.assertTrue(os.path.isfile(os.path.join(test_bin_debug, "check_stale_copies.bat")))
+        self.assertTrue(os.path.isfile(os.path.join(test_bin_debug, "verify_sts_obo_exchange.py")))
+
 if __name__ == "__main__":
     unittest.main()

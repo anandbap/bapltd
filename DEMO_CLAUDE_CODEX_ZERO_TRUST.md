@@ -54,9 +54,13 @@ Every BAP deployment starts with the standard CLI onboarding sequence:
 # Step 1: Install or upgrade BAP package
 pip install --upgrade bap-ltd
 
-# Step 2: Run single-click user-mode installer
-# Deploys canonical binaries to %USERPROFILE%\bin and updates User PATH
+# Step 2: Run user-mode installer
+# Standard minimal installation (production-ready, zero clutter):
 bap install
+
+# OR: Developer & Testing installation with debugging scripts:
+# (Deploys bap review, watch_session, verify_sts, check_stale_copies)
+bap install --debug
 
 # Step 3: Verify environment integrity across all 5 security domains
 bap doctor
@@ -388,7 +392,15 @@ Get-Content .\.bap\project_permissions.json -ErrorAction SilentlyContinue
 # 3. Simulate Cedar Decision on Any Command:
 bapedge check "New-Item -ItemType Directory -Path ..\prod-cluster"
 
-# 4. Verify Cryptographic Integrity:
+# 4. Interactive Session Review & SLA Profiler (Installed via bap install --debug):
+bap review
+# Or review a specific session directly:
+.\review_session.ps1 1
+
+# 5. Stale Asset & Schema Integrity Audit:
+check_stale_copies.bat
+
+# 6. Verify Cryptographic Integrity:
 bapedge verify-log
 ```
 

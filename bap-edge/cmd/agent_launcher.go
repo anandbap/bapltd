@@ -217,5 +217,5 @@ func RunReview(args []string) error {
 			return cmd.Run()
 		}
 	}
-	return fmt.Errorf("review_session script not found in current directory or scripts/")
+	return fmt.Errorf("review_session script not found.\nTo install session review and debugging scripts, run: bap install --debug")
 }

@@ -726,6 +726,70 @@ def install_core_binaries(target_dir: str):
     return deployed
 
 
+def install_debug_scripts(target_dir: str) -> int:
+    """
+    Deploys developer diagnostic, profiling, and session review tools into target_dir.
+    Only executed when the --debug flag is passed to the installer.
+    """
+    os.makedirs(target_dir, exist_ok=True)
+    pkg_dir = os.path.dirname(os.path.abspath(__file__))
+    plat_id = get_platform_id()
+    print(f"\n[*] Deploying BAP Debugging & Diagnostic Scripts to {target_dir} (--debug active)...")
+
+    debug_files = [
+        # Session review & performance inspector
+        "review_session.ps1",
+        "review_session.bat",
+        "review_session.sh",
+        # Session liveness watcher
+        "watch_session.ps1",
+        "watch_session.bat",
+        "watch_session.sh",
+        # STS & OBO token exchange proof
+        "verify_sts_obo_exchange.py",
+        "verify_sts.bat",
+        "verify_sts.sh",
+        # Asset integrity & stale copies checker
+        "check_stale_copies.ps1",
+        "check_stale_copies.bat",
+        "check_stale_copies.sh",
+        # Diagnostic health check & supervisor scripts
+        "bap_doctor.ps1",
+        "bap_doctor.py",
+        "supervise_controlplane.ps1",
+        "supervise_controlplane.sh",
+    ]
+
+    deployed_debug = 0
+    for name in debug_files:
+        dst = os.path.join(target_dir, name)
+        candidates = [
+            os.path.join(REPO_ROOT, "scripts", name),
+            os.path.join(REPO_ROOT, name),
+            os.path.join(pkg_dir, name),
+            os.path.join(pkg_dir, "launchers", name),
+            os.path.join(REPO_ROOT, "dist", plat_id, "claude-client", name),
+        ]
+        src = None
+        for c in candidates:
+            if c and os.path.isfile(c):
+                src = c
+                break
+        if src:
+            try:
+                shutil.copy2(src, dst)
+                if sys.platform != "win32" and (name.endswith(".sh") or name.endswith(".py")):
+                    os.chmod(dst, 0o755)
+                size_kb = os.path.getsize(dst) / 1024
+                print(f"  {TermColor.GREEN}[+] Debug Tool: {name:<26}{TermColor.RESET} [{size_kb:.0f} KB]")
+                deployed_debug += 1
+            except Exception as e:
+                print(f"  {TermColor.YELLOW}[!] Warning copying debug tool {name}: {e}{TermColor.RESET}")
+
+    print(f"  {TermColor.CYAN}[i] Successfully installed {deployed_debug} debugging & review tool(s) to {target_dir}{TermColor.RESET}")
+    return deployed_debug
+
+
 def configure_claude_code(claude_dir: str, cchook_bin: str, mcp_bin: str, bapedge_bin: str, is_global: bool = False):
     """Configures Claude Code settings.json, mcp.json, and hooks for a given directory (global or workspace)."""
     claude_hooks_dir = os.path.join(claude_dir, "hooks")
@@ -1567,7 +1631,12 @@ def uninstall(target_dir: str, workspace_root: str):
         "policy.cedar", "schema.json", "bap-config.json",
         "policy-state.json", "ltd-audit.jsonl", ".bap-pin.json",
         "copilot-wrap.bat", "copilot-wrap.ps1", "copilot-wrap.sh",
-        "codex.cmd", "claude.cmd", "agy.cmd", "copilot.cmd", "bap-profile.ps1"
+        "codex.cmd", "claude.cmd", "agy.cmd", "copilot.cmd", "bap-profile.ps1",
+        "review_session.ps1", "review_session.bat", "review_session.sh",
+        "watch_session.ps1", "watch_session.bat", "watch_session.sh",
+        "verify_sts_obo_exchange.py", "verify_sts.bat", "verify_sts.sh",
+        "check_stale_copies.ps1", "check_stale_copies.bat", "check_stale_copies.sh",
+        "bap_doctor.ps1", "supervise_controlplane.ps1", "supervise_controlplane.sh",
     ]
     for _base in [
         "run_antigravity_cli_bap", "run_antigravity_ide_bap",
@@ -1874,6 +1943,7 @@ def main():
     parser.add_argument("--require-release-manifest", action="store_true", help="Require a complete, internally consistent traceable pilot bundle before changing the installation")
     parser.add_argument("--non-interactive", action="store_true", help="Bypass interactive prompts and use defaults")
     parser.add_argument("--uninstall", action="store_true", help="Cleanly uninstall BAP binaries and restore original agent hooks")
+    parser.add_argument("--debug", action="store_true", help="Install diagnostic, profiling, and debugging scripts (bap review, watch_session, verify_sts, check_stale_copies, etc.)")
     args = parser.parse_args()
 
     target_dir = args.dir if args.dir else resolve_default_install_dir(roaming=args.roaming)
@@ -1935,6 +2005,13 @@ def main():
     release_manifest, release_report = inspect_release_sources(args.require_release_manifest)
     print(f"[*] Release provenance: {release_report['status']} (publisher signature not checked)")
     deployed_count = install_core_binaries(target_dir)
+
+    debug_deployed = 0
+    if args.debug:
+        debug_deployed = install_debug_scripts(target_dir)
+    else:
+        print(f"\n[*] Standard Production Mode: Debugging scripts omitted by default.")
+        print(f"    (To install session review, watch_session, verify_sts, and check_stale_copies, re-run with '--debug')")
     if release_manifest:
         try:
             from . import bap_release
@@ -2008,6 +2085,10 @@ def main():
     print(f"  {TermColor.GREEN}{TermColor.BOLD}BAP FILE INSTALLATION COMPLETE. Validate enrollment, reporting and native callbacks before pilot acceptance.{TermColor.RESET}")
     print("=" * 80)
     print(f"[+] Total Core Binaries Deployed : {deployed_count}")
+    if args.debug:
+        print(f"[+] Debug Scripts Deployed       : {debug_deployed} (review_session, watch_session, verify_sts, check_stale_copies)")
+    else:
+        print(f"[+] Debug Scripts Deployed       : Omitted (Default minimal install; pass '--debug' to include)")
     print(f"[+] Configured Agent Platforms   : {len(agents)}")
     for a in agents:
         print(f"    * {a}")
@@ -2021,6 +2102,9 @@ def main():
     print(f"  6. Verification  : {TermColor.CYAN}bap doctor{TermColor.RESET} (Pre-flight diagnostic health check)")
     print(f"  7. Cockpit       : {TermColor.CYAN}bap launch{TermColor.RESET} (Open developer cockpit & monitor fleet)")
     print(f"  8. Uninstall     : {TermColor.CYAN}bap uninstall{TermColor.RESET} (Clean removal)")
+    if args.debug:
+        print(f"  9. Session Review: {TermColor.CYAN}bap review{TermColor.RESET} (Inspect policy decisions, latency & SLA compliance)")
+        print(f" 10. Stale Check   : {TermColor.CYAN}check_stale_copies.bat{TermColor.RESET} (Verify asset and schema integrity)")
     print("-" * 80)
     print(f"  {TermColor.YELLOW}Note: If 'bapedge' is not recognized in your current open terminal, simply open a{TermColor.RESET}")
     print(f"  {TermColor.YELLOW}new terminal window (or run 'refreshenv') so your shell reloads the updated PATH.{TermColor.RESET}")

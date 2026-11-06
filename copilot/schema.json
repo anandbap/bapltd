@@ -51,6 +51,26 @@
               "escapes_workspace": {
                 "type": "Boolean",
                 "required": false
+              },
+              "executable_class": {
+                "type": "String",
+                "required": false
+              },
+              "action_type": {
+                "type": "String",
+                "required": false
+              },
+              "action_canonical": {
+                "type": "String",
+                "required": false
+              },
+              "resource_canonical": {
+                "type": "String",
+                "required": false
+              },
+              "target_entity": {
+                "type": "String",
+                "required": false
               }
             }
           }

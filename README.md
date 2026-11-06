@@ -33,8 +33,12 @@ Install BAP via pip or directly using pure Python:
 # 1. Install via PyPI
 pip install bap-ltd
 
-# 2. Run single-click user-mode installer (No admin / UAC required)
+# 2. Run single-click user-mode installer (Standard minimal production runtime)
 bap install
+
+# OR: Install with developer debugging, profiling & diagnostic tools
+# (Deploys bap review, watch_session, verify_sts, check_stale_copies)
+bap install --debug
 
 # 3. Authenticate with Identity Provider (Google, GitHub, Entra ID, or Okta)
 bap login
@@ -59,13 +63,19 @@ bap doctor
 # 8. Launch developer cockpit & verify governed agents
 bap launch
 
-# 9. Log out and deregister workstation when finished
+# 9. Review agent sessions, policy decisions, latencies & SLA compliance (requires --debug)
+bap review
+
+# 10. Check asset integrity and stale UI/policy copies across workspaces (requires --debug)
+check_stale_copies.bat
+
+# 11. Log out and deregister workstation when finished
 bap logout
 ```
 
 Or execute without package installation:
 ```bash
-python scripts/bap_install.py
+python scripts/bap_install.py --debug
 python scripts/bap_doctor.py
 python scripts/bap_launch.py
 ```
