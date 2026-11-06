@@ -170,6 +170,21 @@ func TestBuildExecCmdWithShell(t *testing.T) {
 	}
 }
 
+func TestCommandChainingFallback(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	rawCmd := `cmd /c "exit 1" || echo FALLBACK_TRIGGERED`
+	res := RunSandboxedCommandWithDetails(rawCmd)
+	if res.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d (err: %v, output: %q)", res.ExitCode, res.Error, res.Output)
+	}
+	if !strings.Contains(res.Output, "FALLBACK_TRIGGERED") {
+		t.Fatalf("expected FALLBACK_TRIGGERED in output, got %q", res.Output)
+	}
+}
+
+
 
 
 

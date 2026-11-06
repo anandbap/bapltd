@@ -192,12 +192,18 @@ func BuildExecCmdWithShell(cmdStr, shell string) *exec.Cmd {
 				strings.HasPrefix(lowerArgs, "/k ") || strings.HasPrefix(lowerArgs, "-k ") {
 				flag := args[:2]
 				rest := strings.TrimSpace(args[2:])
-				if strings.HasPrefix(rest, "\"") {
-					if strings.HasSuffix(rest, "\"") && strings.Count(rest, "\"") == 2 {
+				// If the command contains compound shell operators (||, &&, ;, |),
+				// only unwrap if quotes encompass the entire rest of the command.
+				// Otherwise, cmd /c is a subcommand in the pipeline and must be preserved.
+				if strings.ContainsAny(trimmed, "|&><;") {
+					if strings.HasPrefix(rest, "\"") && strings.HasSuffix(rest, "\"") && strings.Count(rest, "\"") == 2 {
 						rest = rest[1 : len(rest)-1]
-					} else if closeIdx := strings.Index(rest[1:], "\""); closeIdx != -1 {
-						rest = rest[1:closeIdx+1] + rest[closeIdx+2:]
+						return exec.Command("cmd.exe", flag, rest)
 					}
+					return exec.Command("cmd.exe", "/c", trimmed)
+				}
+				if strings.HasPrefix(rest, "\"") && strings.HasSuffix(rest, "\"") && strings.Count(rest, "\"") == 2 {
+					rest = rest[1 : len(rest)-1]
 				}
 				return exec.Command("cmd.exe", flag, rest)
 			}
