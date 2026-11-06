@@ -3,6 +3,7 @@ package authz
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -528,8 +529,16 @@ func TestScenario3Commands(t *testing.T) {
 		t.Fatalf("failed to create authorizer: %v", err)
 	}
 	ws := `C:\Users\User\pyprj\bapltd`
-
+	prodCluster := `C:\Users\User\pyprj\prod-cluster`
+	prodClusterConfig := `C:\Users\User\pyprj\prod-cluster\config.json`
 	cmd3 := `$p = Join-Path (Resolve-Path ..).Path 'prod-cluster'; New-Item -ItemType Directory -Path $p | Out-Null; '{"cluster": "prod-east", "db": "postgres"}' | Set-Content -Path "$p\config.json" -Encoding ascii; Get-Content "$p\config.json"`
+
+	if runtime.GOOS != "windows" {
+		ws = "/tmp/testws/bapltd"
+		prodCluster = "/tmp/testws/prod-cluster"
+		prodClusterConfig = "/tmp/testws/prod-cluster/config.json"
+		cmd3 = `$p = Join-Path (Resolve-Path ..).Path 'prod-cluster'; New-Item -ItemType Directory -Path $p | Out-Null; '{"cluster": "prod-east", "db": "postgres"}' | Set-Content -Path "$p/config.json" -Encoding ascii; Get-Content "$p/config.json"`
+	}
 
 	varMap := ResolveVariablePaths(cmd3, ws)
 	t.Logf("varMap: %+v", varMap)
@@ -553,8 +562,8 @@ func TestScenario3Commands(t *testing.T) {
 	}
 
 	sessionID := "sess-test-sc3"
-	_ = GrantPermission(ws, sessionID, `C:\Users\User\pyprj\prod-cluster`, "session", []string{"write"})
-	_ = GrantPermission(ws, sessionID, `C:\Users\User\pyprj\prod-cluster\config.json`, "session", []string{"write"})
+	_ = GrantPermission(ws, sessionID, prodCluster, "session", []string{"write"})
+	_ = GrantPermission(ws, sessionID, prodClusterConfig, "session", []string{"write"})
 	authz.SetSessionID(sessionID)
 
 	allowedAfter, reasonAfter, errAfter := authz.EvaluateWithWorkspace("", cmd3, "", ws)

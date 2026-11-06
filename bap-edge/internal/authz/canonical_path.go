@@ -39,7 +39,7 @@ func ResolveCanonicalPath(targetPath, workspaceRoot string) string {
 	var absPath string
 	normTrimmed := strings.ReplaceAll(trimmed, "\\", "/")
 	if filepath.IsAbs(trimmed) || (len(trimmed) >= 3 && trimmed[1] == ':' && (trimmed[2] == '\\' || trimmed[2] == '/')) {
-		absPath = filepath.Clean(trimmed)
+		absPath = filepath.Clean(filepath.FromSlash(normTrimmed))
 	} else if strings.HasPrefix(normTrimmed, "/") {
 		base := workspaceRoot
 		if base == "" {

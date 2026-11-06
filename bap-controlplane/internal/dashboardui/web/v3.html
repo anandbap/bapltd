@@ -1006,8 +1006,8 @@
           '<button type="button" class="convo-unlock-link" style="font-size:11px;padding:1px 7px;margin-left:4px" onclick="openAdminPopover();event.stopPropagation();" title="Prompt text is masked for privacy. Click to unlock with Admin Token">Unlock Prompt</button>';
       }
       li.innerHTML = '<div class="row"><div class="av" aria-hidden="true">' + esc(ini) + '</div><div><div class="who">' + esc(f.who) + '</div>' +
-        '<div class="ask">' + askHtml + (f.blocked ? '<span class="chip no">Blocked</span>' : (f.shadow ? '<span class="chip wr">Flagged</span>' : (f.unknown ? '<span class="chip wr">Not evaluated</span>' : '<span class="chip ok">Allowed</span>'))) + '</div>' +
-        '<div class="did">' + esc(f.did) + (f.blocked ? ' &mdash; <u>see the proof</u>' : ' <span class="open-hint">&mdash; click for every prompt and reply</span>') + '</div></div></div>';
+        '<div class="ask">' + askHtml + (f.blocked ? '<span class="chip no">Blocked</span>' : (f.shadow ? '<span class="chip wr" style="background:#fef7e0;color:#b06000;border:1px solid #f9ab00" title="Executed on host in audit mode; would be blocked by policy in enforce mode">Audit Allowed (Flagged)</span>' : (f.unknown ? '<span class="chip wr">Not evaluated</span>' : '<span class="chip ok">Allowed</span>'))) + '</div>' +
+        '<div class="did">' + esc(f.did) + (f.blocked ? ' &mdash; <u>see the proof</u>' : (f.shadow ? ' <span class="open-hint" style="color:#b06000;font-weight:600">&mdash; executed in audit mode, policy violation flagged</span>' : ' <span class="open-hint">&mdash; click for every prompt and reply</span>')) + '</div></div></div>';
       var open = function () { if (f.blocked && stories[f.storyId]) { openStory(f.storyId, f.sessionId); } else { openConvo(f); } };
       li.addEventListener('click', open);
       li.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
@@ -1106,7 +1106,8 @@
       head.textContent = 'Everything in this session (' + total + ' prompt' + (total === 1 ? '' : 's') + ', ' + items.length + ' records)';
       box.innerHTML = items.map(function (i) {
         var labelHtml, cls = i.kind, text = i.text || '', isAction = i.kind === 'action';
-        var isDeny = isAction && /deny|block/i.test(i.decision || '');
+        var isShadow = isAction && (/shadow_deny|audit_permitted/i.test(i.decision || '') || /audit mode/i.test(i.reason || '') || i.shadow === true);
+        var isDeny = isAction && !isShadow && /deny|block/i.test(i.decision || '');
         if (i.kind === 'prompt') {
           nPrompt++;
           labelHtml = '<span>' + esc('Prompt ' + nPrompt + ' of ' + total) + '</span>';
@@ -1114,6 +1115,11 @@
         } else if (i.kind === 'response') {
           labelHtml = '<span>Agent reply</span>';
           if (!i.captured) text = 'Reply text was not retained.';
+        } else if (isShadow) {
+          cls += ' shadow-audit';
+          var badge = '<span class="chip wr" style="margin:0 8px 0 0;font-size:10.5px;padding:2px 8px;letter-spacing:.05em;background:#fef7e0;color:#b06000;border:1px solid #f9ab00">AUDIT FLAGGED</span>';
+          labelHtml = '<span style="display:inline-flex;align-items:center">' + badge + '<span style="color:#d97706;font-weight:600">Agent action (Audit Mode)</span></span>';
+          text = i.action || '';
         } else {
           cls += isDeny ? ' deny' : ' allow';
           var badge = isDeny ? '<span class="chip no" style="margin:0 8px 0 0;font-size:10.5px;padding:2px 8px;letter-spacing:.05em">BLOCKED</span>' : '<span class="chip ok" style="margin:0 8px 0 0;font-size:10.5px;padding:2px 8px;letter-spacing:.05em">ALLOWED</span>';
@@ -1123,9 +1129,14 @@
         }
         var meta = '';
         if (isAction) {
-          var decText = esc(i.decision ? i.decision.toUpperCase() : (isDeny ? 'DENY' : 'ALLOW'));
-          var reasonText = i.reason ? ' &mdash; ' + esc(i.reason) : '';
-          meta = '<div class="tm" style="font-size:12.5px;margin-top:8px;padding-top:6px;border-top:1px solid ' + (isDeny ? 'rgba(179,38,30,0.2)' : 'rgba(29,122,85,0.2)') + ';color:' + (isDeny ? 'var(--bad)' : 'var(--ok)') + ';font-weight:600"><b>' + decText + '</b>' + reasonText + '</div>';
+          if (isShadow) {
+            var reasonText = i.reason ? ' &mdash; ' + esc(i.reason) : '';
+            meta = '<div class="tm" style="font-size:12.5px;margin-top:8px;padding-top:6px;border-top:1px solid rgba(245,158,11,0.3);color:#b06000;font-weight:600"><b>EXECUTED IN AUDIT (WOULD BE BLOCKED BY POLICY)</b>' + reasonText + '</div>';
+          } else {
+            var decText = esc(i.decision ? i.decision.toUpperCase() : (isDeny ? 'DENY' : 'ALLOW'));
+            var reasonText = i.reason ? ' &mdash; ' + esc(i.reason) : '';
+            meta = '<div class="tm" style="font-size:12.5px;margin-top:8px;padding-top:6px;border-top:1px solid ' + (isDeny ? 'rgba(179,38,30,0.2)' : 'rgba(29,122,85,0.2)') + ';color:' + (isDeny ? 'var(--bad)' : 'var(--ok)') + ';font-weight:600"><b>' + decText + '</b>' + reasonText + '</div>';
+          }
         } else if (i.intent) {
           meta = '<div class="tm">' + esc('Kind of work: ' + i.intent) + '</div>';
         }
