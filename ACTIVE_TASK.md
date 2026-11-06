@@ -335,4 +335,20 @@ Implement the top 3 high-impact enterprise MVP capabilities:
     - Verified: 6/6 tests passing in 3.43s (100% OK).
   - **Epic 32 Status**: All 6 user stories in `BAP-EPIC-32` are now **100% COMPLETE & VERIFIED**.
 
+---
+
+## Story BAP-816: PowerShell AST Semantic Classification, Child Console Attachment, & V3 Activity Decision Styling (COMPLETED)
+- **PowerShell AST Semantic Classification**:
+  - Added pipeline cmdlets (`Out-Null`, `Join-Path`, `Split-Path`, `ConvertTo-Json`, `ConvertFrom-Json`, `Tee-Object`, `Start-Sleep`, `Measure-Command`, `Get-Date`) to `policy.cedar` and `classifier.go`.
+  - Added variable property member recognition (`$p.Path`, `$_.Length`) as in-memory language expressions in `bap-edge/internal/authz/classifier.go`.
+  - Implemented `ResolveVariablePaths` in `workspace.go` to substitute assigned directories into downstream commands (`New-Item -Path $p`, `Set-Content -Path "$p\config.json"`), correctly evaluating Policy 2 for cross-folder writes.
+- **Cross-Platform Child Process Console Attachment**:
+  - Handled Claude Code hook stdio pipe disconnection by binding to parent console via `AttachConsole(ATTACH_PARENT_PROCESS)` and opening `CONIN$` on Windows.
+  - Implemented platform build tags (`//go:build windows` and `//go:build !windows`) in `console_windows.go` and `console_unix.go` across `bap-edge/cmd` and `cchook`.
+- **V3 Cockpit Activity Visual Styling**:
+  - In `bap-controlplane/internal/dashboardui/web/v3.html`, styled `Agent action` green (`var(--ok)`) when allowed and red (`var(--bad)`) when denied.
+- **Dogwood Architecture Assessment**:
+  - Documented Dogwood temporal policy roadmap in `ARCHITECTURE.md` and `docs/EXECUTION_MODEL.md` for session-level state and multi-turn agent trajectory governance.
+
+
 

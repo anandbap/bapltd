@@ -230,6 +230,18 @@ graph TD
      - *Live Event Streaming*: Tails `~/.copilot/session-state/*/events.jsonl`, ingesting prompts (`user.message`), assistant answers (`assistant.message`), and token metrics (`session.usage_record`) to the Control Plane.
      - *Audit Accounting Snapshot*: Extracts final `accountingSnapshot` upon session exit, recording tokens (input, cached, output), AI credits (nanoAIU), and API duration directly into the Merkle audit chain (`/api/v1/audit/ingest`).
 
+8. **PowerShell AST Semantic Classification & Variable Tracking (BAP-816):**
+   - Deconstructs complex multi-command PowerShell pipelines (`|`, `&&`, `||`, `;`) and classifies built-in pipeline cmdlets (`Out-Null`, `Out-Default`, `Out-Host`, `Join-Path`, `Split-Path`, `ConvertTo-Json`, `ConvertFrom-Json`, `Tee-Object`, `Start-Sleep`, `Measure-Command`, `Get-Date`) as permitted utilities in Cedar Policy 1.
+   - Recognizes variable property expressions (`$p.Path`, `$_.Length`) as in-memory language expressions rather than external binaries.
+   - Tracks variable assignments (`$p = '...'`, `$p = Join-Path ...`) via `ResolveVariablePaths`, resolving concrete targets and substituting them into downstream command arguments (`New-Item -Path $p`, `Set-Content -Path "$p\config.json"`) so cross-folder write mutations reliably trigger Policy 2 step-up evaluation.
+9. **Cross-Platform Child Console Attachment for Interactive HITL (BAP-816):**
+   - Solves stdin/stdout detachment when AI agent platforms (e.g. Claude Code) launch lifecycle hooks as child processes with stdio redirected to JSON-RPC pipes.
+   - On Windows, hooks invoke Win32 `kernel32.AttachConsole(ATTACH_PARENT_PROCESS)` and open direct `CONIN$` / `CONOUT$` handles to present interactive human step-up prompts (`[O/S/P/G/D]`).
+   - On Unix/macOS, binds to `/dev/tty`. Modularized with `//go:build` tags across `bap-edge/cmd` and `cchook`.
+10. **Dogwood Temporal & Stateful Policy Architecture Roadmap:**
+    - Evaluates AWS Dogwood (Cedar's temporal extension with Metric First-Order Temporal Logic) for the Control Plane policy distribution engine.
+    - Bridges point-in-time stateless Cedar evaluation with session-level cumulative denial counters, time-bounded step-up authorizations, and cross-tool execution sequences without requiring ad-hoc edge JSON state synchronization.
+
 ---
 
 ### 3.3. Plane 3: Resource Enforcement Plane (`bapgateway`)

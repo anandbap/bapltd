@@ -122,6 +122,27 @@ flowchart TD
   - **Layer 4 (Watchdog)**: Heartbeat monitoring detects unauthenticated evasion and isolates the session.
   - **Layer 5 (Gateway PEP)**: Network egress is blocked without single-use authorization grants.
 
+### 2.7 PowerShell AST Semantic Parsing & Variable Resolution (BAP-816)
+- **Complex Pipeline Deconstruction**: AI agents frequently emit multi-stage PowerShell pipelines rather than static POSIX strings. The BAPEdge parser extracts individual commands across pipelines (`|`), logical operators (`&&`, `||`), and statement delimiters (`;`).
+- **Pipeline Utility Classification**: Built-in pipeline cmdlets (`Out-Null`, `Out-Default`, `Out-Host`, `Join-Path`, `Split-Path`, `ConvertTo-Json`, `ConvertFrom-Json`, `Tee-Object`, `Start-Sleep`, `Measure-Command`, `Get-Date`) are classified as safe utility/pipeline verbs in Cedar Policy 1, eliminating false-positive default denials on idiomatic suppression (e.g. `New-Item ... | Out-Null`).
+- **Variable Path & Member Expression Tracking**:
+  - Variable property access expressions (e.g. `$p.Path`, `$_.Length`) are classified as in-memory language expressions rather than external binaries.
+  - Variable assignments (e.g. `$p = 'C:\ws\prod-cluster'` or `$p = Join-Path (Resolve-Path ..).Path 'prod-cluster'`) are tracked via `ResolveVariablePaths`. Assigned paths are substituted into downstream command arguments (e.g. `New-Item -Path $p`, `Set-Content -Path "$p\config.json"`), allowing accurate workspace escape detection (`effectiveEscapesWorkspace = true`) and routing to Policy 2 for cross-folder mutations.
+
+### 2.8 Cross-Platform Console Attachment for Interactive HITL (BAP-816)
+- **Child Subprocess Stdio Inheritance Problem**: Agent harnesses (e.g. Claude Code) spawn lifecycle hooks as child processes with stdin and stdout redirected to JSON-RPC pipes. Calling standard terminal input (`os.Stdin`) fails or hangs.
+- **Platform Console Binding**:
+  - **Windows**: The process calls `kernel32.AttachConsole(ATTACH_PARENT_PROCESS)` and binds directly to `CONIN$` and `CONOUT$`. This allows interactive step-up approval prompts (`[O] Once`, `[S] Session`, `[P] Project`, `[G] Global`, `[D] Deny`) to render on the developer's console and accept keystrokes even when spawned from a piped subprocess.
+  - **Unix / macOS**: Opens `/dev/tty` for interactive terminal I/O.
+  - Abstracted through platform build tags (`console_windows.go` vs `console_unix.go`), ensuring clean compilation across Windows, Linux, and macOS runners.
+
+### 2.9 Future Temporal Policy: Dogwood Integration Roadmap
+- **Stateless Cedar vs Stateful Multi-Turn Governance**: Cedar evaluates requests point-in-time without session memory. Currently, BAP manages session risk and step-up grants using custom edge Go data structures (`.bap/risk_state.json`, `sessionRiskState`).
+- **Dogwood Architecture**: Dogwood extends Cedar with Metric First-Order Temporal Logic (MFOTL). Adopting Dogwood in the Central Control Plane will enable native declarative policies over:
+  - Cumulative denial thresholds and session token budgets.
+  - Temporal step-up authorization lifetimes (e.g. grant valid for 15 minutes within active session).
+  - Multi-agent tool chaining invariants (e.g. write tool permitted only if preceded by an inspection step and step-up grant).
+
 ---
 
 ## 3. Tool Semantics & Execution Matrix

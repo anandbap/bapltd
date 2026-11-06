@@ -89,6 +89,8 @@ This document represents the complete functional and non-functional requirements
 | `BAP-812` | Reverse-Proxy Origin Governance & Cockpit Admin Zero-Trust Hardening | **DONE** | Proxied TLS Origin evaluation (`X-Forwarded-Proto`), `isVerifiedAdmin` client-side mutation gate, discovery rescan & session freeze protection verified by `TestBrowserOrigins` and V3 contract tests. |
 | `BAP-813` | V3 Cockpit Navigation Modernization & Workstation Registration Lifecycle Semantics | **DONE** | Sleek icon-matched tabs (`navActivity`, `navWorkstations`, `navDiscovery`, `navOBO`), separation of valid registration (`StatusActive`) from heartbeat connectivity (`IsOnline`), non-destructive idle handling, and clean removal of logged-out workstations. |
 | `BAP-814` | Session Termination Semantics, Edge Freeze Enforcement, Discovery Attestation & Deduplication | **DONE** | Irreversible "Stop session" semantics with no unfreeze, workstation freeze blocking new agent startups (Claude, Codex, Antigravity, Copilot, OpenCode), edge `SESSION_STOP_ENFORCED` delivery reporting, `bap status` Shadow IT tool inspection & scan receipts, and 3-tier discovery deduplication. |
+| `BAP-815` | Multi-Agent Process Tree Deduplication, PID-Based Session Reconciliation, Scan Receipt Rolling History & Local Policy Anti-Tamper Enforcement | **DONE** | Ancestor inspection deduplicating child process trees to root PID, deterministic PID-based session reconciliation in store and cockpit, rolling top-8 discovery receipts in `bap status`, and SHA-256 tamper-evident integrity fail-closed gates for local `policy.cedar`. |
+| `BAP-816` | PowerShell AST Semantic Classification, Variable Path Tracking, Cross-Platform Child Console Attachment, & V3 Activity Decision Styling | **DONE** | Full classification for PowerShell pipeline cmdlets (`Out-Null`, `Join-Path`, `Tee-Object`, etc.), variable path tracking (`$p = ...`), property member expression classification (`$p.Path`), cross-platform child console binding (`AttachConsole` / `CONIN$` on Windows, `/dev/tty` on Unix) for HITL step-up in piped hook subprocesses, and high-contrast green/red decision styling in V3 Cockpit. |
 
 ### MVP exit sequence
 
@@ -4204,6 +4206,53 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - **PID Reconciliation**: `bap-controlplane/internal/session/store.go` (`ReconciledTo`, `reconcileObservedSessionsLocked`), `bap-controlplane/internal/session/reporting_identity.go` (`ReserveReportingSessions`), `bap-controlplane/internal/session/pid_reconciliation_test.go` (`TestPIDReconciliation_BidirectionalOrder`), `bap-controlplane/internal/dashboardui/web/v3.html` (`managedByPID`, `Matched with bapedge` badge).
   - **Top-8 Receipt History**: `bap-edge/cmd/discovery_worker.go` (`recordScanReceipt`, `receipts-history.json`), `bap-edge/cmd/cli_tools.go` (`receipt_history` in `bap status` and `--json`).
   - **Anti-Tamper Integrity**: `bap-edge/internal/authz/authorizer.go` (`ComputePolicyDigest`, SHA-256 verification in `NewAuthorizer`), `bap-edge/internal/policystore/store.go` (integrity verification in `Current()`), `bap-edge/internal/authz/tamper_test.go` (`TestAuthorizer_TamperDetection`), `bap-edge/internal/policystore/store_test.go` (tamper detection test).
+
+#### Story BAP-816: PowerShell AST Semantic Classification, Variable Path Tracking, Cross-Platform Child Console Attachment, & V3 Activity Decision Styling
+- **Type**: Story | **Points**: 8 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**:
+  Eliminate agent blockage and false-positive denials during multi-step coding scenarios (e.g. cross-folder database migration deployments) through robust PowerShell AST classification, variable path resolution, child console attachment for interactive HITL escalation, and high-visibility activity styling:
+  1. **PowerShell AST Semantic Classification & Permitted Cmdlet Expansion**:
+     - Expanded Cedar Policy 1 across all 6 repository policy locations (`policy.cedar`, `bap-edge/policy.cedar`, `bap/launchers/policy.cedar`, `bap/policy.cedar`, `cchook/policy.cedar`, `copilot/policy.cedar`) to classify standard PowerShell pipeline and utility cmdlets: `"out-null"`, `"out-default"`, `"out-host"`, `"join-path"`, `"split-path"`, `"convertto-json"`, `"convertfrom-json"`, `"tee-object"`, `"tee"`, `"start-sleep"`, `"measure-command"`, `"get-date"`.
+     - In `bap-edge/internal/authz/classifier.go`, classified member/property access expressions (`$p.Path`, `$_.Length`, etc.) and parenthesized expressions as in-memory language expressions (`ActionType: "read"`, `IsExpression: true`, `CanonicalExec: "write-output"`), preventing false binary classification denials.
+  2. **Variable Assignment Tracking & Target Resolution**:
+     - In `bap-edge/internal/authz/workspace.go`, implemented `ResolveVariablePaths(cmd, workspaceRoot)`: parses variable assignments (`$p = '...'`, `$p = Join-Path ...`) and extracts the assigned filesystem path.
+     - Updated `FindEscapingTargets` and `EvaluateWithWorkspace` in `authorizer.go` to substitute variable values into downstream arguments (e.g. `New-Item -ItemType Directory -Path $p`, `Set-Content -Path "$p\config.json"`). When the resolved target falls outside the workspace root, `effectiveEscapesWorkspace = true` is set, properly routing to Policy 2 for cross-folder write validation and step-up escalation.
+  3. **Cross-Platform Child Process Console Attachment for HITL**:
+     - When agent frameworks (e.g. Claude Code) launch lifecycle hooks (`cchook/interceptor.exe`), stdin and stdout are redirected to JSON-RPC pipes, causing interactive terminal prompts to abort to `non_interactive_deny`.
+     - Created `attachParentConsole()` with platform build tags (`//go:build windows` vs `//go:build !windows`) in `bap-edge/cmd/console_windows.go`, `bap-edge/cmd/console_unix.go`, `cchook/console_windows.go`, and `cchook/console_unix.go`.
+     - On Windows: Invokes `kernel32.AttachConsole(ATTACH_PARENT_PROCESS)` and opens `CONIN$` and `CONOUT$` to present interactive HITL prompts (`[O] Once, [S] Session, [P] Project, [G] Global, [D] Deny`) and capture developer keystrokes.
+     - On Unix/macOS: Binds to `/dev/tty`.
+     - Restores full cross-platform compilation compatibility across Windows, Linux, and macOS CI runners without breaking syscall dependencies.
+  4. **Outside-Workspace Target Extraction in Hook Interceptor**:
+     - In `cchook/interceptor.go`, updated `extractCommandTarget` to inspect `-Path`, `-FilePath`, `-Destination`, `-Out`, and escaping paths (`..`, `/`, `\`) to isolate the true target for interactive prompt display and audit attribution.
+  5. **V3 Cockpit Activity Visual Styling**:
+     - In `bap-controlplane/internal/dashboardui/web/v3.html`, updated activity feed rendering to style `Agent action` with `var(--ok)` (green) for allowed actions and `var(--bad)` (red) for blocked actions, providing immediate visual discrimination of security events.
+  6. **Dogwood Temporal Policy Roadmap**:
+     - Formally evaluated AWS Dogwood (temporal extension of Cedar using Metric First-Order Temporal Logic) for future Control Plane policy distribution, enabling declarative multi-turn session rate-limiting, step-up delegation lifetimes, and tool-chaining invariants.
+
+- **Acceptance Criteria**:
+  - `Given` an agent executing PowerShell pipelines with `Out-Null`, `Join-Path`, or member access `$p.Path`,
+  - `When` evaluated by BAPEdge,
+  - `Then` commands are recognized as valid language constructs without unknown-binary denials.
+  - `Given` an agent command assigning an escaping directory to a variable (`$p = Join-Path ...`),
+  - `When` the agent writes to `$p\config.json`,
+  - `Then` BAPEdge resolves `$p` and evaluates the write against Policy 2.
+  - `Given` Claude Code invoking `interceptor.exe` with redirected stdio pipes,
+  - `When` an out-of-workspace file modification occurs,
+  - `Then` `interceptor.exe` binds to the parent console via `AttachConsole` and interactively prompts the developer for step-up decision.
+  - `Given` the V3 Cockpit Activity stream,
+  - `When` viewing recent actions,
+  - `Then` allowed agent actions display in green and blocked agent actions display in red.
+  - `Given` the multi-platform CI matrix (Windows, Linux, macOS),
+  - `When` building `bapedge` and `interceptor`,
+  - `Then` all targets compile without platform syscall errors.
+
+- **Implementation Evidence**:
+  - **Policy Definitions**: `policy.cedar`, `bap-edge/policy.cedar`, `bap/launchers/policy.cedar`, `bap/policy.cedar`, `cchook/policy.cedar`, `copilot/policy.cedar`.
+  - **AST & Variable Resolution**: `bap-edge/internal/authz/classifier.go` (cmdlet classification & `$*.prop` member access), `bap-edge/internal/authz/workspace.go` (`ResolveVariablePaths`), `bap-edge/internal/authz/authorizer.go` (`EvaluateWithWorkspace` variable substitution), `bap-edge/internal/authz/authorizer_test.go` (`TestScenario3Commands`).
+  - **Console Attachment**: `bap-edge/cmd/console_windows.go`, `bap-edge/cmd/console_unix.go`, `bap-edge/cmd/exec.go`, `cchook/console_windows.go`, `cchook/console_unix.go`, `cchook/interceptor.go`.
+  - **Cockpit Visuals**: `bap-controlplane/internal/dashboardui/web/v3.html` (line 1120 `Agent action` green/red styling).
+  - **Binaries**: Rebuilt `bapedge.exe` (root, `dist/`, `bap/bin/`), `interceptor.exe` (root, `dist/`, `bap/bin/`), `cchook-interceptor.exe` (root, `dist/`), and `claude-client/interceptor.exe`.
 
 
 
