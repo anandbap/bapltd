@@ -534,9 +534,12 @@ func TestScenario3Commands(t *testing.T) {
 	cmd3 := `$p = Join-Path (Resolve-Path ..).Path 'prod-cluster'; New-Item -ItemType Directory -Path $p | Out-Null; '{"cluster": "prod-east", "db": "postgres"}' | Set-Content -Path "$p\config.json" -Encoding ascii; Get-Content "$p\config.json"`
 
 	if runtime.GOOS != "windows" {
-		ws = "/tmp/testws/bapltd"
-		prodCluster = "/tmp/testws/prod-cluster"
-		prodClusterConfig = "/tmp/testws/prod-cluster/config.json"
+		tempBase := t.TempDir()
+		ws = filepath.Join(tempBase, "bapltd")
+		prodCluster = filepath.Join(tempBase, "prod-cluster")
+		prodClusterConfig = filepath.Join(prodCluster, "config.json")
+		_ = os.MkdirAll(ws, 0755)
+		_ = os.MkdirAll(prodCluster, 0755)
 		cmd3 = `$p = Join-Path (Resolve-Path ..).Path 'prod-cluster'; New-Item -ItemType Directory -Path $p | Out-Null; '{"cluster": "prod-east", "db": "postgres"}' | Set-Content -Path "$p/config.json" -Encoding ascii; Get-Content "$p/config.json"`
 	}
 

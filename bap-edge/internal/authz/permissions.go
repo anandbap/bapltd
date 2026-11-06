@@ -103,6 +103,7 @@ func writePermissionsFile(filePath string, perms []PathPermission) error {
 	if err != nil {
 		return err
 	}
+	_ = os.MkdirAll(filepath.Dir(filePath), 0700)
 	if err := os.WriteFile(filePath, data, 0600); err != nil {
 		fallback := filepath.Join(".bap", filepath.Base(filePath))
 		_ = os.MkdirAll(".bap", 0700)
@@ -116,8 +117,14 @@ func IsPathCovered(trustedPath, targetPath string) bool {
 	if trustedPath == "" || targetPath == "" {
 		return false
 	}
-	cleanTrusted := filepath.Clean(trustedPath)
-	cleanTarget := filepath.Clean(targetPath)
+	cleanTrusted := ResolveCanonicalPath(trustedPath, "")
+	if cleanTrusted == "" {
+		cleanTrusted = filepath.Clean(trustedPath)
+	}
+	cleanTarget := ResolveCanonicalPath(targetPath, "")
+	if cleanTarget == "" {
+		cleanTarget = filepath.Clean(targetPath)
+	}
 
 	if strings.EqualFold(cleanTrusted, cleanTarget) {
 		return true
@@ -144,7 +151,10 @@ func IsTargetAuthorized(workspaceRoot, sessionID, targetPath, action string) (bo
 		normAction = "write"
 	}
 
-	cleanTarget := filepath.Clean(targetPath)
+	cleanTarget := ResolveCanonicalPath(targetPath, workspaceRoot)
+	if cleanTarget == "" {
+		cleanTarget = filepath.Clean(targetPath)
+	}
 
 	// 1. Check Session Scope
 	if sessionID != "" {
@@ -197,9 +207,13 @@ func GrantPermission(workspaceRoot, sessionID, targetPath, scope string, actions
 	if targetPath == "" {
 		return fmt.Errorf("target path cannot be empty")
 	}
-	cleanPath, err := filepath.Abs(targetPath)
-	if err != nil {
-		cleanPath = filepath.Clean(targetPath)
+	cleanPath := ResolveCanonicalPath(targetPath, workspaceRoot)
+	if cleanPath == "" {
+		var err error
+		cleanPath, err = filepath.Abs(targetPath)
+		if err != nil {
+			cleanPath = filepath.Clean(targetPath)
+		}
 	}
 
 	if len(actions) == 0 {
@@ -245,9 +259,13 @@ func GrantPermission(workspaceRoot, sessionID, targetPath, scope string, actions
 
 // RevokePermission removes authorization for targetPath from the specified scope.
 func RevokePermission(workspaceRoot, sessionID, targetPath, scope string) error {
-	cleanPath, err := filepath.Abs(targetPath)
-	if err != nil {
-		cleanPath = filepath.Clean(targetPath)
+	cleanPath := ResolveCanonicalPath(targetPath, workspaceRoot)
+	if cleanPath == "" {
+		var err error
+		cleanPath, err = filepath.Abs(targetPath)
+		if err != nil {
+			cleanPath = filepath.Clean(targetPath)
+		}
 	}
 
 	var filePath string
