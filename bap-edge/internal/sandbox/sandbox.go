@@ -187,6 +187,20 @@ func BuildExecCmdWithShell(cmdStr, shell string) *exec.Cmd {
 			return exec.Command(psExe, argParts...)
 		}
 		if executable == "cmd" {
+			lowerArgs := strings.ToLower(args)
+			if strings.HasPrefix(lowerArgs, "/c ") || strings.HasPrefix(lowerArgs, "-c ") ||
+				strings.HasPrefix(lowerArgs, "/k ") || strings.HasPrefix(lowerArgs, "-k ") {
+				flag := args[:2]
+				rest := strings.TrimSpace(args[2:])
+				if strings.HasPrefix(rest, "\"") {
+					if strings.HasSuffix(rest, "\"") && strings.Count(rest, "\"") == 2 {
+						rest = rest[1 : len(rest)-1]
+					} else if closeIdx := strings.Index(rest[1:], "\""); closeIdx != -1 {
+						rest = rest[1:closeIdx+1] + rest[closeIdx+2:]
+					}
+				}
+				return exec.Command("cmd.exe", flag, rest)
+			}
 			return exec.Command("cmd.exe", strings.Fields(args)...)
 		}
 
