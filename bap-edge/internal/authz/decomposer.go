@@ -1,7 +1,6 @@
 package authz
 
 import (
-	"path"
 	"path/filepath"
 	"strings"
 )
@@ -16,34 +15,28 @@ type DecomposedAction struct {
 
 // Decompose deterministically parses executable, command, and arguments into canonical action and resource.
 func Decompose(executable, fullCommand, args string) DecomposedAction {
-	cleanExec := executable
-	if strings.HasPrefix(executable, "(") {
-		cleanExec = strings.TrimLeft(executable, "([{\"'$@&")
-		if idx := strings.IndexAny(cleanExec, ")."); idx != -1 {
-			cleanExec = cleanExec[:idx]
-		}
-	}
-	normExec := strings.ReplaceAll(cleanExec, "\\", "/")
-	exec := strings.ToLower(path.Base(strings.TrimSuffix(normExec, ".exe")))
-	if strings.HasPrefix(exec, "---") || strings.HasPrefix(exec, "===") ||
-		strings.HasPrefix(exec, "***") || strings.HasPrefix(exec, "###") ||
-		strings.HasPrefix(exec, "#") || strings.HasPrefix(exec, "//") ||
-		strings.HasPrefix(exec, "@") || strings.HasPrefix(exec, "{") ||
-		strings.Contains(exec, "=") || strings.HasPrefix(exec, "$") ||
-		strings.Contains(exec, " ") {
-		exec = "write-output"
-	}
+	classification := ClassifyCommand(executable, strings.Fields(args), fullCommand, false)
+	exec := strings.ToLower(classification.CanonicalExec)
+
 	tokens := tokenize(fullCommand)
 	if len(tokens) == 0 {
 		tokens = []string{exec}
 	}
 
-	if IsControlKeyword(exec) {
+	if classification.IsControl {
 		return DecomposedAction{
 			CanonicalAction:   "cli:" + exec + ":exec",
 			CanonicalResource: "system://local",
 			ActionType:        "exec",
 			TargetEntity:      exec,
+		}
+	}
+	if classification.IsExpression {
+		return DecomposedAction{
+			CanonicalAction:   "fs:file:" + classification.ActionType,
+			CanonicalResource: "file://local",
+			ActionType:        classification.ActionType,
+			TargetEntity:      "local",
 		}
 	}
 
@@ -587,22 +580,77 @@ func extractFirstFileTargetForTool(exec string, tokens []string) string {
 	}
 }
 
+func isPathFlag(f string) bool {
+	lower := strings.ToLower(strings.TrimPrefix(strings.TrimPrefix(f, "-"), "-"))
+	switch lower {
+	case "path", "literalpath", "filepath", "destination", "dest", "target", "outfile", "output", "out":
+		return true
+	}
+	return false
+}
+
+func isValueFlag(f string) bool {
+	lower := strings.ToLower(strings.TrimPrefix(strings.TrimPrefix(f, "-"), "-"))
+	switch lower {
+	case "value", "content", "filter", "encoding", "message", "erroraction", "warningaction", "ea", "wa", "informationaction", "ia", "e", "eval":
+		return true
+	}
+	return false
+}
+
 func extractFirstFileTarget(tokens []string) string {
+	// First pass: Check for explicit path parameter (-Path, -LiteralPath, -FilePath, etc.)
 	for i := 1; i < len(tokens); i++ {
 		t := tokens[i]
-		if !strings.HasPrefix(t, "-") {
-			return filepath.ToSlash(filepath.Clean(t))
+		if isPathFlag(t) && i+1 < len(tokens) && !strings.HasPrefix(tokens[i+1], "-") {
+			return filepath.ToSlash(filepath.Clean(tokens[i+1]))
 		}
+	}
+
+	// Second pass: Positional arguments, skipping value arguments following value flags
+	for i := 1; i < len(tokens); i++ {
+		t := tokens[i]
+		if strings.HasPrefix(t, "-") {
+			if isValueFlag(t) {
+				i++ // skip value token
+			}
+			continue
+		}
+		return filepath.ToSlash(filepath.Clean(t))
 	}
 	return "local"
 }
 
 func extractLastFileTarget(tokens []string) string {
+	// First pass: Check for explicit destination/target parameter
 	for i := len(tokens) - 1; i >= 1; i-- {
 		t := tokens[i]
-		if !strings.HasPrefix(t, "-") {
-			return filepath.ToSlash(filepath.Clean(t))
+		if (strings.EqualFold(t, "-Destination") || strings.EqualFold(t, "--destination") || strings.EqualFold(t, "-Dest")) && i+1 < len(tokens) {
+			return filepath.ToSlash(filepath.Clean(tokens[i+1]))
 		}
+	}
+	// Second pass: Check for explicit -Path / -LiteralPath parameter
+	for i := len(tokens) - 1; i >= 1; i-- {
+		t := tokens[i]
+		if isPathFlag(t) && i+1 < len(tokens) && !strings.HasPrefix(tokens[i+1], "-") {
+			return filepath.ToSlash(filepath.Clean(tokens[i+1]))
+		}
+	}
+
+	// Third pass: Scan positional file targets, skipping value arguments
+	var positional []string
+	for i := 1; i < len(tokens); i++ {
+		t := tokens[i]
+		if strings.HasPrefix(t, "-") {
+			if isValueFlag(t) {
+				i++ // skip value token
+			}
+			continue
+		}
+		positional = append(positional, t)
+	}
+	if len(positional) > 0 {
+		return filepath.ToSlash(filepath.Clean(positional[len(positional)-1]))
 	}
 	return "local"
 }

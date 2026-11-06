@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
+
+	"bap-edge/internal/authz"
 )
 
 // InjectedOBOToken is the corporate on-behalf-of token injected into the sandboxed process.
@@ -96,61 +97,20 @@ func ParseCommand(cmdStr string) (string, string) {
 		}
 	}
 
-	rawLower := strings.ToLower(rawExec)
-	if strings.HasPrefix(rawLower, "$") || strings.Contains(rawLower, "=") ||
-		strings.HasPrefix(rawLower, "@") || strings.HasPrefix(rawLower, "{") ||
-		strings.HasPrefix(rawLower, "#") || strings.HasPrefix(rawLower, "//") ||
-		strings.HasPrefix(rawLower, "---") || strings.HasPrefix(rawLower, "===") ||
-		strings.HasPrefix(rawLower, "***") || strings.HasPrefix(rawLower, "###") {
-		return "write-output", args
+	// Python module invocations: python -m pytest ... -> pytest
+	cleanRaw := strings.ToLower(strings.Trim(rawExec, "\"'`"))
+	cleanBase := strings.TrimSuffix(filepath.Base(strings.ReplaceAll(cleanRaw, "\\", "/")), ".exe")
+	argParts := strings.Fields(args)
+	if (cleanBase == "python" || cleanBase == "python3" || cleanBase == "py") && len(argParts) >= 2 && argParts[0] == "-m" && argParts[1] == "pytest" {
+		return "pytest", args
 	}
 
-	// Normalize directory separators and extract base executable name
-	normalized := strings.ReplaceAll(rawExec, "\\", "/")
-	base := path.Base(normalized)
-
-	// Strip shell escape artifacts or quotes (e.g. \"git, \git, ^git)
-	base = strings.Trim(base, "\"'\\^")
-
-	// Strip .exe extension (case-insensitive)
-	lower := strings.ToLower(base)
-	if strings.HasSuffix(lower, ".exe") {
-		base = base[:len(base)-4]
+	classification := authz.ClassifyCommand(rawExec, strings.Fields(args), trimmed, false)
+	exec := strings.ToLower(classification.CanonicalExec)
+	if classification.IsExpression && strings.HasPrefix(strings.TrimSpace(trimmed), "$") {
+		exec = ""
 	}
-
-	// Strip leading parenthesis, wrapper syntax or quotes: (Get-ChildItem -Filter ...).FullName
-	if strings.HasPrefix(base, "(") {
-		clean := strings.TrimLeft(base, "([{\"'$@&")
-		if idx := strings.IndexAny(clean, ")."); idx != -1 {
-			clean = clean[:idx]
-		}
-		if clean != "" {
-			base = clean
-		}
-	}
-	baseLower := strings.ToLower(base)
-	if strings.HasPrefix(baseLower, "---") || strings.HasPrefix(baseLower, "===") ||
-		strings.HasPrefix(baseLower, "***") || strings.HasPrefix(baseLower, "###") ||
-		strings.HasPrefix(baseLower, "#") || strings.HasPrefix(baseLower, "//") {
-		return "write-output", args
-	}
-	if baseLower == "python" || baseLower == "python3" || baseLower == "py" {
-		argParts := strings.Fields(args)
-		if len(argParts) >= 2 && argParts[0] == "-m" && argParts[1] == "pytest" {
-			return "pytest", args
-		}
-	}
-
-	// If invoked via "cmd /c <command>" or "cmd.exe /c <command>", evaluate inner command
-	if baseLower == "cmd" {
-		argParts := strings.Fields(args)
-		if len(argParts) >= 2 && (strings.EqualFold(argParts[0], "/c") || strings.EqualFold(argParts[0], "/k")) {
-			innerCmd := strings.TrimSpace(args[len(argParts[0]):])
-			return ParseCommand(innerCmd)
-		}
-	}
-
-	return strings.ToLower(base), args
+	return exec, args
 }
 
 // isPowerShellCommand determines if a command line string is PowerShell syntax or uses PowerShell cmdlets.

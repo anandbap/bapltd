@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -322,26 +321,12 @@ func (a *Authorizer) evaluateAtomicNode(executable, fullCommand, args, workspace
 		return true, "", nil
 	}
 
-	cleanExec := executable
-	if strings.HasPrefix(executable, "(") {
-		cleanExec = strings.TrimLeft(executable, "([{\"'$@&")
-		if idx := strings.IndexAny(cleanExec, ")."); idx != -1 {
-			cleanExec = cleanExec[:idx]
-		}
-	}
-	normExec := strings.ReplaceAll(cleanExec, "\\", "/")
-	normalizedExec := strings.ToLower(path.Base(strings.TrimSuffix(normExec, ".exe")))
-	if strings.HasPrefix(normalizedExec, "---") || strings.HasPrefix(normalizedExec, "===") ||
-		strings.HasPrefix(normalizedExec, "***") || strings.HasPrefix(normalizedExec, "###") ||
-		strings.HasPrefix(normalizedExec, "@") || strings.HasPrefix(normalizedExec, "{") ||
-		strings.Contains(normalizedExec, "=") || strings.HasPrefix(normalizedExec, "$") ||
-		strings.Contains(normalizedExec, " ") {
-		normalizedExec = "write-output"
-	}
+	classification := ClassifyCommand(executable, strings.Fields(args), fullCommand, false)
+	normalizedExec := strings.ToLower(classification.CanonicalExec)
 	normalizedFull := strings.ToLower(fullCommand)
 	normalizedArgs := strings.ToLower(args)
 
-	if IsControlKeyword(executable) || IsControlKeyword(normalizedExec) {
+	if classification.IsControl || IsControlKeyword(normalizedExec) || IsControlKeyword(executable) {
 		return true, "", nil
 	}
 

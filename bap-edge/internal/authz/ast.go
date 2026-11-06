@@ -1,7 +1,6 @@
 package authz
 
 import (
-	"path"
 	"strings"
 	"unicode"
 )
@@ -72,60 +71,13 @@ func ParseAST(fullCommand string) (*ASTPipeline, error) {
 		exec := ""
 		fullCmd := ""
 		if len(args) > 0 {
-			rawArg := args[0]
-			cleanArg := rawArg
 			fullCmd = strings.Join(args, " ")
-
-			if rawArg == "&" && len(args) > 1 {
-				args = args[1:]
-				rawArg = args[0]
-				cleanArg = rawArg
+			isQuoted := false
+			if len(currentTokens) > 0 {
+				isQuoted = currentTokens[0].isQuoted
 			}
-
-			lowerRaw := strings.ToLower(rawArg)
-			if strings.HasPrefix(lowerRaw, "$") || strings.Contains(lowerRaw, "=") ||
-				strings.HasPrefix(lowerRaw, "@") || strings.HasPrefix(lowerRaw, "{") ||
-				strings.HasPrefix(lowerRaw, "#") || strings.HasPrefix(lowerRaw, "//") ||
-				strings.HasPrefix(lowerRaw, "---") || strings.HasPrefix(lowerRaw, "===") ||
-				strings.HasPrefix(lowerRaw, "***") || strings.HasPrefix(lowerRaw, "###") ||
-				(len(args) == 1 && (currentTokens[0].isQuoted || strings.HasPrefix(fullCmd, "\"") || strings.HasPrefix(fullCmd, "'"))) {
-				if strings.HasPrefix(lowerRaw, "$") && len(args) > 1 {
-					subCmd := strings.ToLower(args[1])
-					if subCmd == "status" || subCmd == "branch" || subCmd == "log" || subCmd == "diff" || subCmd == "checkout" || subCmd == "add" || subCmd == "commit" {
-						exec = "git"
-					} else {
-						exec = "write-output"
-					}
-				} else {
-					exec = "write-output"
-				}
-			} else {
-				// Strip leading parenthesis, quotes, or PowerShell syntax ONLY if starting with parenthesis
-				if strings.HasPrefix(rawArg, "(") {
-					cleanArg = strings.TrimLeft(rawArg, "([{\"'$@&")
-					if idx := strings.IndexAny(cleanArg, ")."); idx != -1 {
-						cleanArg = cleanArg[:idx]
-					}
-				}
-				target := rawArg
-				if cleanArg != "" {
-					target = cleanArg
-				}
-				normPath := strings.ReplaceAll(target, "\\", "/")
-				exec = path.Base(strings.TrimSuffix(normPath, ".exe"))
-
-				// Recognize PowerShell / script string literal expressions or decorative banners
-				lowerExec := strings.ToLower(exec)
-				if strings.HasPrefix(lowerExec, "---") || strings.HasPrefix(lowerExec, "===") ||
-					strings.HasPrefix(lowerExec, "***") || strings.HasPrefix(lowerExec, "###") ||
-					strings.HasPrefix(lowerExec, "#") || strings.HasPrefix(lowerExec, "//") ||
-					strings.HasPrefix(lowerExec, "@") || strings.HasPrefix(lowerExec, "{") ||
-					strings.Contains(lowerExec, "=") || strings.HasPrefix(lowerExec, "$") ||
-					strings.Contains(exec, " ") ||
-					(len(args) == 1 && (strings.HasPrefix(fullCmd, "\"") || strings.HasPrefix(fullCmd, "'"))) {
-					exec = "write-output"
-				}
-			}
+			classification := ClassifyCommand(args[0], args, fullCmd, isQuoted)
+			exec = classification.CanonicalExec
 		}
 
 		// Rebuild full command including redirections if present
@@ -446,7 +398,11 @@ func tokenizeShell(cmd string) []token {
 // IsControlKeyword returns true if the executable token is a shell control flow keyword.
 func IsControlKeyword(s string) bool {
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "if", "then", "else", "elif", "fi", "for", "foreach", "while", "until", "do", "done", "try", "catch", "finally", "switch", "case", "esac":
+	case "if", "then", "else", "elif", "fi", "for", "foreach", "while", "until", "do", "done",
+		"try", "catch", "finally", "switch", "case", "default", "esac",
+		"function", "filter", "workflow", "configuration", "class", "enum",
+		"using", "param", "begin", "process", "end", "dynamicparam",
+		"return", "throw", "break", "continue", "exit":
 		return true
 	default:
 		return false
