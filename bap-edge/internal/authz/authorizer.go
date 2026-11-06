@@ -201,6 +201,8 @@ func (a *Authorizer) EvaluateWithWorkspace(executable, fullCommand, args, worksp
 		overallEscapes = CheckCommandWorkspaceEscape(workspaceRoot, cmdToParse)
 	}
 
+	varMap := ResolveVariablePaths(cmdToParse, workspaceRoot)
+
 	var evaluateNode func(n *ASTNode) (bool, string, error)
 	evaluateNode = func(n *ASTNode) (bool, string, error) {
 		// 1. Evaluate nested subcommands in command substitutions $(...) and `...`
@@ -219,9 +221,21 @@ func (a *Authorizer) EvaluateWithWorkspace(executable, fullCommand, args, worksp
 			nodeExec = executable
 		}
 		nodeFull := n.FullCommand
+
+		nodeArgsList := make([]string, len(n.Args))
+		for idx, arg := range n.Args {
+			expanded := arg
+			for vName, vVal := range varMap {
+				if strings.Contains(expanded, vName) {
+					expanded = strings.ReplaceAll(expanded, vName, vVal)
+				}
+			}
+			nodeArgsList[idx] = expanded
+		}
+
 		nodeArgs := ""
-		if len(n.Args) > 1 {
-			nodeArgs = strings.Join(n.Args[1:], " ")
+		if len(nodeArgsList) > 1 {
+			nodeArgs = strings.Join(nodeArgsList[1:], " ")
 		}
 
 		nodeEscapes := overallEscapes
@@ -229,10 +243,10 @@ func (a *Authorizer) EvaluateWithWorkspace(executable, fullCommand, args, worksp
 		// Track directory changes across pipeline (cd, chdir, pushd)
 		first := strings.ToLower(nodeExec)
 		if first == "cd" || first == "chdir" || first == "pushd" {
-			if len(n.Args) >= 2 {
-				target := strings.Trim(n.Args[1], "\"'")
-				if strings.EqualFold(target, "/d") && len(n.Args) >= 3 {
-					target = strings.Trim(n.Args[2], "\"'")
+			if len(nodeArgsList) >= 2 {
+				target := strings.Trim(nodeArgsList[1], "\"'")
+				if strings.EqualFold(target, "/d") && len(nodeArgsList) >= 3 {
+					target = strings.Trim(nodeArgsList[2], "\"'")
 				}
 				if target == "" || target == "~" {
 					nodeEscapes = true
@@ -254,7 +268,7 @@ func (a *Authorizer) EvaluateWithWorkspace(executable, fullCommand, args, worksp
 		}
 
 		var canonicalTarget string
-		for i, arg := range n.Args {
+		for i, arg := range nodeArgsList {
 			if i == 0 || isCommandFlag(arg) {
 				continue
 			}

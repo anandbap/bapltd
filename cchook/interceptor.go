@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"time"
 )
@@ -1373,6 +1374,12 @@ func promptTerminalHITL(workspaceRoot, sessionID, targetFile, toolName string) s
 	var closer func()
 
 	if runtime.GOOS == "windows" {
+		kernel32 := syscall.NewLazyDLL("kernel32.dll")
+		procAttachConsole := kernel32.NewProc("AttachConsole")
+		procFreeConsole := kernel32.NewProc("FreeConsole")
+		ret, _, _ := procAttachConsole.Call(uintptr(0xFFFFFFFF)) // ATTACH_PARENT_PROCESS
+		attached := ret != 0
+
 		conin, errIn := os.OpenFile("CONIN$", os.O_RDWR, 0)
 		if errIn != nil {
 			conin, errIn = os.Open("CONIN$")
@@ -1382,6 +1389,9 @@ func promptTerminalHITL(workspaceRoot, sessionID, targetFile, toolName string) s
 			conout, _ = os.OpenFile("CONOUT$", os.O_WRONLY, 0)
 		}
 		if errIn != nil {
+			if attached {
+				procFreeConsole.Call()
+			}
 			return "non_interactive_deny"
 		}
 		in = conin
@@ -1390,11 +1400,17 @@ func promptTerminalHITL(workspaceRoot, sessionID, targetFile, toolName string) s
 			closer = func() {
 				_ = conin.Close()
 				_ = conout.Close()
+				if attached {
+					procFreeConsole.Call()
+				}
 			}
 		} else {
 			out = os.Stderr
 			closer = func() {
 				_ = conin.Close()
+				if attached {
+					procFreeConsole.Call()
+				}
 			}
 		}
 	} else {
@@ -1487,9 +1503,26 @@ func extractCommandTarget(cmd string) string {
 		return strings.TrimSpace(strings.Trim(parts[len(parts)-1], "\"'`"))
 	}
 	tokens := tokenizeHookCommand(cmd)
+	// Check for explicit -Path / -FilePath flag
+	for i := 0; i < len(tokens)-1; i++ {
+		lowerTok := strings.ToLower(tokens[i])
+		if lowerTok == "-path" || lowerTok == "-filepath" || lowerTok == "-target" || lowerTok == "-destination" || lowerTok == "-out" {
+			val := strings.Trim(tokens[i+1], "\"'`")
+			if val != "" {
+				return val
+			}
+		}
+	}
+	// Look for paths containing .. or / or \
+	for _, tok := range tokens {
+		t := strings.Trim(tok, "\"'`(),; \t")
+		if (strings.Contains(t, "..") || strings.Contains(t, "/") || strings.Contains(t, "\\")) && !strings.HasPrefix(t, "-") && !strings.HasPrefix(t, "/") && len(t) > 1 {
+			return t
+		}
+	}
 	for i := 1; i < len(tokens); i++ {
 		t := strings.Trim(tokens[i], "\"'`")
-		if !strings.HasPrefix(t, "-") && !strings.HasPrefix(t, "/") && len(t) > 1 {
+		if !strings.HasPrefix(t, "-") && !strings.HasPrefix(t, "/") && len(t) > 1 && !strings.EqualFold(t, "=") {
 			return t
 		}
 	}

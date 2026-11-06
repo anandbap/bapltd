@@ -30,7 +30,8 @@ permit (
         "test-path", "copy-item", "cpi", "move-item", "mi", "remove-item", "ri", "new-item", "ni", "set-content", "sc", "add-content", "ac", "out-file", "write-output", "write-host", "format-table", "ft", "format-list", "fl",
         "taskkill", "kill", "pkill", "killall",
         "get-location", "gl", "get-item", "gi", "get-member", "gm", "get-process", "gps",
-        "get-acl", "get-command", "resolve-path", "icacls", "attrib",
+        "get-acl", "get-command", "resolve-path", "join-path", "split-path", "icacls", "attrib",
+        "out-null", "out-default", "out-host", "convertto-json", "convertfrom-json", "tee-object", "start-sleep", "measure-command", "get-date",
         "bapedge", "ltd-agent", "bapcontrolplane", "bapgateway", "bapmcp", "bap", "bapdashboard"
     ].contains(context.executable)
 };

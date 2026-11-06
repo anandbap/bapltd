@@ -29,7 +29,9 @@ permit (
         "select-object", "where-object", "select-string", "sls", "sort-object", "measure-object", "get-content", "get-childitem", "gci", "out-string",
         "test-path", "copy-item", "cpi", "move-item", "mi", "remove-item", "ri", "new-item", "ni", "set-content", "sc", "add-content", "ac", "out-file", "write-output", "write-host", "format-table", "ft", "format-list", "fl",
         "taskkill", "kill", "pkill", "killall",
-        "get-acl", "get-command", "resolve-path", "icacls", "attrib",
+        "get-location", "gl", "get-item", "gi", "get-member", "gm", "get-process", "gps",
+        "get-acl", "get-command", "resolve-path", "join-path", "split-path", "icacls", "attrib",
+        "out-null", "out-default", "out-host", "convertto-json", "convertfrom-json", "tee-object", "start-sleep", "measure-command", "get-date",
         "bapedge", "ltd-agent", "bapcontrolplane", "bapgateway", "bapmcp", "bap", "bapdashboard"
     ].contains(context.executable)
 };
@@ -209,6 +211,3 @@ forbid (
     context.full_command like "*canary-trap-*" ||
     context.full_command like "*bap-canary-*"
 };
-
-
-

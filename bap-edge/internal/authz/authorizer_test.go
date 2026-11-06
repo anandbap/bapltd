@@ -521,3 +521,46 @@ func BenchmarkCedarEvaluate_Forbidden(b *testing.B) {
 		}
 	}
 }
+
+func TestScenario3Commands(t *testing.T) {
+	authz, err := NewAuthorizer("../../policy.cedar")
+	if err != nil {
+		t.Fatalf("failed to create authorizer: %v", err)
+	}
+	ws := `C:\Users\User\pyprj\bapltd`
+
+	cmd3 := `$p = Join-Path (Resolve-Path ..).Path 'prod-cluster'; New-Item -ItemType Directory -Path $p | Out-Null; '{"cluster": "prod-east", "db": "postgres"}' | Set-Content -Path "$p\config.json" -Encoding ascii; Get-Content "$p\config.json"`
+
+	varMap := ResolveVariablePaths(cmd3, ws)
+	t.Logf("varMap: %+v", varMap)
+
+	escaping := FindEscapingTargets(ws, cmd3)
+	t.Logf("FindEscapingTargets: %v", escaping)
+
+	pipeline, err := ParseAST(cmd3)
+	t.Logf("ParseAST error: %v, nodes: %d", err, len(pipeline.Nodes))
+	for i, n := range pipeline.Nodes {
+		t.Logf("Node %d: Exec=%q, Full=%q, SubCmds=%d", i, n.Executable, n.FullCommand, len(n.SubCommands))
+		for j, sub := range n.SubCommands {
+			t.Logf("  Sub %d: Exec=%q, Full=%q", j, sub.Executable, sub.FullCommand)
+		}
+	}
+
+	allowed, reason, err := authz.EvaluateWithWorkspace("", cmd3, "", ws)
+	t.Logf("EvaluateWithWorkspace before step-up: allowed=%v reason=%s err=%v", allowed, reason, err)
+	if allowed {
+		t.Fatalf("expected command escaping workspace with write to be denied before step-up")
+	}
+
+	sessionID := "sess-test-sc3"
+	_ = GrantPermission(ws, sessionID, `C:\Users\User\pyprj\prod-cluster`, "session", []string{"write"})
+	_ = GrantPermission(ws, sessionID, `C:\Users\User\pyprj\prod-cluster\config.json`, "session", []string{"write"})
+	authz.SetSessionID(sessionID)
+
+	allowedAfter, reasonAfter, errAfter := authz.EvaluateWithWorkspace("", cmd3, "", ws)
+	t.Logf("EvaluateWithWorkspace after step-up: allowed=%v reason=%s err=%v", allowedAfter, reasonAfter, errAfter)
+	if !allowedAfter {
+		t.Fatalf("expected command to be allowed after session trust granted, got: %s", reasonAfter)
+	}
+}
+

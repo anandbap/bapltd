@@ -153,8 +153,8 @@ func ClassifyCommand(rawExec string, args []string, fullCmd string, isQuoted boo
 		}
 	}
 
-	// 8. Member Invocations or Method Calls: $obj.Method(), [Math]::Round()
-	if strings.Contains(clean, ".") && (strings.Contains(clean, "(") || strings.Contains(clean, "::")) {
+	// 8. Member Invocations, Property Access, or Method Calls: $obj.Method(), $p.Path, [Math]::Round()
+	if strings.Contains(clean, ".") && (strings.Contains(clean, "(") || strings.Contains(clean, "::") || strings.HasPrefix(clean, "$") || strings.HasPrefix(clean, "@")) {
 		return CommandClassification{
 			CanonicalExec: "write-output",
 			ActionType:    "read",
@@ -206,11 +206,11 @@ func ClassifyCommand(rawExec string, args []string, fullCmd string, isQuoted boo
 		return CommandClassification{CanonicalExec: "echo", ActionType: "read"}
 	case "write-host", "write-output", "write-warning", "write-error", "write-verbose", "write-debug":
 		return CommandClassification{CanonicalExec: "write-output", ActionType: "read"}
-	case "test-path", "resolve-path", "get-location", "pwd", "get-acl", "get-command", "get-member", "get-help", "start-sleep":
+	case "test-path", "resolve-path", "join-path", "split-path", "get-location", "pwd", "get-acl", "get-command", "get-member", "get-help", "start-sleep", "sleep", "measure-command", "get-date":
 		return CommandClassification{CanonicalExec: lowerClean, ActionType: "read"}
 	case "set-location", "cd", "chdir", "pushd", "popd":
 		return CommandClassification{CanonicalExec: lowerClean, ActionType: "read"}
-	case "out-string", "out-null", "out-default", "out-host":
+	case "out-string", "out-null", "out-default", "out-host", "convertto-json", "convertfrom-json", "tee-object", "tee":
 		return CommandClassification{CanonicalExec: lowerClean, ActionType: "read"}
 	case "out-file":
 		return CommandClassification{CanonicalExec: lowerClean, ActionType: "write"}

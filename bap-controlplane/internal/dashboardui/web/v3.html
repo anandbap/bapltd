@@ -1117,7 +1117,8 @@
         } else {
           cls += isDeny ? ' deny' : ' allow';
           var badge = isDeny ? '<span class="chip no" style="margin:0 8px 0 0;font-size:10.5px;padding:2px 8px;letter-spacing:.05em">BLOCKED</span>' : '<span class="chip ok" style="margin:0 8px 0 0;font-size:10.5px;padding:2px 8px;letter-spacing:.05em">ALLOWED</span>';
-          labelHtml = '<span style="display:inline-flex;align-items:center">' + badge + '<span>Agent action</span></span>';
+          var actionColor = isDeny ? 'var(--bad)' : 'var(--ok)';
+          labelHtml = '<span style="display:inline-flex;align-items:center">' + badge + '<span style="color:' + actionColor + ';font-weight:600">Agent action</span></span>';
           text = i.action || '';
         }
         var meta = '';

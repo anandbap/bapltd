@@ -281,13 +281,78 @@ func TokenizeCommand(cmd string) []string {
 	return tokenizeCommand(cmd)
 }
 
+// ResolveVariablePaths extracts variable assignments (e.g. $p = '...', $p = Join-Path ...)
+// and returns a map of variable name -> resolved absolute or canonical path.
+func ResolveVariablePaths(cmd, workspaceRoot string) map[string]string {
+	vars := make(map[string]string)
+	cleanRoot := filepath.Clean(workspaceRoot)
+
+	unified := cmd
+	for _, sep := range []string{"\n", "\r", ";"} {
+		unified = strings.ReplaceAll(unified, sep, "\n")
+	}
+	for _, line := range strings.Split(unified, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "$") && !strings.Contains(trimmed, "=") {
+			continue
+		}
+		parts := strings.SplitN(trimmed, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		varName := strings.TrimSpace(parts[0])
+		rawVal := strings.TrimSpace(parts[1])
+		if !strings.HasPrefix(varName, "$") {
+			continue
+		}
+		val := strings.Trim(rawVal, "\"'` \t")
+		if strings.Contains(rawVal, "Join-Path") || strings.Contains(rawVal, "Resolve-Path") || strings.Contains(rawVal, "..") {
+			var baseDir string
+			var childDir string
+			tokens := strings.Fields(rawVal)
+			for _, t := range tokens {
+				cleanT := strings.Trim(t, "\"'`(),; \t")
+				if idx := strings.Index(cleanT, ")"); idx != -1 {
+					cleanT = cleanT[:idx]
+				}
+				if strings.Contains(cleanT, "..") || isExplicitAbsolutePath(cleanT) {
+					baseDir = cleanT
+				} else if cleanT != "" && !strings.Contains(cleanT, "Path") && !strings.Contains(cleanT, "Join") && !strings.Contains(cleanT, "Resolve") && !strings.HasPrefix(cleanT, "-") && !strings.HasPrefix(cleanT, "$") {
+					childDir = cleanT
+				}
+			}
+			if baseDir != "" {
+				resolvedBase := ResolveCanonicalPath(baseDir, cleanRoot)
+				if childDir != "" {
+					val = filepath.Clean(filepath.Join(resolvedBase, childDir))
+				} else {
+					val = resolvedBase
+				}
+			}
+		} else if isExplicitAbsolutePath(val) || strings.Contains(val, "..") || strings.Contains(val, string(filepath.Separator)) || strings.Contains(val, "/") {
+			val = ResolveCanonicalPath(val, cleanRoot)
+		}
+		if val != "" {
+			vars[varName] = val
+		}
+	}
+	return vars
+}
+
 // FindEscapingTargets returns all canonical file paths in cmdArgs that escape workspaceRoot.
 func FindEscapingTargets(workspaceRoot, cmdArgs string) []string {
 	if workspaceRoot == "" || cmdArgs == "" {
 		return nil
 	}
 	cleanRoot := filepath.Clean(workspaceRoot)
-	tokens := tokenizeCommand(cmdArgs)
+	varMap := ResolveVariablePaths(cmdArgs, workspaceRoot)
+
+	expandedCmd := cmdArgs
+	for vName, vVal := range varMap {
+		expandedCmd = strings.ReplaceAll(expandedCmd, vName, vVal)
+	}
+
+	tokens := tokenizeCommand(expandedCmd)
 	var targets []string
 	for _, tok := range tokens {
 		if isCommandFlag(tok) {
