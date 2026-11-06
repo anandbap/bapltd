@@ -8,15 +8,25 @@ func (s *Store) WorkstationBlocked(instance, app string, includeQuarantine bool)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.buildIdentityIndexLocked()
+	hasActive := false
+	isBlocked := false
 	for _, a := range s.identityIndex[instance+"\x00"+app] {
-		if primary := s.agents[a.SupersededBy]; primary != nil && primary.InstanceID == instance && primary.AppID == app {
-			continue
+		if a.Status == types.StatusActive {
+			hasActive = true
+			break
+		}
+		if primary := s.agents[a.SupersededBy]; primary != nil && primary.InstanceID == instance && primary.AppID == app && primary.Status == types.StatusActive {
+			hasActive = true
+			break
 		}
 		if a.Status == types.StatusRevoked || a.Status == types.StatusDeregistered || (includeQuarantine && a.Status == types.StatusQuarantined) {
-			return true
+			isBlocked = true
 		}
 	}
-	return false
+	if hasActive {
+		return false
+	}
+	return isBlocked
 }
 
 func (s *Store) buildIdentityIndexLocked() {

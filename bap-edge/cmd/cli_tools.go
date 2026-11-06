@@ -322,7 +322,9 @@ func RunStatus(args []string) error {
 						QuarantinedAgents  []string `json:"quarantined_agents"`
 					}
 					if json.NewDecoder(rResp.Body).Decode(&rData) == nil {
-						targets := []string{creds.AgentID, creds.InstanceID}
+						// Only check AgentID and SessionToken against deregistered/revoked lists.
+						// InstanceID represents hardware and must NOT purge active credentials.
+						targets := []string{creds.AgentID}
 						if creds.SessionToken != "" {
 							targets = append(targets, creds.SessionToken)
 						}
@@ -340,13 +342,40 @@ func RunStatus(args []string) error {
 									break
 								}
 							}
-							for _, q := range rData.QuarantinedAgents {
-								if strings.EqualFold(q, t) {
-									isFrozen = true
-									break
+						}
+						for _, q := range rData.QuarantinedAgents {
+							if strings.EqualFold(q, creds.AgentID) || (creds.InstanceID != "" && strings.EqualFold(q, creds.InstanceID)) {
+								isFrozen = true
+								break
+							}
+						}
+
+						// If flagged for deregistration, verify active session status with heartbeat before purging
+						if isDereg && creds.SessionToken != "" && !isTokenExpired(creds.SessionToken) {
+							hbPayload := map[string]string{
+								"agent_id":   creds.AgentID,
+								"session_id": creds.AgentID,
+							}
+							if hbBytes, err := json.Marshal(hbPayload); err == nil {
+								if hbReq, err := http.NewRequest(http.MethodPost, strings.TrimRight(creds.ServerURL, "/")+"/api/v1/sessions/heartbeat", bytes.NewReader(hbBytes)); err == nil {
+									hbReq.Header.Set("Content-Type", "application/json")
+									hbReq.Header.Set("Authorization", "Bearer "+creds.SessionToken)
+									if hbResp, err := cClient.Do(hbReq); err == nil {
+										if hbResp.StatusCode == http.StatusOK {
+											var hbData struct {
+												Status string `json:"status"`
+											}
+											if json.NewDecoder(hbResp.Body).Decode(&hbData) == nil && hbData.Status == "alive" {
+												// Server actively attests session is alive; do not purge
+												isDereg = false
+											}
+										}
+										_ = hbResp.Body.Close()
+									}
 								}
 							}
 						}
+
 						if isDereg {
 							state.PurgeAllCredentials(foundCredPath)
 							enrolled = false

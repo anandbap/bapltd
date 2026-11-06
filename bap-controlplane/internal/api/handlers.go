@@ -799,9 +799,7 @@ func (s *Server) handleOIDCDeviceCode(w http.ResponseWriter, r *http.Request) {
 		verificationURI = "https://login.microsoftonline.com/common/oauth2/deviceauth"
 	} else if provider == "okta" {
 		verificationURI = "https://auth.corp.okta.com/device"
-	} else if provider == "github" {
-		verificationURI = "https://github.com/login/device"
-	} else if provider == "google" {
+	} else if provider == "github" || provider == "google" {
 		verificationURI = fmt.Sprintf("%s://%s/device", scheme, host)
 	}
 
@@ -1088,6 +1086,10 @@ func (s *Server) authorizeDeviceSession(userCode, email, dept, provider string, 
 	if s.sessionStore != nil {
 		if err := s.sessionStore.ClearWorkstationLogout(enrolled.AgentID, enrolled.InstanceID); err != nil {
 			return nil, fmt.Errorf("Workstation login recovery error: %w", err)
+		}
+		_, _ = s.sessionStore.RestoreTarget(enrolled.AgentID)
+		if enrolled.InstanceID != "" {
+			_, _ = s.sessionStore.RestoreTarget(enrolled.InstanceID)
 		}
 	}
 	sessionToken, _, err := s.minter.Mint(enrolled, session.BinaryHash, nil)
@@ -1501,8 +1503,30 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 					if json.NewDecoder(uResp.Body).Decode(&userInfo) == nil {
 						if userInfo.Email != "" {
 							email = userInfo.Email
-						} else if userInfo.Login != "" {
-							email = userInfo.Login + "@users.noreply.github.com"
+						} else {
+							// Query GitHub user/emails to get primary verified email
+							eReq, _ := http.NewRequest(http.MethodGet, "https://api.github.com/user/emails", nil)
+							eReq.Header.Set("Authorization", "Bearer "+tokResult.AccessToken)
+							eReq.Header.Set("Accept", "application/json")
+							if eResp, eErr := http.DefaultClient.Do(eReq); eErr == nil {
+								defer eResp.Body.Close()
+								var emailsList []struct {
+									Email    string `json:"email"`
+									Primary  bool   `json:"primary"`
+									Verified bool   `json:"verified"`
+								}
+								if json.NewDecoder(eResp.Body).Decode(&emailsList) == nil {
+									for _, em := range emailsList {
+										if em.Primary && em.Verified && em.Email != "" {
+											email = em.Email
+											break
+										}
+									}
+								}
+							}
+							if (email == "" || email == "developer@github.com") && userInfo.Login != "" {
+								email = userInfo.Login + "@users.noreply.github.com"
+							}
 						}
 					}
 				}
@@ -2688,12 +2712,20 @@ func (s *Server) handleGetRevocations(w http.ResponseWriter, r *http.Request) {
 	var quarantinedAgents []string
 	var revokedAgents []string
 	if s.registry != nil {
-		for _, a := range s.registry.ListAll() {
+		allAgents := s.registry.ListAll()
+		activeInstances := make(map[string]bool)
+		for _, a := range allAgents {
+			if a.Status == types.StatusActive && a.InstanceID != "" {
+				activeInstances[strings.ToLower(a.InstanceID)] = true
+			}
+		}
+
+		for _, a := range allAgents {
 			if a.Status == types.StatusDeregistered {
 				if a.AgentID != "" {
 					deregisteredAgents = append(deregisteredAgents, a.AgentID)
 				}
-				if a.InstanceID != "" {
+				if a.InstanceID != "" && a.SupersededBy == "" && !activeInstances[strings.ToLower(a.InstanceID)] {
 					deregisteredAgents = append(deregisteredAgents, a.InstanceID)
 				}
 			} else if a.Status == types.StatusQuarantined {
@@ -2707,7 +2739,7 @@ func (s *Server) handleGetRevocations(w http.ResponseWriter, r *http.Request) {
 				if a.AgentID != "" {
 					revokedAgents = append(revokedAgents, a.AgentID)
 				}
-				if a.InstanceID != "" {
+				if a.InstanceID != "" && a.SupersededBy == "" && !activeInstances[strings.ToLower(a.InstanceID)] {
 					revokedAgents = append(revokedAgents, a.InstanceID)
 				}
 			}
