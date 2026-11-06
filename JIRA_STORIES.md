@@ -93,6 +93,10 @@ This document represents the complete functional and non-functional requirements
 | `BAP-816` | PowerShell AST Semantic Classification, Variable Path Tracking, Cross-Platform Child Console Attachment, & V3 Activity Decision Styling | **DONE** | Full classification for PowerShell pipeline cmdlets (`Out-Null`, `Join-Path`, `Tee-Object`, etc.), variable path tracking (`$p = ...`), property member expression classification (`$p.Path`), cross-platform child console binding (`AttachConsole` / `CONIN$` on Windows, `/dev/tty` on Unix) for HITL step-up in piped hook subprocesses, and high-contrast green/red decision styling in V3 Cockpit. |
 | `BAP-817` | Boundary & Capability-Based Cedar Policy Evolution & Automated Audit-to-Policy Mining | **PLANNED** | Evolves Policy 1 permit baseline from static string arrays to semantic execution classes (`toolchain`, `shell_builtin`), preserves declarative Forbid invariants (Policies 2–7) for boundary defense, and introduces an automated audit-to-policy synthesizer to generate scoped Cedar policies from observed agent traces. |
 | `BAP-818` | AWS Dogwood Policy Engine Integration for Temporal & Stateful Multi-Turn Agent Governance | **PLANNED** | Integrates AWS Dogwood (Metric First-Order Temporal Logic extension to Cedar) into the Control Plane for declarative cumulative session token/denial budgets, time-bounded step-up delegation lifetimes, multi-turn tool-chaining invariants, and automatic lowering to Cedar runtime contexts. |
+| `BAP-819` | OS-Level Kernel Filesystem Isolation via Windows Write-Restricted Tokens & Linux Landlock LSM | **PLANNED** | Replaces shell AST regex parsing with OS-enforced filesystem virtualization: Windows Write-Restricted SIDs and Linux Landlock LSM guarantee that file writes outside `$WORKSPACE_ROOT` return native kernel `ACCESS_DENIED`, eliminating shell evasion. |
+| `BAP-820` | Native Governed MCP Tool Acceleration & Structured Payload Enforcement | **PLANNED** | Injects high-performance, governed Model Context Protocol (MCP) file and inspection tools (`bap_write_file`, `bap_read_file`, `bap_edit_file`) into agent harnesses, prioritizing structured JSON payloads over ad-hoc shell script generation for 90% of operations. |
+| `BAP-821` | Cryptographically Signed Policy Bundle Streaming & In-Memory Hot-Reloading | **PLANNED** | Control Plane RFC 7515 JWS-signed policy bundle distribution via SSE streams, allowing edge daemons to hot-reload verified Cedar/Dogwood policies in memory without file hash drift, disk mutation errors, or daemon restarts. |
+| `BAP-822` | V3 Cockpit Interactive Policy Studio, Real-Time Simulator & "Why Was It Blocked?" Engine | **PLANNED** | Interactive visual policy simulator in V3 Cockpit allowing admins and developers to test candidate agent commands against live policies, with full AST breakdown, context mapping, and 1-click policy synthesis. |
 
 ### MVP exit sequence
 
@@ -4327,6 +4331,99 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 - **Implementation Evidence**:
   - **Architecture Specification**: `ARCHITECTURE.md` (Section 3.2.11) and `docs/EXECUTION_MODEL.md` (Section 2.9).
   - **Pre-existing State Primitives**: `bap-edge/cmd/exec.go` (`sessionRiskState`), `bap-controlplane/internal/hitl/escalation.go`, `bap-gateway/internal/tokenexchange/exchange.go`.
+
+#### Story BAP-819: OS-Level Kernel Filesystem Isolation via Windows Write-Restricted Tokens & Linux Landlock LSM
+- **Type**: Story | **Points**: 13 | **Priority**: P1 - High | **Status**: `PLANNED`
+- **Description**:
+  Eliminate the shell AST regex cat-and-mouse game by enforcing workspace filesystem boundaries at the operating system kernel level:
+  1. **Windows Write-Restricted Token Isolation**:
+     - Modernize `bap-edge/internal/sandbox/windows_token.go` to construct a Restricted Primary Token utilizing `LUA_TOKEN` / Write-Restricted SIDs (`CreateRestrictedToken` with `DISABLE_MAX_PRIVILEGE` + restricted SID filter).
+     - The restricted token explicitly excludes write permissions on all filesystem paths except the target workspace directory and `%TEMP%\bap_*`.
+     - When an agent executes arbitrary PowerShell, cmd.exe, Python, or binary code that attempts to mutate files outside the workspace (e.g. `../prod-cluster/config.json`), the Windows NT kernel driver returns native `ERROR_ACCESS_DENIED` at the Win32 filesystem boundary.
+  2. **Linux Landlock LSM Filesystem Sealing**:
+     - In `bap-edge/internal/sandbox/linux_landlock.go`, utilize the Linux Landlock Linux Security Module (available in Linux 5.13+) to restrict filesystem rulesets before invoking `execve`.
+     - Grants `LANDLOCK_ACCESS_FS_READ` across system libraries (`/usr`, `/lib`, `/bin`) and sibling repos, while restricting `LANDLOCK_ACCESS_FS_WRITE` and `LANDLOCK_ACCESS_FS_MAKE_REG` strictly to `$WORKSPACE_ROOT`.
+  3. **Seamless HITL Step-Up Escalation Integration**:
+     - When an OS kernel access denial occurs, the broker catches the access violation and triggers the interactive HITL prompt (`[O/S/P/G/D]`) or step-up gateway grant, cleanly lifting the boundary for the authorized destination.
+
+- **Acceptance Criteria**:
+  - `Given` an agent executing arbitrary, unparseable shell or compiled code attempting to write outside workspace,
+  - `When` executed inside the sandbox,
+  - `Then` the OS kernel denies the write operation with native access denied errors, regardless of shell evasion or obfuscation.
+  - `Given` a user approving a step-up grant for a sibling directory,
+  - `When` executed,
+  - `Then` the OS sandbox ruleset dynamically includes the authorized target path.
+
+---
+
+#### Story BAP-820: Native Governed MCP Tool Acceleration & Structured Payload Enforcement
+- **Type**: Story | **Points**: 8 | **Priority**: P1 - High | **Status**: `PLANNED`
+- **Description**:
+  Provide native, high-performance Model Context Protocol (MCP) file and workspace tools to eliminate 90% of raw shell execution:
+  1. **Governed MCP Server Tools**:
+     - Extend `bapmcp` with standardized, high-performance workspace tools:
+       - `bap_write_file`: `{ "path": string, "content": string, "encoding"?: string }`
+       - `bap_edit_file`: `{ "path": string, "old_string": string, "new_string": string }`
+       - `bap_read_file`: `{ "path": string, "line_range"?: [int, int] }`
+       - `bap_list_dir`: `{ "path": string, "recursive"?: bool }`
+     - All tools process structured JSON parameters, bypassing shell parsing, quote-escaping, and AST extraction completely.
+  2. **Harness Auto-Configuration & Tool Prioritization**:
+     - Update agent launchers (`run_claude_bap.bat`, `run_antigravity_cli_bap.bat`, `run_copilot_cli_bap.bat`) and plugins to inject `bapmcp` automatically into tool manifests.
+     - Codify governance rules (`AGENTS.md`, `GEMINI.md`, `CLAUDE.md`) directing agents to prefer `bap_*` MCP tools for file mutations over ad-hoc shell commands.
+
+- **Acceptance Criteria**:
+  - `Given` an agent instructed to create or edit a file,
+  - `When` using `bapmcp` tools,
+  - `Then` file operations are evaluated as deterministic JSON paths with zero shell tokenization overhead.
+  - `Given` an MCP write targeting a directory outside the workspace,
+  - `When` evaluated,
+  - `Then` canonical path resolution immediately triggers the appropriate Cedar Policy 2 or HITL escalation.
+
+---
+
+#### Story BAP-821: Cryptographically Signed Policy Bundle Streaming & In-Memory Hot-Reloading
+- **Type**: Story | **Points**: 8 | **Priority**: P1 - High | **Status**: `PLANNED`
+- **Description**:
+  Eliminate local policy disk drift and hash mismatch lockouts through centralized, cryptographically signed policy bundle streaming:
+  1. **RFC 7515 JWS-Signed Policy Bundles**:
+     - The Control Plane signs the authoritative policy bundle (`policy.cedar`, `schema.json`, and dynamic rules) using an enterprise asymmetric signing key (RFC 7515 JWS).
+     - Packages bundle metadata: version, timestamp, issuer, SHA-256 digest, and expiration.
+  2. **Live SSE Policy Streaming & In-Memory Hot-Reloading**:
+     - Edge daemons subscribe to `/api/v1/control/policy-stream` via Server-Sent Events (SSE).
+     - Upon receiving an updated bundle, `bapedge` verifies the cryptographic signature against the Control Plane public key (JWKS), updates in-memory `cedar.PolicySet`, and persists verified cached copies to `.bapstate/policy/` with restricted permissions.
+     - Completely prevents `HashMismatchError` caused by manual disk edits or offline skew.
+
+- **Acceptance Criteria**:
+  - `Given` an administrator updating Cedar policies in the Control Plane,
+  - `When` published,
+  - `Then` connected edge daemons receive the update via SSE and hot-reload policies in memory within 500ms without restarting.
+  - `Given` an untrusted process tampering with `policy.cedar` on the edge filesystem,
+  - `When` authorizer checks run,
+  - `Then` the daemon detects signature invalidity and retains the verified signed in-memory bundle.
+
+---
+
+#### Story BAP-822: V3 Cockpit Interactive Policy Studio, Real-Time Simulator & "Why Was It Blocked?" Engine
+- **Type**: Story | **Points**: 8 | **Priority**: P2 - Medium | **Status**: `PLANNED`
+- **Description**:
+  Deliver an interactive Policy Studio and simulation engine in the V3 Cockpit for rapid policy verification and explainability:
+  1. **Visual Policy Simulator Tab in V3 Cockpit**:
+     - Provide an interactive web interface where security teams and developers can input sample agent commands, payloads, or tool calls and simulate decisions in real-time.
+     - Displays full AST breakdown, detected executable class, resolved target paths, and the exact Cedar/Dogwood rule triggered.
+  2. **"Why Was It Blocked?" Diagnostic Modal**:
+     - For any blocked or audit-flagged event in the Activity Feed, a 1-click "Explain Verdict" button opens a diagnostic drawer explaining:
+       - What the agent asked (`UserPrompt`).
+       - What the agent attempted (`FullCommand` & `CanonicalAction`).
+       - The evaluated invariant (e.g. `Policy 2: escapes_workspace=true, action=write`).
+       - Suggested remediation (e.g. `bapedge trust <path> --project` or proposed Cedar rule snippet).
+
+- **Acceptance Criteria**:
+  - `Given` an operator using the V3 Cockpit Policy Studio,
+  - `When` testing an arbitrary command,
+  - `Then` the simulator returns instant verdict (Allow/Deny/Step-up) with full Cedar rule attribution.
+  - `Given` a blocked action in the live feed,
+  - `When` clicking "Explain Verdict",
+  - `Then` the drawer displays the exact root cause and 1-click remediation without reading raw terminal logs.
 
 
 
