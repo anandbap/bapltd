@@ -113,6 +113,7 @@ type RegisterEdgeResponse struct {
 	InstanceID               string    `json:"instance_id,omitempty"`
 	SPIFFEID                 string    `json:"spiffe_id,omitempty"`
 	Status                   string    `json:"status"`
+	UserEmail                string    `json:"user_email,omitempty"`
 	ServerTime               time.Time `json:"server_time"`
 	SessionToken             string    `json:"session_token"`
 	ServerVersion            string    `json:"server_version,omitempty"`

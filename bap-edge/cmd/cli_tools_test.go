@@ -98,6 +98,38 @@ func TestRunStatus_EnrolledDiscovery(t *testing.T) {
 	}
 }
 
+func TestRunStatus_OTCEnrolledDoesNotPurgeCredentials(t *testing.T) {
+	tmpDir := t.TempDir()
+	credsPath := filepath.Join(tmpDir, "credentials.json")
+	creds := StoredCredentials{
+		ServerURL:    "http://127.0.0.1:54321",
+		AgentID:      "agent-test-otc-enrolled",
+		AppID:        "claude-code",
+		InstanceID:   "inst-otc-01",
+		SessionToken: "mock-session-token",
+		AuthMode:     "otc",
+		EnrolledAt:   time.Now(),
+	}
+	data, _ := json.MarshalIndent(creds, "", "  ")
+	if err := os.WriteFile(credsPath, data, 0600); err != nil {
+		t.Fatalf("failed to write test creds: %v", err)
+	}
+
+	origEnv := os.Getenv("BAP_CREDENTIALS")
+	os.Setenv("BAP_CREDENTIALS", credsPath)
+	defer os.Setenv("BAP_CREDENTIALS", origEnv)
+
+	err := RunStatus([]string{"--json", "--no-sweep"})
+	if err != nil {
+		t.Fatalf("RunStatus with OTC enrolled credentials failed: %v", err)
+	}
+
+	// Verify credentials.json was NOT deleted or purged by RunStatus
+	if _, err := os.Stat(credsPath); os.IsNotExist(err) {
+		t.Fatalf("BUG: credentials.json was purged by RunStatus!")
+	}
+}
+
 func TestRunWhy(t *testing.T) {
 	// Test empty args prints usage
 	if err := RunWhy([]string{}); err != nil {

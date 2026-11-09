@@ -102,29 +102,54 @@ def find_bapedge() -> str:
     pkg_dir = os.path.dirname(os.path.abspath(__file__))
     plat_id = get_platform_id()
 
+    # 1. Direct explicit environment override
+    env_bin = os.environ.get("BAPEDGE_BIN")
+    if env_bin and os.path.isfile(env_bin) and is_real_binary(env_bin):
+        return os.path.abspath(env_bin)
+
     candidates = [
+        # Package bundled binary (matches python package version exactly)
+        os.path.join(pkg_dir, "bin", plat_id, binary_name),
+        os.path.join(pkg_dir, "bin", plat_id.replace("arm64", "amd64"), binary_name),
+        # Current workspace root binary
+        os.path.abspath(binary_name),
+        os.path.join(os.getcwd(), binary_name),
+        # User directories
         os.path.join(home, "bin", binary_name),
         os.path.join(os.environ.get("LOCALAPPDATA", ""), "BAP", "bin", binary_name),
         os.path.join(os.environ.get("APPDATA", ""), "BAP", "bin", binary_name),
         os.path.expanduser(f"~/.local/bin/{binary_name}"),
         os.path.expanduser(f"~/.bap/bin/{binary_name}"),
-        os.path.join(pkg_dir, "bin", plat_id, binary_name),
-        os.path.join(pkg_dir, "bin", plat_id.replace("arm64", "amd64"), binary_name),
-        os.path.abspath(binary_name),
     ]
+
+    valid = []
+    seen = set()
     for c in candidates:
         if c and os.path.isfile(c) and is_real_binary(c):
-            if sys.platform != "win32":
-                try:
-                    if not os.access(c, os.X_OK):
-                        os.chmod(c, 0o755)
-                except Exception:
-                    pass
-            bin_dir = os.path.dirname(os.path.abspath(c))
-            path_parts = os.environ.get("PATH", "").split(os.pathsep)
-            if bin_dir and bin_dir not in path_parts:
-                os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
-            return os.path.abspath(c)
+            abs_c = os.path.abspath(c)
+            if abs_c.lower() not in seen:
+                seen.add(abs_c.lower())
+                valid.append(abs_c)
+
+    if valid:
+        # Sort by mtime descending (newest binary first) to prevent stale user profile copies
+        # from shadowing newly compiled or packaged binaries
+        try:
+            valid.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        except Exception:
+            pass
+        chosen = valid[0]
+        if sys.platform != "win32":
+            try:
+                if not os.access(chosen, os.X_OK):
+                    os.chmod(chosen, 0o755)
+            except Exception:
+                pass
+        bin_dir = os.path.dirname(chosen)
+        path_parts = os.environ.get("PATH", "").split(os.pathsep)
+        if bin_dir and bin_dir not in path_parts:
+            os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+        return chosen
 
     # Search system PATH, skipping python script shims to avoid recursion
     curr_exe = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else ""

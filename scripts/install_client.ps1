@@ -24,6 +24,7 @@ if (-not (Test-Path -LiteralPath $sourceDir)) {
 }
 
 $clientFiles = @(
+    "bap.exe",
     "bapedge.exe",
     "interceptor.exe",
     "run_claude_bap.bat",

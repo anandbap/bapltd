@@ -282,14 +282,12 @@ func RunStatus(args []string) error {
 	}
 
 	var credsData []byte
-	foundCredPath := DefaultCredentialsPath()
 	for _, cp := range candidateCredPaths {
 		if cp == "" {
 			continue
 		}
 		if data, err := os.ReadFile(cp); err == nil && len(data) > 0 {
 			credsData = data
-			foundCredPath = cp
 			break
 		}
 	}
@@ -351,36 +349,9 @@ func RunStatus(args []string) error {
 							}
 						}
 
-						// If flagged for deregistration, verify active session status with heartbeat before purging
-						if isDereg && creds.SessionToken != "" && !isTokenExpired(creds.SessionToken) {
-							hbPayload := map[string]string{
-								"agent_id":   creds.AgentID,
-								"session_id": creds.AgentID,
-							}
-							if hbBytes, err := json.Marshal(hbPayload); err == nil {
-								if hbReq, err := http.NewRequest(http.MethodPost, strings.TrimRight(creds.ServerURL, "/")+"/api/v1/sessions/heartbeat", bytes.NewReader(hbBytes)); err == nil {
-									hbReq.Header.Set("Content-Type", "application/json")
-									hbReq.Header.Set("Authorization", "Bearer "+creds.SessionToken)
-									if hbResp, err := cClient.Do(hbReq); err == nil {
-										if hbResp.StatusCode == http.StatusOK {
-											var hbData struct {
-												Status string `json:"status"`
-											}
-											if json.NewDecoder(hbResp.Body).Decode(&hbData) == nil && hbData.Status == "alive" {
-												// Server actively attests session is alive; do not purge
-												isDereg = false
-											}
-										}
-										_ = hbResp.Body.Close()
-									}
-								}
-							}
-						}
-
 						if isDereg {
-							state.PurgeAllCredentials(foundCredPath)
 							enrolled = false
-							authModeLabel = "Unenrolled (Workstation was deregistered by central administrator)"
+							authModeLabel = "Deregistered (Workstation marked deregistered on Central Control Plane; run 'bap login' or 'bap register' to re-enroll)"
 						} else if isFrozen {
 							authModeLabel += " [❄️ WORKSTATION FROZEN by Central Administrator]"
 						}
@@ -925,6 +896,8 @@ func RunStatus(args []string) error {
 			fmt.Printf("  IdP Groups:       %v\n", creds.Groups)
 		}
 		fmt.Printf("  Agent Workload:   %s (App: %s)\n", creds.AgentID, creds.AppID)
+	} else if authModeLabel != "Unenrolled" && authModeLabel != "" {
+		fmt.Printf("  Enrollment:       %s\n", authModeLabel)
 	} else {
 		fmt.Printf("  Enrollment:       Unenrolled (run 'bapedge login' or 'bapedge register')\n")
 	}
@@ -934,8 +907,16 @@ func RunStatus(args []string) error {
 	fmt.Println("  ACTIVE SESSIONS:")
 	if len(sessionList) > 0 {
 		for _, s := range sessionList {
+			statusDisplay := s.Status
+			if !enrolled && (s.Status == "ACTIVE" || strings.HasPrefix(s.Status, "ACTIVE")) {
+				statusDisplay = "ACTIVE (LOCAL ONLY)"
+			}
 			fmt.Printf("    • [%s] Session: %-25s App: %-12s PID: %-7d Uptime: %-8s Plugin: %-18s Prompts: %d\n",
-				s.Status, s.SessionID, s.AppID, s.PID, s.Uptime, s.Plugin, s.PromptCount)
+				statusDisplay, s.SessionID, s.AppID, s.PID, s.Uptime, s.Plugin, s.PromptCount)
+		}
+		if !enrolled {
+			fmt.Println("    [i] Workstation is Unenrolled: Sessions are bounded and audited locally on this machine.")
+			fmt.Println("        To publish and stream sessions to Central Control Plane, run 'bap login' or 'bap register'.")
 		}
 	} else {
 		fmt.Println("    (No local agent sessions currently active)")

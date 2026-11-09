@@ -196,6 +196,10 @@ func EnsureSessionStarted(sessionID, appID string, clientPID int, initialPrompt 
 			}
 			writeLocalRevoked(sessionID, reason)
 			return fmt.Errorf("Session startup BLOCKED: %s", reason)
+		} else if resp.StatusCode == http.StatusUnauthorized {
+			if credSPIFFE == "" {
+				fmt.Fprintf(os.Stderr, "[i] Central Control Plane: Workstation is Unenrolled (HTTP 401). Session will be governed locally.\n    Run 'bap login' to stream sessions to %s\n", serverURL)
+			}
 		}
 	}
 

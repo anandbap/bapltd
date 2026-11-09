@@ -99,6 +99,7 @@ This document represents the complete functional and non-functional requirements
 | `BAP-822` | V3 Cockpit Interactive Policy Studio, Real-Time Simulator & "Why Was It Blocked?" Engine | **DONE** | Interactive visual policy simulator and 1-click "Explain Verdict" diagnostic engine in V3 Cockpit displaying AST breakdown, invariant rule attribution, and 1-click remediation. |
 | `BAP-823` | Universal Runtime Auto-Remediation, Self-Healing Recovery & `--fix` Parameter across Workloads | **DONE** | Automatic detection and programmatic healing of orphaned recovery states, stale mutexes, corrupted settings, and dangling backup artifacts across all BAP workloads (`bap claude`, `bap codex`, `bap review`, `bap status`, `bap doctor`) with out-of-the-box non-interactive healing and explicit `--fix` flag. |
 | `BAP-824` | Compile-Time Build-Type Hard-Gating & Internal Dev-Override Segregation | **DONE** | Strict compile-time binary gating (`AllowDevOverrides` via `-ldflags`) ensuring internal bypass toggles (`BAP_HOOKS=false`, `BAP_DISABLE_HOOKS=1`, `BAP_MODE=disabled`, `--hooks-disabled`, `bapedge dev-override`) are strictly blocked and forbidden in Enterprise Production and CI builds with zero security evasion exposure. |
+| `BAP-825` | OTC Workstation Parity, Persistent Enrollment Invariant & Non-Destructive Inspection | **DONE** | Full lifecycle alignment between OTC (`bap register`) and OIDC (`bap login`): persistent Workstation Agent registration, session vs workstation lifecycle decoupling, auto-reactivation, `bap deregister` alias, and non-destructive `bap status` inspection. |
 
 ### MVP exit sequence
 
@@ -4513,3 +4514,44 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - **Build Flag Infrastructure**: `bap-edge/pkg/version/version.go`, `cchook/interceptor.go`, `bap-edge/cmd/watch.go`.
   - **Launcher Enforcement**: `run_claude_bap.ps1`, `run_claude_bap.bat`.
   - **Architecture Reference**: `ARCHITECTURE.md` (Section 17.2).
+
+---
+
+#### Story BAP-825: OTC Workstation Parity, Persistent Enrollment Invariants & Non-Destructive Inspection
+- **Type**: Story | **Points**: 8 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**:
+  Achieve complete architectural and lifecycle parity between One-Time Code (OTC) enrollment (`bap register <CODE>`) and interactive OIDC device authorization (`bap login`):
+  1. **Workstation Master vs Ephemeral Session Decoupling**:
+     - Establishes that `bap register` enrolls the developer's host machine as a persistent Workstation Agent (`DeviceType: "workstation"`, `AuthMode: "otc"`), identical in longevity to an OIDC-enrolled workstation.
+     - Ephemeral AI client tool sessions (`sess-claude-...`, `sess-copilot-...`, `sess-codex-...`) run as lightweight, transient workloads on top of the enrolled workstation.
+     - Central Control Plane session termination handlers (`handleSessionEnd`, `EndSessionAgent`, and idle sweeper `PurgeStale`) strictly guard workstation agents (`isWorkstationAgent` predicate). Closing an ephemeral Claude Code or Codex session ends only that tool session and NEVER marks the master enrolled workstation as `StatusDeregistered`.
+  2. **Workstation Re-Registration & Prior Logout Clearing**:
+     - `handleRegisterEdge` automatically clears previous logout records and restores target authority (`sessionStore.ClearWorkstationLogout` and `RestoreTarget`), enabling clean, seamless re-enrollment across workstation upgrades or credential rotation.
+     - Mints 1-year persistent workstation session tokens via `MintWorkstationSession`, matching OIDC token lifetimes.
+     - Propagates verified `UserEmail` and `AuthMode` in `RegisterEdgeResponse` so the edge agent immediately binds user identity.
+  3. **Non-Destructive Compliance Inspection (`bap status`)**:
+     - Converts `bap status` into a strictly read-only, non-destructive compliance inspection tool.
+     - Completely eliminates `state.PurgeAllCredentials` and erroneous synthetic heartbeats from the status check workflow. An inspection command must never mutate or wipe local state.
+     - Transparently distinguishes between `One-Time Code (OTC)` and `OIDC Federated (...)` enrollments, corporate user email, and host properties.
+  4. **CLI Parity & Deregistration Symmetry**:
+     - Introduces `bap deregister` as a canonical alias for `bap logout`, guaranteeing semantic symmetry with `bap register`:
+       - `bap register <CODE>` $\rightarrow$ Enrolls workstation with OTC.
+       - `bap deregister` $\rightarrow$ Gracefully terminates sessions, notifies control plane (`/api/v1/agents/deregister`), and clears local credentials.
+
+- **Acceptance Criteria**:
+  - `Given` a developer workstation registered via OTC (`bap register <CODE>`),
+  - `When` launching an AI agent (`bap claude`), executing tasks, and exiting Claude Code,
+  - `Then` `bap status` continues to report `Auth Mode: One-Time Code (OTC)` with `Status: Active`, and `credentials.json` remains intact.
+  - `Given` a workstation registered via OTC,
+  - `When` executing `bap status`,
+  - `Then` `credentials.json` is never deleted or modified, even if the remote control plane reports temporary revocations.
+  - `Given` an operator executing `bap deregister`,
+  - `When` the command finishes,
+  - `Then` the workstation is deregistered from the Central Control Plane and local credentials are removed, identically to `bap logout`.
+
+- **Implementation Evidence**:
+  - **Control Plane Registry Guard**: `bap-controlplane/internal/registry/agent.go` (`isWorkstationAgent`, `EndSessionAgent`, `PurgeStale`, `EnrollWithVersion`).
+  - **Workstation Identity Model**: `bap-controlplane/internal/registry/workstation.go` (`sameWorkstation`), `bap-controlplane/internal/api/handlers.go` (`handleRegisterEdge`).
+  - **Edge Registration & Status**: `bap-edge/cmd/register.go`, `bap-edge/cmd/cli_tools.go`, `bap-edge/main.go` (`deregister` alias).
+  - **Unit Test Coverage**: `bap-controlplane/internal/registry/agent_test.go`, `bap-edge/cmd/cli_tools_test.go`.
+  - **Architecture Reference**: `ARCHITECTURE.md` (Section 17.3).

@@ -654,8 +654,22 @@ func (s *Server) handleRegisterEdge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 4a. Clear prior logout / revoked status on session store for re-enrolling workstation
+	if s.sessionStore != nil {
+		_ = s.sessionStore.ClearWorkstationLogout(enrolled.AgentID, enrolled.InstanceID)
+		_, _ = s.sessionStore.RestoreTarget(enrolled.AgentID)
+		if enrolled.InstanceID != "" {
+			_, _ = s.sessionStore.RestoreTarget(enrolled.InstanceID)
+		}
+	}
+
 	// 5. Issue initial session token
 	sessionToken, _, _ := s.minter.Mint(enrolled, req.BinaryHash, nil)
+
+	userEmail := enrolled.UserEmail
+	if userEmail == "" {
+		userEmail = enrolled.OwnerEmail
+	}
 
 	resp := types.RegisterEdgeResponse{
 		AgentID:                  enrolled.AgentID,
@@ -663,6 +677,7 @@ func (s *Server) handleRegisterEdge(w http.ResponseWriter, r *http.Request) {
 		InstanceID:               enrolled.InstanceID,
 		SPIFFEID:                 enrolled.SPIFFEID,
 		Status:                   string(enrolled.Status),
+		UserEmail:                userEmail,
 		ServerTime:               time.Now(),
 		SessionToken:             sessionToken,
 		ServerVersion:            version.Version,

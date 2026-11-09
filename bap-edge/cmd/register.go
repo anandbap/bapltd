@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"bap-edge/internal/attest"
@@ -40,6 +41,7 @@ type RegisterResponse struct {
 	InstanceID               string    `json:"instance_id,omitempty"`
 	SPIFFEID                 string    `json:"spiffe_id,omitempty"`
 	Status                   string    `json:"status"`
+	UserEmail                string    `json:"user_email,omitempty"`
 	ServerTime               time.Time `json:"server_time"`
 	SessionToken             string    `json:"session_token"`
 	ServerVersion            string    `json:"server_version,omitempty"`
@@ -113,8 +115,12 @@ func RunRegister(args []string) error {
 		fmt.Printf("[+] Auto-acquired development OTC: %s\n", *code)
 	}
 
+	if *code == "" && len(fs.Args()) > 0 {
+		*code = strings.TrimSpace(fs.Args()[0])
+	}
+
 	if *code == "" {
-		return fmt.Errorf("missing required --code flag (e.g. --code LTD-OTC-XXXX or pass --dev for local development)")
+		return fmt.Errorf("missing required registration code (usage: bap register <CODE> or bap register --code <CODE> or bap register --dev)")
 	}
 
 	// 1. Identify running binary and compute SHA-256 hash for attestation
@@ -197,6 +203,8 @@ func RunRegister(args []string) error {
 		Status:       regResp.Status,
 		BinaryHash:   binHash,
 		SessionToken: regResp.SessionToken,
+		AuthMode:     "otc",
+		UserEmail:    regResp.UserEmail,
 		EnrolledAt:   time.Now().UTC(),
 	}
 

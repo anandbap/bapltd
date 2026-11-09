@@ -28,7 +28,7 @@ func sameWorkstation(a *types.RegisteredAgent, req types.RegisteredAgent) bool {
 		return false
 	}
 	return strings.EqualFold(a.AppID, req.AppID) ||
-		(workstationApp(req.AppID) && (workstationApp(a.AppID) || a.AuthMode == "oidc" || a.DeviceType != ""))
+		(workstationApp(req.AppID) && (workstationApp(a.AppID) || a.AuthMode == "oidc" || a.AuthMode == "otc" || a.EnrolledAt != nil || a.DeviceType != ""))
 }
 
 // EnrollWorkstation updates one stable workstation identity across client

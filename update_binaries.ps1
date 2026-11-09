@@ -129,6 +129,7 @@ if (Test-Path "dist\windows-amd64") {
 $userBin = Join-Path $env:USERPROFILE "bin"
 if (Test-Path $userBin) {
     Safe-Copy "bap-edge\bapedge.exe" (Join-Path $userBin "bapedge.exe")
+    Safe-Copy "bap-edge\bapedge.exe" (Join-Path $userBin "bap.exe")
     Safe-Copy "bap-edge\bapedge.exe" (Join-Path $userBin "bapmcp.exe")
     Safe-Copy "bap-controlplane\bapcontrolplane.exe" (Join-Path $userBin "bapcontrolplane.exe")
     Safe-Copy "bap-controlplane\bapdashboard.exe" (Join-Path $userBin "bapdashboard.exe")
@@ -144,6 +145,7 @@ if (Test-Path $userBin) {
 # 8. Update Python wheel package staging directory if present
 if (Test-Path "bap\bin\windows-amd64") {
     Safe-Copy "bap-edge\bapedge.exe" "bap\bin\windows-amd64\bapedge.exe"
+    Safe-Copy "bap-edge\bapedge.exe" "bap\bin\windows-amd64\bap.exe"
     Safe-Copy "bap-edge\bapedge.exe" "bap\bin\windows-amd64\bapmcp.exe"
     Safe-Copy "bap-controlplane\bapcontrolplane.exe" "bap\bin\windows-amd64\bapcontrolplane.exe"
     Safe-Copy "bap-gateway\bapgateway.exe" "bap\bin\windows-amd64\bapgateway.exe"

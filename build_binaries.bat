@@ -23,9 +23,12 @@ if "%1"=="-all" goto :build_all
 for /f "tokens=*" %%i in ('git rev-parse --short HEAD 2^>nul') do set "GIT_COMMIT=%%i"
 if "%GIT_COMMIT%"=="" set "GIT_COMMIT=dev"
 if "%BAP_VERSION%"=="" (
+    for /f "tokens=*" %%v in ('powershell -NoProfile -Command "(Get-Content '%ROOT_DIR%bap-edge\pkg\version\version.go' | Select-String 'Version =').Line.Split([char]34)[1]" 2^>nul') do set "BAP_VERSION=%%v"
+)
+if "%BAP_VERSION%"=="" (
     for /f "tokens=4" %%v in ('python "%ROOT_DIR%scripts\bump_version.py" --current 2^>nul') do set "BAP_VERSION=v%%v"
 )
-if "%BAP_VERSION%"=="" set "BAP_VERSION=v1.1.0"
+if "%BAP_VERSION%"=="" set "BAP_VERSION=v1.12.11"
 for /f "tokens=*" %%i in ('powershell -NoProfile -Command "(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')"') do set "BUILD_DATE=%%i"
 
 echo [0/6] Ensuring BAP Root CA and TLS credentials...
@@ -76,6 +79,10 @@ copy /y bapedge.exe "%ROOT_DIR%bapmcp.exe" >nul
 del /f /q "%ROOT_DIR%bapmcp.old" >nul 2>&1
 
 copy /y bapedge.exe "%ROOT_DIR%ltd-agent.exe" >nul 2>&1
+if exist "%USERPROFILE%\bin" (
+    copy /y bapedge.exe "%USERPROFILE%\bin\bapedge.exe" >nul 2>&1
+    copy /y bapedge.exe "%USERPROFILE%\bin\bap.exe" >nul 2>&1
+)
 
 echo [3/6] Building bap-gateway (Version: %BAP_VERSION%, Commit: %GIT_COMMIT%)...
 cd /d "%ROOT_DIR%bap-gateway"
@@ -139,6 +146,7 @@ if exist "%ROOT_DIR%dist\windows-amd64\gateway" (
 
 if exist "%USERPROFILE%\bin" (
     copy /y "%ROOT_DIR%bapedge.exe" "%USERPROFILE%\bin\bapedge.exe" >nul 2>&1
+    copy /y "%ROOT_DIR%bapedge.exe" "%USERPROFILE%\bin\bap.exe" >nul 2>&1
     copy /y "%ROOT_DIR%bapedge.exe" "%USERPROFILE%\bin\bapmcp.exe" >nul 2>&1
     copy /y "%ROOT_DIR%bapcontrolplane.exe" "%USERPROFILE%\bin\bapcontrolplane.exe" >nul 2>&1
     copy /y "%ROOT_DIR%bapdashboard.exe" "%USERPROFILE%\bin\bapdashboard.exe" >nul 2>&1
@@ -149,8 +157,25 @@ if exist "%USERPROFILE%\bin" (
     copy /y "%ROOT_DIR%bap-config.json" "%USERPROFILE%\bin\bap-config.json" >nul 2>&1
 )
 
+for %%V in (Python312 Python313 Python311 Python310) do (
+    if exist "%APPDATA%\Python\%%V\Scripts" (
+        if exist "%APPDATA%\Python\%%V\Scripts\bapedge.exe" move /y "%APPDATA%\Python\%%V\Scripts\bapedge.exe" "%APPDATA%\Python\%%V\Scripts\bapedge.old" >nul 2>&1
+        copy /y "%ROOT_DIR%bapedge.exe" "%APPDATA%\Python\%%V\Scripts\bapedge.exe" >nul 2>&1
+        del /f /q "%APPDATA%\Python\%%V\Scripts\bapedge.old" >nul 2>&1
+
+        if exist "%APPDATA%\Python\%%V\Scripts\bap.exe" move /y "%APPDATA%\Python\%%V\Scripts\bap.exe" "%APPDATA%\Python\%%V\Scripts\bap.old" >nul 2>&1
+        copy /y "%ROOT_DIR%bapedge.exe" "%APPDATA%\Python\%%V\Scripts\bap.exe" >nul 2>&1
+        del /f /q "%APPDATA%\Python\%%V\Scripts\bap.old" >nul 2>&1
+
+        if exist "%APPDATA%\Python\%%V\Scripts\bapmcp.exe" move /y "%APPDATA%\Python\%%V\Scripts\bapmcp.exe" "%APPDATA%\Python\%%V\Scripts\bapmcp.old" >nul 2>&1
+        copy /y "%ROOT_DIR%bapedge.exe" "%APPDATA%\Python\%%V\Scripts\bapmcp.exe" >nul 2>&1
+        del /f /q "%APPDATA%\Python\%%V\Scripts\bapmcp.old" >nul 2>&1
+    )
+)
+
 if exist "%ROOT_DIR%bap\bin\windows-amd64" (
     copy /y "%ROOT_DIR%bapedge.exe" "%ROOT_DIR%bap\bin\windows-amd64\bapedge.exe" >nul 2>&1
+    copy /y "%ROOT_DIR%bapedge.exe" "%ROOT_DIR%bap\bin\windows-amd64\bap.exe" >nul 2>&1
     copy /y "%ROOT_DIR%bapedge.exe" "%ROOT_DIR%bap\bin\windows-amd64\bapmcp.exe" >nul 2>&1
     copy /y "%ROOT_DIR%bapcontrolplane.exe" "%ROOT_DIR%bap\bin\windows-amd64\bapcontrolplane.exe" >nul 2>&1
     copy /y "%ROOT_DIR%bapgateway.exe" "%ROOT_DIR%bap\bin\windows-amd64\bapgateway.exe" >nul 2>&1

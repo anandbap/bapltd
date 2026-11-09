@@ -1345,6 +1345,33 @@ To ensure internal developer agility while guaranteeing zero escape hatches in e
      ```
    - This clear visual distinction guarantees that unmonitored sessions cannot be mistaken for compliant enterprise-governed sessions.
 
+### 17.3. OTC Workstation Parity & Persistent Enrollment Invariant (BAP-825)
+To ensure identical workstation identity invariants regardless of whether an edge workstation enrolls via enterprise OIDC (`bap login`) or headless One-Time Code (`bap register <CODE>`):
+1. **Workstation Master vs Ephemeral Session Decoupling**:
+   - The edge workstation master enrollment (`credentials.json`) represents the physical host developer machine (`DeviceType: "workstation"`, `AuthMode: "otc"|"oidc"`), remaining active across sessions until an explicit `bap logout` / `bap deregister`.
+   - AI agent tools (`claude-code`, `copilot`, `antigravity`, `codex`) start transient sub-sessions (`sess-claude-...`) governed by the workstation.
+   - Central Control Plane termination handlers (`handleSessionEnd`, `EndSessionAgent`) and idle purgers (`PurgeStale`) evaluate `isWorkstationAgent`:
+     ```go
+     func isWorkstationAgent(a *types.RegisteredAgent) bool {
+         return strings.Contains(strings.ToLower(a.AppID), "workstation") ||
+             strings.EqualFold(a.AppID, "bapedge") ||
+             strings.EqualFold(a.AppID, "bap") ||
+             a.DeviceType != "" ||
+             a.AuthMode == "oidc" ||
+             a.AuthMode == "otc" ||
+             a.EnrolledAt != nil
+     }
+     ```
+   - Ephemeral session exit terminates only the tool session, permanently preventing master workstation deregistration.
+2. **Workstation Re-Enrollment & Prior Logout Clearing**:
+   - `handleRegisterEdge` automatically clears previous logout records (`sessionStore.ClearWorkstationLogout` and `RestoreTarget`), allowing seamless re-enrollment and issuing 1-year persistent workstation tokens (`MintWorkstationSession`).
+3. **Strictly Non-Destructive Compliance Inspection (`bap status`)**:
+   - Inspection commands are strictly read-only and never wipe local credentials.
+   - Displays unified identity attributes: `One-Time Code (OTC)` vs `OIDC Federated (...)`, user email, and host properties.
+4. **CLI Parity & Deregistration Symmetry**:
+   - `bap deregister` is a direct alias for `bap logout`, ensuring semantic symmetry: `bap register <CODE>` enrolls, `bap deregister` deregisters.
+
+
 
 
 

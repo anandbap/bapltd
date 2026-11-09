@@ -1,5 +1,5 @@
 {
-    "disableAllHooks":  true,
+    "disableAllHooks":  false,
     "hooks":  {
                   "SessionStart":  [
                                        {

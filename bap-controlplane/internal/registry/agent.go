@@ -113,6 +113,13 @@ func (s *Store) EnrollWithVersion(agentID string, binaryHash, pubKey, hostname, 
 
 	spiffeID := fmt.Sprintf("spiffe://%s/app/%s/instance/%s", s.trustDomain, strings.ToLower(parentAgent.AppID), instanceID)
 
+	if parentAgent.AuthMode == "" {
+		parentAgent.AuthMode = "otc"
+	}
+	if parentAgent.DeviceType == "" {
+		parentAgent.DeviceType = "workstation"
+	}
+
 	// If the parent agent is pending enrollment, or is re-enrolling/re-activating on the same workstation:
 	isSameWorkstation := (instanceID != "" && parentAgent.InstanceID == instanceID) || (hostname != "" && strings.EqualFold(parentAgent.Hostname, hostname))
 	if parentAgent.Status == types.StatusPendingEnrollment || parentAgent.Status == types.StatusDeregistered || isSameWorkstation {
@@ -163,6 +170,12 @@ func (s *Store) EnrollWithVersion(agentID string, binaryHash, pubKey, hostname, 
 		Hostname:            hostname,
 		OS:                  osName,
 		Arch:                arch,
+		DeviceType:          parentAgent.DeviceType,
+		AuthMode:            parentAgent.AuthMode,
+		UserEmail:           parentAgent.UserEmail,
+		Department:          parentAgent.Department,
+		Groups:              parentAgent.Groups,
+		IdPProvider:         parentAgent.IdPProvider,
 		AgentVersion:        agentVersion,
 		ProtocolVersion:     protocolVersion,
 		CreatedAt:           parentAgent.CreatedAt,
@@ -646,8 +659,23 @@ func (s *Store) HeartbeatInstance(appID, instanceID string) error {
 	return fmt.Errorf("agent instance %q/%q not found", appID, instanceID)
 }
 
+// isWorkstationAgent returns true if the agent represents a persistent workstation or enrolled edge node.
+// Enrolled workstations remain enrolled across session restarts and are only deregistered via explicit 'bap logout' or admin action.
+func isWorkstationAgent(a *types.RegisteredAgent) bool {
+	if a == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(a.AppID), "workstation") ||
+		strings.EqualFold(a.AppID, "bapedge") ||
+		strings.EqualFold(a.AppID, "bap") ||
+		a.DeviceType != "" ||
+		a.AuthMode == "oidc" ||
+		a.AuthMode == "otc" ||
+		a.EnrolledAt != nil
+}
+
 // EndSessionAgent updates the registry status when an ephemeral session closes.
-// Workstation agents (enrolled via OIDC / device flow) remain enrolled permanently unless explicitly deregistered via 'bap logout'.
+// Workstation agents (enrolled via OIDC, OTC, or device registration) remain enrolled permanently unless explicitly deregistered via 'bap logout'.
 func (s *Store) EndSessionAgent(appID, instanceID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -657,11 +685,11 @@ func (s *Store) EndSessionAgent(appID, instanceID string) {
 			if a.Status == types.StatusRevoked || a.Status == types.StatusDeregistered {
 				continue
 			}
-			isWorkstation := strings.Contains(strings.ToLower(a.AppID), "workstation") || a.DeviceType != "" || a.AuthMode == "oidc"
+			if isWorkstationAgent(a) {
+				continue
+			}
 			if instanceID != "" && (a.InstanceID == instanceID || a.AgentID == instanceID) {
-				if !isWorkstation {
-					a.Status = types.StatusDeregistered
-				}
+				a.Status = types.StatusDeregistered
 			}
 		}
 	}
@@ -685,11 +713,11 @@ func (s *Store) PurgeStale(maxIdle time.Duration) int {
 				if a.Status == types.StatusRevoked || a.Status == types.StatusDeregistered {
 					continue
 				}
-				isWorkstation := strings.Contains(strings.ToLower(a.AppID), "workstation") || a.DeviceType != "" || a.AuthMode == "oidc"
-				if !isWorkstation {
-					a.Status = types.StatusDeregistered
-					count++
+				if isWorkstationAgent(a) {
+					continue
 				}
+				a.Status = types.StatusDeregistered
+				count++
 			}
 		}
 	}

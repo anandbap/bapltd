@@ -232,6 +232,10 @@ func RunSessionStart(args []string) error {
 			fmt.Fprintf(os.Stderr, "  All new Claude Code sessions are denied until access is restored.\n")
 			fmt.Fprintf(os.Stderr, "===============================================================================\n\n")
 			os.Exit(2)
+		} else if resp.StatusCode == http.StatusUnauthorized {
+			if credSPIFFE == "" {
+				fmt.Fprintf(os.Stderr, "[i] Central Control Plane: Workstation is Unenrolled (HTTP 401). Session will be governed locally.\n    Run 'bap login' to stream sessions to %s\n", serverURL)
+			}
 		}
 	}
 

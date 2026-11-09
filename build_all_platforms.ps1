@@ -152,6 +152,15 @@ foreach ($p in $platforms) {
         Safe-CopyItem (Join-Path $platformDir "bapgateway.exe") (Join-Path $rootDir "bapgateway.exe")
         Safe-CopyItem (Join-Path $platformDir "cchook-interceptor.exe") (Join-Path $rootDir "interceptor.exe")
         Safe-CopyItem (Join-Path $platformDir "cchook-interceptor.exe") (Join-Path $rootDir "cchook-interceptor.exe")
+
+        # Synchronize user profile global bin if present
+        $userBin = Join-Path $env:USERPROFILE "bin"
+        if (Test-Path $userBin) {
+            Write-Host ">>> Synchronizing freshly compiled Windows binaries to user profile bin ($userBin)..." -ForegroundColor Cyan
+            Safe-CopyItem (Join-Path $platformDir "bapedge.exe") (Join-Path $userBin "bapedge.exe")
+            Safe-CopyItem (Join-Path $platformDir "bapedge.exe") (Join-Path $userBin "bap.exe")
+            Safe-CopyItem (Join-Path $platformDir "cchook-interceptor.exe") (Join-Path $userBin "interceptor.exe")
+        }
     }
 
     # Root files for platform
