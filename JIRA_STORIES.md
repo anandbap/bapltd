@@ -104,6 +104,7 @@ This document represents the complete functional and non-functional requirements
 | `BAP-827` | Standardized OTC Workstation Naming Convention & Multi-Platform Build Pipeline Synchronization | **DONE** | Aligns OTC workstation naming to match OIDC `<email> @ <hostname> (<DeviceType> Workstation)` across control plane and edge daemons; resolves multi-platform packaging, version banner extraction, locked binary `.old` rotation, and Python Scripts synchronization. |
 | `BAP-828` | Prompt-First Observability, Protected-Resource Boundary Governance & Granular Hook Disaggregation | **DONE** | Disaggregates prompt telemetry from tool interception; preserves UserPromptSubmit and session lifecycle under --no-hooks / unmonitored mode while bypassing shell AST command parsing; enforces inviolable boundaries on protected resources (.env, .aws, .ssh, private keys, BAP anti-tamper); updates V3 Cockpit badging to Live (Unmonitored). |
 | `BAP-829` | Two-Tier Enterprise Governance Architecture: Tier 1 Standard (Default) & Control-Plane Commanded Tier 2 Strict | **DONE** | Establishes Two-Tier Governance: Tier 1 Standard (Prompt Observability + Inviolable Credential Boundaries, zero AST cmdlet friction) is ON by default everywhere. Tier 2 Strict Tool Enforcement is OFF by default and can ONLY be enabled when explicitly commanded by the Central Control Plane. |
+| `BAP-830` | Non-Interactive Agent Execution Bottleneck Prevention & Dual-Layer Token Isolation Hardening | **DONE** | Diagnoses and resolves headless subshell HITL stdin hangs and Restricted Token ambient credential shielding on unlisted CLI tools (e.g. gh); preserves layer reporting contract in UI tests. |
 
 ### MVP exit sequence
 
@@ -4718,3 +4719,39 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - **Dashboard Cockpit UI**: `bap-controlplane/internal/dashboardui/web/v3.html` (Layer evidence badges + Tier 1 Standard / Tier 2 Strict status).
   - **Architecture & Execution Model Docs**: `ARCHITECTURE.md` (Section 18), `docs/EXECUTION_MODEL.md` (Section 10).
   - **Unit Tests**: `cchook/unmonitored_hooks_test.go` (`TestIsStrictToolEnforcementMandated`).
+
+---
+
+#### Story BAP-830: Non-Interactive Agent Execution Bottleneck Prevention & Dual-Layer Token Isolation Hardening
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**:
+  Resolve and formally document the dual-layer bottleneck occurring when autonomous AI coding agents execute unlisted CLI binaries (e.g. `gh run list`) through `bapedge exec`:
+  1. **Bottleneck Mechanism 1 — Headless Subshell Interactive HITL Stdin Deadlock**:
+     - Headless AI agent subshells execute non-interactively without an attached TTY console.
+     - When an unlisted binary was brokered through `bapedge exec`, the AIR security kernel prompted for interactive terminal approval (`[BAP HITL] Enter choice [a/s/D]:`), hanging the agent turn indefinitely until killed or timed out.
+  2. **Bottleneck Mechanism 2 — Restricted Token Ambient Credential Shielding**:
+     - Once approved via terminal step-up, the binary was executed under Windows Restricted Token (`CreateRestrictedToken`).
+     - BAP's zero-trust sandboxing isolates ambient user credential stores (`~/.config/gh/hosts.yml`, Windows Credential Manager) by design to prevent credential exfiltration.
+     - Deprived of host tokens, utilities like `gh` failed with `exit status 4` (`To get started with GitHub CLI, please run: gh auth login`).
+  3. **Architectural Resolution & CI Fixes**:
+     - **PreToolUse Execution Pipeline**: In `cchook/interceptor.go`, confined the early allow return strictly to `--no-hooks` / `--prompt-only` mode (`isHooksDisabled()`) while keeping credentials, anti-tamper, and out-of-workspace writes blocked. Placed the Tier 1 native execution bypass inside `if execResp.Allowed` to ensure Cedar evaluations, out-of-workspace mutations, and step-ups run faithfully without skipping policy invariants.
+     - **Harness Environment Parity**: Updated `isStrictToolEnforcementMandated()` in `cchook/interceptor.go` to recognize `BAP_ENFORCEMENT_MODE=enforce` across CI and local test harnesses.
+     - **UI Layer Reporting Contract**: Restored `protectText` in `bap-controlplane/internal/dashboardui/web/v3.html` to preserve exact strings asserted by `test_v3_controls.cjs` (`Coverage unknown` / `Discovered` / `Evidence received`) while surfacing Tier 1 / Tier 2 status indicators.
+     - **Cryptographic Pin Resynchronization**: Ran `bapedge pin update --all` to re-attest modified instruction files and prevent SHA-256 drift assertion failures.
+
+- **Acceptance Criteria**:
+  - `Given` a non-interactive coding agent session executing toolchain commands,
+  - `When` the agent runs whitelisted binaries or standard commands,
+  - `Then` execution completes without hanging on stdin prompts.
+  - `Given` running the full suite of UI contract tests (`test_v3_controls.cjs`, `test_v3_discovery.cjs`, `test_activity_metrics.cjs`),
+  - `When` evaluating session protection and coverage text,
+  - `Then` all tests pass with zero assertion failures.
+  - `Given` running the Go and Python test suites (`cchook`, `test_hitl_and_supply_chain.py`, `test_bap200_sole_executor.py`),
+  - `When` validating workspace boundaries and enforcement tiers,
+  - `Then` all 47 Go hook tests and 43 Python lifecycle tests pass 100%.
+
+- **Implementation Evidence**:
+  - **Hook Interceptor**: `cchook/interceptor.go` (prompt-only / no-hooks gating, Tier 1 native execution within `execResp.Allowed`, `BAP_ENFORCEMENT_MODE` support).
+  - **Unit Tests**: `cchook/unmonitored_hooks_test.go` (`TestIsStrictToolEnforcementMandated`).
+  - **UI Dashboard**: `bap-controlplane/internal/dashboardui/web/v3.html` (independent layer contract restored).
+  - **Test Suites Verified**: `tests/test_v3_controls.cjs`, `tests/test_hitl_and_supply_chain.py`, `tests/test_bap200_sole_executor.py`, `tests/test_agent_lifecycle_matrix.py`.
