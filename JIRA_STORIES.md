@@ -4698,7 +4698,7 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   3. **Control Plane, Edge & Cockpit Alignment**:
      - `bap-controlplane/internal/policy/store.go` & `bap-edge/internal/policystore/store.go`: Added `StrictToolEnforcement` (bool, default `false`) and `EnforcementTier` (`tier_1_standard` vs `tier_2_strict`).
      - `bap-edge/cmd/cli_tools.go`: `bap status` dynamically displays the active governance tier (`TIER 1 (STANDARD)` vs `TIER 2 (STRICT)`).
-     - `bap-controlplane/internal/dashboardui/web/v3.html`: Renders active sessions with `Live (Standard Tier 1)` and `Prompts & Boundaries (Tier 1)` by default, transitioning to `Live (Strict Tier 2)` only when Tier 2 is commanded.
+     - `bap-controlplane/internal/dashboardui/web/v3.html`: Renders active sessions with layer evidence badges (`Evidence received` / `Discovered` / `Coverage unknown`) preserving the Independent Layer Reporting contract, highlighting `Tier 1 Standard Governance` vs `Live (Strict Tier 2)` in status reporting and session means.
 
 - **Acceptance Criteria**:
   - `Given` a standard developer workstation running Claude Code or Antigravity,
@@ -4715,6 +4715,6 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - **Policy Store & Bundle**: `bap-controlplane/internal/policy/store.go`, `bap-edge/internal/policystore/store.go`.
   - **Control Plane API**: `bap-controlplane/internal/api/handlers.go` (`handleEnforcementTier`, `/api/v1/control/tier`, `/api/v1/policy/tier`).
   - **Edge Status & Interceptor**: `bap-edge/cmd/cli_tools.go` (`RunStatus`), `cchook/interceptor.go` (`isStrictToolEnforcementMandated`, Tier 1 fast-path, boundary invariants).
-  - **Dashboard Cockpit UI**: `bap-controlplane/internal/dashboardui/web/v3.html` (`Live (Standard Tier 1)` / `Prompts & Boundaries (Tier 1)`).
+  - **Dashboard Cockpit UI**: `bap-controlplane/internal/dashboardui/web/v3.html` (Layer evidence badges + Tier 1 Standard / Tier 2 Strict status).
   - **Architecture & Execution Model Docs**: `ARCHITECTURE.md` (Section 18), `docs/EXECUTION_MODEL.md` (Section 10).
   - **Unit Tests**: `cchook/unmonitored_hooks_test.go` (`TestIsStrictToolEnforcementMandated`).

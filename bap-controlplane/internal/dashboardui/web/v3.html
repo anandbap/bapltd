@@ -1795,13 +1795,6 @@
               reportText = 'Stopped';
               reportClass = 'off';
               means = s.close_reason ? ('Session ' + s.close_reason + '.') : 'Session stopped by administrator.';
-            } else if (isUnmonitored) {
-              protectText = 'Prompts Only (Tool Hooks Disabled)';
-              protectClass = 'a';
-              reportText = isLive ? 'Live (Unmonitored)' : 'Offline (Unmonitored)';
-              reportClass = isLive ? 'a' : 'off';
-              means = 'Session running with BAP tool hooks disabled (--no-hooks). Invariant secret protection active; command confirmation delegated to user.' +
-                (s.prompt_available ? ' Prompt text reported.' : '');
             } else if (isObserved && isBackedByBroker) {
               protectText = 'Matched with bapedge';
               protectClass = 'g';
@@ -1810,25 +1803,17 @@
               means = 'Process ID ' + (s.client_pid || '') + ' matched with bapedge broker. Commands evaluated against Cedar invariants.';
             } else if (isLive) {
               var isStrict = s.enforcement_tier === 'tier_2_strict' || s.strict_tool_enforcement === true;
-              if (isStrict) {
-                protectText = toolEvidence ? 'Governed (Tier 2 Strict)' : 'Strict Tool Policy (Tier 2)';
-                protectClass = 'g';
-                reportText = 'Live (Strict Tier 2)';
-                reportClass = 'g';
-                means = 'Tier 2 Strict Tool Enforcement active (Mandated by Control Plane): Full Cedar AST cmdlet parsing and execution brokering enforced. ' +
-                  (s.prompt_available ? 'Prompt text reported.' : '');
-              } else {
-                protectText = 'Prompts & Boundaries (Tier 1)';
-                protectClass = 'g';
-                reportText = 'Live (Standard Tier 1)';
-                reportClass = 'g';
-                means = 'Tier 1 Standard Governance active (Default): Prompt observability & credential boundary protection enforced; tool commands execute natively without AST friction. ' +
-                  (s.prompt_available ? 'Prompt text reported.' : '');
-              }
+              protectText = toolEvidence ? 'Evidence received' : (layers.indexOf('discovery') !== -1 ? 'Discovered' : 'Coverage unknown');
+              protectClass = toolEvidence ? 'g' : 'off';
+              reportText = isUnmonitored ? 'Live (Unmonitored)' : (isStrict ? 'Live (Strict Tier 2)' : 'Live');
+              reportClass = isUnmonitored ? 'a' : 'g';
+              means = (layers.length ? 'Reported layers: ' + layers.map(esc).join(', ') + '. ' : 'Reporting coverage has not been confirmed. ') +
+                (isUnmonitored ? 'Session running with tool hooks disabled (--no-hooks). ' : (isStrict ? 'Tier 2 Strict Tool Enforcement active (Mandated by Control Plane). ' : 'Tier 1 Standard Governance active (Default). ')) +
+                (s.prompt_available ? 'Prompt text reported.' : (s.prompt_capture_disabled ? 'Prompt capture disabled by policy.' : 'Prompt text not reported.'));
             } else {
               protectText = toolEvidence ? 'Evidence received' : (layers.indexOf('discovery') !== -1 ? 'Discovered' : 'Coverage unknown');
               protectClass = toolEvidence ? 'g' : 'off';
-              reportText = 'Offline';
+              reportText = isUnmonitored ? 'Offline (Unmonitored)' : 'Offline';
               reportClass = 'off';
               means = 'Session ended or timed out.' + (s.close_reason ? ' ' + s.close_reason + '.' : '');
             }
