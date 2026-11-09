@@ -338,6 +338,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/agents", s.handleListAgents)
 	s.mux.HandleFunc("/api/v1/policy/bundle", s.handleGetPolicyBundle)
 	s.mux.HandleFunc("/api/v1/policy/sync", s.handlePolicySync)
+	s.mux.HandleFunc("/api/v1/policy/tier", s.handleEnforcementTier)
+	s.mux.HandleFunc("/api/v1/control/tier", s.handleEnforcementTier)
 	s.mux.HandleFunc("/api/v1/audit/ingest", s.handleAuditIngest)
 	s.mux.HandleFunc("/api/v1/audit/events", s.handleListAuditEvents)
 	s.mux.HandleFunc("/api/v1/sessions/start", s.requireSessionIdentity(s.handleSessionStart))
@@ -2405,6 +2407,59 @@ func (s *Server) handlePolicySync(w http.ResponseWriter, r *http.Request) {
 	resp.ServerVersion = version.Version
 	resp.MinEdgeVersion = s.minEdgeVersion
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleEnforcementTier(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		bundle := s.policyStore.GetBundle()
+		tier := bundle.EnforcementTier
+		if tier == "" {
+			if bundle.StrictToolEnforcement {
+				tier = "tier_2_strict"
+			} else {
+				tier = "tier_1_standard"
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"tier":                    tier,
+			"enforcement_tier":        tier,
+			"strict_tool_enforcement": bundle.StrictToolEnforcement,
+			"default_tier":            "tier_1_standard",
+			"description":             "Tier 1 Standard is the default across all workstations (Prompt Observability + Inviolable Credential Boundaries). Tier 2 Strict Tool Enforcement is only active when commanded by Control Plane.",
+		})
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		if !s.isAdminCaller(r) {
+			writeError(w, http.StatusUnauthorized, "Administrator authentication required to set enforcement tier")
+			return
+		}
+		var req struct {
+			Tier   string `json:"tier"`
+			Strict *bool  `json:"strict_tool_enforcement"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+			return
+		}
+		strict := false
+		if req.Strict != nil {
+			strict = *req.Strict
+		} else if strings.EqualFold(req.Tier, "2") || strings.EqualFold(req.Tier, "tier_2") || strings.EqualFold(req.Tier, "strict") || strings.EqualFold(req.Tier, "tier_2_strict") {
+			strict = true
+		}
+		s.policyStore.SetStrictToolEnforcement(strict)
+		bundle := s.policyStore.GetBundle()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":                  "updated",
+			"tier":                    bundle.EnforcementTier,
+			"enforcement_tier":        bundle.EnforcementTier,
+			"strict_tool_enforcement": bundle.StrictToolEnforcement,
+		})
+		return
+	}
+	writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 }
 
 func (s *Server) handleAuditIngest(w http.ResponseWriter, r *http.Request) {

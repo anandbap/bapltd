@@ -18,13 +18,15 @@ const (
 )
 
 type Bundle struct {
-	Version     uint64 `json:"version"`
-	Digest      string `json:"digest"`
-	PolicyCedar string `json:"policy_cedar"`
-	SchemaJSON  string `json:"schema_json,omitempty"`
-	KillSwitch  bool   `json:"kill_switch"`
-	UpdatedAt   string `json:"updated_at"`
-	RiskTier    string `json:"risk_tier,omitempty"`
+	Version               uint64 `json:"version"`
+	Digest                string `json:"digest"`
+	PolicyCedar           string `json:"policy_cedar"`
+	SchemaJSON            string `json:"schema_json,omitempty"`
+	KillSwitch            bool   `json:"kill_switch"`
+	StrictToolEnforcement bool   `json:"strict_tool_enforcement"` // Tier 2 tool enforcement (Default: false)
+	EnforcementTier       string `json:"enforcement_tier,omitempty"` // "tier_1_standard" (default) or "tier_2_strict"
+	UpdatedAt             string `json:"updated_at"`
+	RiskTier              string `json:"risk_tier,omitempty"`
 }
 
 type SyncRequest struct {
@@ -73,13 +75,25 @@ func (s *Store) Update(cedarCode, schema string, killSwitch bool) Bundle {
 		newVersion = 1
 	}
 
+	strict := s.bundle.StrictToolEnforcement
+	tier := s.bundle.EnforcementTier
+	if tier == "" {
+		if strict {
+			tier = "tier_2_strict"
+		} else {
+			tier = "tier_1_standard"
+		}
+	}
+
 	s.bundle = Bundle{
-		Version:     newVersion,
-		Digest:      digest,
-		PolicyCedar: cedarCode,
-		SchemaJSON:  schema,
-		KillSwitch:  killSwitch,
-		UpdatedAt:   time.Now().UTC().Format(time.RFC3339),
+		Version:               newVersion,
+		Digest:                digest,
+		PolicyCedar:           cedarCode,
+		SchemaJSON:            schema,
+		KillSwitch:            killSwitch,
+		StrictToolEnforcement: strict,
+		EnforcementTier:       tier,
+		UpdatedAt:             time.Now().UTC().Format(time.RFC3339),
 	}
 	return s.bundle
 }
@@ -125,6 +139,25 @@ func (s *Store) SetKillSwitch(killSwitch bool) {
 	defer s.mu.Unlock()
 	s.bundle.KillSwitch = killSwitch
 	s.bundle.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+}
+
+func (s *Store) SetStrictToolEnforcement(strict bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bundle.StrictToolEnforcement = strict
+	if strict {
+		s.bundle.EnforcementTier = "tier_2_strict"
+	} else {
+		s.bundle.EnforcementTier = "tier_1_standard"
+	}
+	s.bundle.Version++
+	s.bundle.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+}
+
+func (s *Store) IsStrictToolEnforcement() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.bundle.StrictToolEnforcement
 }
 
 func (s *Store) GetBundle() Bundle {

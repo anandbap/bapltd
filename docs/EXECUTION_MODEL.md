@@ -323,3 +323,67 @@ To eliminate raw shell script generation entirely for file mutations, `bapmcp` p
 - `bap_list_dir`: Inspects workspace directories without shell tools.
 
 By routing file operations through typed JSON-RPC parameters, AI agents bypass shell string escaping, terminal pipe wrapping, and AST classification completely. Cross-folder mutations outside the workspace are verified against active project, session, and global permissions via `IsTargetAuthorized`, ensuring seamless step-up governance without shell traps.
+
+---
+
+## 10. Two-Tier Enterprise Governance Model (BAP-829)
+
+### 10.1 Architectural Context
+Autonomous coding agents (such as Claude Code and Google Antigravity) natively require developer confirmation before executing modifying actions and commands. Concurrently, attempting to parse, tokenize, and broker every single shell command via subshell wrappers introduces severe latency, PowerShell cmdlet parsing complexity, and developer friction.
+
+To balance high-velocity developer agility with strict enterprise compliance and secret protection, BAP formalizes a two-tier governance architecture:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        AI Developer Prompt                             │
+└──────────────────────────────────┬─────────────────────────────────────┘
+                                   │
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│   Tier 1 (Standard - Default): 100% User Prompt Observability          │
+│   • Captures all UserPromptSubmit events                               │
+│   • Streams prompt text and session metadata to Central Control Plane  │
+└──────────────────────────────────┬─────────────────────────────────────┘
+                                   │
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│   Tier 1 Inviolable Hard Gates: Credential & Tamper Defense            │
+│   • PreToolUse check on every file and command operation               │
+│   • Hard DENY on .env, ~/.aws, ~/.ssh, keys, certificates, BAP state   │
+└──────────────────┬──────────────────────────────────┬──────────────────┘
+                   │ Safe Tool Operation              │ Forbidden Credential
+                   ▼                                  ▼
+┌──────────────────────────────────────┐  ┌──────────────────────────────┐
+│  Tier Selection Evaluation           │  │ HARD DENY (Invariant Exit)   │
+│  (Read policy-state.json cache)      │  │ Emits security violation     │
+└──────────────┬───────────────────────┘  └──────────────────────────────┘
+               │
+      ┌────────┴──────────────────────────┐
+      │                                   │
+      ▼                                   ▼
+┌──────────────────────────────┐ ┌───────────────────────────────────────┐
+│ Tier 1 (Default Everywhere): │ │ Tier 2 (Central Control Plane Only):  │
+│ Native Tool Execution        │ │ Strict Cedar AST & bapedge exec       │
+│ • Zero subshell wrapping     │ │ • Activated ONLY when mandated by CP  │
+│ • Developer HITL in agent    │ │ • Full Cedar AST binary whitelisting  │
+│ • No cmdlet parsing bugs     │ │ • bapedge.exe exec sandbox wrapping   │
+└──────────────────────────────┘ └───────────────────────────────────────┘
+```
+
+### 10.2 Tier 1: Standard Enterprise Governance (Default)
+Tier 1 is active by default across all deployments:
+1. **100% Prompt Observability**: Intercepts `UserPromptSubmit` in real time, guaranteeing centralized audit visibility and security intelligence.
+2. **Inviolable Credential Hard Gates**: Blocks all attempts to access sensitive files (`.env*`, `~/.aws/*`, `~/.ssh/*`, certificates, private keys, and BAP tamper targets) across all tools (`Bash`, `Read`, `Write`, `Edit`, `View`).
+3. **Native Tool Execution**: General compilation, git, and testing commands execute directly without subshell wrapping, eliminating command mangling and execution delays.
+
+### 10.3 Tier 2: Strict Tool Enforcement (Control Plane Commanded)
+Tier 2 is strictly off by default:
+1. **Central Authority**: Can only be enabled centrally by the Control Plane via `/api/v1/control/tier` or `/api/v1/policy/tier` (`StrictToolEnforcement = true`).
+2. **Exhaustive AST Whitelisting**: Every command is parsed and tokenized against Cedar allowlists and brokered through `bapedge exec`.
+
+### 10.4 Resilience & Status Visibility
+1. Interceptors evaluate `StrictToolEnforcement` locally from `policy-state.json` ($<1\text{ ms}$), defaulting safely to Tier 1 if offline.
+2. `bap status` clearly displays active tier:
+   - `Governance Tier: TIER 1 (STANDARD) - Prompt-First & Boundary Governance [Default]`
+   - `Governance Tier: TIER 2 (STRICT) - Central Control Plane Mandated Tool Brokerage`
+

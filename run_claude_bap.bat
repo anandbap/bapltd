@@ -140,7 +140,7 @@ for ($i = 0; $i -lt $args.Count; $i++) {
         continue
     }
 
-    if ($a -eq '--no-hooks' -or $a -eq '--disable-hooks' -or $a -eq '--unmonitored' -or $a -eq '--bap-hooks=false') {
+    if ($a -eq '--no-hooks' -or $a -eq '--disable-hooks' -or $a -eq '--unmonitored' -or $a -eq '--bap-hooks=false' -or $a -eq '--prompt-only') {
         $env:BAP_HOOKS = 'false'
         continue
     }
@@ -1420,7 +1420,7 @@ $ClaudeArgs = @()
         }
 
         $BapClaudeSettings = [ordered]@{
-            disableAllHooks = $hooksDisabled
+            disableAllHooks = $false
 
             hooks = [ordered]@{
                 SessionStart = @(
@@ -1576,7 +1576,7 @@ $ClaudeArgs = @()
     Write-Host ''
     Write-Host '=============================================================================='
     if ($hooksDisabled) {
-        Write-Host '  CLAUDE CODE - UNMONITORED WORKLOAD (BAP HOOKS DISABLED)'
+        Write-Host '  CLAUDE CODE - PROMPT-ONLY / UNMONITORED WORKLOAD (TOOL HOOKS DISABLED)'
     } else {
         Write-Host '  CLAUDE CODE IS NOW GOVERNED BY BAP ZERO-TRUST'
     }
@@ -1584,7 +1584,7 @@ $ClaudeArgs = @()
     Write-Host "  Target Control Plane : $ServerUrl"
     Write-Host "  Active Session ID    : $SessionId"
     Write-Host "  User Identity        : $env:USERNAME on $env:COMPUTERNAME"
-    Write-Host "  Policy Hook          : $(if ($hooksDisabled) { 'DISABLED (BAP_HOOKS=false; unmonitored)' } else { $InterceptorBin })"
+    Write-Host "  Policy Hook          : $(if ($hooksDisabled) { 'PROMPT & BOUNDARY ONLY (BAP_HOOKS=false; tool AST bypassed)' } else { $InterceptorBin })"
     Write-Host '  PreToolUse Coverage  : ALL tools (*)'
     Write-Host '  Settings Custody     : Transactional BAP ownership'
     Write-Host "  Session Guard PID    : $($watchdog.Id)"

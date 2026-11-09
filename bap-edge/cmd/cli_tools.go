@@ -751,10 +751,16 @@ func RunStatus(args []string) error {
 	policyVersion := uint64(0)
 	policyDigest := ""
 	killSwitch := false
+	strictTools := false
+	enforcementTier := "TIER 1 (STANDARD) - Prompt-First & Boundary Governance [Default]"
 	if pErr == nil {
 		policyVersion = pState.Version
 		policyDigest = pState.Digest
 		killSwitch = pState.KillSwitch
+		strictTools = pState.StrictToolEnforcement
+		if strictTools || strings.EqualFold(pState.EnforcementTier, "tier_2_strict") || strings.EqualFold(pState.EnforcementTier, "strict") {
+			enforcementTier = "TIER 2 (STRICT) - Mandatory Central Control Plane Tool Governance"
+		}
 	} else if pPath, err := authz.FindFile("", "policy.cedar"); err == nil {
 		if pData, err := os.ReadFile(pPath); err == nil {
 			digest := sha256.Sum256(pData)
@@ -877,9 +883,11 @@ func RunStatus(args []string) error {
 				"items":                discoveredItems,
 			},
 			"policy": map[string]any{
-				"version":     policyVersion,
-				"digest":      policyDigest,
-				"kill_switch": killSwitch,
+				"version":                 policyVersion,
+				"digest":                  policyDigest,
+				"kill_switch":             killSwitch,
+				"strict_tool_enforcement": strictTools,
+				"enforcement_tier":        func() string { if strictTools { return "tier_2_strict" }; return "tier_1_standard" }(),
 			},
 			"telemetry": map[string]any{
 				"total_logged":            totalLogged,
@@ -1069,6 +1077,7 @@ func RunStatus(args []string) error {
 
 	// 3. Inspect Cached Cedar Policy Bundle
 	fmt.Println("\n  POLICY BUNDLE & ZERO-TRUST CACHE:")
+	fmt.Printf("    • Governance Tier: %s\n", enforcementTier)
 	if policyVersion > 0 {
 		fmt.Printf("    • Version:        v%d\n", policyVersion)
 		fmt.Printf("    • Rules Digest:   %s\n", policyDigest)

@@ -19,6 +19,9 @@ import (
 // Session represents an active or historical agent execution session (e.g., a Claude Code or Copilot run).
 type Session struct {
 	ReportingLayers     []string      `json:"reporting_layers,omitempty"`
+	ReportingLayer      string        `json:"reporting_layer,omitempty"`
+	HooksDisabled       bool          `json:"hooks_disabled,omitempty"`
+	EnforcementTier     string        `json:"enforcement_tier,omitempty"`
 	SessionID           string        `json:"session_id"`
 	AppID               string        `json:"app_id"`
 	InstanceID          string        `json:"instance_id,omitempty"`
@@ -80,6 +83,8 @@ type IntentContext struct {
 // SessionStartRequest contains fields to initiate a session.
 type SessionStartRequest struct {
 	ReportingLayer      string        `json:"reporting_layer,omitempty"`
+	HooksDisabled       bool          `json:"hooks_disabled,omitempty"`
+	EnforcementTier     string        `json:"enforcement_tier,omitempty"`
 	SessionID           string        `json:"session_id,omitempty"`
 	AppID               string        `json:"app_id"`
 	InstanceID          string        `json:"instance_id,omitempty"`
@@ -339,6 +344,21 @@ func (s *Store) Start(req SessionStartRequest) (*Session, error) {
 			return nil, fmt.Errorf("session is revoked; administrator restore required")
 		}
 		addReportingLayer(existing, req.ReportingLayer)
+		if req.HooksDisabled {
+			existing.HooksDisabled = true
+			addReportingLayer(existing, "unmonitored")
+		}
+		if req.ReportingLayer != "" {
+			existing.ReportingLayer = req.ReportingLayer
+			if req.ReportingLayer == "unmonitored" {
+				existing.HooksDisabled = true
+			}
+		}
+		if req.EnforcementTier != "" {
+			existing.EnforcementTier = req.EnforcementTier
+		} else if existing.EnforcementTier == "" {
+			existing.EnforcementTier = "tier_1_standard"
+		}
 		if req.AgentName != "" {
 			existing.AgentName = req.AgentName
 		}
@@ -493,11 +513,17 @@ func (s *Store) Start(req SessionStartRequest) (*Session, error) {
 		GrantID:             req.GrantID,
 		Lineage:             req.Lineage,
 		LineageTree:         lineageTree,
+		HooksDisabled:       req.HooksDisabled || req.ReportingLayer == "unmonitored",
+		ReportingLayer:      req.ReportingLayer,
+		EnforcementTier:     func() string { if req.EnforcementTier != "" { return req.EnforcementTier }; return "tier_1_standard" }(),
 	}
 
 	s.sessions[sessionID] = sess
 	s.order = append(s.order, sessionID)
 	addReportingLayer(sess, req.ReportingLayer)
+	if sess.HooksDisabled {
+		addReportingLayer(sess, "unmonitored")
+	}
 	s.reconcileObservedSessionsLocked(sess.ClientPID, sess.Hostname, sess.InstanceID, sess.SessionID, sess)
 	s.saveSessionToDB(sess)
 	return sess, nil
@@ -1253,6 +1279,10 @@ func (s *Store) loadFromDB() error {
 		_ = json.Unmarshal([]byte(reportingJSON.String), &layers)
 		for _, layer := range layers {
 			addReportingLayer(sess, layer)
+			if layer == "unmonitored" {
+				sess.HooksDisabled = true
+				sess.ReportingLayer = "unmonitored"
+			}
 		}
 
 		// Architectural fix: reap stale active sessions from crashed/prior runs upon startup

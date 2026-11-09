@@ -25,19 +25,23 @@ var (
 )
 
 type Bundle struct {
-	Version     uint64 `json:"version"`
-	Digest      string `json:"digest"`
-	PolicyCedar string `json:"policy_cedar"`
-	SchemaJSON  string `json:"schema_json,omitempty"`
-	KillSwitch  bool   `json:"kill_switch"`
-	UpdatedAt   string `json:"updated_at"`
+	Version               uint64 `json:"version"`
+	Digest                string `json:"digest"`
+	PolicyCedar           string `json:"policy_cedar"`
+	SchemaJSON            string `json:"schema_json,omitempty"`
+	KillSwitch            bool   `json:"kill_switch"`
+	StrictToolEnforcement bool   `json:"strict_tool_enforcement"`
+	EnforcementTier       string `json:"enforcement_tier,omitempty"`
+	UpdatedAt             string `json:"updated_at"`
 }
 
 type PolicyState struct {
-	Version    uint64    `json:"version"`
-	Digest     string    `json:"digest"`
-	KillSwitch bool      `json:"kill_switch"`
-	LastSync   time.Time `json:"last_sync"`
+	Version               uint64    `json:"version"`
+	Digest                string    `json:"digest"`
+	KillSwitch            bool      `json:"kill_switch"`
+	StrictToolEnforcement bool      `json:"strict_tool_enforcement"`
+	EnforcementTier       string    `json:"enforcement_tier,omitempty"`
+	LastSync              time.Time `json:"last_sync"`
 }
 
 type SyncResponse struct {
@@ -103,10 +107,12 @@ func (s *Store) Accept(bundle Bundle) error {
 	}
 
 	state := PolicyState{
-		Version:    bundle.Version,
-		Digest:     computed,
-		KillSwitch: bundle.KillSwitch,
-		LastSync:   time.Now().UTC(),
+		Version:               bundle.Version,
+		Digest:                computed,
+		KillSwitch:            bundle.KillSwitch,
+		StrictToolEnforcement: bundle.StrictToolEnforcement,
+		EnforcementTier:       bundle.EnforcementTier,
+		LastSync:              time.Now().UTC(),
 	}
 
 	stateData, err := json.MarshalIndent(state, "", "  ")

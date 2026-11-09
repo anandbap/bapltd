@@ -1371,6 +1371,122 @@ To ensure identical workstation identity invariants regardless of whether an edg
 4. **CLI Parity & Deregistration Symmetry**:
    - `bap deregister` is a direct alias for `bap logout`, ensuring semantic symmetry: `bap register <CODE>` enrolls, `bap deregister` deregisters.
 
+---
+
+## 18. Two-Tier Enterprise Governance Architecture (Epic 46 — `BAP-829`)
+
+### 18.1. Architectural Philosophy: Prompt Observability & Boundary Defense vs AST Parsing Fragility
+As autonomous AI developer agents (Claude Code, Antigravity IDE, GitHub Copilot CLI, OpenAI Codex) evolve, they feature sophisticated native confirmation dialogs, asking the developer directly before running shell scripts or executing mutating actions.
+
+In enterprise software engineering, attempting to exhaustively pre-parse, tokenize, and broker every permutation of thousands of host shell commands (PowerShell cmdlets, subshells, aliases, pipes, flags) via synchronous hooks introduces severe engineering fragility, false-positive blocks, and subshell performance latency. More critically, developers are already the ultimate human-in-the-loop for typical coding tasks (compiling binaries, running unit tests, git branch operations, package installations).
+
+However, **enterprise crown jewels and security boundaries are non-negotiable invariants** that must never be exposed or tampered with by any autonomous agent. To deliver zero-trust security without crippling developer productivity, BAP establishes the **Two-Tier Enterprise Governance Architecture**:
+
+```mermaid
+flowchart TD
+    subgraph CP ["Central Control Plane (bapcontrolplane)"]
+        TierConfig["Central Tier State<br/>(Default: tier_1_standard)"]
+        TierAPI["/api/v1/control/tier<br/>/api/v1/policy/tier"]
+        PolicyDist["Signed Policy Bundle<br/>(StrictToolEnforcement: false)"]
+        Cockpit["Cockpit Dashboard<br/>[Live (Standard Tier 1)]"]
+        TierConfig --> TierAPI
+        TierConfig --> PolicyDist
+        TierConfig --> Cockpit
+    end
+
+    subgraph Edge ["Developer Workstation (bapedge & cchook)"]
+        CachedPolicy["policy-state.json<br/>(Local Non-Blocking Cache)"]
+        UserPrompt["User Prompt<br/>(UserPromptSubmit Hook)"]
+        ToolUse["Tool Execution<br/>(PreToolUse Hook)"]
+
+        subgraph Invariants ["Inviolable Credential Hard Gate"]
+            SecretCheck{Target Resource<br/>Protected?}
+            HardDeny["HARD DENY<br/>(403 Invariant Violation)"]
+        end
+
+        subgraph TierRouter ["Governance Tier Router"]
+            IsStrict{Control Plane<br/>Mandates Tier 2?}
+            Tier1Path["Tier 1: Native Tool Execution<br/>(Developer Human-in-the-Loop)"]
+            Tier2Path["Tier 2: Cedar AST Whitelist<br/>+ bapedge exec Broker"]
+        end
+
+        PolicyDist -.->|Background Sync| CachedPolicy
+        CachedPolicy --> IsStrict
+
+        UserPrompt -->|100% Ingestion| CP
+        ToolUse --> SecretCheck
+
+        SecretCheck -->|.env, ~/.aws, ~/.ssh, keys, BAP tamper| HardDeny
+        SecretCheck -->|Safe Resource| IsStrict
+
+        IsStrict -->|No (Default: Tier 1)| Tier1Path
+        IsStrict -->|Yes (Mandated)| Tier2Path
+    end
+```
+
+### 18.2. Tier 1 — Standard Enterprise Governance (Default: Enabled Everywhere)
+**Tier 1 is the default operational mode for all BAP deployments.** It provides immediate enterprise compliance and risk containment with zero developer friction:
+
+1. **100% User Prompt Observability**:
+   - Interceptors (`cchook`, plugin hooks, CLI shims) capture every raw prompt submitted to the agent (`UserPromptSubmit`).
+   - Prompts are ingested synchronously and streamed to the Central Control Plane, creating an immutable audit trail of developer intent, project context, and compliance activity.
+   - Enables enterprise Shadow AI detection, prompt injection monitoring, and activity analytics across all workstations.
+2. **Inviolable Credential & System Boundary Hard Gates**:
+   - Evaluated on every `PreToolUse` invocation for all tool types (`Bash`, `Read`, `Write`, `Edit`, `View`).
+   - Any attempt to access, read, write, or exfiltrate protected credentials is unconditionally and synchronously **DENIED**:
+     - Environment secrets: `.env`, `.env.*`
+     - Cloud credentials: `~/.aws/*`, `~/.azure/*`, `~/.gcp/*`, `credentials.json`
+     - Private keys & certificates: `~/.ssh/*`, `*.pem`, `*.key`, `id_rsa`, `id_ed25519`
+     - BAP anti-tamper targets: `bapedge.exe`, `policy-state.json`, `credentials.json`, `.claude/settings.json.bap-backup-*`
+   - Hard denial emits an immediate Cedar invariant violation receipt to the Control Plane audit ledger.
+3. **Frictionless Native Tool Execution**:
+   - For all standard developer tasks (running compilers, formatters, tests, git commands, npm/cargo/pip builds), tools execute natively in the developer workspace.
+   - Completely eliminates subshell latency, quote-stripping issues, and the endless combinatorial explosion of PowerShell/Bash cmdlet parsing.
+   - Operational approval remains natively with the developer inside the coding agent's native confirmation dialogs.
+4. **Cockpit UI & Status Visualization**:
+   - Real-time radar cockpit badges sessions as: `Live (Standard Tier 1)` or `Prompts & Boundaries (Tier 1)`.
+   - `bap status` reports:
+     ```
+     Governance Tier: TIER 1 (STANDARD) - Prompt-First & Boundary Governance [Default]
+     ```
+
+### 18.3. Tier 2 — Strict Tool Enforcement (Central Control Plane Commanded Only)
+**Tier 2 is strictly OFF by default.** It is reserved for high-risk, regulated, or air-gapped environments where every individual shell cmdlet must be parsed and executed through the BAP Edge broker:
+
+1. **Control Plane Exclusive Authority**:
+   - Edge clients cannot arbitrarily elevate themselves to Tier 2 without Control Plane authorization.
+   - Tier 2 is triggered only when the Central Control Plane sets `StrictToolEnforcement = true` (`EnforcementTier = "tier_2_strict"`) in the signed policy bundle, or via administrative API command.
+2. **Mandatory Cedar AST Whitelisting & Brokered Execution**:
+   - When commanded by the Control Plane, edge interceptors switch dynamically to full Cedar AST inspection.
+   - Commands are tokenized, evaluated against binary allowlists, and rewritten to pass through `bapedge.exe exec "<command>"` under Windows restricted tokens or Linux namespaces.
+   - Any unapproved binary or syntax construct triggers step-up authentication or denial.
+3. **Cockpit UI & Status Visualization**:
+   - Sessions are badged in real-time on the cockpit as: `Live (Strict Tier 2)`.
+   - `bap status` reports:
+     ```
+     Governance Tier: TIER 2 (STRICT) - Central Control Plane Mandated Tool Brokerage
+     ```
+
+### 18.4. Control Plane Tier Synchronization API Contract
+The Central Control Plane exposes dedicated management endpoints for inspecting and toggling governance tiers:
+
+| Endpoint | Method | Auth | Description |
+|---|---|---|---|
+| `/api/v1/control/tier` | `GET` | Bearer / Public | Returns active tier (`tier_1_standard` or `tier_2_strict`), `strict_tool_enforcement` bool, and architectural description. |
+| `/api/v1/control/tier` | `POST` | Bearer Admin | Dynamically toggles enforcement tier across the enterprise fleet. Updates signed policy bundles. |
+| `/api/v1/policy/tier` | `GET` / `POST` | Bearer Admin | Policy store alias for tier inspection and updates. |
+| `/api/v1/sessions/start` | `POST` | Workstation Token | Session registration payload includes `enforcement_tier` and `strict_tool_enforcement` metadata. |
+
+### 18.5. Edge Resilience & Non-Blocking Policy Cache
+To guarantee that edge developers never experience IDE freezes or tool latency when offline or disconnected from the Control Plane:
+1. **Local Non-Blocking Evaluation**:
+   - `cchook` reads `StrictToolEnforcement` directly from the cached `policy-state.json` written by `bapedge`.
+   - Read latency is $< 1\text{ ms}$ with zero synchronous network round-trips.
+2. **Safe Fallback Invariant**:
+   - If `policy-state.json` is missing, unreadable, or corrupted, the interceptor safely defaults to **Tier 1 (Standard)**.
+   - Hard boundary checks (`.env`, `~/.aws`, `~/.ssh`, BAP anti-tamper) are compiled directly into the interceptor binary and execute deterministically regardless of policy bundle availability.
+
+
 
 
 

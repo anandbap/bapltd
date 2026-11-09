@@ -2215,8 +2215,14 @@ func handleSessionStartHook(payload HookPayload) {
 	if username == "" {
 		username = os.Getenv("USER")
 	}
+	hooksDisabled := isHooksDisabled()
+	reportingLayer := "hook"
+	if hooksDisabled {
+		reportingLayer = "unmonitored"
+	}
 	startPayload := map[string]any{
-		"reporting_layer": "hook",
+		"reporting_layer": reportingLayer,
+		"hooks_disabled":  hooksDisabled,
 		"session_id":      sessionID,
 		"app_id":          appID,
 		"caller_path":     caller.BinaryPath,
@@ -2525,19 +2531,26 @@ func ensureSessionAndWatcher(sessionID, serverURL string) {
 	if username == "" {
 		username = os.Getenv("USER")
 	}
+	hooksDisabled := isHooksDisabled()
+	reportingLayer := "hook"
+	if hooksDisabled {
+		reportingLayer = "unmonitored"
+	}
 
 	// 1. Write PID markers immediately so all concurrent/child hooks share this session
 	writePIDMarkers(sessionID, serverURL, caller.AppID, caller.BinaryPath, caller.BinaryHash, targetPID, rawPPID)
 
 	// 2. Register session immediately with control plane
 	startPayload := map[string]any{
-		"session_id":  sessionID,
-		"app_id":      caller.AppID,
-		"caller_path": caller.BinaryPath,
-		"caller_hash": caller.BinaryHash,
-		"user_id":     username,
-		"hostname":    hostname,
-		"client_pid":  targetPID,
+		"session_id":      sessionID,
+		"app_id":          caller.AppID,
+		"caller_path":     caller.BinaryPath,
+		"caller_hash":     caller.BinaryHash,
+		"user_id":         username,
+		"hostname":        hostname,
+		"client_pid":      targetPID,
+		"reporting_layer": reportingLayer,
+		"hooks_disabled":  hooksDisabled,
 	}
 	if body, err := json.Marshal(startPayload); err == nil {
 		client := getHTTPClient()
@@ -2546,7 +2559,11 @@ func ensureSessionAndWatcher(sessionID, serverURL string) {
 	}
 
 	// 3. Spawn detached watcher monitoring the true root agent PID
-	wCmd := exec.Command(ltdBin, "watch", fmt.Sprintf("--pid=%d", watchPIDFor(targetPID, caller)), fmt.Sprintf("--server=%s", serverURL), fmt.Sprintf("--session-id=%s", sessionID), fmt.Sprintf("--app-id=%s", caller.AppID), "--detach")
+	watchArgs := []string{"watch", fmt.Sprintf("--pid=%d", watchPIDFor(targetPID, caller)), fmt.Sprintf("--server=%s", serverURL), fmt.Sprintf("--session-id=%s", sessionID), fmt.Sprintf("--app-id=%s", caller.AppID), "--detach"}
+	if hooksDisabled {
+		watchArgs = append(watchArgs, "--hooks-disabled")
+	}
+	wCmd := exec.Command(ltdBin, watchArgs...)
 	if err := wCmd.Start(); err != nil {
 		hookLog("ensureSessionAndWatcher: failed to spawn watcher for %s: %v", sessionID, err)
 		return
@@ -2689,6 +2706,72 @@ func handleUserPromptHook(payload HookPayload) {
 	emitUniversalSuccess()
 }
 
+// isHooksDisabled returns true if hook interception is bypassed via environment variables
+// (e.g. BAP_HOOKS=false, BAP_DISABLE_HOOKS=1, BAP_MODE=disabled, or --no-hooks).
+func isHooksDisabled() bool {
+	if hookEnv := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_HOOKS"))); hookEnv == "false" || hookEnv == "off" || hookEnv == "0" {
+		return true
+	}
+	if disEnv := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_DISABLE_HOOKS"))); disEnv == "1" || disEnv == "true" {
+		return true
+	}
+	if modeEnv := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_MODE"))); modeEnv == "disabled" || modeEnv == "off" {
+		return true
+	}
+	return false
+}
+
+// isStrictToolEnforcementMandated checks whether the Central Control Plane has commanded
+// Tier 2 Strict Tool Enforcement for this workload.
+// By default, Tier 1 (Standard Governance: Prompt-First Observability + Boundary Invariants)
+// is active everywhere. Tier 2 (Strict Tool AST Enforcement) is OFF by default unless explicitly
+// commanded by the Central Control Plane.
+func isStrictToolEnforcementMandated() bool {
+	// 1. Explicit local environment overrides (e.g. testing or explicit bypass)
+	if tierEnv := strings.TrimSpace(os.Getenv("BAP_TIER")); tierEnv == "1" || strings.EqualFold(tierEnv, "standard") {
+		return false
+	} else if tierEnv == "2" || strings.EqualFold(tierEnv, "strict") {
+		return true
+	}
+	if strictEnv := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_STRICT_TOOLS"))); strictEnv == "true" || strictEnv == "1" {
+		return true
+	}
+	if isHooksDisabled() {
+		// Explicit hook disabling or --no-hooks / --prompt-only always runs in Tier 1 Standard
+		return false
+	}
+
+	// 2. Query cached policy-state.json pushed by Central Control Plane
+	candidates := []string{
+		filepath.Join(".bap", "policy-state.json"),
+		filepath.Join("..", ".bap", "policy-state.json"),
+		"policy-state.json",
+		"../policy-state.json",
+		filepath.Join("bap-edge", "policy-state.json"),
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		candidates = append(candidates, filepath.Join(home, ".bapstate", "policy", "policy-state.json"))
+		candidates = append(candidates, filepath.Join(home, ".bap", "policy-state.json"))
+	}
+
+	for _, cand := range candidates {
+		if data, err := os.ReadFile(cand); err == nil {
+			var st struct {
+				StrictToolEnforcement bool   `json:"strict_tool_enforcement"`
+				EnforcementTier       string `json:"enforcement_tier"`
+			}
+			if json.Unmarshal(data, &st) == nil {
+				if st.StrictToolEnforcement || strings.EqualFold(st.EnforcementTier, "tier_2_strict") || strings.EqualFold(st.EnforcementTier, "strict") {
+					return true
+				}
+			}
+		}
+	}
+
+	// Default: Tier 2 is ALWAYS OFF by default! Tier 1 Standard applies.
+	return false
+}
+
 func main() {
 	// 1. Read event payload from stdin
 	inputBytes, err := io.ReadAll(os.Stdin)
@@ -2723,25 +2806,6 @@ func main() {
 	}
 	if payload.AppID != "" {
 		activeCallerAppID = payload.AppID
-	}
-
-	// 1.5 Operator Hook Disabling Override (Internal BAP Engineering Builds Only)
-	hookDisabledEnv := false
-	if hookEnv := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_HOOKS"))); hookEnv == "false" || hookEnv == "off" || hookEnv == "0" {
-		hookDisabledEnv = true
-	} else if disEnv := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_DISABLE_HOOKS"))); disEnv == "1" || disEnv == "true" {
-		hookDisabledEnv = true
-	} else if modeEnv := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_MODE"))); modeEnv == "disabled" || modeEnv == "off" {
-		hookDisabledEnv = true
-	}
-
-	if hookDisabledEnv {
-		if !strings.EqualFold(strings.TrimSpace(AllowDevOverrides), "true") {
-			fmt.Fprintln(os.Stderr, "[BAP ZERO-TRUST SECURITY ERROR] Hook disabling flags ('BAP_HOOKS=false', 'BAP_MODE=disabled') are strictly disabled in Enterprise Production builds. Full governance remains active.")
-		} else {
-			outputDecision("allow", "BAP hooks disabled via internal dev override", "Hooks disabled for internal BAP development")
-			return
-		}
 	}
 
 	// Normalize Antigravity fields if present
@@ -2814,6 +2878,41 @@ func main() {
 		return
 	}
 	ensureSessionAndWatcher(sessionID, resolveServerURL())
+
+	// Story BAP-829: Two-Tier Governance Architecture
+	// Tier 1 (Standard Governance) is the default across all workstations and coding agents.
+	// Tool commands execute natively without AST cmdlet parsing or subshell wrapping friction,
+	// while UserPromptSubmit, session lifecycle, and boundary invariants (.env, .aws, .ssh, anti-tamper) remain 100% active.
+	// Tier 2 (Strict Tool Enforcement) is only activated if the Central Control Plane explicitly commands it.
+	if !isStrictToolEnforcementMandated() {
+		targetPath := payload.ToolInput.FilePath
+		if targetPath == "" {
+			targetPath = payload.ToolInput.Path
+		}
+		normTarget := strings.ToLower(filepath.ToSlash(targetPath))
+		cmdText := strings.TrimSpace(payload.ToolInput.Command)
+		lowerCmd := strings.ToLower(filepath.ToSlash(cmdText))
+
+		// Invariant 1: Block credential access across all file tools and commands
+		if strings.Contains(normTarget, ".env") || strings.Contains(normTarget, ".aws") || strings.Contains(normTarget, ".ssh") || strings.Contains(normTarget, "id_rsa") || strings.Contains(normTarget, "id_ed25519") ||
+			strings.Contains(lowerCmd, ".env") || strings.Contains(lowerCmd, ".aws") || strings.Contains(lowerCmd, ".ssh") || strings.Contains(lowerCmd, "id_rsa") || strings.Contains(lowerCmd, "id_ed25519") {
+			outputDecision("deny", fmt.Sprintf("Security Invariant Violation: Direct access to sensitive credential store %q is strictly forbidden by policy", targetPath), "Sensitive credential file access blocked by BAP invariant policy")
+			return
+		}
+
+		// Invariant 2: Block tampering with BAP configuration, policies, hooks, or binaries
+		if normTarget != "" && isProtectedBAPAsset(normTarget) {
+			outputDecision("deny", fmt.Sprintf("Security Invariant Violation: Direct modification or tampering with BAP protected asset %q is strictly forbidden", targetPath), "Modifying or tampering with BAP configuration, policies, hooks, or binaries is prohibited.")
+			return
+		}
+		if isTamper, tamperReason := isTamperingCommand(cmdText); isTamper {
+			outputDecision("deny", tamperReason, "Direct modification or tampering with BAP configuration, policies, hooks, or binaries is prohibited.")
+			return
+		}
+
+		outputDecision("allow", "Tier 1 Standard Governance: Tool command execution permitted; operational confirmation delegated to developer", "Tier 1 Standard active (Tier 2 strict enforcement is OFF by default)")
+		return
+	}
 
 	workspaceRoot := resolveWorkspaceRoot()
 

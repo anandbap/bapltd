@@ -17,7 +17,7 @@ import (
 func parseLauncherArgs(args []string) (downstreamArgs []string, hooksDisabled bool, forceFix bool, serverURL string, err error) {
 	for _, a := range args {
 		switch {
-		case a == "--no-hooks" || a == "--disable-hooks" || a == "--hooks-disabled" || a == "--unmonitored" || a == "--bap-hooks=false":
+		case a == "--no-hooks" || a == "--disable-hooks" || a == "--hooks-disabled" || a == "--unmonitored" || a == "--bap-hooks=false" || a == "--prompt-only":
 			if !version.DevOverridesAllowed() {
 				return nil, false, false, "", fmt.Errorf("[BAP ZERO-TRUST SECURITY VIOLATION] Dev-override and hook bypass flags ('%s') are strictly disabled in Enterprise Production builds.", a)
 			}

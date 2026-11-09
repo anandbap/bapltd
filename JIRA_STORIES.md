@@ -102,6 +102,8 @@ This document represents the complete functional and non-functional requirements
 | `BAP-825` | OTC Workstation Parity, Persistent Enrollment Invariant & Non-Destructive Inspection | **DONE** | Full lifecycle alignment between OTC (`bap register`) and OIDC (`bap login`): persistent Workstation Agent registration, session vs workstation lifecycle decoupling, auto-reactivation, `bap deregister` alias, and non-destructive `bap status` inspection. |
 | `BAP-826` | Active Workstation Liveness Verification, Ephemeral DB Skew Detection & Self-Healing Auto-Re-Enrollment (`bap status --fix`) | **DONE** | Control plane `/api/v1/agents/verify` endpoint, active enrollment liveness probe in `bap status`, clear out-of-sync diagnostics upon server redeploy/restart, and 1-click self-healing via `bap status --fix`. |
 | `BAP-827` | Standardized OTC Workstation Naming Convention & Multi-Platform Build Pipeline Synchronization | **DONE** | Aligns OTC workstation naming to match OIDC `<email> @ <hostname> (<DeviceType> Workstation)` across control plane and edge daemons; resolves multi-platform packaging, version banner extraction, locked binary `.old` rotation, and Python Scripts synchronization. |
+| `BAP-828` | Prompt-First Observability, Protected-Resource Boundary Governance & Granular Hook Disaggregation | **DONE** | Disaggregates prompt telemetry from tool interception; preserves UserPromptSubmit and session lifecycle under --no-hooks / unmonitored mode while bypassing shell AST command parsing; enforces inviolable boundaries on protected resources (.env, .aws, .ssh, private keys, BAP anti-tamper); updates V3 Cockpit badging to Live (Unmonitored). |
+| `BAP-829` | Two-Tier Enterprise Governance Architecture: Tier 1 Standard (Default) & Control-Plane Commanded Tier 2 Strict | **DONE** | Establishes Two-Tier Governance: Tier 1 Standard (Prompt Observability + Inviolable Credential Boundaries, zero AST cmdlet friction) is ON by default everywhere. Tier 2 Strict Tool Enforcement is OFF by default and can ONLY be enabled when explicitly commanded by the Central Control Plane. |
 
 ### MVP exit sequence
 
@@ -4637,3 +4639,82 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - **Naming Schema**: `bap-controlplane/pkg/types/types.go`, `bap-controlplane/internal/api/handlers.go` (`handleDevOTCRequest`, `handleRegisterEdge`), `bap-edge/cmd/register.go`.
   - **Build Pipeline Hardening**: `build_all_platforms.bat`, `build_all_platforms.ps1`, `build_binaries.bat`.
   - **Unit & Integration Tests**: `bap-controlplane/internal/api/verify_agent_test.go` (`TestDevOTCRequest_WorkstationNaming`), full 5-target binary build in `dist/`.
+
+---
+
+#### Story BAP-828: Prompt-First Observability, Protected-Resource Boundary Governance & Granular Hook Disaggregation
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**:
+  Disaggregate prompt telemetry and session lifecycle observation from tool execution interception, establishing a strategic prompt-first enterprise governance model:
+  1. **Strategic Intent & Granular Hook Disaggregation**:
+     - Modern coding agents (Claude Code, Antigravity, Copilot) are highly capable and interactive; intercepting and parsing 5,000+ PowerShell and Unix shell cmdlet variants at `PreToolUse` creates a high-friction combinatorial game.
+     - Under `--no-hooks` or `BAP_HOOKS=false` (unmonitored/developer mode), tool command execution is delegated directly to the developer's native approval prompt inside the agent runtime, completely eliminating shell AST rewriting and wrapping overhead.
+     - However, enterprise observability must remain inviolable: user prompts must continue to be captured, classified, and analyzed for prompt injection and intent risk even when tool hooks are disabled.
+  2. **Interceptor & Launcher Hook Isolation**:
+     - Updated launcher configurations (`run_claude_bap.ps1`, `run_claude_bap.bat`, `bap/launchers/`) so `disableAllHooks` in `.claude/settings.json` is never set to `true`. This ensures Anthropic's native runtime executes the interceptor for `UserPromptSubmit`, `SessionStart`, and `SessionEnd`.
+     - In `cchook/interceptor.go`, decoupled hook bypass logic: `SessionStart`, `SessionEnd`, `Stop`, and `UserPromptSubmit` hooks always execute in full.
+     - In `PreToolUse`, when `isHooksDisabled()` is active, the interceptor strictly enforces zero-trust boundary invariants on protected resources:
+       - Direct access to sensitive credential stores (`.env`, `~/.aws`, `~/.ssh`, `id_rsa`, `id_ed25519`, private keys) is immediately **DENIED**.
+       - Direct tampering with BAP configuration, policies, hooks, and binaries is immediately **DENIED**.
+       - All other tool operations return `outputDecision("allow")` immediately with zero AST overhead.
+  3. **Control Plane Session State & V3 Cockpit Badging**:
+     - Updated `bap-controlplane/internal/session/reporting.go` to permit `"unmonitored"` in `addReportingLayer`.
+     - In `bap-controlplane/internal/session/store.go`, added `HooksDisabled` and `ReportingLayer` to `Session` and `SessionStartRequest`, persisting unmonitored state across restarts.
+     - In `bap-controlplane/internal/dashboardui/web/v3.html`, refined session coverage card rendering: active sessions with hooks disabled are badged with distinct amber styling as `Live (Unmonitored)` with protection status `Prompts Only (Tool Hooks Disabled)` instead of misleading generic `Live`.
+
+- **Acceptance Criteria**:
+  - `Given` launching Claude Code with `bap claude --no-hooks` or `BAP_HOOKS=false`,
+  - `When` the developer submits user prompts in the agent,
+  - `Then` all user prompts are reliably captured, classified, and streamed to the Control Plane `/api/v1/sessions/prompt`.
+  - `Given` an unmonitored session (`--no-hooks`),
+  - `When` the agent attempts to inspect or read `.env`, `.aws`, or private keys,
+  - `Then` BAP immediately issues a hard DENY invariant receipt, preventing credential exfiltration.
+  - `Given` an active unmonitored session,
+  - `When` viewing the Central Control Plane V3 Cockpit,
+  - `Then` the session is distinctly displayed as `Live (Unmonitored)` with protection badge `Prompts Only (Tool Hooks Disabled)`.
+
+- **Implementation Evidence**:
+  - **Hook Disaggregation & Invariant Protection**: `cchook/interceptor.go` (`isHooksDisabled`, invariant secret shielding on `PreToolUse`, prompt & lifecycle passthrough).
+  - **Launcher Configurations**: `run_claude_bap.ps1`, `run_claude_bap.bat`, `bap/launchers/run_claude_bap.ps1`, `bap/launchers/run_claude_bap.bat`, `bap/run_claude_bap.ps1` (`disableAllHooks = $false`).
+  - **Control Plane State & Reporting**: `bap-controlplane/internal/session/reporting.go`, `bap-controlplane/internal/session/store.go` (`HooksDisabled`, `ReportingLayer`).
+  - **Dashboard Cockpit UI**: `bap-controlplane/internal/dashboardui/web/v3.html` (distinct amber badge `Live (Unmonitored)` / `Prompts Only (Tool Hooks Disabled)`).
+
+---
+
+#### Story BAP-829: Two-Tier Enterprise Governance Architecture: Tier 1 Standard (Default) & Control-Plane Commanded Tier 2 Strict
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**:
+  Establish the definitive enterprise two-tier governance model for coding agents:
+  1. **Tier 1: Standard Governance (Prompt-First & Boundary Protection — ON BY DEFAULT)**:
+     - Applies as the universal baseline default across all workstations, developer laptops, and agent sessions without requiring dev-override bypass flags or compile-time escape hatches.
+     - **Observability**: 100% prompt ingestion, real-time intent classification, prompt injection detection, and session lifecycle tracking (`SessionStart`, `SessionEnd`, `Stop`).
+     - **Inviolable Invariant Gate**: Strictly denies access to sensitive credential stores (`.env`, `~/.aws`, `~/.ssh`, `id_rsa`, `id_ed25519`, private keys) and blocks direct tampering with BAP configuration, policies, hooks, and binaries.
+     - **Frictionless Tool Execution**: Normal developer CLI and tool commands (`git`, `npm`, `cargo`, `docker`, `pwsh`, `pytest`) run at native hardware speed with zero PowerShell/Unix AST cmdlet parsing, zero shell wrapping, and zero terminal pipe deadlocks, delegating operational confirmation directly to the developer's native agent confirmation prompt.
+  2. **Tier 2: Strict Tool Enforcement (Cedar Whitelisting & Brokered Sandboxing — OFF BY DEFAULT)**:
+     - Tier 2 is **strictly disabled by default** across all workstations and agent launchers.
+     - Tier 2 can **ONLY be enabled when commanded by the Central Control Plane** (e.g. for high-risk production bastion agents, PCI/SOC regulated codebases, or unmonitored automated bots).
+     - Controlled centrally via `StrictToolEnforcement` and `EnforcementTier` in policy bundles and `/api/v1/control/tier` / `/api/v1/policy/tier` APIs.
+     - When Tier 2 is commanded by the Control Plane, edge daemons and interceptors switch to deep AST parsing, Cedar binary whitelist checks, step-up prompts, and `bapedge exec` subshell wrapping.
+  3. **Control Plane, Edge & Cockpit Alignment**:
+     - `bap-controlplane/internal/policy/store.go` & `bap-edge/internal/policystore/store.go`: Added `StrictToolEnforcement` (bool, default `false`) and `EnforcementTier` (`tier_1_standard` vs `tier_2_strict`).
+     - `bap-edge/cmd/cli_tools.go`: `bap status` dynamically displays the active governance tier (`TIER 1 (STANDARD)` vs `TIER 2 (STRICT)`).
+     - `bap-controlplane/internal/dashboardui/web/v3.html`: Renders active sessions with `Live (Standard Tier 1)` and `Prompts & Boundaries (Tier 1)` by default, transitioning to `Live (Strict Tier 2)` only when Tier 2 is commanded.
+
+- **Acceptance Criteria**:
+  - `Given` a standard developer workstation running Claude Code or Antigravity,
+  - `When` the agent starts without explicit central Tier 2 commands,
+  - `Then` BAP runs in Tier 1 Standard: all prompts are ingested and credential stores are shielded, while tool commands run natively without AST friction.
+  - `Given` an enterprise administrator activating Tier 2 on the Central Control Plane (`POST /api/v1/control/tier` with `{"strict_tool_enforcement": true}`),
+  - `When` edge daemons sync policy,
+  - `Then` edge daemons switch to Tier 2 Strict Tool Enforcement, enforcing Cedar binary whitelists and broker execution.
+  - `Given` running `bap status`,
+  - `When` inspecting the policy section,
+  - `Then` it clearly shows `Governance Tier: TIER 1 (STANDARD) - Prompt-First & Boundary Governance [Default]`.
+
+- **Implementation Evidence**:
+  - **Policy Store & Bundle**: `bap-controlplane/internal/policy/store.go`, `bap-edge/internal/policystore/store.go`.
+  - **Control Plane API**: `bap-controlplane/internal/api/handlers.go` (`handleEnforcementTier`, `/api/v1/control/tier`, `/api/v1/policy/tier`).
+  - **Edge Status & Interceptor**: `bap-edge/cmd/cli_tools.go` (`RunStatus`), `cchook/interceptor.go` (`isStrictToolEnforcementMandated`, Tier 1 fast-path, boundary invariants).
+  - **Dashboard Cockpit UI**: `bap-controlplane/internal/dashboardui/web/v3.html` (`Live (Standard Tier 1)` / `Prompts & Boundaries (Tier 1)`).
+  - **Architecture & Execution Model Docs**: `ARCHITECTURE.md` (Section 18), `docs/EXECUTION_MODEL.md` (Section 10).
+  - **Unit Tests**: `cchook/unmonitored_hooks_test.go` (`TestIsStrictToolEnforcementMandated`).

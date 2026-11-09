@@ -4,7 +4,7 @@ package session
 // that all operations on the workstation are intercepted. The set is bounded.
 func addReportingLayer(sess *Session, layer string) {
 	switch layer {
-	case "hook", "mcp", "shim", "broker", "gateway", "discovery", "launcher", "sdk":
+	case "hook", "mcp", "shim", "broker", "gateway", "discovery", "launcher", "sdk", "unmonitored", "plugin":
 	default:
 		return
 	}
