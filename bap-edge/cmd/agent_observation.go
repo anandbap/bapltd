@@ -97,13 +97,13 @@ func agentApp(name string) string {
 	switch name {
 	case "claude", "claude-code":
 		return "claude-code"
-	case "antigravity", "agy":
+	case "antigravity", "agy", "language_server":
 		return "antigravity"
 	case "opencode", "open-code":
 		return "opencode"
-	case "codex", "openai-codex":
+	case "codex", "openai-codex", "codex-agent":
 		return "codex"
-	case "copilot", "github-copilot":
+	case "copilot", "github-copilot", "copilot-agent":
 		return "copilot"
 	case "cursor", "gemini":
 		return name

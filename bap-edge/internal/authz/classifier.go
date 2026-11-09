@@ -35,7 +35,7 @@ func resolveExecutableClass(name, actionType string, isExpr, isControl bool) str
 	}
 	lower := strings.ToLower(name)
 	switch lower {
-	case "git", "go", "npm", "npx", "yarn", "pnpm", "node", "pytest", "python", "python3", "py", "pip", "pip3", "mvn", "gradle", "cargo", "java", "javac":
+	case "git", "gh", "go", "npm", "npx", "yarn", "pnpm", "node", "pytest", "python", "python3", "py", "pip", "pip3", "mvn", "gradle", "cargo", "java", "javac":
 		return "toolchain"
 	case "bash", "sh", "zsh", "powershell", "pwsh", "cmd":
 		return "script_runtime"

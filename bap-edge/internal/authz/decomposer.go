@@ -43,6 +43,8 @@ func Decompose(executable, fullCommand, args string) DecomposedAction {
 	switch exec {
 	case "git":
 		return decomposeGit(tokens)
+	case "gh":
+		return decomposeGH(tokens)
 	case "kubectl":
 		return decomposeKubectl(tokens)
 	case "helm":
@@ -250,6 +252,23 @@ func decomposeGit(tokens []string) DecomposedAction {
 			ActionType:        "exec",
 			TargetEntity:      sub,
 		}
+	}
+}
+
+func decomposeGH(tokens []string) DecomposedAction {
+	sub := "run"
+	if len(tokens) > 1 {
+		sub = strings.ToLower(tokens[1])
+	}
+	actionType := "read"
+	if sub == "auth" || sub == "secret" || sub == "ssh-key" {
+		actionType = "credential"
+	}
+	return DecomposedAction{
+		CanonicalAction:   "github:cli:" + sub,
+		CanonicalResource: "repo:github",
+		ActionType:        actionType,
+		TargetEntity:      sub,
 	}
 }
 

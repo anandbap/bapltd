@@ -105,6 +105,7 @@ This document represents the complete functional and non-functional requirements
 | `BAP-828` | Prompt-First Observability, Protected-Resource Boundary Governance & Granular Hook Disaggregation | **DONE** | Disaggregates prompt telemetry from tool interception; preserves UserPromptSubmit and session lifecycle under --no-hooks / unmonitored mode while bypassing shell AST command parsing; enforces inviolable boundaries on protected resources (.env, .aws, .ssh, private keys, BAP anti-tamper); updates V3 Cockpit badging to Live (Unmonitored). |
 | `BAP-829` | Two-Tier Enterprise Governance Architecture: Tier 1 Standard (Default) & Control-Plane Commanded Tier 2 Strict | **DONE** | Establishes Two-Tier Governance: Tier 1 Standard (Prompt Observability + Inviolable Credential Boundaries, zero AST cmdlet friction) is ON by default everywhere. Tier 2 Strict Tool Enforcement is OFF by default and can ONLY be enabled when explicitly commanded by the Central Control Plane. |
 | `BAP-830` | Non-Interactive Agent Execution Bottleneck Prevention & Dual-Layer Token Isolation Hardening | **DONE** | Diagnoses and resolves headless subshell HITL stdin hangs and Restricted Token ambient credential shielding on unlisted CLI tools (e.g. gh); preserves layer reporting contract in UI tests. |
+| `BAP-831` | GitHub CLI (gh) Whitelisting & Non-Interactive Agent Immunity from Terminal HITL Prompts | **DONE** | Whitelists `gh` across Cedar policies, AST classifier, and decomposer; guarantees interactive terminal HITL prompts are strictly disabled for all AI coding agents (Antigravity, Codex, OpenCode, Claude Code, Copilot) across environment variables and process ancestry. |
 
 ### MVP exit sequence
 
@@ -4755,3 +4756,45 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - **Unit Tests**: `cchook/unmonitored_hooks_test.go` (`TestIsStrictToolEnforcementMandated`).
   - **UI Dashboard**: `bap-controlplane/internal/dashboardui/web/v3.html` (independent layer contract restored).
   - **Test Suites Verified**: `tests/test_v3_controls.cjs`, `tests/test_hitl_and_supply_chain.py`, `tests/test_bap200_sole_executor.py`, `tests/test_agent_lifecycle_matrix.py`.
+
+---
+
+#### Story BAP-831: GitHub CLI (gh) Whitelisting & Non-Interactive Agent Immunity from Terminal HITL Prompts
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**:
+  Ensure coding agents are never blocked by interactive terminal step-up prompts, and whitelist the GitHub CLI toolchain:
+  1. **GitHub CLI (`gh`) Policy Whitelist**:
+     - Added `"gh"` to the Permit Policy baseline in `policy.cedar`, `bap-edge/policy.cedar`, `cchook/policy.cedar`, and Go default fallback policy `defaultBaselinePolicy`.
+     - Classified `gh` as `ExecClassToolchain` in `bap-edge/internal/authz/classifier.go`.
+     - Implemented `decomposeGH` in `bap-edge/internal/authz/decomposer.go` with granular canonical actions (`github:cli:run`, `github:cli:pr`, `github:cli:issue`, `github:cli:repo`).
+     - Synchronized 35 fleet copies of `policy.cedar` via `scripts/check_stale_copies.ps1 -Fix`.
+  2. **Non-Interactive Agent Immunity from Terminal HITL Step-Up**:
+     - Standardized agent environment detection in `isAgentEnvironment(source)` across all 5 supported agent platforms:
+       - Antigravity / Gemini: `ANTIGRAVITY`, `ANTIGRAVITY_AGENT`, `ANTIGRAVITY_CONVERSATION_ID`, `ANTIGRAVITY_PROJECT_ID`, `ANTIGRAVITY_APP_DATA_DIR`, `AGY_SESSION`, `GEMINI_AGENT`, `GEMINI_CLI`.
+       - Claude Code: `CLAUDE_CODE`, `CLAUDE_AGENT`, `CLAUDE_SESSION_ID`, `ANTHROPIC_CLI`, `CLAUDE_CLI`.
+       - GitHub Copilot: `COPILOT_AGENT`, `GITHUB_COPILOT`, `COPILOT_CLI`, `VSCODE_COPILOT`.
+       - OpenAI Codex: `CODEX_SANDBOX`, `CODEX_AGENT`, `CODEX_SESSION`, `OPENAI_CODEX`, `CODEX_CLI`.
+       - OpenCode: `OPENCODE`, `OPENCODE_AGENT`, `OPENCODE_SESSION`, `OPENCODE_CLI`.
+       - General: `AI_AGENT`, `AGENT_NAME`, `AUTO_GPT`, `AGENT_WORKSPACE`, `BAP_SESSION_ID`, `LTD_SESSION_ID`, and `LTD_SOURCE`.
+     - Added `language_server` to `agentApp()` in `bap-edge/cmd/agent_observation.go` so Antigravity process trees are correctly mapped to `antigravity`.
+     - Ensured `observedCaller` runs unconditionally to climb caller process ancestry up to 16 levels even when `--session-id` is supplied.
+     - Strictly prohibited attaching to controlling parent consoles (`attachParentConsole()`) or prompting on stdin (`[BAP HITL] Enter choice [a/s/D]:`) when the caller is an agent. Any unapproved action fails closed immediately with `non_interactive_deny` and a structured suggestion.
+     - Terminal HITL step-up prompts are strictly reserved for direct human developer terminal execution (`cmd.exe`, `powershell.exe`, `pwsh.exe`, `bash`).
+
+- **Acceptance Criteria**:
+  - `Given` an agent (Antigravity, Codex, OpenCode, Claude Code, Copilot) executing `bapedge exec "gh run list"`,
+  - `When` evaluated by BAP,
+  - `Then` it is permitted immediately as an authorized toolchain binary (`github:cli:run`) with zero prompts.
+  - `Given` an agent executing an unapproved or denied binary (e.g. `setup.exe /s`),
+  - `When` evaluated by BAP,
+  - `Then` it fails closed non-interactively in sub-second time without hanging on stdin.
+  - `Given` a human developer executing an unlisted binary directly in PowerShell or cmd,
+  - `When` evaluated by BAP,
+  - `Then` it prompts the interactive operator for HITL step-up (`[A] Approve Once`, `[S] Trust for Session`, `[D] Deny`).
+
+- **Implementation Evidence**:
+  - **Cedar Policies**: `policy.cedar`, `bap-edge/policy.cedar`, `cchook/policy.cedar` (whitelisted `gh`).
+  - **Authz Engine**: `bap-edge/internal/authz/authorizer.go`, `bap-edge/internal/authz/classifier.go`, `bap-edge/internal/authz/decomposer.go` (`decomposeGH`).
+  - **Agent Observation & HITL Immunity**: `bap-edge/cmd/exec.go` (`isAgentEnvironment`, ancestry caller discovery, `non_interactive_deny`), `bap-edge/cmd/agent_observation.go` (`agentApp` with `language_server`).
+  - **Fleet Synchronization**: 35 copies verified in sync; pinned in `~/.bapstate/pins.json`.
+  - **Unit Tests**: `test_hitl_and_supply_chain.py` (15/15 PASS), `cchook` Go tests (47/47 PASS), `test_v3_controls.cjs` (PASS).

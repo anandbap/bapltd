@@ -661,7 +661,7 @@ permit (
     [
         "pytest", "python", "python3", "py", "pip", "pip3",
         "go", "npm", "npx", "yarn", "pnpm", "node",
-        "mvn", "gradle", "cargo", "git",
+        "mvn", "gradle", "cargo", "git", "gh",
         "java", "javac",
         "ls", "dir", "mkdir", "echo", "pwd", "cat", "type", "printenv", "whoami",
         "cd", "chdir", "pushd", "popd", "exit",

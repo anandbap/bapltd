@@ -914,10 +914,8 @@ func RunExec(args []string) {
 
 	ppid := os.Getppid()
 	var observed agentProcess
-	if *sessionFlag == "" {
-		if processes, err := listAgentProcesses(); err == nil {
-			observed, _ = observedCaller(ppid, processes)
-		}
+	if processes, err := listAgentProcesses(); err == nil {
+		observed, _ = observedCaller(ppid, processes)
 	}
 	discoveredBin, discoveredHash, discoveredAppID := resolveCallerLineage(ppid)
 	if observed.PID > 0 {
@@ -1371,20 +1369,48 @@ func isTerminal(f *os.File) bool {
 }
 
 func isAgentEnvironment(source string) bool {
-	if source != "" && source != "cli" {
+	normSource := strings.ToLower(strings.TrimSpace(source))
+	if normSource != "" && normSource != "cli" {
+		return true
+	}
+	ltdSource := strings.ToLower(strings.TrimSpace(os.Getenv("LTD_SOURCE")))
+	if ltdSource != "" && ltdSource != "cli" {
 		return true
 	}
 	agentEnvs := []string{
 		"BAP_SESSION_ID",
 		"LTD_SESSION_ID",
 		"ANTIGRAVITY",
+		"ANTIGRAVITY_AGENT",
+		"ANTIGRAVITY_CONVERSATION_ID",
+		"ANTIGRAVITY_PROJECT_ID",
+		"ANTIGRAVITY_APP_DATA_DIR",
+		"ANTIGRAVITY_LS_VERSION",
 		"AGY_SESSION",
 		"GEMINI_AGENT",
+		"GEMINI_CLI",
 		"CLAUDE_CODE",
+		"CLAUDE_AGENT",
+		"CLAUDE_SESSION_ID",
+		"ANTHROPIC_CLI",
 		"COPILOT_AGENT",
+		"GITHUB_COPILOT",
+		"COPILOT_CLI",
+		"VSCODE_COPILOT",
+		"CODEX_SANDBOX",
+		"CODEX_AGENT",
+		"CODEX_SESSION",
+		"OPENAI_CODEX",
+		"CODEX_CLI",
+		"OPENCODE",
+		"OPENCODE_AGENT",
+		"OPENCODE_SESSION",
+		"OPENCODE_CLI",
+		"CURSOR_AGENT",
 		"AI_AGENT",
 		"AGENT_NAME",
 		"AUTO_GPT",
+		"AGENT_WORKSPACE",
 	}
 	for _, envKey := range agentEnvs {
 		if os.Getenv(envKey) != "" {
