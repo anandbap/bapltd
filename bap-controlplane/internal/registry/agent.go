@@ -661,8 +661,9 @@ func (s *Store) HeartbeatInstance(appID, instanceID string) error {
 
 // isWorkstationAgent returns true if the agent represents a persistent workstation or enrolled edge node.
 // Enrolled workstations remain enrolled across session restarts and are only deregistered via explicit 'bap logout' or admin action.
+// Ephemeral auto-created sessions marked with RecoveryOnly are never treated as permanent workstations.
 func isWorkstationAgent(a *types.RegisteredAgent) bool {
-	if a == nil {
+	if a == nil || a.RecoveryOnly {
 		return false
 	}
 	return strings.Contains(strings.ToLower(a.AppID), "workstation") ||
@@ -671,7 +672,7 @@ func isWorkstationAgent(a *types.RegisteredAgent) bool {
 		a.DeviceType != "" ||
 		a.AuthMode == "oidc" ||
 		a.AuthMode == "otc" ||
-		a.EnrolledAt != nil
+		(a.EnrolledAt != nil && a.AuthMode != "")
 }
 
 // EndSessionAgent updates the registry status when an ephemeral session closes.
