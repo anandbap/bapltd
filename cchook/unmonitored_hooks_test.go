@@ -50,6 +50,7 @@ func TestIsStrictToolEnforcementMandated(t *testing.T) {
 		t.Setenv("BAP_TIER", "")
 		t.Setenv("BAP_STRICT_TOOLS", "")
 		t.Setenv("BAP_HOOKS", "")
+		t.Setenv("BAP_ENFORCEMENT_MODE", "")
 		if isStrictToolEnforcementMandated() {
 			t.Errorf("expected isStrictToolEnforcementMandated to be false by default")
 		}
@@ -58,6 +59,7 @@ func TestIsStrictToolEnforcementMandated(t *testing.T) {
 	t.Run("BAP_TIER=2 enables strict enforcement", func(t *testing.T) {
 		isolate(t)
 		t.Setenv("BAP_TIER", "2")
+		t.Setenv("BAP_ENFORCEMENT_MODE", "")
 		if !isStrictToolEnforcementMandated() {
 			t.Errorf("expected isStrictToolEnforcementMandated to be true for BAP_TIER=2")
 		}
@@ -67,6 +69,7 @@ func TestIsStrictToolEnforcementMandated(t *testing.T) {
 		isolate(t)
 		t.Setenv("BAP_TIER", "1")
 		t.Setenv("BAP_STRICT_TOOLS", "true")
+		t.Setenv("BAP_ENFORCEMENT_MODE", "enforce")
 		if isStrictToolEnforcementMandated() {
 			t.Errorf("expected isStrictToolEnforcementMandated to be false for BAP_TIER=1")
 		}
@@ -76,8 +79,19 @@ func TestIsStrictToolEnforcementMandated(t *testing.T) {
 		isolate(t)
 		t.Setenv("BAP_TIER", "")
 		t.Setenv("BAP_STRICT_TOOLS", "true")
+		t.Setenv("BAP_ENFORCEMENT_MODE", "")
 		if !isStrictToolEnforcementMandated() {
 			t.Errorf("expected isStrictToolEnforcementMandated to be true for BAP_STRICT_TOOLS=true")
+		}
+	})
+
+	t.Run("BAP_ENFORCEMENT_MODE=enforce enables strict enforcement", func(t *testing.T) {
+		isolate(t)
+		t.Setenv("BAP_TIER", "")
+		t.Setenv("BAP_STRICT_TOOLS", "")
+		t.Setenv("BAP_ENFORCEMENT_MODE", "enforce")
+		if !isStrictToolEnforcementMandated() {
+			t.Errorf("expected isStrictToolEnforcementMandated to be true for BAP_ENFORCEMENT_MODE=enforce")
 		}
 	})
 }

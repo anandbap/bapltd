@@ -2728,6 +2728,10 @@ func isHooksDisabled() bool {
 // commanded by the Central Control Plane.
 func isStrictToolEnforcementMandated() bool {
 	// 1. Explicit local environment overrides (e.g. testing or explicit bypass)
+	if isHooksDisabled() {
+		// Explicit hook disabling or --no-hooks / --prompt-only always runs in Tier 1 Standard
+		return false
+	}
 	if tierEnv := strings.TrimSpace(os.Getenv("BAP_TIER")); tierEnv == "1" || strings.EqualFold(tierEnv, "standard") {
 		return false
 	} else if tierEnv == "2" || strings.EqualFold(tierEnv, "strict") {
@@ -2736,9 +2740,8 @@ func isStrictToolEnforcementMandated() bool {
 	if strictEnv := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_STRICT_TOOLS"))); strictEnv == "true" || strictEnv == "1" {
 		return true
 	}
-	if isHooksDisabled() {
-		// Explicit hook disabling or --no-hooks / --prompt-only always runs in Tier 1 Standard
-		return false
+	if modeEnv := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_ENFORCEMENT_MODE"))); modeEnv == "enforce" {
+		return true
 	}
 
 	// 2. Query cached policy-state.json pushed by Central Control Plane
@@ -2879,12 +2882,10 @@ func main() {
 	}
 	ensureSessionAndWatcher(sessionID, resolveServerURL())
 
-	// Story BAP-829: Two-Tier Governance Architecture
-	// Tier 1 (Standard Governance) is the default across all workstations and coding agents.
-	// Tool commands execute natively without AST cmdlet parsing or subshell wrapping friction,
-	// while UserPromptSubmit, session lifecycle, and boundary invariants (.env, .aws, .ssh, anti-tamper) remain 100% active.
-	// Tier 2 (Strict Tool Enforcement) is only activated if the Central Control Plane explicitly commands it.
-	if !isStrictToolEnforcementMandated() {
+	// When tool hooks are explicitly disabled (--no-hooks or --prompt-only),
+	// BAP still shields inviolable enterprise invariants (credentials, anti-tamper, outside-workspace mutations)
+	// while delegating standard in-workspace tool execution directly to the developer.
+	if isHooksDisabled() {
 		targetPath := payload.ToolInput.FilePath
 		if targetPath == "" {
 			targetPath = payload.ToolInput.Path
@@ -2910,7 +2911,18 @@ func main() {
 			return
 		}
 
-		outputDecision("allow", "Tier 1 Standard Governance: Tool command execution permitted; operational confirmation delegated to developer", "Tier 1 Standard active (Tier 2 strict enforcement is OFF by default)")
+		// Invariant 3: Block modifying files escaping workspace
+		workspaceRoot := resolveWorkspaceRoot()
+		if targetPath != "" && (payload.ToolName == "Edit" || payload.ToolName == "Write") && isPathOutsideWorkspace(workspaceRoot, targetPath) {
+			outputDecision("deny", fmt.Sprintf("Modifying files outside workspace is forbidden for file %q", targetPath), "Modifying files outside workspace is prohibited.")
+			return
+		}
+		if cmdText != "" && checkCommandWorkspaceEscape(workspaceRoot, cmdText) && isMutatingShellCommand(cmdText) {
+			outputDecision("deny", fmt.Sprintf("Directory traversal outside workspace is forbidden in command: %s", cmdText), "Commands modifying files outside workspace require authorization.")
+			return
+		}
+
+		outputDecision("allow", "Tool execution permitted (hooks disabled / prompt-only mode); confirmation delegated to developer", "Prompt-only / no-hooks mode active")
 		return
 	}
 
@@ -3238,6 +3250,10 @@ func main() {
 		}
 		if brokerWrapped {
 			outputDecision("allow", "", "Broker wrapper session-bound and payload re-authorized by BAP Cedar policy")
+			return
+		}
+		if !isStrictToolEnforcementMandated() {
+			outputDecision("allow", "", "Command authorized by BAP Cedar policy (Tier 1 Standard native execution)")
 			return
 		}
 		// Rewrite tool input command to route through bapedge exec using safe structured --cmd-b64
