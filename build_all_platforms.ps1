@@ -12,6 +12,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
 $rootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $rootDir) { $rootDir = (Get-Location).Path }
 Set-Location $rootDir
@@ -62,6 +63,7 @@ Write-Host ">>> Ensuring BAP Root CA and TLS credentials (Domain: $Domain)..." -
 
 $env:CGO_ENABLED = "0"
 $env:GOTOOLCHAIN = "auto"
+$env:GOFLAGS = "-buildvcs=false"
 
 $platforms = @(
     @{ Name = "windows-amd64"; OS = "windows"; Arch = "amd64"; Ext = ".exe" },
@@ -141,11 +143,15 @@ foreach ($p in $platforms) {
     if ($p.Name -eq "windows-amd64") {
         Write-Host "`n>>> Synchronizing freshly compiled Windows binaries to root workspace..." -ForegroundColor Cyan
         Safe-CopyItem (Join-Path $platformDir "bapedge.exe") (Join-Path $rootDir "bapedge.exe")
+        Safe-CopyItem (Join-Path $platformDir "bapedge.exe") (Join-Path $rootDir "bap.exe")
+        Safe-CopyItem (Join-Path $platformDir "bapedge.exe") (Join-Path $rootDir "bap\bin\windows-amd64\bapedge.exe")
         Safe-CopyItem (Join-Path $platformDir "bapedge.exe") (Join-Path $rootDir "bapmcp.exe")
         Safe-CopyItem (Join-Path $platformDir "bapedge.exe") (Join-Path $rootDir "ltd-agent.exe")
         Safe-CopyItem (Join-Path $platformDir "bapcontrolplane.exe") (Join-Path $rootDir "bapcontrolplane.exe")
         Safe-CopyItem (Join-Path $platformDir "bapdashboard.exe") (Join-Path $rootDir "bapdashboard.exe")
         Safe-CopyItem (Join-Path $platformDir "bapgateway.exe") (Join-Path $rootDir "bapgateway.exe")
+        Safe-CopyItem (Join-Path $platformDir "cchook-interceptor.exe") (Join-Path $rootDir "interceptor.exe")
+        Safe-CopyItem (Join-Path $platformDir "cchook-interceptor.exe") (Join-Path $rootDir "cchook-interceptor.exe")
     }
 
     # Root files for platform

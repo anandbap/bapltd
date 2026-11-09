@@ -65,6 +65,12 @@ if exist "%ROOT_DIR%bapedge.exe" move /y "%ROOT_DIR%bapedge.exe" "%ROOT_DIR%bape
 copy /y bapedge.exe "%ROOT_DIR%bapedge.exe" >nul
 del /f /q "%ROOT_DIR%bapedge.old" >nul 2>&1
 
+if exist "%ROOT_DIR%bap.exe" move /y "%ROOT_DIR%bap.exe" "%ROOT_DIR%bap.old" >nul 2>&1
+copy /y bapedge.exe "%ROOT_DIR%bap.exe" >nul
+del /f /q "%ROOT_DIR%bap.old" >nul 2>&1
+
+if exist "%ROOT_DIR%bap\bin\windows-amd64\bapedge.exe" copy /y bapedge.exe "%ROOT_DIR%bap\bin\windows-amd64\bapedge.exe" >nul 2>&1
+
 if exist "%ROOT_DIR%bapmcp.exe" move /y "%ROOT_DIR%bapmcp.exe" "%ROOT_DIR%bapmcp.old" >nul 2>&1
 copy /y bapedge.exe "%ROOT_DIR%bapmcp.exe" >nul
 del /f /q "%ROOT_DIR%bapmcp.old" >nul 2>&1
