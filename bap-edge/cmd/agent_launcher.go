@@ -8,7 +8,34 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"bap-edge/internal/authz"
+	"bap-edge/pkg/version"
 )
+
+// parseLauncherArgs extracts BAP launcher flags and returns the filtered downstream args for the agent CLI.
+func parseLauncherArgs(args []string) (downstreamArgs []string, hooksDisabled bool, forceFix bool, serverURL string, err error) {
+	for _, a := range args {
+		switch {
+		case a == "--no-hooks" || a == "--disable-hooks" || a == "--hooks-disabled" || a == "--unmonitored" || a == "--bap-hooks=false":
+			if !version.DevOverridesAllowed() {
+				return nil, false, false, "", fmt.Errorf("[BAP ZERO-TRUST SECURITY VIOLATION] Dev-override and hook bypass flags ('%s') are strictly disabled in Enterprise Production builds.", a)
+			}
+			hooksDisabled = true
+		case a == "--fix" || a == "-Fix" || a == "--remediate":
+			forceFix = true
+		case strings.HasPrefix(a, "--server="):
+			serverURL = strings.TrimPrefix(a, "--server=")
+		case strings.HasPrefix(a, "--server-url="):
+			serverURL = strings.TrimPrefix(a, "--server-url=")
+		case a == "--server" || a == "--server-url":
+			continue
+		default:
+			downstreamArgs = append(downstreamArgs, a)
+		}
+	}
+	return downstreamArgs, hooksDisabled, forceFix, serverURL, nil
+}
 
 // resolveLauncherScript finds a launcher script matching one of the given names
 // across current directory, repo root, and standard BAP user directories.
@@ -32,6 +59,23 @@ func resolveLauncherScript(scriptNames []string) string {
 	if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
 		candidateDirs = append(candidateDirs, filepath.Join(localAppData, "BAP", "launchers"))
 		candidateDirs = append(candidateDirs, filepath.Join(localAppData, "BAP"))
+	}
+	if appData := os.Getenv("APPDATA"); appData != "" {
+		candidateDirs = append(candidateDirs, filepath.Join(appData, "BAP", "launchers"))
+		candidateDirs = append(candidateDirs, filepath.Join(appData, "BAP"))
+	}
+
+	// Check workspace root if known
+	if ws := authz.GetWorkspaceRoot(); ws != "" {
+		candidateDirs = append(candidateDirs, ws, filepath.Join(ws, "scripts"), filepath.Join(ws, "bap"))
+	}
+
+	// Walk up to find git root from cwd
+	for dir := cwd; dir != "" && dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			candidateDirs = append(candidateDirs, dir, filepath.Join(dir, "scripts"), filepath.Join(dir, "bap"))
+			break
+		}
 	}
 
 	for _, dir := range candidateDirs {
@@ -83,6 +127,19 @@ func findExecutable(names []string) string {
 
 // RunClaude launches Claude Code in active BAP Zero-Trust Governance.
 func RunClaude(args []string) error {
+	downstreamArgs, hooksDisabled, forceFix, serverURL, err := parseLauncherArgs(args)
+	if err != nil {
+		return err
+	}
+	_ = forceFix
+	_ = serverURL
+
+	if hooksDisabled {
+		_ = os.Setenv("BAP_HOOKS", "false")
+		_ = os.Setenv("BAP_DISABLE_HOOKS", "1")
+		fmt.Println("[!] BAP hooks disabled via CLI flag (--no-hooks). Running in unmonitored development mode.")
+	}
+
 	// First check for dedicated BAP launcher scripts
 	var script string
 	if runtime.GOOS == "windows" {
@@ -118,20 +175,21 @@ func RunClaude(args []string) error {
 		return fmt.Errorf("Claude Code CLI ('claude') not found on PATH or standard directories.\nPlease install with 'npm install -g @anthropic-ai/claude-code' or run 'bap setup --app=claude-code'.")
 	}
 
-	// Check if native plugin directory exists
-	cwd, _ := os.Getwd()
-	pluginDir := filepath.Join(cwd, "plugins", "claude")
-	claudeArgs := args
-	hasPluginFlag := false
-	for _, a := range args {
-		if strings.HasPrefix(a, "--plugin-dir") {
-			hasPluginFlag = true
-			break
+	claudeArgs := downstreamArgs
+	if !hooksDisabled {
+		cwd, _ := os.Getwd()
+		pluginDir := filepath.Join(cwd, "plugins", "claude")
+		hasPluginFlag := false
+		for _, a := range downstreamArgs {
+			if strings.HasPrefix(a, "--plugin-dir") {
+				hasPluginFlag = true
+				break
+			}
 		}
-	}
-	if !hasPluginFlag {
-		if info, err := os.Stat(pluginDir); err == nil && info.IsDir() {
-			claudeArgs = append([]string{"--plugin-dir", pluginDir}, args...)
+		if !hasPluginFlag {
+			if info, err := os.Stat(pluginDir); err == nil && info.IsDir() {
+				claudeArgs = append([]string{"--plugin-dir", pluginDir}, downstreamArgs...)
+			}
 		}
 	}
 
@@ -140,15 +198,37 @@ func RunClaude(args []string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(),
+	cmdEnv := os.Environ()
+	cmdEnv = append(cmdEnv,
 		"LTD_SOURCE=claude-code",
 		"BAP_SESSION_ID="+sessionID,
 	)
-	return cmd.Run()
+	if hooksDisabled {
+		cmdEnv = append(cmdEnv, "BAP_HOOKS=false", "BAP_DISABLE_HOOKS=1")
+	}
+	cmd.Env = cmdEnv
+
+	_ = EnsureSessionStarted(sessionID, "claude-code", os.Getpid(), "")
+	runErr := cmd.Run()
+	_ = EnsureSessionEnded(sessionID, "cli process exited")
+	return runErr
 }
 
 // RunCodex launches OpenAI Codex CLI in active BAP Zero-Trust Governance.
 func RunCodex(args []string) error {
+	downstreamArgs, hooksDisabled, forceFix, serverURL, err := parseLauncherArgs(args)
+	if err != nil {
+		return err
+	}
+	_ = forceFix
+	_ = serverURL
+
+	if hooksDisabled {
+		_ = os.Setenv("BAP_HOOKS", "false")
+		_ = os.Setenv("BAP_DISABLE_HOOKS", "1")
+		fmt.Println("[!] BAP hooks disabled via CLI flag (--no-hooks). Running in unmonitored development mode.")
+	}
+
 	var script string
 	if runtime.GOOS == "windows" {
 		script = resolveLauncherScript([]string{"run_codex_cli_bap.ps1", "run_codex_cli_bap.bat"})
@@ -184,14 +264,19 @@ func RunCodex(args []string) error {
 	}
 
 	sessionID := fmt.Sprintf("sess-codex-%d-%d", os.Getpid(), time.Now().Unix())
-	cmd := exec.Command(codexBin, args...)
+	cmd := exec.Command(codexBin, downstreamArgs...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(),
+	cmdEnv := os.Environ()
+	cmdEnv = append(cmdEnv,
 		"LTD_SOURCE=codex",
 		"BAP_SESSION_ID="+sessionID,
 	)
+	if hooksDisabled {
+		cmdEnv = append(cmdEnv, "BAP_HOOKS=false", "BAP_DISABLE_HOOKS=1")
+	}
+	cmd.Env = cmdEnv
 	return cmd.Run()
 }
 

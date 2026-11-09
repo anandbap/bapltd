@@ -152,10 +152,19 @@ if exist "%USERPROFILE%\bin" (
     copy /y "%ROOT_DIR%bapdashboard.exe" "%USERPROFILE%\bin\bapdashboard.exe" >nul 2>&1
     copy /y "%ROOT_DIR%bapgateway.exe" "%USERPROFILE%\bin\bapgateway.exe" >nul 2>&1
     copy /y "%ROOT_DIR%cchook\interceptor.exe" "%USERPROFILE%\bin\interceptor.exe" >nul 2>&1
+    copy /y "%ROOT_DIR%run_claude_bap.bat" "%USERPROFILE%\bin\run_claude_bap.bat" >nul 2>&1
+    copy /y "%ROOT_DIR%run_claude_bap.ps1" "%USERPROFILE%\bin\run_claude_bap.ps1" >nul 2>&1
     copy /y "%ROOT_DIR%policy.cedar" "%USERPROFILE%\bin\policy.cedar" >nul 2>&1
     copy /y "%ROOT_DIR%schema.json" "%USERPROFILE%\bin\schema.json" >nul 2>&1
     copy /y "%ROOT_DIR%bap-config.json" "%USERPROFILE%\bin\bap-config.json" >nul 2>&1
 )
+
+if not exist "%USERPROFILE%\.bap\launchers" mkdir "%USERPROFILE%\.bap\launchers" >nul 2>&1
+copy /y "%ROOT_DIR%run_claude_bap.ps1" "%USERPROFILE%\.bap\launchers\run_claude_bap.ps1" >nul 2>&1
+copy /y "%ROOT_DIR%run_claude_bap.bat" "%USERPROFILE%\.bap\launchers\run_claude_bap.bat" >nul 2>&1
+copy /y "%ROOT_DIR%run_codex_cli_bap.ps1" "%USERPROFILE%\.bap\launchers\run_codex_cli_bap.ps1" >nul 2>&1
+copy /y "%ROOT_DIR%run_codex_cli_bap.bat" "%USERPROFILE%\.bap\launchers\run_codex_cli_bap.bat" >nul 2>&1
+copy /y "%ROOT_DIR%review_session.ps1" "%USERPROFILE%\.bap\launchers\review_session.ps1" >nul 2>&1
 
 for %%V in (Python312 Python313 Python311 Python310) do (
     if exist "%APPDATA%\Python\%%V\Scripts" (
@@ -170,6 +179,9 @@ for %%V in (Python312 Python313 Python311 Python310) do (
         if exist "%APPDATA%\Python\%%V\Scripts\bapmcp.exe" move /y "%APPDATA%\Python\%%V\Scripts\bapmcp.exe" "%APPDATA%\Python\%%V\Scripts\bapmcp.old" >nul 2>&1
         copy /y "%ROOT_DIR%bapedge.exe" "%APPDATA%\Python\%%V\Scripts\bapmcp.exe" >nul 2>&1
         del /f /q "%APPDATA%\Python\%%V\Scripts\bapmcp.old" >nul 2>&1
+
+        copy /y "%ROOT_DIR%run_claude_bap.bat" "%APPDATA%\Python\%%V\Scripts\run_claude_bap.bat" >nul 2>&1
+        copy /y "%ROOT_DIR%run_claude_bap.ps1" "%APPDATA%\Python\%%V\Scripts\run_claude_bap.ps1" >nul 2>&1
     )
 )
 
