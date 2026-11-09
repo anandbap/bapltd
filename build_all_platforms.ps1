@@ -7,7 +7,7 @@ param(
     [switch]$Archive = $true,
     [switch]$ForceRegenCerts = $false,
     [string]$Domain = "a.b.com",
-    [string]$Version = "",
+    [string]$Version = "v1.12.14",
     [string]$AllowDevOverrides = "true"
 )
 
@@ -19,10 +19,10 @@ Set-Location $rootDir
 
 if (-not $Version) {
     if (Test-Path (Join-Path $rootDir "bap-edge\pkg\version\version.go")) {
-        $vMatch = Select-String -Path (Join-Path $rootDir "bap-edge\pkg\version\version.go") -Pattern 'Version\s*=\s*"(v?[0-9]+\.[0-9]+\.[0-9]+)"'
+        $vMatch = Select-String -Path (Join-Path $rootDir "bap-edge\pkg\version\version.go") -Pattern 'Version\s*=\s*"([^"]+)"'
         if ($vMatch) { $Version = $vMatch.Matches[0].Groups[1].Value }
     }
-    if (-not $Version) { $Version = "v1.1.0" }
+    if (-not $Version) { $Version = "v1.12.13" }
 }
 if (-not $Version.StartsWith("v")) { $Version = "v$Version" }
 
@@ -32,22 +32,30 @@ $buildDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 
 function Safe-CopyItem {
     param($Source, $Destination)
-    if (-not (Test-Path $Source)) { return }
-    $dstDir = Split-Path -Parent $Destination
-    if ($dstDir -and -not (Test-Path $dstDir)) {
-        New-Item -ItemType Directory -Path $dstDir -Force | Out-Null
-    }
     try {
-        Microsoft.PowerShell.Management\Copy-Item -LiteralPath $Source -Destination $Destination -Force
+
+        if (-not (Test-Path $Source -ErrorAction SilentlyContinue)) { return }
+    $dstDir = Split-Path -Parent $Destination
+        if ($dstDir -and -not (Test-Path $dstDir -ErrorAction SilentlyContinue)) {
+            New-Item -ItemType Directory -Path $dstDir -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+
+        Microsoft.PowerShell.Management\Copy-Item -LiteralPath $Source -Destination $Destination -Force -ErrorAction Stop
     }
     catch {
         # If file is locked, rotate to .old, copy fresh, and attempt cleanup
         $tempOld = "$Destination.old"
-        Remove-Item -LiteralPath $tempOld -Force -ErrorAction SilentlyContinue
-        try {
-            Microsoft.PowerShell.Management\Move-Item -LiteralPath $Destination -Destination $tempOld -Force
-            Microsoft.PowerShell.Management\Copy-Item -LiteralPath $Source -Destination $Destination -Force
+        Remove-Item -LiteralPath $tempOld -Force -ErrorAction SilentlyContinue; try {
+
+
+
+    
+            Microsoft.PowerShell.Management\Move-Item -LiteralPath $Destination -Destination $tempOld -Force -ErrorAction Stop
+            Microsoft.PowerShell.Management\Copy-Item -LiteralPath $Source -Destination $Destination -Force -ErrorAction Stop
             Remove-Item -LiteralPath $tempOld -Force -ErrorAction SilentlyContinue
+
+
+
         }
         catch {
             Write-Warning "Could not overwrite $Destination (process locked by running service)"
@@ -84,6 +92,7 @@ $components = @(
 
 Write-Host "===============================================================================" -ForegroundColor Cyan
 Write-Host "   BAP MULTI-PLATFORM BINARY & DEPLOYMENT PACKAGER" -ForegroundColor Cyan
+Write-Host "   Version: $Version | Commit: $gitCommit | Built: $buildDate" -ForegroundColor Yellow
 Write-Host "   Target Platforms: Windows, Linux (amd64, arm64), macOS (Intel, Apple Silicon)" -ForegroundColor Cyan
 Write-Host "===============================================================================" -ForegroundColor Cyan
 
@@ -115,8 +124,11 @@ foreach ($p in $platforms) {
         $outFile = Join-Path $platformDir "$($c.Name)$($p.Ext)"
         $compDir = Join-Path $rootDir $c.Dir
 
-        Push-Location $compDir
-        try {
+        Push-Location $compDir; try {
+
+
+
+    
             $versionPkg = switch ($c.Dir) {
                 "bap-controlplane" { "bap-controlplane/pkg/version" }
                 "bap-edge"         { "bap-edge/pkg/version" }
@@ -160,6 +172,40 @@ foreach ($p in $platforms) {
             Safe-CopyItem (Join-Path $platformDir "bapedge.exe") (Join-Path $userBin "bapedge.exe")
             Safe-CopyItem (Join-Path $platformDir "bapedge.exe") (Join-Path $userBin "bap.exe")
             Safe-CopyItem (Join-Path $platformDir "cchook-interceptor.exe") (Join-Path $userBin "interceptor.exe")
+            Safe-CopyItem (Join-Path $platformDir "bapcontrolplane.exe") (Join-Path $userBin "bapcontrolplane.exe")
+            Safe-CopyItem (Join-Path $platformDir "bapdashboard.exe") (Join-Path $userBin "bapdashboard.exe")
+            Safe-CopyItem (Join-Path $platformDir "bapgateway.exe") (Join-Path $userBin "bapgateway.exe")
+            Safe-CopyItem (Join-Path $rootDir "run_claude_bap.bat") (Join-Path $userBin "run_claude_bap.bat")
+            Safe-CopyItem (Join-Path $rootDir "run_claude_bap.ps1") (Join-Path $userBin "run_claude_bap.ps1")
+            Safe-CopyItem (Join-Path $rootDir "policy.cedar") (Join-Path $userBin "policy.cedar")
+            Safe-CopyItem (Join-Path $rootDir "schema.json") (Join-Path $userBin "schema.json")
+            Safe-CopyItem (Join-Path $rootDir "bap-config.json") (Join-Path $userBin "bap-config.json")
+        }
+
+        # Synchronize dedicated BAP launchers directory
+        $bapLaunchers = Join-Path $env:USERPROFILE ".bap\launchers"
+        Write-Host ">>> Synchronizing launcher scripts to $bapLaunchers..." -ForegroundColor Cyan
+        Safe-CopyItem (Join-Path $rootDir "run_claude_bap.ps1") (Join-Path $bapLaunchers "run_claude_bap.ps1")
+        Safe-CopyItem (Join-Path $rootDir "run_claude_bap.bat") (Join-Path $bapLaunchers "run_claude_bap.bat")
+        Safe-CopyItem (Join-Path $rootDir "run_codex_cli_bap.ps1") (Join-Path $bapLaunchers "run_codex_cli_bap.ps1")
+        Safe-CopyItem (Join-Path $rootDir "run_codex_cli_bap.bat") (Join-Path $bapLaunchers "run_codex_cli_bap.bat")
+        Safe-CopyItem (Join-Path $rootDir "review_session.ps1") (Join-Path $bapLaunchers "review_session.ps1")
+
+        # Synchronize all detected Python user Scripts directories in %APPDATA%\Python
+        $pyVersions = @("Python312", "Python313", "Python311", "Python310")
+        $appData = $env:APPDATA
+        if ($appData) {
+            foreach ($v in $pyVersions) {
+                $pyScripts = Join-Path $appData "Python\$v\Scripts"
+                if (Test-Path $pyScripts) {
+                    Write-Host ">>> Synchronizing Windows binaries to Python user Scripts ($pyScripts)..." -ForegroundColor Cyan
+                    Safe-CopyItem (Join-Path $platformDir "bapedge.exe") (Join-Path $pyScripts "bapedge.exe")
+                    Safe-CopyItem (Join-Path $platformDir "bapedge.exe") (Join-Path $pyScripts "bap.exe")
+                    Safe-CopyItem (Join-Path $platformDir "bapedge.exe") (Join-Path $pyScripts "bapmcp.exe")
+                    Safe-CopyItem (Join-Path $rootDir "run_claude_bap.bat") (Join-Path $pyScripts "run_claude_bap.bat")
+                    Safe-CopyItem (Join-Path $rootDir "run_claude_bap.ps1") (Join-Path $pyScripts "run_claude_bap.ps1")
+                }
+            }
         }
     }
 

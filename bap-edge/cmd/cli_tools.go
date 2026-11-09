@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -259,6 +260,8 @@ func RunStatus(args []string) error {
 	// 3. Enrolled Identity & Credentials
 	var creds StoredCredentials
 	enrolled := false
+	outOfSync := false
+	outOfSyncReason := ""
 	authModeLabel := "Unenrolled"
 
 	candidateCredPaths := []string{
@@ -310,10 +313,55 @@ func RunStatus(args []string) error {
 				authModeLabel = fmt.Sprintf("OIDC Federated (%s, MFA Enforced)", idp)
 			}
 
-			// If control plane is reachable, verify that this specific agent has not been deregistered or frozen
-			if creds.ServerURL != "" {
+			// Determine target control plane endpoint
+			targetCP := creds.ServerURL
+			if targetCP == "" || (!cpConnected && targetCP != serverURL) {
+				targetCP = serverURL
+			}
+			targetCP = strings.TrimRight(targetCP, "/")
+
+			// Active liveness verification probe (Option A): query /api/v1/agents/verify directly
+			if targetCP != "" && cpConnected {
+				vClient := httptransport.New(2500 * time.Millisecond)
+				vURL := fmt.Sprintf("%s/api/v1/agents/verify?agent_id=%s", targetCP, url.QueryEscape(creds.AgentID))
+				vReq, _ := http.NewRequest(http.MethodGet, vURL, nil)
+				if creds.SessionToken != "" {
+					vReq.Header.Set("Authorization", "Bearer "+creds.SessionToken)
+				}
+				if vResp, vErr := vClient.Do(vReq); vErr == nil {
+					var vData struct {
+						Valid     bool   `json:"valid"`
+						Status    string `json:"status"`
+						AgentID   string `json:"agent_id"`
+						AgentName string `json:"agent_name"`
+						Error     string `json:"error"`
+					}
+					_ = json.NewDecoder(vResp.Body).Decode(&vData)
+					vResp.Body.Close()
+
+					if vResp.StatusCode == http.StatusNotFound || vData.Status == "not_found" {
+						enrolled = false
+						outOfSync = true
+						outOfSyncReason = "Agent not found in registry (Central Control Plane restarted or database reset)"
+						authModeLabel = "OUT OF SYNC (Central Control Plane has no record of this enrollment)"
+					} else if vResp.StatusCode == http.StatusUnauthorized || vData.Status == "token_invalid" {
+						enrolled = false
+						outOfSync = true
+						outOfSyncReason = "Enrollment token rejected (signing key changed after server redeploy or token expired)"
+						authModeLabel = "OUT OF SYNC (Enrollment token rejected by Central Control Plane)"
+					} else if vData.Status == "revoked" || vData.Status == "deregistered" {
+						enrolled = false
+						authModeLabel = fmt.Sprintf("Deregistered (Workstation marked %s on Central Control Plane; run 'bap login' or 'bap register' to re-enroll)", vData.Status)
+					} else if vData.Status == "quarantined" {
+						authModeLabel += " [❄️ WORKSTATION FROZEN by Central Administrator]"
+					}
+				}
+			}
+
+			// If control plane is reachable and not already out-of-sync, check revocations list
+			if !outOfSync && targetCP != "" {
 				cClient := httptransport.New(2 * time.Second)
-				if rResp, rErr := cClient.Get(strings.TrimRight(creds.ServerURL, "/") + "/api/v1/control/revocations"); rErr == nil && rResp.StatusCode == http.StatusOK {
+				if rResp, rErr := cClient.Get(targetCP + "/api/v1/control/revocations"); rErr == nil && rResp.StatusCode == http.StatusOK {
 					var rData struct {
 						DeregisteredAgents []string `json:"deregistered_agents"`
 						RevokedSessions    []string `json:"revoked_sessions"`
@@ -357,6 +405,30 @@ func RunStatus(args []string) error {
 						}
 					}
 					rResp.Body.Close()
+				}
+			}
+
+			// Option B: Self-Healing auto-re-enrollment via --fix
+			if *fixFlag && outOfSync {
+				if creds.AuthMode == "otc" || creds.AuthMode == "" {
+					fmt.Println("[*] 🛠️  Self-Healing: Re-enrolling workstation via development OTC...")
+					regArgs := []string{"--dev", "--server=" + targetCP}
+					if err := RunRegister(regArgs); err == nil {
+						fmt.Println("[+] 🛠️  Auto-healed workstation enrollment: Successfully re-registered via development OTC!")
+						// Reload updated credentials
+						if cData, cErr := os.ReadFile(DefaultCredentialsPath()); cErr == nil {
+							if json.Unmarshal(cData, &creds) == nil && creds.AgentID != "" {
+								enrolled = true
+								outOfSync = false
+								outOfSyncReason = ""
+								authModeLabel = "One-Time Code (OTC) [Re-enrolled via --fix]"
+							}
+						}
+					} else {
+						fmt.Printf("[-] ⚠️  Auto-re-enrollment failed: %v\n", err)
+					}
+				} else if creds.AuthMode == "oidc" {
+					fmt.Println("[!] ⚠️  Workstation was enrolled via OIDC. Please run 'bap login' to re-authenticate with your Identity Provider.")
 				}
 			}
 		}
@@ -776,12 +848,14 @@ func RunStatus(args []string) error {
 				"compatibility_status": compatibilityStatus,
 			},
 			"enrollment": map[string]any{
-				"enrolled":   enrolled,
-				"auth_mode":  authModeLabel,
-				"agent_id":   creds.AgentID,
-				"app_id":     creds.AppID,
-				"user_email": creds.UserEmail,
-				"department": creds.Department,
+				"enrolled":           enrolled,
+				"out_of_sync":        outOfSync,
+				"out_of_sync_reason": outOfSyncReason,
+				"auth_mode":          authModeLabel,
+				"agent_id":           creds.AgentID,
+				"app_id":             creds.AppID,
+				"user_email":         creds.UserEmail,
+				"department":         creds.Department,
 			},
 			"sessions": map[string]any{
 				"active_count":  activeCount,
@@ -896,6 +970,13 @@ func RunStatus(args []string) error {
 			fmt.Printf("  IdP Groups:       %v\n", creds.Groups)
 		}
 		fmt.Printf("  Agent Workload:   %s (App: %s)\n", creds.AgentID, creds.AppID)
+	} else if outOfSync {
+		fmt.Printf("  Enrollment:       OUT OF SYNC [⚠️  Central Control Plane has no record of this enrollment]\n")
+		fmt.Printf("  Sync Diagnostic:  %s\n", outOfSyncReason)
+		fmt.Printf("  Resolution:       Run 'bap register' or 'bap login' to re-enroll (or 'bap status --fix')\n")
+		if creds.AgentID != "" {
+			fmt.Printf("  Prior Identity:   %s (App: %s)\n", creds.AgentID, creds.AppID)
+		}
 	} else if authModeLabel != "Unenrolled" && authModeLabel != "" {
 		fmt.Printf("  Enrollment:       %s\n", authModeLabel)
 	} else {

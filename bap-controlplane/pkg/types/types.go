@@ -198,6 +198,7 @@ type DelegateGrantResponse struct {
 // DevOTCRequest allows unauthenticated developers in dev mode to request an instant OTC.
 type DevOTCRequest struct {
 	AppID      string `json:"app_id,omitempty"`
+	Hostname   string `json:"hostname,omitempty"`
 	DeviceType string `json:"device_type,omitempty"`
 	OS         string `json:"os,omitempty"`
 	Arch       string `json:"arch,omitempty"`

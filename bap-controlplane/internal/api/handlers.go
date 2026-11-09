@@ -325,6 +325,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/agents/pre-register", s.requireAdminAuth(s.handlePreRegister))
 	s.mux.HandleFunc("/api/v1/agents/register", s.handleRegisterEdge)
 	s.mux.HandleFunc("/api/v1/agents/register-edge", s.handleRegisterEdge)
+	s.mux.HandleFunc("/api/v1/agents/verify", s.handleVerifyAgent)
+	s.mux.HandleFunc("/api/v1/control/verify", s.handleVerifyAgent)
 	s.mux.HandleFunc("/api/v1/agents/deregister", s.handleDeregisterAgent)
 	s.mux.HandleFunc("/api/v1/auth/logout", s.handleDeregisterAgent)
 	s.mux.HandleFunc("/api/v1/grants/acquire", s.handleAcquireGrant)
@@ -654,7 +656,40 @@ func (s *Server) handleRegisterEdge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4a. Clear prior logout / revoked status on session store for re-enrolling workstation
+	// 4a. Standardize workstation naming convention matching OIDC: <email> @ <hostname> (<DeviceType> Workstation)
+	if enrolled.AgentName == "" || strings.Contains(enrolled.AgentName, "(Dev Mode)") || !strings.Contains(enrolled.AgentName, "@") {
+		email := enrolled.UserEmail
+		if email == "" {
+			email = enrolled.OwnerEmail
+		}
+		if email == "" {
+			email = "developer@internal.local"
+		}
+		host := req.Hostname
+		if host == "" {
+			host = enrolled.Hostname
+		}
+		if host == "" {
+			host = "workstation"
+		}
+		devType := enrolled.DeviceType
+		if devType == "" {
+			if strings.EqualFold(req.OS, "linux") || strings.EqualFold(enrolled.OS, "linux") {
+				devType = "server"
+			} else {
+				devType = "desktop"
+			}
+		}
+		devTitle := "Desktop"
+		if strings.EqualFold(devType, "server") {
+			devTitle = "Server"
+		} else if strings.EqualFold(devType, "laptop") {
+			devTitle = "Laptop"
+		}
+		enrolled.AgentName = fmt.Sprintf("%s @ %s (%s Workstation)", email, host, devTitle)
+	}
+
+	// 4b. Clear prior logout / revoked status on session store for re-enrolling workstation
 	if s.sessionStore != nil {
 		_ = s.sessionStore.ClearWorkstationLogout(enrolled.AgentID, enrolled.InstanceID)
 		_, _ = s.sessionStore.RestoreTarget(enrolled.AgentID)
@@ -686,6 +721,103 @@ func (s *Server) handleRegisterEdge(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// handleVerifyAgent validates active registration status and token validity for a given agent or instance.
+func (s *Server) handleVerifyAgent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	agentID := strings.TrimSpace(r.URL.Query().Get("agent_id"))
+	token := ""
+	authHeader := r.Header.Get("Authorization")
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		token = strings.TrimPrefix(authHeader, "Bearer ")
+	}
+
+	var tokenClaims *authz.GrantClaims
+	var tokenErr error
+	if token != "" {
+		tokenClaims, tokenErr = s.minter.Verify(token)
+	}
+
+	if agentID == "" && tokenClaims != nil {
+		agentID = tokenClaims.AgentID
+		if agentID == "" {
+			agentID = tokenClaims.Sub
+		}
+	}
+
+	if agentID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"valid":  false,
+			"status": "missing_parameter",
+			"error":  "agent_id query parameter or valid Bearer token is required",
+		})
+		return
+	}
+
+	agent, err := s.registry.Get(agentID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{
+			"valid":    false,
+			"status":   "not_found",
+			"agent_id": agentID,
+			"error":    "Agent not found in registry (Central Control Plane restarted or database reset)",
+		})
+		return
+	}
+
+	if token != "" && tokenErr != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"valid":    false,
+			"status":   "token_invalid",
+			"agent_id": agentID,
+			"error":    "Enrollment token rejected (signing key changed after server redeploy or token expired): " + tokenErr.Error(),
+		})
+		return
+	}
+
+	if agent.Status == types.StatusRevoked || agent.Status == types.StatusDeregistered {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"valid":      false,
+			"status":     string(agent.Status),
+			"agent_id":   agent.AgentID,
+			"agent_name": agent.AgentName,
+			"hostname":   agent.Hostname,
+			"auth_mode":  agent.AuthMode,
+			"error":      fmt.Sprintf("Agent is marked %s on control plane", agent.Status),
+		})
+		return
+	}
+
+	isQuarantined := (agent.Status == types.StatusQuarantined) || s.registry.WorkstationBlocked(agent.InstanceID, agent.AppID, false)
+	if isQuarantined {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"valid":      false,
+			"status":     "quarantined",
+			"agent_id":   agent.AgentID,
+			"agent_name": agent.AgentName,
+			"hostname":   agent.Hostname,
+			"auth_mode":  agent.AuthMode,
+			"error":      "Workstation frozen or quarantined by administrator",
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"valid":          true,
+		"status":         string(agent.Status),
+		"agent_id":       agent.AgentID,
+		"agent_name":     agent.AgentName,
+		"hostname":       agent.Hostname,
+		"auth_mode":      agent.AuthMode,
+		"user_email":     agent.UserEmail,
+		"instance_id":    agent.InstanceID,
+		"server_version": version.Version,
+	})
+}
+
 // handleDevOTCRequest allows developers in dev mode to generate an OTC token instantly.
 // In production mode, this endpoint is strictly disabled (HTTP 403) to enforce out-of-band admin OTC or MFA OIDC login.
 func (s *Server) handleDevOTCRequest(w http.ResponseWriter, r *http.Request) {
@@ -702,17 +834,38 @@ func (s *Server) handleDevOTCRequest(w http.ResponseWriter, r *http.Request) {
 	var req types.DevOTCRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
+	devType := strings.ToLower(strings.TrimSpace(req.DeviceType))
+	if devType == "" {
+		if strings.EqualFold(req.OS, "linux") {
+			devType = "server"
+		} else {
+			devType = "desktop"
+		}
+	}
+	hostname := strings.TrimSpace(req.Hostname)
+	if hostname == "" {
+		hostname = "workstation"
+	}
+
 	appID := strings.TrimSpace(req.AppID)
 	if appID == "" {
-		appID = "bap-edge-dev"
+		appID = "workstation-" + devType
 	}
 	ownerEmail := strings.TrimSpace(req.OwnerEmail)
 	if ownerEmail == "" {
 		ownerEmail = "developer@internal.local"
 	}
+
+	devTitle := "Desktop"
+	if devType == "server" {
+		devTitle = "Server"
+	} else if devType == "laptop" {
+		devTitle = "Laptop"
+	}
+
 	agentName := strings.TrimSpace(req.AgentName)
-	if agentName == "" {
-		agentName = "Developer Workstation (Dev Mode)"
+	if agentName == "" || agentName == "Developer Workstation (Dev Mode)" || agentName == "Developer Laptop" {
+		agentName = fmt.Sprintf("%s @ %s (%s Workstation)", ownerEmail, hostname, devTitle)
 	}
 
 	preReq := types.PreRegisterRequest{

@@ -68,6 +68,15 @@ func (s *Store) Get(agentID string) (*types.RegisteredAgent, error) {
 
 	agent, exists := s.agents[agentID]
 	if !exists {
+		for _, a := range s.agents {
+			if a.InstanceID != "" && a.InstanceID == agentID {
+				agent = a
+				exists = true
+				break
+			}
+		}
+	}
+	if !exists {
 		return nil, fmt.Errorf("agent %q not found in registry", agentID)
 	}
 	copy := *agent

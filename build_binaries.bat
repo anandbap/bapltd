@@ -17,19 +17,26 @@ if /i "%2"=="-fix" set "AUTO_FIX=-Fix"
 if /i "%1"=="--fix" set "AUTO_FIX=-Fix"
 if /i "%2"=="--fix" set "AUTO_FIX=-Fix"
 
-if "%1"=="--all" goto :build_all
-if "%1"=="-all" goto :build_all
-
 for /f "tokens=*" %%i in ('git rev-parse --short HEAD 2^>nul') do set "GIT_COMMIT=%%i"
 if "%GIT_COMMIT%"=="" set "GIT_COMMIT=dev"
 if "%BAP_VERSION%"=="" (
     for /f "tokens=*" %%v in ('powershell -NoProfile -Command "(Get-Content '%ROOT_DIR%bap-edge\pkg\version\version.go' | Select-String 'Version =').Line.Split([char]34)[1]" 2^>nul') do set "BAP_VERSION=%%v"
 )
 if "%BAP_VERSION%"=="" (
+    for /f "tokens=*" %%v in ('powershell -NoProfile -Command "(Get-Content '%ROOT_DIR%bap-controlplane\pkg\version\version.go' | Select-String 'Version =').Line.Split([char]34)[1]" 2^>nul') do set "BAP_VERSION=%%v"
+)
+if "%BAP_VERSION%"=="" (
+    for /f "tokens=*" %%v in ('powershell -NoProfile -Command "(Get-Content '%ROOT_DIR%pyproject.toml' | Select-String 'version =').Line.Split([char]34)[1]" 2^>nul') do set "BAP_VERSION=%%v"
+)
+if not "%BAP_VERSION%"=="" if not "%BAP_VERSION:~0,1%"=="v" set "BAP_VERSION=v%BAP_VERSION%"
+if "%BAP_VERSION%"=="" (
     for /f "tokens=4" %%v in ('python "%ROOT_DIR%scripts\bump_version.py" --current 2^>nul') do set "BAP_VERSION=v%%v"
 )
-if "%BAP_VERSION%"=="" set "BAP_VERSION=v1.12.11"
+if "%BAP_VERSION%"=="" set "BAP_VERSION=v1.12.13"
 for /f "tokens=*" %%i in ('powershell -NoProfile -Command "(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')"') do set "BUILD_DATE=%%i"
+
+if "%1"=="--all" goto :build_all
+if "%1"=="-all" goto :build_all
 
 echo [0/6] Ensuring BAP Root CA and TLS credentials...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT_DIR%scripts\ensure_certs.ps1"
@@ -220,7 +227,13 @@ echo (Tip: Run 'build_binaries.bat --all' to build all platforms, or 'build_whee
 exit /b 0
 
 :build_all
-call "%ROOT_DIR%build_all_platforms.bat" %*
+set "REST_ARGS="
+for %%A in (%*) do (
+    if /i not "%%A"=="--all" if /i not "%%A"=="-all" (
+        set "REST_ARGS=!REST_ARGS! %%A"
+    )
+)
+call "%ROOT_DIR%build_all_platforms.bat" !REST_ARGS!
 if "%BUILD_WHEEL%"=="1" (
     echo.
     echo [*] Packaging universal multi-platform Python Wheel...

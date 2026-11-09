@@ -89,10 +89,33 @@ func RunRegister(args []string) error {
 	// In dev mode, if no OTC was explicitly supplied, auto-request one from control plane
 	if *code == "" && *devMode {
 		devOTCUrl := fmt.Sprintf("%s/api/v1/auth/otc/dev-request", *serverURL)
+		host, _ := os.Hostname()
+		user := os.Getenv("USERNAME")
+		if user == "" {
+			user = os.Getenv("USER")
+		}
+		if user == "" {
+			user = "developer"
+		}
+		email := fmt.Sprintf("%s@internal.local", user)
+		devType := "desktop"
+		if runtime.GOOS == "linux" {
+			devType = "server"
+		}
+		devTitle := "Desktop"
+		if devType == "server" {
+			devTitle = "Server"
+		}
+		agentName := fmt.Sprintf("%s @ %s (%s Workstation)", email, host, devTitle)
+
 		reqBody, _ := json.Marshal(map[string]string{
-			"app_id":      "bap-edge-dev",
-			"owner_email": "dev@internal.local",
-			"agent_name":  "Developer Workstation (Dev Mode)",
+			"app_id":      "workstation-" + devType,
+			"owner_email": email,
+			"agent_name":  agentName,
+			"hostname":    host,
+			"device_type": devType,
+			"os":          runtime.GOOS,
+			"arch":        runtime.GOARCH,
 		})
 		resp, err := http.Post(devOTCUrl, "application/json", bytes.NewReader(reqBody))
 		if err != nil {

@@ -100,6 +100,8 @@ This document represents the complete functional and non-functional requirements
 | `BAP-823` | Universal Runtime Auto-Remediation, Self-Healing Recovery & `--fix` Parameter across Workloads | **DONE** | Automatic detection and programmatic healing of orphaned recovery states, stale mutexes, corrupted settings, and dangling backup artifacts across all BAP workloads (`bap claude`, `bap codex`, `bap review`, `bap status`, `bap doctor`) with out-of-the-box non-interactive healing and explicit `--fix` flag. |
 | `BAP-824` | Compile-Time Build-Type Hard-Gating & Internal Dev-Override Segregation | **DONE** | Strict compile-time binary gating (`AllowDevOverrides` via `-ldflags`) ensuring internal bypass toggles (`BAP_HOOKS=false`, `BAP_DISABLE_HOOKS=1`, `BAP_MODE=disabled`, `--hooks-disabled`, `bapedge dev-override`) are strictly blocked and forbidden in Enterprise Production and CI builds with zero security evasion exposure. |
 | `BAP-825` | OTC Workstation Parity, Persistent Enrollment Invariant & Non-Destructive Inspection | **DONE** | Full lifecycle alignment between OTC (`bap register`) and OIDC (`bap login`): persistent Workstation Agent registration, session vs workstation lifecycle decoupling, auto-reactivation, `bap deregister` alias, and non-destructive `bap status` inspection. |
+| `BAP-826` | Active Workstation Liveness Verification, Ephemeral DB Skew Detection & Self-Healing Auto-Re-Enrollment (`bap status --fix`) | **DONE** | Control plane `/api/v1/agents/verify` endpoint, active enrollment liveness probe in `bap status`, clear out-of-sync diagnostics upon server redeploy/restart, and 1-click self-healing via `bap status --fix`. |
+| `BAP-827` | Standardized OTC Workstation Naming Convention & Multi-Platform Build Pipeline Synchronization | **DONE** | Aligns OTC workstation naming to match OIDC `<email> @ <hostname> (<DeviceType> Workstation)` across control plane and edge daemons; resolves multi-platform packaging, version banner extraction, locked binary `.old` rotation, and Python Scripts synchronization. |
 
 ### MVP exit sequence
 
@@ -4555,3 +4557,83 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - **Edge Registration & Status**: `bap-edge/cmd/register.go`, `bap-edge/cmd/cli_tools.go`, `bap-edge/main.go` (`deregister` alias).
   - **Unit Test Coverage**: `bap-controlplane/internal/registry/agent_test.go`, `bap-edge/cmd/cli_tools_test.go`.
   - **Architecture Reference**: `ARCHITECTURE.md` (Section 17.3).
+
+---
+
+#### Story BAP-826: Active Workstation Liveness Verification, Ephemeral DB Skew Detection & Self-Healing Auto-Re-Enrollment (`bap status --fix`)
+- **Type**: Story | **Points**: 8 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**:
+  Resolve registration desynchronization and false "Enrolled" reports when the Central Control Plane restarts or redeploys with ephemeral storage (e.g. Render deployments) while edge workstations retain valid local credentials:
+  1. **Control Plane Agent Verification Endpoint (`/api/v1/agents/verify` & `/api/v1/control/verify`)**:
+     - Implemented `handleVerifyAgent` in `bap-controlplane/internal/api/handlers.go`.
+     - Validates workstation existence in `s.registry` (including instance ID fallback in `s.registry.Get`).
+     - Verifies bearer session token cryptographic signature via `s.minter.Verify(token)`.
+     - If the control plane restarted and lost in-memory registration state, returns HTTP 404 with structured JSON (`valid: false`, `status: "not_found"`).
+     - If the token was signed with a previous minter key, returns HTTP 401 with `status: "token_invalid"`.
+     - Distinguishes administrative deregistration/revocation vs. active enrollment vs. temporary network outages.
+  2. **Active Workstation Liveness Probe (`bap status`)**:
+     - In `bap-edge/cmd/cli_tools.go`, updated `RunStatus` to query `/api/v1/agents/verify?agent_id=<creds.AgentID>` with Bearer session token whenever the control plane is online.
+     - When desynchronization is detected, immediately flags the workstation as `OUT OF SYNC`:
+       ```text
+       Enrollment:       OUT OF SYNC [⚠️  Central Control Plane has no record of this enrollment]
+       Sync Diagnostic:  Agent not found in registry (Central Control Plane restarted or database reset)
+       Resolution:       Run 'bap register' or 'bap login' to re-enroll (or 'bap status --fix')
+       Prior Identity:   <AgentID> (App: <AppID>)
+       ```
+     - In `--json` mode, `enrollment` payload includes `"out_of_sync": true` and `"out_of_sync_reason": "..."`.
+     - Preserves offline resilience: transient network errors (connection refused, timeouts, 502/503) do not flag desynchronization; local offline execution and spooling continue safely.
+  3. **Option B: 1-Click Self-Healing via `--fix` (`bap status --fix`)**:
+     - When `--fix` is passed and `outOfSync` is detected, `RunStatus` initiates automatic re-enrollment for OTC workloads via `RunRegister([]string{"--dev", "--server=" + targetCP})`.
+     - Automatically acquires a fresh development OTC, registers the workstation with identical hardware naming attributes, re-mints session tokens, updates `credentials.json`, re-syncs Cedar policy, and restores the workstation to fully enrolled status without manual developer friction.
+     - For OIDC accounts, guides the user with a direct instruction to run `bap login`.
+
+- **Acceptance Criteria**:
+  - `Given` a previously registered workstation and a Central Control Plane that was redeployed/restarted (wiping in-memory registry entries),
+  - `When` executing `bap status`,
+  - `Then` `bap status` queries `/api/v1/agents/verify`, detects HTTP 404, and clearly displays `OUT OF SYNC` with a diagnostic explanation and resolution advice.
+  - `Given` an out-of-sync OTC workstation,
+  - `When` executing `bap status --fix`,
+  - `Then` `bap status` automatically re-enrolls via development OTC, refreshes `credentials.json`, and restores active enrollment.
+  - `Given` a control plane that is completely offline (network down),
+  - `When` executing `bap status`,
+  - `Then` local cached credentials remain valid without being falsely marked as out-of-sync or purged.
+
+- **Implementation Evidence**:
+  - **Control Plane Verification Endpoint**: `bap-controlplane/internal/api/handlers.go` (`handleVerifyAgent`, routes `/api/v1/agents/verify`, `/api/v1/control/verify`), `bap-controlplane/internal/registry/agent.go` (`Get` instance ID fallback).
+  - **Edge Liveness & Auto-Healing**: `bap-edge/cmd/cli_tools.go` (`RunStatus`, `outOfSync` diagnostics, `--fix` auto-registration).
+  - **Unit Test Coverage**: `bap-controlplane/internal/api/verify_agent_test.go` (`TestVerifyAgent_MissingAgentID`, `TestVerifyAgent_NotFound`, `TestVerifyAgent_ActiveAgent`, `TestVerifyAgent_Deregistered`), `bap-edge/cmd/cli_tools_test.go` (`TestRunStatus`, `TestRunStatus_OTCEnrolledDoesNotPurgeCredentials`).
+
+---
+
+#### Story BAP-827: Standardized OTC Workstation Naming Convention & Multi-Platform Build Pipeline Synchronization
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**:
+  Achieve complete identity and packaging consistency across registration modes and deployment targets:
+  1. **Standardized OTC Workstation Naming Convention**:
+     - Standardized One-Time Code (OTC) workstation registration to follow the exact same naming scheme as OIDC device authentication:
+       $$\text{<owner\_email>} \text{ @ } \text{<hostname>} \text{ (} \text{<DeviceType>} \text{ Workstation)}$$
+       *(e.g., `User@internal.local @ DESKTOP-E63V3UH (Desktop Workstation)`)*
+     - Updated `bap-controlplane/pkg/types/types.go` (`DevOTCRequest`) to include `Hostname`, `DeviceType`, `OS`, `Arch`.
+     - In `bap-controlplane/internal/api/handlers.go` (`handleDevOTCRequest`, `handleRegisterEdge`) and `bap-edge/cmd/register.go`, populated host machine context during OTC dev-requests so workstation naming remains consistent across re-enrollments, varying only by the unique instance ID suffix.
+  2. **Multi-Platform Build Pipeline Synchronization & Version Reflection**:
+     - Fixed `build_all_platforms.bat` to dynamically extract SemVer and commit hash from source files and display a clear header banner matching `build_binaries.bat`.
+     - Updated `build_all_platforms.ps1` to receive `-Version` from `build_all_platforms.bat` and synchronize built binaries directly into `%APPDATA%\Python\Python*\Scripts` and `%USERPROFILE%\.bap\launchers`.
+     - Added robust file lock rotation (`.old` renaming) with `try/catch` and `-ErrorAction SilentlyContinue` to prevent restricted token sandbox path traversal and running daemon locks from aborting the compiler.
+  3. **Launcher CLI Passthrough & Support**:
+     - Verified and hardened launcher argument forwarding across `run_claude_bap.ps1`, `run_claude_bap.bat`, and `bap-edge/cmd/agent_launcher.go` for flags like `--no-hooks` and `--fix`.
+
+- **Acceptance Criteria**:
+  - `Given` a developer registering via OTC (`bap register --dev` or `bap register <CODE>`),
+  - `When` registration completes,
+  - `Then` the workstation name in the control plane cockpit and agent registry displays `<email> @ <hostname> (<DeviceType> Workstation)`.
+  - `Given` executing `build_all_platforms.bat`,
+  - `When` the script starts,
+  - `Then` it immediately outputs the target BAP version and commit hash, and packages all 5 OS/architecture targets (Windows amd64, Linux amd64/arm64, macOS amd64/arm64) into `dist/`.
+  - `Given` running BAP daemons locking user binaries,
+  - `When` `build_all_platforms.ps1` executes,
+  - `Then` file rotation gracefully falls back without terminating the build process.
+
+- **Implementation Evidence**:
+  - **Naming Schema**: `bap-controlplane/pkg/types/types.go`, `bap-controlplane/internal/api/handlers.go` (`handleDevOTCRequest`, `handleRegisterEdge`), `bap-edge/cmd/register.go`.
+  - **Build Pipeline Hardening**: `build_all_platforms.bat`, `build_all_platforms.ps1`, `build_binaries.bat`.
+  - **Unit & Integration Tests**: `bap-controlplane/internal/api/verify_agent_test.go` (`TestDevOTCRequest_WorkstationNaming`), full 5-target binary build in `dist/`.
