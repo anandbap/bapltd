@@ -97,6 +97,8 @@ This document represents the complete functional and non-functional requirements
 | `BAP-820` | Native Governed MCP Tool Acceleration & Structured Payload Enforcement | **DONE** | Implemented native, high-performance governed Model Context Protocol (MCP) file and workspace tools (`bap_write_file`, `bap_read_file`, `bap_edit_file`, `bap_list_dir`) in `bapmcp` with workspace boundary validation, credential shielding, and audit telemetry. |
 | `BAP-821` | Cryptographically Signed Policy Bundle Streaming & In-Memory Hot-Reloading | **DONE** | Control Plane RFC 7515 JWS-signed policy bundle distribution via SSE streams, enabling edge daemons to hot-reload verified Cedar policies in memory without file hash drift or daemon restarts. |
 | `BAP-822` | V3 Cockpit Interactive Policy Studio, Real-Time Simulator & "Why Was It Blocked?" Engine | **DONE** | Interactive visual policy simulator and 1-click "Explain Verdict" diagnostic engine in V3 Cockpit displaying AST breakdown, invariant rule attribution, and 1-click remediation. |
+| `BAP-823` | Universal Runtime Auto-Remediation, Self-Healing Recovery & `--fix` Parameter across Workloads | **DONE** | Automatic detection and programmatic healing of orphaned recovery states, stale mutexes, corrupted settings, and dangling backup artifacts across all BAP workloads (`bap claude`, `bap codex`, `bap review`, `bap status`, `bap doctor`) with out-of-the-box non-interactive healing and explicit `--fix` flag. |
+| `BAP-824` | Compile-Time Build-Type Hard-Gating & Internal Dev-Override Segregation | **DONE** | Strict compile-time binary gating (`AllowDevOverrides` via `-ldflags`) ensuring internal bypass toggles (`BAP_HOOKS=false`, `BAP_DISABLE_HOOKS=1`, `BAP_MODE=disabled`, `--hooks-disabled`, `bapedge dev-override`) are strictly blocked and forbidden in Enterprise Production and CI builds with zero security evasion exposure. |
 
 ### MVP exit sequence
 
@@ -4444,15 +4446,70 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 - **Implementation Evidence**:
   - **Cockpit UI & Diagnostic Drawers**: `bap-controlplane/internal/dashboardui/web/v3.html` and `bap-controlplane/internal/dashboardui/web/cockpit.js`.
   - **Architecture Reference**: `ARCHITECTURE.md` (Section 16.6).
-  - `Given` an operator using the V3 Cockpit Policy Studio,
-  - `When` testing an arbitrary command,
-  - `Then` the simulator returns instant verdict (Allow/Deny/Step-up) with full Cedar rule attribution.
-  - `Given` a blocked action in the live feed,
-  - `When` clicking "Explain Verdict",
-  - `Then` the drawer displays the exact root cause and 1-click remediation without reading raw terminal logs.
 
+---
 
+#### Story BAP-823: Universal Runtime Auto-Remediation, Self-Healing Recovery & `--fix` Parameter across Workloads
+- **Type**: Story | **Points**: 8 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**:
+  Deliver zero-manual-intervention self-healing and programmatic auto-remediation across all BAP workloads (`bap claude`, `bap codex`, `bap review`, `bap status`, `bap doctor`):
+  1. **Out-of-the-Box Non-Interactive Auto-Remediation**:
+     - When launching an agent (`bap claude`, `bap codex`) or executing maintenance commands, BAP automatically inspects the environment for recoverable error states before failing.
+     - Automatically cleans stale or corrupted recovery manifests (`.claude/bap-recovery-*.json`, `.codex/bap-recovery-*.json`) when target processes are dead.
+     - Safely archives orphaned backup artifacts (`.claude/settings.json.bap-backup-*`) into a secure `.claude/.bap-recovery-archive/` directory instead of throwing fatal exceptions requiring manual developer deletion.
+     - Ensures agents start cleanly and seamlessly without aborting or trapping users in crash loops.
+  2. **Explicit `--fix` Forced Remediation Parameter**:
+     - Introduces standard `--fix` / `-Fix` CLI flag across all BAP commands.
+     - When supplied explicitly by an operator or CI pipeline (e.g., `bap claude --fix`, `bap doctor --fix`, `bap status --fix`), forces thorough aggressive remediation: releases stale file locks, purges dead socket listeners, restores default settings if corrupted, and synchronizes stale hook scripts.
+  3. **Forensic Integrity Preservation**:
+     - Auto-remediation actions maintain an immutable audit trail: archived backups retain their original timestamps and hash manifests in `.bap-recovery-archive/` for forensic review.
+     - Emits structured warnings and telemetry so administrators know self-healing took place without blocking the developer's momentum.
 
+- **Acceptance Criteria**:
+  - `Given` an orphaned BAP backup file in `.claude/` without active processes,
+  - `When` executing `bap claude` without flags,
+  - `Then` the launcher auto-archives the orphan to `.claude/.bap-recovery-archive/`, restores configuration, and launches Claude Code cleanly without manual intervention.
+  - `Given` a corrupted recovery manifest,
+  - `When` executing `bap claude --fix`,
+  - `Then` the recovery state is reset and verified healthy before starting the governed session.
+  - `Given` any BAP launcher encountering recoverable state divergence,
+  - `When` starting the session,
+  - `Then` the user is never prompted to manually delete internal `.bap-*` files.
 
+- **Implementation Evidence**:
+  - **Launcher Auto-Remediation**: `run_claude_bap.ps1`, `run_claude_bap.bat`, `bap-edge/cmd/agent_launcher.go`.
+  - **Archive Directory**: `.claude/.bap-recovery-archive/`.
+  - **Architecture Reference**: `ARCHITECTURE.md` (Section 17.1).
 
+---
 
+#### Story BAP-824: Compile-Time Build-Type Hard-Gating & Internal Dev-Override Segregation
+- **Type**: Story | **Points**: 8 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**:
+  Enforce strict physical segregation between Enterprise Production releases and Internal BAP Engineering builds to guarantee that development-time bypass mechanisms cannot be exploited in production:
+  1. **Compile-Time `-ldflags` Hard-Gating**:
+     - Variable `AllowDevOverrides` in `bap-edge/pkg/version/version.go` and `cchook/interceptor.go` controls whether developer bypass mechanisms are enabled.
+     - Production and CI builds compile binaries with `-ldflags "-X 'bap-edge/pkg/version.AllowDevOverrides=false' -X 'main.AllowDevOverrides=false'"`, physically disabling override code paths.
+  2. **Strict Invariant Rejection of Override Environment Variables**:
+     - In Enterprise Production builds (`AllowDevOverrides == "false"`), any attempt to pass `BAP_HOOKS=false`, `BAP_DISABLE_HOOKS=1`, `BAP_MODE=disabled`, or CLI flag `--hooks-disabled` is strictly rejected with a zero-trust security error:
+       `[BAP ZERO-TRUST SECURITY VIOLATION] Dev-overrides are permanently disabled in Enterprise Production builds.`
+     - Launchers and hooks terminate immediately with exit code 1 and record the bypass attempt in the local tamper ledger.
+  3. **Internal BAP Development Agility**:
+     - Internal engineering builds retain `AllowDevOverrides == "true"`, allowing AI agents and engineers developing BAP itself to iterate without triggering recursive policy enforcement locks on their own coding tools.
+     - Clear CLI reflection (`bapedge version` / `bap version`) displaying `dev-overrides: true|false` for transparent auditability.
+
+- **Acceptance Criteria**:
+  - `Given` an enterprise production build of BAP (`AllowDevOverrides=false`),
+  - `When` an agent or user sets `BAP_HOOKS=false` and launches `bap claude`,
+  - `Then` the launcher refuses execution, emits a `[BAP ZERO-TRUST SECURITY VIOLATION]`, and exits with code 1.
+  - `Given` a production build of `interceptor.exe`,
+  - `When` `BAP_DISABLE_HOOKS=1` is present in the environment,
+  - `Then` the interceptor ignores the variable and continues full invariant Cedar evaluation.
+  - `Given` `bapedge version`,
+  - `When` executed by an auditor,
+  - `Then` the output explicitly indicates the build target and `dev-overrides` status.
+
+- **Implementation Evidence**:
+  - **Build Flag Infrastructure**: `bap-edge/pkg/version/version.go`, `cchook/interceptor.go`, `bap-edge/cmd/watch.go`.
+  - **Launcher Enforcement**: `run_claude_bap.ps1`, `run_claude_bap.bat`.
+  - **Architecture Reference**: `ARCHITECTURE.md` (Section 17.2).

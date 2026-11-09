@@ -1299,6 +1299,52 @@ To govern multi-turn agent workflows and temporal delegation lifetimes:
 - **V3 Cockpit Policy Studio**: Interactive visual simulator for testing agent commands against live policies with full AST breakdown.
 - **"Why Was It Blocked?" Modal**: 1-click verdict explanation in the Activity feed mapping blocked operations to Cedar rule IDs, evaluated invariants, and suggested remediation (`bapedge trust <path> --project`).
 
+---
+
+## 17. Universal Self-Healing Runtime Auto-Remediation & Compile-Time Dev-Override Segregation (Epic 45 — `BAP-823`–`BAP-824`)
+
+### 17.1. Universal Self-Healing Auto-Remediation & `--fix` Parameter (BAP-823)
+To eliminate manual developer intervention when recovering from ungraceful crashes, dead session mutexes, or orphaned configuration backups:
+1. **Out-of-the-Box Non-Interactive Healing**:
+   - Every BAP entry point (`bap claude`, `bap codex`, `bap review`, `bap doctor`, `bap status`) inspects runtime state upon startup.
+   - If an ungracefully terminated session leaves behind recovery manifests (`bap-recovery-*.json`) whose parent and child processes are dead, the launcher verifies whether the original configuration (`settings.json`) is intact. If the configuration cannot be cleanly matched or if the recovery manifest is corrupted, the dead manifest is safely expunged.
+   - Any orphaned backup files (`.claude/settings.json.bap-backup-*`) found without an active surviving session are automatically moved into a dedicated quarantine archive directory:
+     $$\text{Quarantine Directory: } \texttt{.claude/.bap-recovery-archive/}$$
+   - The launcher prints diagnostic guidance, logs the remediation event to the local audit ledger, and proceeds to start the agent session seamlessly. Developers never need to manually delete BAP internal files.
+2. **Forced `--fix` Parameter**:
+   - All BAP CLI commands accept an optional `--fix` flag (e.g. `bap claude --fix`, `bap status --fix`, `bap doctor --fix`).
+   - When specified, `--fix` triggers aggressive reconciliation:
+     - Dead process cleanup: Force-reconciles stale registry markers and clears dangling PID tracking records.
+     - Settings restoration: Validates JSON syntax of agent configuration files and restores last-known good backups if corruption is detected.
+     - Hook synchronization: Verifies that interceptor binary paths in agent hook manifests point to active, valid binaries, updating absolute path references if the workspace directory was moved.
+
+### 17.2. Compile-Time Build-Type Hard-Gating & Dev-Override Segregation (BAP-824)
+To ensure internal developer agility while guaranteeing zero escape hatches in enterprise environments:
+1. **Physical Segregation via Go `-ldflags`**:
+   - The variable `AllowDevOverrides` is embedded at compile time:
+     ```go
+     // In bap-edge/pkg/version/version.go and cchook/interceptor.go
+     var AllowDevOverrides = "true" // Defaults to "true" in internal developer builds
+     ```
+   - Enterprise Production releases and CI deployment pipelines compile all binaries with overrides physically disabled:
+     ```powershell
+     go build -ldflags "-X 'bap-edge/pkg/version.AllowDevOverrides=false' -X 'main.AllowDevOverrides=false'" -o bapedge.exe .
+     ```
+2. **Enterprise Production Invariant Enforcement**:
+   - In production builds (`DevOverridesAllowed() == false`), any attempt to bypass or suppress BAP governance via environment variables (`BAP_HOOKS=false`, `BAP_DISABLE_HOOKS=1`, `BAP_MODE=disabled`) or CLI flags (`--hooks-disabled`, `bapedge dev-override on`) results in an immediate fatal rejection:
+     ```
+     [-] [BAP ZERO-TRUST SECURITY VIOLATION] Dev-overrides are permanently disabled in Enterprise Production builds.
+     [*] Refusing to launch ungoverned session.
+     ```
+   - The event is logged as an invariant security violation to the local audit ledger and reported to the Control Plane.
+3. **Internal BAP Development Agility**:
+   - When developing and testing BAP itself, internal engineering builds (`AllowDevOverrides == "true"`) honor `BAP_HOOKS=false` and `--hooks-disabled`.
+   - In unmonitored development mode, `bap status` transparently renders:
+     ```
+     • [ACTIVE (UNMONITORED)] Session: sess-claude-... App: claude-code PID: 1234 Uptime: 10s Plugin: Hooks Disabled (Unmonitored)
+     ```
+   - This clear visual distinction guarantees that unmonitored sessions cannot be mistaken for compliant enterprise-governed sessions.
+
 
 
 

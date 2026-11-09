@@ -147,6 +147,19 @@ func EnsureSessionStarted(sessionID, appID string, clientPID int, initialPrompt 
 	sessionSVID := fmt.Sprintf("spiffe://bap.internal/workstation/%s/session/%s", instanceID, sessionID)
 	hostname, _ := os.Hostname()
 
+	hooksDisabled := false
+	if envVal := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_HOOKS"))); envVal == "false" || envVal == "off" || envVal == "0" {
+		hooksDisabled = true
+	} else if disVal := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_DISABLE_HOOKS"))); disVal == "1" || disVal == "true" {
+		hooksDisabled = true
+	} else if modeVal := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_MODE"))); modeVal == "disabled" || modeVal == "off" {
+		hooksDisabled = true
+	}
+	repLayer := "plugin"
+	if hooksDisabled {
+		repLayer = "unmonitored"
+	}
+
 	// 5. Pre-flight registration with Central Control Plane
 	startPayload := map[string]any{
 		"session_id":            sessionID,
@@ -160,7 +173,8 @@ func EnsureSessionStarted(sessionID, appID string, clientPID int, initialPrompt 
 		"session_svid":          sessionSVID,
 		"workstation_spiffe_id": credSPIFFE,
 		"spiffe_id":             credSPIFFE,
-		"reporting_layer":       "plugin",
+		"reporting_layer":       repLayer,
+		"hooks_disabled":        hooksDisabled,
 	}
 	if credEmail != "" && credEmail != "NA" {
 		startPayload["user_email"] = credEmail

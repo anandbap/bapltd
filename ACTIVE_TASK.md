@@ -350,5 +350,22 @@ Implement the top 3 high-impact enterprise MVP capabilities:
 - **Dogwood Architecture Assessment**:
   - Documented Dogwood temporal policy roadmap in `ARCHITECTURE.md` and `docs/EXECUTION_MODEL.md` for session-level state and multi-turn agent trajectory governance.
 
+---
+
+## Story BAP-823 & BAP-824: Universal Runtime Auto-Remediation, Self-Healing Recovery, & Compile-Time Dev-Override Hard-Gating (COMPLETED)
+- **Universal Auto-Remediation & Self-Healing Across All Agent Workloads (BAP-823)**:
+  - **Programmatic Zero-Crash Recovery**: If an ungracefully terminated session leaves behind dead recovery manifests or orphaned `.bap-backup-*` files, `run_claude_bap.ps1`, `run_claude_bap.bat`, and `scripts/bap_launcher_engine.ps1` (governing `bap codex`, `bap opencode`, `bap antigravity`) automatically clear stale manifests and archive orphaned backups into `.claude/.bap-recovery-archive/` or `.bapstate/recovery-archive/` with full forensic history preserved.
+  - **CLI `--fix` Flag Support**: Standardized across `bap claude --fix`, `bap codex --fix`, `bap review-session --fix`, `bap doctor --fix`, and `bap status --fix` for forced aggressive cleanup of stale mutexes, dead process tracking, and undrained spool files.
+  - **Audit Ledger Auto-Reconciliation**: `review_session.ps1` drains orphaned hook-evidence spools, cleans dead recovery manifests, and safely ignores inaccessible paths outside sandboxes.
+- **Compile-Time Build-Type Hard-Gating & Dev-Override Segregation (BAP-824)**:
+  - **Compiler Flag Hard-Gating**: Gated by `AllowDevOverrides` in `bap-edge/pkg/version/version.go` and `cchook/interceptor.go`. Enterprise production builds compiled with `-ldflags "-X 'bap-edge/pkg/version.AllowDevOverrides=false' -X 'main.AllowDevOverrides=false'"` physically eliminate dev bypass logic.
+  - **Zero-Trust Production Invariant**: Any attempt to supply `BAP_HOOKS=false`, `BAP_DISABLE_HOOKS=1`, `BAP_MODE=disabled`, `--hooks-disabled`, or `bapedge dev-override` in production mode is blocked with `[BAP ZERO-TRUST SECURITY VIOLATION]`, exiting immediately with exit code 1.
+  - **Internal Engineering Agility**: Internal builds retain `AllowDevOverrides = "true"`, and `bap status` clearly displays `[ACTIVE (UNMONITORED)] ... Plugin: Hooks Disabled (Unmonitored)` when dev-overrides are active.
+- **Verification & Test Isolation**:
+  - Isolated `TestScenario3Commands` via `t.TempDir()` on all platforms to prevent test interference from local `.bap/project_permissions.json`.
+  - All unit tests passed: `TestParentLauncherAncestryAdoptsNativeSession`, `TestIsDescendantOf`, `TestRunStatus_UnmonitoredSessionWithHooksDisabled`, `TestScenario3Commands`.
+  - Holistic Claude Code suite: 10/10 tests passed in 1.58s (135.28 ms avg latency).
+  - Fleet asset audit: 104 of 104 distribution files verified in exact sync via `scripts/check_stale_copies.ps1`.
+
 
 

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -41,9 +42,20 @@ func (d *doctorReport) report(name, status, details string) {
 
 // RunDoctor executes the pre-flight diagnostic health check natively in Go.
 func RunDoctor(args []string) error {
+	hasFix := false
+	for _, a := range args {
+		if a == "--fix" || a == "-Fix" || a == "-fix" {
+			hasFix = true
+			break
+		}
+	}
+
 	fmt.Println("===============================================================================")
 	fmt.Println("           BOUNDED AUTHORITY PLANE (BAP) - PRE-FLIGHT DOCTOR")
 	fmt.Println("===============================================================================")
+	if hasFix {
+		fmt.Println("[*] Explicit --fix requested: Self-healing mode active.")
+	}
 	hostname, _ := os.Hostname()
 	username := os.Getenv("USERNAME")
 	if username == "" {
@@ -242,7 +254,39 @@ func RunDoctor(args []string) error {
 
 	recoveryFile := filepath.Join(".claude", ".bap-recovery.json")
 	if fileExists(recoveryFile) {
-		rep.report("Active Session Concurrency", "PASS", fmt.Sprintf("Recovery tracking active (%s)", recoveryFile))
+		stale := false
+		data, rErr := os.ReadFile(recoveryFile)
+		if rErr == nil {
+			var recMap map[string]any
+			if jsonErr := json.Unmarshal(data, &recMap); jsonErr == nil {
+				if pidVal, ok := recMap["launcher_pid"].(float64); ok && pidVal > 0 {
+					if !isProcessAlive(int(pidVal)) {
+						stale = true
+					}
+				}
+			}
+		}
+		if stale {
+			if hasFix {
+				_ = os.Remove(recoveryFile)
+				mirror := filepath.Join(".claude", ".bap-recovery-mirror.json")
+				_ = os.Remove(mirror)
+				archiveDir := filepath.Join(".claude", ".bap-recovery-archive")
+				_ = os.MkdirAll(archiveDir, 0755)
+				if entries, err := os.ReadDir(".claude"); err == nil {
+					for _, e := range entries {
+						if strings.Contains(e.Name(), ".bap-backup-") {
+							_ = os.Rename(filepath.Join(".claude", e.Name()), filepath.Join(archiveDir, e.Name()))
+						}
+					}
+				}
+				rep.report("Active Session Concurrency", "PASS", "Self-healed stale recovery manifests and archived orphaned backups")
+			} else {
+				rep.report("Active Session Concurrency", "WARN", fmt.Sprintf("Stale recovery manifest detected (PID dead). Run with '--fix' to auto-remediate: %s", recoveryFile))
+			}
+		} else {
+			rep.report("Active Session Concurrency", "PASS", fmt.Sprintf("Recovery tracking active (%s)", recoveryFile))
+		}
 	} else {
 		rep.report("Active Session Concurrency", "PASS", "Idle (No lingering transactions or lockouts)")
 	}

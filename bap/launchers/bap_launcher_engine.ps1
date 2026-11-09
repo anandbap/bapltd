@@ -700,10 +700,12 @@ function Invoke-BapGovernedSession {
     $ParentPidArg = 0
     $ParentTicksArg = [int64]0
     $UserPrompt = $env:BAP_USER_PROMPT
+    $AutoFix = $false
     $ForwardArgs = @()
 
     for ($i = 0; $i -lt $ScriptRawArgs.Count; $i++) {
         $a = [string]$ScriptRawArgs[$i]
+        if ($a -eq '--fix' -or $a -eq '-Fix' -or $a -eq '/fix') { $AutoFix = $true; continue }
         if ($a -eq '--bap-watchdog') { $Mode = 'Watchdog'; continue }
         if ($a -eq '--bap-manifest') { $i++; $ManifestArg = [string]$ScriptRawArgs[$i]; continue }
         if ($a -eq '--bap-mutex') { $i++; $MutexArg = [string]$ScriptRawArgs[$i]; continue }

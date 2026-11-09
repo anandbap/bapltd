@@ -127,6 +127,11 @@ jobs:
             (cd bap-controlplane && go build -trimpath -ldflags "-s -w -X bap-controlplane/pkg/version.Version=${SEMVER} -X bap-controlplane/pkg/version.GitCommit=${GIT_COMMIT} -X bap-controlplane/pkg/version.BuildDate=${BUILD_DATE} -X bap-controlplane/pkg/version.Environment=prod" -o "../$DIST_DIR/bapdashboard${{ matrix.target.ext }}" ./cmd/dashboard || true)
           fi
 
+          if [ -d "cchook" ]; then
+            echo "Compiling cchook interceptor..."
+            (cd cchook && go build -trimpath -ldflags "-s -w -X 'main.AllowDevOverrides=false'" -o "../$DIST_DIR/interceptor${{ matrix.target.ext }}" . || true)
+          fi
+
       # -----------------------------------------------------------------------
       # Code Signing
       # -----------------------------------------------------------------------

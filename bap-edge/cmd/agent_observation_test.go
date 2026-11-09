@@ -226,3 +226,73 @@ func TestMultiAgentObservationRecognition(t *testing.T) {
 		}
 	}
 }
+
+func TestParentLauncherAncestryAdoptsNativeSession(t *testing.T) {
+	t.Setenv("BAP_STATE_DIR", t.TempDir())
+	state.ResetForTesting()
+	t.Cleanup(state.ResetForTesting)
+	log := filepath.Join(t.TempDir(), "observations.jsonl")
+	t.Setenv("BAP_AUDIT_LOG", log)
+	s, _ := NewDaemonServer("off", 0)
+
+	// Simulate launcher wrapper: pwsh.exe (PID 31000) spawns cmd.exe (PID 31001) spawns claude.exe (PID 31002)
+	launcher := agentProcess{PID: 31000, ParentPID: 1, Name: "pwsh.exe"}
+	shim := agentProcess{PID: 31001, ParentPID: 31000, Name: "cmd.exe"}
+	claude := agentProcess{PID: 31002, ParentPID: 31001, Name: "claude.exe", Birth: "claude-birth"}
+	processes := []agentProcess{launcher, shim, claude}
+
+	// Native marker was registered by the launcher pwsh.exe for PID 31000
+	_ = os.MkdirAll(state.SessionsDir(), 0700)
+	nativeMarker := map[string]any{
+		"session_id": "sess-claude-launcher-owned",
+		"server_url": "off",
+		"pid":        31000,
+		"app_id":     "claude-code",
+	}
+	markerBytes, _ := json.Marshal(nativeMarker)
+	_ = os.WriteFile(sessionPIDMarkerPath(31000), markerBytes, 0600)
+
+	s.reconcileObservedProcesses(processes, "installation-workstation")
+
+	// The daemon must have adopted the launcher's native session and suppressed the shadow session
+	if len(s.sessions) != 1 {
+		t.Fatalf("expected exactly 1 session, got %d: %+v", len(s.sessions), s.sessions)
+	}
+	if sess, ok := s.sessions["sess-claude-launcher-owned"]; !ok || sess.ReportingLayer != "launcher" {
+		t.Fatalf("expected native session adopted with reporting_layer=launcher, got %+v", s.sessions)
+	}
+
+	// No Shadow IT presence entry should be written to the audit log
+	if entries, err := audit.ReadEntries(log); err == nil && len(entries) > 0 {
+		t.Fatalf("expected no shadow IT audit presence entries, got %d: %+v", len(entries), entries)
+	}
+}
+
+func TestIsDescendantOf(t *testing.T) {
+	byPID := map[int]agentProcess{
+		10: {PID: 10, ParentPID: 1, Name: "init"},
+		20: {PID: 20, ParentPID: 10, Name: "pwsh.exe"},
+		30: {PID: 30, ParentPID: 20, Name: "cmd.exe"},
+		40: {PID: 40, ParentPID: 30, Name: "claude.exe"},
+		50: {PID: 50, ParentPID: 50, Name: "self-loop"},
+	}
+
+	if !isDescendantOf(40, 20, byPID) {
+		t.Fatal("expected PID 40 to be descendant of PID 20")
+	}
+	if !isDescendantOf(40, 10, byPID) {
+		t.Fatal("expected PID 40 to be descendant of PID 10")
+	}
+	if isDescendantOf(20, 40, byPID) {
+		t.Fatal("expected ancestor PID 20 NOT to be descendant of child PID 40")
+	}
+	if isDescendantOf(20, 20, byPID) {
+		t.Fatal("expected same PID NOT to be descendant of itself")
+	}
+	if isDescendantOf(50, 10, byPID) {
+		t.Fatal("expected loop process NOT to match unrelated ancestor")
+	}
+	if isDescendantOf(-1, 20, byPID) || isDescendantOf(40, -1, byPID) {
+		t.Fatal("invalid PIDs must return false")
+	}
+}

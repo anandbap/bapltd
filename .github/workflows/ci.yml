@@ -111,6 +111,8 @@ jobs:
           name: bap-windows-amd64-executables
           path: |
             bapedge.exe
+            bap.exe
+            interceptor.exe
             bapcontrolplane.exe
             bapdashboard.exe
             bapgateway.exe

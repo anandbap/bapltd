@@ -86,6 +86,7 @@ function Safe-Copy($src, $dst) {
 
 # 5. Rotate and update root binaries
 Safe-Copy "bap-edge\bapedge.exe" "bapedge.exe"
+Safe-Copy "bap-edge\bapedge.exe" "bap.exe"
 Safe-Copy "bap-edge\bapedge.exe" "bapmcp.exe"
 Safe-Copy "bap-edge\bapedge.exe" "ltd-agent.exe"
 Safe-Copy "bap-controlplane\bapcontrolplane.exe" "bapcontrolplane.exe"

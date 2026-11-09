@@ -528,18 +528,15 @@ func TestScenario3Commands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create authorizer: %v", err)
 	}
-	ws := `C:\Users\User\pyprj\bapltd`
-	prodCluster := `C:\Users\User\pyprj\prod-cluster`
-	prodClusterConfig := `C:\Users\User\pyprj\prod-cluster\config.json`
-	cmd3 := `$p = Join-Path (Resolve-Path ..).Path 'prod-cluster'; New-Item -ItemType Directory -Path $p | Out-Null; '{"cluster": "prod-east", "db": "postgres"}' | Set-Content -Path "$p\config.json" -Encoding ascii; Get-Content "$p\config.json"`
+	tempBase := t.TempDir()
+	ws := filepath.Join(tempBase, "bapltd")
+	prodCluster := filepath.Join(tempBase, "prod-cluster")
+	prodClusterConfig := filepath.Join(prodCluster, "config.json")
+	_ = os.MkdirAll(ws, 0755)
+	_ = os.MkdirAll(prodCluster, 0755)
 
+	cmd3 := `$p = Join-Path (Resolve-Path ..).Path 'prod-cluster'; New-Item -ItemType Directory -Path $p | Out-Null; '{"cluster": "prod-east", "db": "postgres"}' | Set-Content -Path "$p\config.json" -Encoding ascii; Get-Content "$p\config.json"`
 	if runtime.GOOS != "windows" {
-		tempBase := t.TempDir()
-		ws = filepath.Join(tempBase, "bapltd")
-		prodCluster = filepath.Join(tempBase, "prod-cluster")
-		prodClusterConfig = filepath.Join(prodCluster, "config.json")
-		_ = os.MkdirAll(ws, 0755)
-		_ = os.MkdirAll(prodCluster, 0755)
 		cmd3 = `$p = Join-Path (Resolve-Path ..).Path 'prod-cluster'; New-Item -ItemType Directory -Path $p | Out-Null; '{"cluster": "prod-east", "db": "postgres"}' | Set-Content -Path "$p/config.json" -Encoding ascii; Get-Content "$p/config.json"`
 	}
 

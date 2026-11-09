@@ -1,11 +1,16 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"bap-edge/internal/state"
 )
 
 func TestRunSetup(t *testing.T) {
@@ -152,4 +157,46 @@ func TestPerformSweep(t *testing.T) {
 		t.Fatalf("PerformSweep failed: %v", err)
 	}
 	_ = res
+}
+
+func TestRunStatus_UnmonitoredSessionWithHooksDisabled(t *testing.T) {
+	t.Setenv("BAP_STATE_DIR", t.TempDir())
+	state.ResetForTesting()
+	t.Cleanup(state.ResetForTesting)
+
+	sDir := state.SessionsDir()
+	markerPath := filepath.Join(sDir, "sess-unmonitored-test.json")
+	marker := map[string]any{
+		"session_id":      "sess-claude-unmonitored-1",
+		"app_id":          "claude-code",
+		"pid":             os.Getpid(),
+		"hooks_disabled":  true,
+		"reporting_layer": "unmonitored",
+		"started_at":      time.Now(),
+	}
+	markerBytes, _ := json.Marshal(marker)
+	_ = os.WriteFile(markerPath, markerBytes, 0600)
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := RunStatus([]string{})
+	w.Close()
+	os.Stdout = oldStdout
+
+	if err != nil {
+		t.Fatalf("RunStatus failed: %v", err)
+	}
+
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	out := buf.String()
+
+	if !strings.Contains(out, "ACTIVE (UNMONITORED)") && !strings.Contains(out, "Hooks Disabled") {
+		t.Fatalf("expected status output to show unmonitored / hooks disabled session, got:\n%s", out)
+	}
+	if strings.Contains(out, "Active (Verified)") {
+		t.Fatalf("unmonitored session must not be labeled 'Active (Verified)', got:\n%s", out)
+	}
 }

@@ -2725,6 +2725,25 @@ func main() {
 		activeCallerAppID = payload.AppID
 	}
 
+	// 1.5 Operator Hook Disabling Override (Internal BAP Engineering Builds Only)
+	hookDisabledEnv := false
+	if hookEnv := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_HOOKS"))); hookEnv == "false" || hookEnv == "off" || hookEnv == "0" {
+		hookDisabledEnv = true
+	} else if disEnv := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_DISABLE_HOOKS"))); disEnv == "1" || disEnv == "true" {
+		hookDisabledEnv = true
+	} else if modeEnv := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_MODE"))); modeEnv == "disabled" || modeEnv == "off" {
+		hookDisabledEnv = true
+	}
+
+	if hookDisabledEnv {
+		if !strings.EqualFold(strings.TrimSpace(AllowDevOverrides), "true") {
+			fmt.Fprintln(os.Stderr, "[BAP ZERO-TRUST SECURITY ERROR] Hook disabling flags ('BAP_HOOKS=false', 'BAP_MODE=disabled') are strictly disabled in Enterprise Production builds. Full governance remains active.")
+		} else {
+			outputDecision("allow", "BAP hooks disabled via internal dev override", "Hooks disabled for internal BAP development")
+			return
+		}
+	}
+
 	// Normalize Antigravity fields if present
 	if payload.ConversationID != "" && payload.SessionID == "" {
 		payload.SessionID = payload.ConversationID

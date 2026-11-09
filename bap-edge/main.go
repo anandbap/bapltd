@@ -179,7 +179,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error running Codex: %v\n", err)
 			os.Exit(1)
 		}
-	case "review", "sessions":
+	case "review", "review-session", "review-sessions", "sessions":
 		if err := cmd.RunReview(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error running review: %v\n", err)
 			os.Exit(1)

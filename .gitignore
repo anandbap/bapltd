@@ -28,7 +28,7 @@ credentials.json
 .env.local
 .env.*.local
 test-repo-bare.git/
-
+.claude
 # ==============================================================================
 # Accidental Shell Redirection Artifacts & Console Tokens (CMD/PowerShell)
 # ==============================================================================

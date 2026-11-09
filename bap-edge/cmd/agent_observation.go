@@ -67,6 +67,25 @@ func findRootAgentProcess(p agentProcess, byPID map[int]agentProcess) agentProce
 	return curr
 }
 
+// isDescendantOf checks if childPID is a descendant of ancestorPID using the process table.
+func isDescendantOf(childPID, ancestorPID int, byPID map[int]agentProcess) bool {
+	if childPID <= 0 || ancestorPID <= 0 || childPID == ancestorPID {
+		return false
+	}
+	curr := childPID
+	for depth := 0; depth < 16; depth++ {
+		p, ok := byPID[curr]
+		if !ok || p.ParentPID <= 0 || p.ParentPID == curr {
+			break
+		}
+		if p.ParentPID == ancestorPID {
+			return true
+		}
+		curr = p.ParentPID
+	}
+	return false
+}
+
 // Process metadata only: never read an agent's environment, memory or transcript.
 type agentProcess struct {
 	PID, ParentPID int
@@ -150,6 +169,7 @@ func (s *DaemonServer) reconcileObservedProcesses(processes []agentProcess, host
 		ServerURL string `json:"server_url"`
 		Birth     string `json:"process_birth"`
 		PID       int    `json:"pid"`
+		AppID     string `json:"app_id"`
 	}
 
 	checkNativeMarker := func(pid int, expectedBirth string) (nativeSessionInfo, bool) {
@@ -165,7 +185,7 @@ func (s *DaemonServer) reconcileObservedProcesses(processes []agentProcess, host
 				if native.ServerURL != "" && strings.TrimRight(native.ServerURL, "/") != strings.TrimRight(s.state.ServerURL, "/") {
 					continue
 				}
-				if native.Birth != "" && native.Birth != expectedBirth {
+				if native.Birth != "" && expectedBirth != "" && native.Birth != expectedBirth {
 					continue
 				}
 				return native, true
@@ -174,19 +194,88 @@ func (s *DaemonServer) reconcileObservedProcesses(processes []agentProcess, host
 		return nativeSessionInfo{}, false
 	}
 
+	// Also load active native sessions from SessionsDir to cross-check workload trees
+	// against native sessions whose PID is an ancestor wrapper or launcher process.
+	var activeNativeSessions []nativeSessionInfo
+	dirs := []string{state.SessionsDir(), filepath.Join(".bap", "sessions")}
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || strings.HasPrefix(entry.Name(), "pid-") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+			if err != nil {
+				continue
+			}
+			var nat nativeSessionInfo
+			if json.Unmarshal(data, &nat) == nil && nat.SessionID != "" && nat.PID > 0 {
+				if nat.ServerURL != "" && strings.TrimRight(nat.ServerURL, "/") != strings.TrimRight(s.state.ServerURL, "/") {
+					continue
+				}
+				activeNativeSessions = append(activeNativeSessions, nat)
+			}
+		}
+	}
+
 	for _, tree := range treesByRootPID {
 		id := observedSessionID(host, tree.root)
 		if id == "" {
 			continue
 		}
 
-		// Check if any process in the tree matches a native session marker
+		// Check if any process in the tree matches a native session marker or has an ancestor launcher
 		var adoptedNative *nativeSessionInfo
 		for _, pid := range tree.pids {
 			pObj := byPID[pid]
 			if native, ok := checkNativeMarker(pid, pObj.Birth); ok {
 				adoptedNative = &native
 				break
+			}
+			// Walk parent hierarchy to find launcher/wrapper that registered the native session
+			currPID := pid
+			for depth := 0; depth < 16; depth++ {
+				p, ok := byPID[currPID]
+				if !ok || p.ParentPID <= 0 || p.ParentPID == currPID {
+					break
+				}
+				parentProcess, pExists := byPID[p.ParentPID]
+				parentBirth := ""
+				if pExists {
+					parentBirth = parentProcess.Birth
+				}
+				if native, ok := checkNativeMarker(p.ParentPID, parentBirth); ok {
+					if native.AppID == "" || strings.EqualFold(native.AppID, agentApp(tree.root.Name)) {
+						adoptedNative = &native
+						break
+					}
+				}
+				currPID = p.ParentPID
+			}
+			if adoptedNative != nil {
+				break
+			}
+		}
+
+		if adoptedNative == nil {
+			// Cross-check against active native sessions in SessionsDir
+			for _, nSess := range activeNativeSessions {
+				if nSess.AppID == "" || strings.EqualFold(nSess.AppID, agentApp(tree.root.Name)) {
+					matches := false
+					for _, pid := range tree.pids {
+						if pid == nSess.PID || isDescendantOf(pid, nSess.PID, byPID) {
+							matches = true
+							break
+						}
+					}
+					if matches {
+						adoptedNative = &nSess
+						break
+					}
+				}
 			}
 		}
 
@@ -208,7 +297,7 @@ func (s *DaemonServer) reconcileObservedProcesses(processes []agentProcess, host
 		already := false
 		for _, attached := range s.sessions {
 			for _, pid := range tree.pids {
-				if attached.PID == pid && attached.SessionID != id && attached.ReportingLayer != "discovery" {
+				if (attached.PID == pid || isDescendantOf(pid, attached.PID, byPID)) && attached.SessionID != id && attached.ReportingLayer != "discovery" {
 					already = true
 					break
 				}

@@ -169,6 +169,7 @@ func RunStatus(args []string) error {
 	serverFlag := fs.String("server", "", "Central BAP control plane URL")
 	jsonFlag := fs.Bool("json", false, "Output status in JSON format")
 	noSweepFlag := fs.Bool("no-sweep", false, "Disable automatic sweep and flush of pending spool")
+	fixFlag := fs.Bool("fix", false, "Force automatic self-healing, stale state purge, and recovery archive")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -481,6 +482,7 @@ func RunStatus(args []string) error {
 				PID            int       `json:"pid"`
 				AppID          string    `json:"app_id"`
 				ReportingLayer string    `json:"reporting_layer"`
+				HooksDisabled  bool      `json:"hooks_disabled"`
 				PromptCount    int       `json:"prompt_count"`
 				UserPrompt     string    `json:"user_prompt"`
 				StartedAt      time.Time `json:"started_at"`
@@ -495,12 +497,17 @@ func RunStatus(args []string) error {
 				if !alive {
 					statusStr = "ORPHANED/STALE (Process Dead)"
 					staleCount++
+				} else if sInfo.HooksDisabled || sInfo.ReportingLayer == "unmonitored" {
+					statusStr = "ACTIVE (UNMONITORED)"
+					activeCount++
 				} else {
 					activeCount++
 				}
 				age := time.Since(sInfo.StartedAt).Round(time.Second)
 				pluginLabel := "Active"
-				if pRec, ok := pluginByApp[strings.ToLower(sInfo.AppID)]; ok && pRec.PluginInstalled {
+				if sInfo.HooksDisabled || sInfo.ReportingLayer == "unmonitored" {
+					pluginLabel = "Hooks Disabled (Unmonitored)"
+				} else if pRec, ok := pluginByApp[strings.ToLower(sInfo.AppID)]; ok && pRec.PluginInstalled {
 					if pRec.EnforcementVerified {
 						pluginLabel = "Active (Verified)"
 					} else {
@@ -549,15 +556,28 @@ func RunStatus(args []string) error {
 						if dSess.SessionID == "" || seenSessionIDs[dSess.SessionID] {
 							continue
 						}
-						seenSessionIDs[dSess.SessionID] = true
 						alive := isProcessAlive(dSess.PID)
-						statusStr := "ACTIVE"
 						if !alive {
-							statusStr = "ORPHANED/STALE (Process Dead)"
-							staleCount++
-						} else {
-							activeCount++
+							continue
 						}
+						// Suppress duplicate Shadow IT observed sessions when an active native session
+						// for this application is already present in sessionList.
+						if strings.HasPrefix(dSess.SessionID, "observed-") {
+							isGoverned := false
+							for _, nativeS := range sessionList {
+								if !strings.HasPrefix(nativeS.SessionID, "observed-") &&
+									(nativeS.Status == "ACTIVE" || strings.HasPrefix(nativeS.Status, "ACTIVE")) &&
+									strings.EqualFold(nativeS.AppID, dSess.AppID) {
+									isGoverned = true
+									break
+								}
+							}
+							if isGoverned {
+								continue
+							}
+						}
+						seenSessionIDs[dSess.SessionID] = true
+						activeCount++
 						pluginLabel := "Discovery Observed (Shadow IT)"
 						if dSess.ReportingLayer != "" && dSess.ReportingLayer != "discovery" {
 							pluginLabel = dSess.ReportingLayer
@@ -567,7 +587,7 @@ func RunStatus(args []string) error {
 							SessionID:   dSess.SessionID,
 							AppID:       dSess.AppID,
 							PID:         dSess.PID,
-							Status:      statusStr,
+							Status:      "ACTIVE",
 							Uptime:      age.String(),
 							Plugin:      pluginLabel,
 							PromptCount: 0,
@@ -599,7 +619,8 @@ func RunStatus(args []string) error {
 				}
 				already := false
 				for _, sess := range sessionList {
-					if sess.PID == root.PID {
+					if sess.PID == root.PID || isDescendantOf(root.PID, sess.PID, byPID) ||
+						(sess.Status == "ACTIVE" && !strings.HasPrefix(sess.SessionID, "observed-") && strings.EqualFold(sess.AppID, agentApp(root.Name))) {
 						already = true
 						break
 					}
@@ -710,11 +731,11 @@ func RunStatus(args []string) error {
 	// Status should auto-trigger sweep ONLY when no other bap-edge is actively running,
 	// unless that other instance is unresponsive / dead.
 	otherStatus := CheckOtherBapEdgeInstances()
-	canAutoSync := !*noSweepFlag && cpConnected && (!otherStatus.OtherRunning || otherStatus.Unresponsive)
+	canAutoSync := (*fixFlag || (!*noSweepFlag && cpConnected)) && (!otherStatus.OtherRunning || otherStatus.Unresponsive)
 	autoSweepTriggered := false
 	var autoSweepResult SweepResult
 
-	if canAutoSync && (totalLogged > 0 || staleCount > 0) {
+	if (canAutoSync && (totalLogged > 0 || staleCount > 0)) || *fixFlag {
 		autoSweepResult, _ = PerformSweep(serverURL, false)
 		autoSweepTriggered = true
 

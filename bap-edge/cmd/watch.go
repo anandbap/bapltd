@@ -21,6 +21,7 @@ import (
 	"bap-edge/internal/config"
 	"bap-edge/internal/fim"
 	"bap-edge/internal/state"
+	"bap-edge/pkg/version"
 )
 
 var isSpoolFlushRunning atomic.Bool
@@ -72,9 +73,25 @@ func RunSessionStart(args []string) error {
 	instanceFlag := fs.String("instance-id", "", "Agent instance ID (default: enrolled identity or host-derived)")
 	pidFlag := fs.Int("pid", 0, "Target process ID to watch (default: parent PID)")
 	promptFlag := fs.String("prompt", "", "Initial user prompt")
+	hooksDisabledFlag := fs.Bool("hooks-disabled", false, "Start session in unmonitored mode with hooks disabled")
 
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	hooksDisabled := *hooksDisabledFlag
+	if !hooksDisabled {
+		if envVal := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_HOOKS"))); envVal == "false" || envVal == "off" || envVal == "0" {
+			hooksDisabled = true
+		} else if disVal := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_DISABLE_HOOKS"))); disVal == "1" || disVal == "true" {
+			hooksDisabled = true
+		} else if modeVal := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_MODE"))); modeVal == "disabled" || modeVal == "off" {
+			hooksDisabled = true
+		}
+	}
+	if hooksDisabled && !version.DevOverridesAllowed() {
+		fmt.Fprintf(os.Stderr, "[BAP ZERO-TRUST SECURITY WARNING] Dev-override and hook bypass flags ('--hooks-disabled', 'BAP_HOOKS=false') are disabled in Enterprise Production builds. Full governance remains active.\n")
+		hooksDisabled = false
 	}
 
 	watchPID := *pidFlag
@@ -167,17 +184,24 @@ func RunSessionStart(args []string) error {
 
 	sessionSVID := fmt.Sprintf("spiffe://bap.internal/workstation/%s/session/%s", instanceID, sessionID)
 
+	reportingLayer := "plugin"
+	if hooksDisabled {
+		reportingLayer = "unmonitored"
+	}
+
 	// 2. Pre-flight check with Central Control Plane
 	startPayload := map[string]any{
-		"session_id":   sessionID,
-		"app_id":       *appFlag,
-		"instance_id":  instanceID,
-		"resource_id":  instanceID,
-		"user_id":      username,
-		"hostname":     hostname,
-		"client_pid":   watchPID,
-		"user_prompt":  initialPrompt,
-		"session_svid": sessionSVID,
+		"session_id":      sessionID,
+		"app_id":          *appFlag,
+		"instance_id":     instanceID,
+		"resource_id":     instanceID,
+		"user_id":         username,
+		"hostname":        hostname,
+		"client_pid":      watchPID,
+		"user_prompt":     initialPrompt,
+		"session_svid":    sessionSVID,
+		"reporting_layer": reportingLayer,
+		"hooks_disabled":  hooksDisabled,
 	}
 	if credEmail != "" && credEmail != "NA" {
 		startPayload["user_email"] = credEmail
@@ -472,19 +496,32 @@ func writeSessionMarker(sessionID, serverURL, appID, username, hostname, initial
 	if strings.TrimSpace(initialPrompt) != "" {
 		promptCount = 1
 	}
+	hooksDisabled := false
+	if envVal := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_HOOKS"))); envVal == "false" || envVal == "off" || envVal == "0" {
+		hooksDisabled = true
+	} else if disVal := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_DISABLE_HOOKS"))); disVal == "1" || disVal == "true" {
+		hooksDisabled = true
+	} else if modeVal := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_MODE"))); modeVal == "disabled" || modeVal == "off" {
+		hooksDisabled = true
+	}
+	reportingLayer := "plugin"
+	if hooksDisabled {
+		reportingLayer = "unmonitored"
+	}
 	marker := map[string]any{
-		"process_birth": processBirth(watchPID),
-		"session_id":    sessionID,
-		"instance_id":   instID,
-		"server_url":    serverURL,
-		"pid":           watchPID,
-		"app_id":        appID,
-		"user":          username,
-		"hostname":      hostname,
-		"user_prompt":   initialPrompt,
-		"prompt_count":  promptCount,
-		"reporting_layer": "plugin",
-		"started_at":    time.Now().UTC(),
+		"process_birth":   processBirth(watchPID),
+		"session_id":      sessionID,
+		"instance_id":     instID,
+		"server_url":      serverURL,
+		"pid":             watchPID,
+		"app_id":          appID,
+		"user":            username,
+		"hostname":        hostname,
+		"user_prompt":     initialPrompt,
+		"prompt_count":    promptCount,
+		"reporting_layer": reportingLayer,
+		"hooks_disabled":  hooksDisabled,
+		"started_at":      time.Now().UTC(),
 	}
 	if data, err := json.MarshalIndent(marker, "", "  "); err == nil {
 		// 1. Write per-session isolated marker

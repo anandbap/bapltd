@@ -21,7 +21,9 @@ param(
 
     [int]$Limit = 10,
 
-    [switch]$NonInteractive
+    [switch]$NonInteractive,
+
+    [switch]$Fix
 )
 
 $ErrorActionPreference = 'Stop'
@@ -336,6 +338,60 @@ if ($script:activeLedgers.Count -eq 0) {
     Write-Host "`n[!] No BAP audit ledger found. Have you executed any governed agent sessions?" -ForegroundColor Red
     Write-Host "    Expected locations: .bapstate\audit.jsonl or %USERPROFILE%\.bapstate\audit.jsonl`n" -ForegroundColor Gray
     exit 0
+}
+
+if ($Fix) {
+    Write-Host "[*] Explicit --fix requested. Performing audit reconciliation and self-healing..." -ForegroundColor Cyan
+    $spoolDirs = @(
+        (Join-Path (Get-Location) ".bapstate\hook-evidence"),
+        (Join-Path $env:USERPROFILE ".bapstate\hook-evidence")
+    )
+    $drained = 0
+    foreach ($sd in $spoolDirs) {
+        try {
+            if (Test-Path -LiteralPath $sd -ErrorAction SilentlyContinue) {
+                $files = Get-ChildItem -Path $sd -Filter "*.json" -ErrorAction SilentlyContinue
+                foreach ($f in $files) {
+                    try {
+                        $jsonText = [System.IO.File]::ReadAllText($f.FullName)
+                        if ($script:activeLedgers.Count -gt 0) {
+                            [System.IO.File]::AppendAllText($script:activeLedgers[0], "`n" + $jsonText.Trim())
+                            Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue
+                            $drained++
+                        }
+                    } catch {}
+                }
+            }
+        } catch {}
+    }
+    $recDirs = @(
+        (Join-Path (Get-Location) ".bapstate"),
+        (Join-Path (Get-Location) ".claude"),
+        (Join-Path (Get-Location) ".codex")
+    )
+    $cleaned = 0
+    foreach ($rd in $recDirs) {
+        try {
+            if (Test-Path -LiteralPath $rd -ErrorAction SilentlyContinue) {
+                $recFiles = Get-ChildItem -Path $rd -Filter "*recovery*.json" -ErrorAction SilentlyContinue
+                foreach ($rf in $recFiles) {
+                    try {
+                        $recData = Get-Content -LiteralPath $rf.FullName -Raw | ConvertFrom-Json
+                        $alive = $false
+                        if ($recData.launcher_pid) {
+                            $p = Get-Process -Id ([int]$recData.launcher_pid) -ErrorAction SilentlyContinue
+                            if ($p -and -not $p.HasExited) { $alive = $true }
+                        }
+                        if (-not $alive) {
+                            Remove-Item -LiteralPath $rf.FullName -Force -ErrorAction SilentlyContinue
+                            $cleaned++
+                        }
+                    } catch {}
+                }
+            }
+        } catch {}
+    }
+    Write-Host "[+] Auto-remediation complete: $drained spool event(s) drained, $cleaned stale manifest(s) cleared.`n" -ForegroundColor Green
 }
 
 $sessionsDict = Load-SessionData -LedgerPaths $script:activeLedgers
