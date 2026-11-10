@@ -4869,3 +4869,43 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
 - **Unit Tests**:
   - `TestXargsAndModernDevToolsAuthorization` in `authorizer_test.go` (PASS).
   - All 104 asset copies verified in sync.
+
+
+#### Story BAP-834: Fundamental Alignment of Tier 1 Standard Governance (Inviolable Hard Gates & Unhindered In-Workspace Developer Execution) vs Tier 2 Strict Tool Enforcement
+- **Type**: Bug Fix / Architecture Alignment | **Points**: 8 | **Priority**: P0 - Highest | **Status**: `DONE`
+- **Description**:
+  Resolve fundamental developer friction and AI coding agent execution blocks in Tier 1 Standard Governance. Disentangle `BAP_ENFORCEMENT_MODE=enforce` from Tier 2 Strict Tool Enforcement. In Tier 1 Standard mode (the default across all workstations and coding agents), BAP strictly enforces inviolable security hard gates (secrets, tampering, cross-workspace mutations, raw exfiltration, revocation) while permitting native developer and agent tool execution inside the workspace boundary without Cedar default-deny AST allowlist bottlenecks.
+
+- **Root Causes**:
+  1. `cchook/interceptor.go` line 2813 evaluated `if modeEnv := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_ENFORCEMENT_MODE"))); modeEnv == "enforce" { return true }`, conflating enforcement mode (enforce vs audit/shadow) with Tier 2 Strict Tool Enforcement. Because enforcement mode was almost always `enforce`, Tier 1 was impossible to run in production, and every command was forced into Tier 2 strict allowlists and `bapedge exec` sandbox wrapping.
+  2. In `cchook/interceptor.go`, commands were subjected to `bapedge check` with Cedar's default-deny AST allowlist. When unlisted developer commands (`xargs cat`, `comm`, `wc`, `diff`, custom build scripts) did not match Policy 1, Cedar returned default-deny (`len(diag.Reasons) == 0`), which caused `cchook` to block Claude Code execution.
+  3. In `bap-edge/cmd/exec.go`, Cedar default-deny ("no permit policy matched") was treated as an unrecoverable failure for AI coding agents (`isAgentEnvironment` returned `non_interactive_deny`), causing agents to halt rather than executing safely inside the workspace.
+
+- **Key Changes**:
+  1. **Tier 1 & Enforcement Mode Decoupling**: Removed the erroneous `BAP_ENFORCEMENT_MODE=enforce` check in `cchook/interceptor.go`. Aligned `isStrictToolEnforcementMandated()` with `authz.IsStrictTierMandated()`, ensuring Tier 1 Standard is the true default everywhere unless explicitly commanded by `BAP_TIER=2`, `BAP_STRICT_TOOLS=true`, or Control Plane cached `policy-state.json`.
+  2. **Tier 1 Invariant Inviolability**: In `cchook/interceptor.go`, commands and file operations are pre-screened against the 5 inviolable security hard gates:
+     - Invariant 1: Credential Stores (`.env*`, `~/.aws*`, `~/.ssh*`, `id_rsa`, `id_ed25519`) -> HARD DENY.
+     - Invariant 2: Anti-Tamper (BAP configuration, policies, hooks, state, binaries) -> HARD DENY.
+     - Invariant 3: Workspace Containment (cross-folder mutations, file writes/deletes outside workspace root) -> HARD DENY (unless trusted / HITL approved).
+     - Invariant 4: Raw Network Exfiltration (`nc`, `netcat`, `socat`) -> HARD DENY.
+     - Invariant 5: Session Revocation -> HARD DENY.
+  3. **Tier 1 Native Execution**: When all invariants pass in Tier 1 Standard mode, commands execute natively with zero subshell wrapping, eliminating command mangling and developer latency.
+  4. **Cedar Invariant Classification**: Implemented `isCedarInvariantViolation()` in `bap-edge/cmd/exec.go` and `cchook/interceptor.go`. Differentiates between hard invariant violations (which explicitly name the violating policy, e.g. Policy 2, Policy 3, Policy 4, Policy 5) and standard Cedar default-deny ("no permit policy matched"). In Tier 1, in-workspace commands that do not violate any invariants are permitted under Tier 1 Standard governance.
+  5. **Agent Interactive Immunity**: Ensured coding agents (`claude`, `claude-code`, `antigravity`, `codex`, `opencode`, `copilot`) are never subjected to blocking interactive terminal HITL prompts.
+
+- **Acceptance Criteria**:
+  - `Given` a developer or AI coding agent running legitimate in-workspace commands (`xargs cat`, `gh run list --limit 3`, `find . -name '*.go' 2>/dev/null`, `wc -l`, etc.) in Tier 1 Standard Governance,
+  - `When` checked by `bapedge check` or `cchook`,
+  - `Then` execution is permitted natively without AST default-deny blocks or subshell wrapping.
+  - `Given` a command attempting to access sensitive credentials (`cat .env`), tamper with BAP assets (`cat evil > policy.cedar`), mutate files outside workspace root (`rm -rf /`), or perform raw exfiltration (`nc -l 4444`),
+  - `When` evaluated under Tier 1 or Tier 2,
+  - `Then` it is strictly and immutably denied by BAP security invariant hard gates.
+  - `Given` a Central Control Plane mandating Tier 2 Strict Tool Enforcement (`strict_tool_enforcement: true`),
+  - `When` evaluated,
+  - `Then` full Cedar AST allowlisting and broker-owned execution (`bapedge exec`) are enforced.
+
+- **Unit Tests**:
+  - `TestTier1VsTier2InvariantCheck` in `bap-edge/cmd/exec_tamper_test.go` (PASS).
+  - `TestIsStrictToolEnforcementMandated` in `cchook/unmonitored_hooks_test.go` (PASS).
+  - `node tests/test_v3_controls.cjs` (PASS).
+  - All 104 asset copies verified in sync.

@@ -62,3 +62,26 @@ func TestIsTamperingAttempt_RealTampering(t *testing.T) {
 		}
 	}
 }
+
+func TestTier1VsTier2InvariantCheck(t *testing.T) {
+	// In Tier 1, default deny reasons from Cedar (unlisted tools) do not count as invariant violations
+	defaultDenyReason := "Explicit deny or default deny (no permit policy matched)"
+	if isCedarInvariantViolation(defaultDenyReason) {
+		t.Errorf("expected Cedar default deny reason to NOT be classified as an invariant violation in Tier 1")
+	}
+
+	// Invariant violations (Policy 2, Policy 3, Policy 4, escapes_workspace, secrets) MUST be classified as invariant violations
+	invariantReasons := []string{
+		"Denial triggered by: policy policy2",
+		"Denial triggered by: policy policy3",
+		"Path escapes workspace boundary",
+		"Access to sensitive credential file .env is forbidden",
+		"Direct modification or tampering with BAP protected asset is forbidden",
+		"Raw socket/network exfiltration utility is forbidden",
+	}
+	for _, r := range invariantReasons {
+		if !isCedarInvariantViolation(r) {
+			t.Errorf("expected %q to be classified as an invariant violation", r)
+		}
+	}
+}

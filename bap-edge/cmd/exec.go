@@ -847,6 +847,25 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 	exitWithResponse(resp, code, ec.forceJSON, ec.forceRaw, isAgentEnvironment(ec.source))
 }
 
+// isCedarInvariantViolation determines if an authorization denial was caused by an inviolable
+// security invariant (secrets, tampering, workspace escape mutation, raw exfiltration)
+// vs a standard Cedar default-deny (unlisted tool in Policy 1).
+func isCedarInvariantViolation(reason string) bool {
+	r := strings.ToLower(reason)
+	if strings.Contains(r, "default deny") || strings.Contains(r, "no permit policy matched") {
+		return false
+	}
+	return strings.Contains(r, "policy") ||
+		strings.Contains(r, "escapes") ||
+		strings.Contains(r, "outside workspace") ||
+		strings.Contains(r, "secret") ||
+		strings.Contains(r, "credential") ||
+		strings.Contains(r, ".env") ||
+		strings.Contains(r, "tamper") ||
+		strings.Contains(r, "exfiltration") ||
+		strings.Contains(r, "protected")
+}
+
 // RunExec handles the 'exec' subcommand.
 func RunExec(args []string) {
 	startTime := time.Now().UTC()
@@ -1225,6 +1244,17 @@ func RunExec(args []string) {
 			Mode:    ec.enforcementMode,
 		}
 		ec.exit(resp, 1)
+	}
+
+	// In Tier 1 Standard Governance (default):
+	// Inviolable security invariants (secrets, tamper, out-of-workspace mutations, raw exfiltration)
+	// are strictly enforced. Standard in-workspace developer and agent commands that do not violate
+	// any invariants are permitted under Tier 1 native execution.
+	// Cedar default-deny ("no permit policy matched") is only enforced in Tier 2 Strict Tool Enforcement mode.
+	if !allowed && !authz.IsStrictTierMandated() {
+		if !isCedarInvariantViolation(reason) {
+			allowed = true
+		}
 	}
 
 	stepUpResult := ""

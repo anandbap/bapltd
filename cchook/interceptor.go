@@ -2791,6 +2791,25 @@ func isHooksDisabled() bool {
 	return false
 }
 
+// isCedarInvariantViolation determines if an authorization denial was caused by an inviolable
+// security invariant (secrets, tampering, workspace escape mutation, raw exfiltration)
+// vs a standard Cedar default-deny (unlisted tool in Policy 1).
+func isCedarInvariantViolation(reason string) bool {
+	r := strings.ToLower(reason)
+	if strings.Contains(r, "default deny") || strings.Contains(r, "no permit policy matched") {
+		return false
+	}
+	return strings.Contains(r, "policy") ||
+		strings.Contains(r, "escapes") ||
+		strings.Contains(r, "outside workspace") ||
+		strings.Contains(r, "secret") ||
+		strings.Contains(r, "credential") ||
+		strings.Contains(r, ".env") ||
+		strings.Contains(r, "tamper") ||
+		strings.Contains(r, "exfiltration") ||
+		strings.Contains(r, "protected")
+}
+
 // isStrictToolEnforcementMandated checks whether the Central Control Plane has commanded
 // Tier 2 Strict Tool Enforcement for this workload.
 // By default, Tier 1 (Standard Governance: Prompt-First Observability + Boundary Invariants)
@@ -2808,9 +2827,6 @@ func isStrictToolEnforcementMandated() bool {
 		return true
 	}
 	if strictEnv := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_STRICT_TOOLS"))); strictEnv == "true" || strictEnv == "1" {
-		return true
-	}
-	if modeEnv := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_ENFORCEMENT_MODE"))); modeEnv == "enforce" {
 		return true
 	}
 
@@ -3173,6 +3189,21 @@ func main() {
 	}
 	command = decodedCommand
 
+	// Invariant 1: Block credential access in commands
+	lowerCmd := strings.ToLower(filepath.ToSlash(command))
+	if strings.Contains(lowerCmd, ".env") || strings.Contains(lowerCmd, ".aws") || strings.Contains(lowerCmd, ".ssh") || strings.Contains(lowerCmd, "id_rsa") || strings.Contains(lowerCmd, "id_ed25519") {
+		outputDecision("deny", fmt.Sprintf("Security Invariant Violation: Direct access to sensitive credential store is strictly forbidden by policy in command: %s", command), "Sensitive credential file access blocked by BAP invariant policy")
+		return
+	}
+
+	// Invariant 4: Block raw network exfiltration utilities
+	for _, rawExfil := range []string{"nc ", "netcat ", "socat "} {
+		if strings.HasPrefix(lowerCmd, rawExfil) || strings.Contains(lowerCmd, " "+rawExfil) || strings.Contains(lowerCmd, "|"+rawExfil) || strings.Contains(lowerCmd, ";"+rawExfil) || strings.Contains(lowerCmd, "&"+rawExfil) {
+			outputDecision("deny", fmt.Sprintf("Security Invariant Violation: Raw socket/network exfiltration utility %q is strictly forbidden", strings.TrimSpace(rawExfil)), "Raw network exfiltration blocked by BAP invariant policy")
+			return
+		}
+	}
+
 	// The decoded payload—not the wrapper text—is subject to the same local
 	// invariants and Cedar decision as an original agent command.
 	if isTamper, tamperReason := isTamperingCommand(command); isTamper {
@@ -3370,6 +3401,17 @@ func main() {
 			outputDecision("allow", "", fmt.Sprintf("[BAP AUDIT MODE] Policy violation detected: %s. Execution permitted in audit mode.", execResp.Reason))
 			return
 		}
+
+		// In Tier 1 Standard mode, if the denial was solely due to Cedar default-deny (unlisted tool in Policy 1),
+		// rather than an Invariant violation (Policy 2: workspace escape, Policy 3: secret, Policy 4/6: tamper, Policy 5: exfiltration),
+		// permit native execution under Tier 1 Standard governance!
+		if !isStrictToolEnforcementMandated() {
+			if !isCedarInvariantViolation(execResp.Reason) {
+				outputDecision("allow", "", "Command authorized by BAP Cedar policy (Tier 1 Standard native execution)")
+				return
+			}
+		}
+
 		reason := execResp.Reason
 		if reason == "" {
 			reason = "Command execution denied by bapedge Cedar security policy"
