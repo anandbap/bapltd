@@ -582,13 +582,41 @@ func cleanupSessionMarker(sessionID string, watchPID int) {
 // cleanupStaleSessionMarkers scans .bapstate/sessions/ (and legacy .bap/sessions/) and removes orphaned markers for dead processes.
 func cleanupStaleSessionMarkers() {
 	searchDirs := []string{state.SessionsDir(), filepath.Join(".bap", "sessions")}
+
+	// 1. Build map of current active session per PID
+	activeSessionByPID := make(map[int]string)
 	for _, sessionsDir := range searchDirs {
 		entries, err := os.ReadDir(sessionsDir)
 		if err != nil {
 			continue
 		}
 		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			if !entry.IsDir() && strings.HasPrefix(entry.Name(), "pid-") && strings.HasSuffix(entry.Name(), ".json") {
+				path := filepath.Join(sessionsDir, entry.Name())
+				if data, err := os.ReadFile(path); err == nil {
+					var pInfo struct {
+						PID       int    `json:"pid"`
+						SessionID string `json:"session_id"`
+					}
+					if json.Unmarshal(data, &pInfo) == nil && pInfo.PID > 0 && pInfo.SessionID != "" {
+						if isProcessAlive(pInfo.PID) {
+							activeSessionByPID[pInfo.PID] = pInfo.SessionID
+						} else {
+							_ = os.Remove(path)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	for _, sessionsDir := range searchDirs {
+		entries, err := os.ReadDir(sessionsDir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || strings.HasPrefix(entry.Name(), "pid-") {
 				continue
 			}
 			path := filepath.Join(sessionsDir, entry.Name())
@@ -597,12 +625,32 @@ func cleanupStaleSessionMarkers() {
 				continue
 			}
 			var marker struct {
-				PID       int       `json:"pid"`
-				SessionID string    `json:"session_id"`
-				StartedAt time.Time `json:"started_at"`
+				PID          int       `json:"pid"`
+				SessionID    string    `json:"session_id"`
+				ProcessBirth string    `json:"process_birth"`
+				StartedAt    time.Time `json:"started_at"`
 			}
 			if err := json.Unmarshal(data, &marker); err == nil {
-				if marker.PID > 0 && !isProcessAlive(marker.PID) {
+				alive := marker.PID > 0 && isProcessAlive(marker.PID)
+				if alive && marker.ProcessBirth != "" && marker.PID > 0 {
+					curBirth := processBirth(marker.PID)
+					if curBirth != "" && curBirth != marker.ProcessBirth {
+						alive = false
+					}
+				}
+				superseded := false
+				if alive && marker.PID > 0 {
+					if activeSess, ok := activeSessionByPID[marker.PID]; ok && activeSess != marker.SessionID {
+						superseded = true
+					}
+				}
+				isTestSess := strings.Contains(strings.ToLower(marker.SessionID), "-test") ||
+					strings.HasPrefix(marker.SessionID, "sess-test") ||
+					strings.HasPrefix(marker.SessionID, "sess-bap200") ||
+					strings.HasPrefix(marker.SessionID, "sess-hitl")
+				expired := !IsWatcherAlive(marker.SessionID) && (isTestSess || time.Since(marker.StartedAt) > 15*time.Minute)
+
+				if !alive || superseded || expired {
 					_ = os.Remove(path)
 					if marker.SessionID != "" {
 						_ = os.Remove(sessionMarkerPath(marker.SessionID))
@@ -611,8 +659,10 @@ func cleanupStaleSessionMarkers() {
 						_ = os.Remove(filepath.Join(bapUserDir(), "watchers", sanitizeInstanceID(marker.SessionID)+".watcher"))
 						_ = os.Remove(watcherLivenessPath(marker.SessionID))
 					}
-					_ = os.Remove(sessionPIDMarkerPath(marker.PID))
-					_ = os.Remove(filepath.Join(".bap", "sessions", fmt.Sprintf("pid-%d.json", marker.PID)))
+					if marker.PID > 0 && !alive {
+						_ = os.Remove(sessionPIDMarkerPath(marker.PID))
+						_ = os.Remove(filepath.Join(".bap", "sessions", fmt.Sprintf("pid-%d.json", marker.PID)))
+					}
 				}
 			}
 		}

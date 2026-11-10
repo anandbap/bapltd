@@ -282,6 +282,11 @@ func (s *DaemonServer) reconcileObservedProcesses(processes []agentProcess, host
 		if adoptedNative != nil {
 			s.mu.Lock()
 			delete(s.sessions, id)
+			for sid, existing := range s.sessions {
+				if existing.PID == tree.root.PID && sid != adoptedNative.SessionID {
+					delete(s.sessions, sid)
+				}
+			}
 			s.sessions[adoptedNative.SessionID] = AttachedSession{
 				SessionID:      adoptedNative.SessionID,
 				AppID:          agentApp(tree.root.Name),

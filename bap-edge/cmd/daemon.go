@@ -555,7 +555,12 @@ func (s *DaemonServer) runSessionReconcileWorker(ctx context.Context) {
 		case <-ticker.C:
 			s.mu.Lock()
 			for sid, sess := range s.sessions {
-				if !isProcessAlive(sess.PID) {
+				alive := isProcessAlive(sess.PID)
+				isTest := strings.Contains(strings.ToLower(sid), "-test") ||
+					strings.HasPrefix(sid, "sess-test") ||
+					strings.HasPrefix(sid, "sess-bap200") ||
+					strings.HasPrefix(sid, "sess-hitl")
+				if !alive || isTest {
 					delete(s.sessions, sid)
 					_ = os.Remove(sessionMarkerPath(sid))
 				}

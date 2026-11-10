@@ -13,6 +13,8 @@ Verifies:
 import os
 import sys
 import json
+import shutil
+import tempfile
 import time
 import unittest
 import subprocess
@@ -23,6 +25,17 @@ CCHOOK_BIN = os.path.join(REPO_ROOT, "cchook", "interceptor.exe")
 
 
 class TestHitlAndSupplyChain(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.test_state_dir = tempfile.mkdtemp(prefix="bap-test-hitl-")
+        os.environ["BAP_STATE_DIR"] = cls.test_state_dir
+
+    @classmethod
+    def tearDownClass(cls):
+        if os.environ.get("BAP_STATE_DIR") == cls.test_state_dir:
+            os.environ.pop("BAP_STATE_DIR", None)
+        shutil.rmtree(cls.test_state_dir, ignore_errors=True)
+
     def setUp(self):
         self.session_id = f"sess-hitl-{self._testMethodName}"
         self.env = os.environ.copy()

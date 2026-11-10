@@ -17,8 +17,10 @@ Verifies:
 import base64
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 
@@ -78,6 +80,17 @@ def run_bapedge(args: list, env=None) -> tuple[int, dict, str]:
 
 
 class TestBAP200SoleExecutor(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.test_state_dir = tempfile.mkdtemp(prefix="bap-test-bap200-")
+        os.environ["BAP_STATE_DIR"] = cls.test_state_dir
+
+    @classmethod
+    def tearDownClass(cls):
+        if os.environ.get("BAP_STATE_DIR") == cls.test_state_dir:
+            os.environ.pop("BAP_STATE_DIR", None)
+        shutil.rmtree(cls.test_state_dir, ignore_errors=True)
 
     def setUp(self):
         self.assertTrue(os.path.isfile(BAPEDGE_BIN), f"bapedge.exe missing at {BAPEDGE_BIN}")

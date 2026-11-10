@@ -16,8 +16,10 @@ Run locally in <3s:
 
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 
 WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -64,6 +66,17 @@ def invoke_hook(payload: dict, env_overrides: dict = None) -> dict:
 
 class TestMultiAgentLifecycleMatrix(unittest.TestCase):
     """Scenario tests verifying multi-agent lifecycle hook invariant contracts."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.test_state_dir = tempfile.mkdtemp(prefix="bap-test-matrix-")
+        os.environ["BAP_STATE_DIR"] = cls.test_state_dir
+
+    @classmethod
+    def tearDownClass(cls):
+        if os.environ.get("BAP_STATE_DIR") == cls.test_state_dir:
+            os.environ.pop("BAP_STATE_DIR", None)
+        shutil.rmtree(cls.test_state_dir, ignore_errors=True)
 
     def test_claude_lifecycle_session_start(self):
         """Verify Claude Code SessionStart contract preserves status: ok and continue: true."""

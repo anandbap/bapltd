@@ -509,6 +509,28 @@ func RunStatus(args []string) error {
 	}
 	var sessionList []sessionDetail
 
+	// Build map of current active session per PID from all pid-*.json markers
+	activeSessionByPID := make(map[int]string)
+	for _, sDir := range sessionDirs {
+		entries, _ := os.ReadDir(sDir)
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.HasPrefix(entry.Name(), "pid-") && strings.HasSuffix(entry.Name(), ".json") {
+				path := filepath.Join(sDir, entry.Name())
+				if data, err := os.ReadFile(path); err == nil {
+					var pInfo struct {
+						PID       int    `json:"pid"`
+						SessionID string `json:"session_id"`
+					}
+					if json.Unmarshal(data, &pInfo) == nil && pInfo.PID > 0 && pInfo.SessionID != "" {
+						if isProcessAlive(pInfo.PID) {
+							activeSessionByPID[pInfo.PID] = pInfo.SessionID
+						}
+					}
+				}
+			}
+		}
+	}
+
 	for _, sDir := range sessionDirs {
 		entries, _ := os.ReadDir(sDir)
 		for _, entry := range entries {
@@ -523,6 +545,7 @@ func RunStatus(args []string) error {
 			var sInfo struct {
 				SessionID      string    `json:"session_id"`
 				PID            int       `json:"pid"`
+				ProcessBirth   string    `json:"process_birth"`
 				AppID          string    `json:"app_id"`
 				ReportingLayer string    `json:"reporting_layer"`
 				HooksDisabled  bool      `json:"hooks_disabled"`
@@ -536,9 +559,36 @@ func RunStatus(args []string) error {
 				}
 				seenSessionIDs[sInfo.SessionID] = true
 				alive := isProcessAlive(sInfo.PID)
+				if alive && sInfo.ProcessBirth != "" && sInfo.PID > 0 {
+					curBirth := processBirth(sInfo.PID)
+					if curBirth != "" && curBirth != sInfo.ProcessBirth {
+						alive = false
+					}
+				}
+				age := time.Since(sInfo.StartedAt).Round(time.Second)
+
+				// Check if this session was superseded on the same PID
+				superseded := false
+				if alive && sInfo.PID > 0 {
+					if activeSess, ok := activeSessionByPID[sInfo.PID]; ok && activeSess != sInfo.SessionID {
+						superseded = true
+					}
+				}
+				isTestSess := strings.Contains(strings.ToLower(sInfo.SessionID), "-test") ||
+					strings.HasPrefix(sInfo.SessionID, "sess-test") ||
+					strings.HasPrefix(sInfo.SessionID, "sess-bap200") ||
+					strings.HasPrefix(sInfo.SessionID, "sess-hitl")
+				expired := !IsWatcherAlive(sInfo.SessionID) && (isTestSess || age > 15*time.Minute)
+
 				statusStr := "ACTIVE"
 				if !alive {
 					statusStr = "ORPHANED/STALE (Process Dead)"
+					staleCount++
+				} else if superseded {
+					statusStr = "SUPERSEDED (Inactive)"
+					staleCount++
+				} else if expired {
+					statusStr = "EXPIRED/STALE (Inactive)"
 					staleCount++
 				} else if sInfo.HooksDisabled || sInfo.ReportingLayer == "unmonitored" {
 					statusStr = "ACTIVE (UNMONITORED)"
@@ -546,7 +596,6 @@ func RunStatus(args []string) error {
 				} else {
 					activeCount++
 				}
-				age := time.Since(sInfo.StartedAt).Round(time.Second)
 				pluginLabel := "Active"
 				if sInfo.HooksDisabled || sInfo.ReportingLayer == "unmonitored" {
 					pluginLabel = "Hooks Disabled (Unmonitored)"
@@ -601,6 +650,29 @@ func RunStatus(args []string) error {
 						}
 						alive := isProcessAlive(dSess.PID)
 						if !alive {
+							continue
+						}
+						// Suppress superseded sessions on the same PID
+						if activeSess, ok := activeSessionByPID[dSess.PID]; ok && activeSess != dSess.SessionID {
+							continue
+						}
+						// Suppress leftover test sessions
+						isTest := strings.Contains(strings.ToLower(dSess.SessionID), "-test") ||
+							strings.HasPrefix(dSess.SessionID, "sess-test") ||
+							strings.HasPrefix(dSess.SessionID, "sess-bap200") ||
+							strings.HasPrefix(dSess.SessionID, "sess-hitl")
+						if isTest {
+							continue
+						}
+						// Suppress duplicate sessions if this PID already has an active session in sessionList
+						alreadyActivePID := false
+						for _, exSess := range sessionList {
+							if exSess.PID == dSess.PID && (exSess.Status == "ACTIVE" || strings.HasPrefix(exSess.Status, "ACTIVE")) {
+								alreadyActivePID = true
+								break
+							}
+						}
+						if alreadyActivePID {
 							continue
 						}
 						// Suppress duplicate Shadow IT observed sessions when an active native session
@@ -780,7 +852,7 @@ func RunStatus(args []string) error {
 	// Status should auto-trigger sweep ONLY when no other bap-edge is actively running,
 	// unless that other instance is unresponsive / dead.
 	otherStatus := CheckOtherBapEdgeInstances()
-	canAutoSync := (*fixFlag || (!*noSweepFlag && cpConnected)) && (!otherStatus.OtherRunning || otherStatus.Unresponsive)
+	canAutoSync := (*fixFlag || !*noSweepFlag) && (!otherStatus.OtherRunning || otherStatus.Unresponsive)
 	autoSweepTriggered := false
 	var autoSweepResult SweepResult
 
@@ -795,7 +867,7 @@ func RunStatus(args []string) error {
 			staleCount = 0
 			var updatedList []sessionDetail
 			for _, s := range sessionList {
-				if s.Status == "ACTIVE" {
+				if s.Status == "ACTIVE" || strings.HasPrefix(s.Status, "ACTIVE") {
 					updatedList = append(updatedList, s)
 				}
 			}
@@ -994,8 +1066,14 @@ func RunStatus(args []string) error {
 
 	// 1. Inspect Active Sessions
 	fmt.Println("  ACTIVE SESSIONS:")
-	if len(sessionList) > 0 {
-		for _, s := range sessionList {
+	var activeSessions []sessionDetail
+	for _, s := range sessionList {
+		if s.Status == "ACTIVE" || strings.HasPrefix(s.Status, "ACTIVE") {
+			activeSessions = append(activeSessions, s)
+		}
+	}
+	if len(activeSessions) > 0 {
+		for _, s := range activeSessions {
 			statusDisplay := s.Status
 			if !enrolled && (s.Status == "ACTIVE" || strings.HasPrefix(s.Status, "ACTIVE")) {
 				statusDisplay = "ACTIVE (LOCAL ONLY)"
@@ -1350,6 +1428,31 @@ func PerformSweep(serverURL string, force bool) (SweepResult, error) {
 	var res SweepResult
 	sessionSweepDirs := []string{state.SessionsDir(), filepath.Join(".bap", "sessions")}
 
+	// 1a. Build map of current active session per PID
+	activeSessionByPID := make(map[int]string)
+	for _, sDir := range sessionSweepDirs {
+		entries, _ := os.ReadDir(sDir)
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.HasPrefix(entry.Name(), "pid-") && strings.HasSuffix(entry.Name(), ".json") {
+				path := filepath.Join(sDir, entry.Name())
+				if data, err := os.ReadFile(path); err == nil {
+					var pInfo struct {
+						PID       int    `json:"pid"`
+						SessionID string `json:"session_id"`
+					}
+					if json.Unmarshal(data, &pInfo) == nil && pInfo.PID > 0 && pInfo.SessionID != "" {
+						if isProcessAlive(pInfo.PID) {
+							activeSessionByPID[pInfo.PID] = pInfo.SessionID
+						} else {
+							_ = os.Remove(path)
+							res.SweptDeadPIDFiles++
+						}
+					}
+				}
+			}
+		}
+	}
+
 	controlPlaneOffline := false
 	for _, sessionsDir := range sessionSweepDirs {
 		entries, _ := os.ReadDir(sessionsDir)
@@ -1363,18 +1466,56 @@ func PerformSweep(serverURL string, force bool) (SweepResult, error) {
 				continue
 			}
 
+			// Clean up dead pid-*.json files
+			if strings.HasPrefix(entry.Name(), "pid-") {
+				var pInfo struct {
+					PID int `json:"pid"`
+				}
+				if json.Unmarshal(data, &pInfo) == nil && pInfo.PID > 0 && !isProcessAlive(pInfo.PID) {
+					_ = os.Remove(p)
+					res.SweptDeadPIDFiles++
+				}
+				continue
+			}
+
 			var sInfo struct {
-				SessionID string `json:"session_id"`
-				PID       int    `json:"pid"`
+				SessionID    string    `json:"session_id"`
+				PID          int       `json:"pid"`
+				ProcessBirth string    `json:"process_birth"`
+				StartedAt    time.Time `json:"started_at"`
 			}
 			if json.Unmarshal(data, &sInfo) == nil {
-				shouldPurge := force || (sInfo.PID > 0 && !isProcessAlive(sInfo.PID))
+				alive := sInfo.PID > 0 && isProcessAlive(sInfo.PID)
+				if alive && sInfo.ProcessBirth != "" && sInfo.PID > 0 {
+					curBirth := processBirth(sInfo.PID)
+					if curBirth != "" && curBirth != sInfo.ProcessBirth {
+						alive = false
+					}
+				}
+				age := time.Since(sInfo.StartedAt)
+				superseded := false
+				if alive && sInfo.PID > 0 {
+					if activeSess, ok := activeSessionByPID[sInfo.PID]; ok && activeSess != sInfo.SessionID {
+						superseded = true
+					}
+				}
+				isTestSess := strings.Contains(strings.ToLower(sInfo.SessionID), "-test") ||
+					strings.HasPrefix(sInfo.SessionID, "sess-test") ||
+					strings.HasPrefix(sInfo.SessionID, "sess-bap200") ||
+					strings.HasPrefix(sInfo.SessionID, "sess-hitl")
+				expired := !IsWatcherAlive(sInfo.SessionID) && (isTestSess || age > 15*time.Minute)
+
+				shouldPurge := force || !alive || superseded || expired
 				if shouldPurge {
 					_ = os.Remove(p)
 					if sInfo.SessionID != "" {
 						_ = os.Remove(sessionMarkerPath(sInfo.SessionID))
+						sum := sha256.Sum256([]byte(sInfo.SessionID))
+						_ = os.Remove(filepath.Join(".bap", "sessions", fmt.Sprintf("%x.json", sum[:])))
+						_ = os.Remove(filepath.Join(bapUserDir(), "watchers", sanitizeInstanceID(sInfo.SessionID)+".watcher"))
+						_ = os.Remove(watcherLivenessPath(sInfo.SessionID))
 						// Inform control plane of crash recovery
-						if !controlPlaneOffline {
+						if !controlPlaneOffline && serverURL != "" {
 							sweepPayload := map[string]any{
 								"session_id": sInfo.SessionID,
 								"reason":     "orphaned_crash_detected_by_edge_sweep",
@@ -1384,8 +1525,9 @@ func PerformSweep(serverURL string, force bool) (SweepResult, error) {
 							}
 						}
 					}
-					if sInfo.PID > 0 {
+					if sInfo.PID > 0 && !alive {
 						_ = os.Remove(sessionPIDMarkerPath(sInfo.PID))
+						_ = os.Remove(filepath.Join(".bap", "sessions", fmt.Sprintf("pid-%d.json", sInfo.PID)))
 					}
 					res.LocalSweptSessions++
 				}
