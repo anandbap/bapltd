@@ -3353,10 +3353,6 @@ func main() {
 			outputDecision("allow", "", "Broker wrapper session-bound and payload re-authorized by BAP Cedar policy")
 			return
 		}
-		if !isStrictToolEnforcementMandated() {
-			outputDecision("allow", "", "Command authorized by BAP Cedar policy (Tier 1 Standard native execution)")
-			return
-		}
 		// Rewrite tool input command to route through bapedge exec using safe structured --cmd-b64
 		caller := inspectCallerProcess(ppid)
 		callerSource := caller.AppID
@@ -3404,10 +3400,27 @@ func main() {
 
 		// In Tier 1 Standard mode, if the denial was solely due to Cedar default-deny (unlisted tool in Policy 1),
 		// rather than an Invariant violation (Policy 2: workspace escape, Policy 3: secret, Policy 4/6: tamper, Policy 5: exfiltration),
-		// permit native execution under Tier 1 Standard governance!
+		// permit broker execution under Tier 1 Standard governance!
 		if !isStrictToolEnforcementMandated() {
 			if !isCedarInvariantViolation(execResp.Reason) {
-				outputDecision("allow", "", "Command authorized by BAP Cedar policy (Tier 1 Standard native execution)")
+				caller := inspectCallerProcess(ppid)
+				callerSource := caller.AppID
+				if callerSource == "" {
+					callerSource = "claude-code"
+				}
+				shellArg := ""
+				if strings.EqualFold(payload.ToolName, "powershell") || strings.EqualFold(payload.ToolName, "pwsh") {
+					shellArg = " --shell powershell"
+				}
+				execBin := ltdBin
+				baseName := filepath.Base(ltdBin)
+				if lookPath, err := exec.LookPath(baseName); err == nil && lookPath != "" {
+					execBin = baseName
+				} else if abs, err := filepath.Abs(ltdBin); err == nil {
+					execBin = abs
+				}
+				rewritten := fmt.Sprintf(`%s exec%s --source %s --session-id %s --cmd-b64 %s`, execBin, shellArg, callerSource, sessionID, cmdB64)
+				outputDecisionWithUpdatedInput("allow", "", "Command authorized by BAP Cedar policy (Tier 1 Standard broker execution)", &ToolInput{Command: rewritten})
 				return
 			}
 		}

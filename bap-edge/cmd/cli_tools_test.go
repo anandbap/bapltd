@@ -213,16 +213,24 @@ func TestRunStatus_UnmonitoredSessionWithHooksDisabled(t *testing.T) {
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
+	// Drain concurrently: status output exceeds the OS pipe buffer, so reading
+	// only after RunStatus returns deadlocks the writer.
+	var buf bytes.Buffer
+	drained := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(&buf, r)
+		close(drained)
+	}()
+
 	err := RunStatus([]string{})
 	w.Close()
 	os.Stdout = oldStdout
+	<-drained
 
 	if err != nil {
 		t.Fatalf("RunStatus failed: %v", err)
 	}
 
-	var buf bytes.Buffer
-	_, _ = io.Copy(&buf, r)
 	out := buf.String()
 
 	if !strings.Contains(out, "ACTIVE (UNMONITORED)") && !strings.Contains(out, "Hooks Disabled") {

@@ -3,12 +3,17 @@
 package sandbox
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestRestrictedTokenPrivileges(t *testing.T) {
-	out, code, err := RunSandboxedCommandWithExitCode("whoami /priv")
+	// Use the absolute System32 path: a bare "whoami" resolves to GNU coreutils
+	// when the tests are launched from Git Bash, which rejects "/priv".
+	whoami := filepath.Join(os.Getenv("SystemRoot"), "System32", "whoami.exe")
+	out, code, err := RunSandboxedCommandWithExitCode(whoami + " /priv")
 	if err != nil {
 		t.Fatalf("RunSandboxedCommandWithExitCode failed: %v", err)
 	}
