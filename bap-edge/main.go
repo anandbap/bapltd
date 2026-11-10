@@ -78,6 +78,15 @@ Examples:
 `
 
 func main() {
+	// If invoked as bap-hook-adapter[.exe], default to running plugin adapter
+	if strings.Contains(strings.ToLower(os.Args[0]), "bap-hook-adapter") {
+		if err := cmd.RunPlugin(append([]string{"adapter"}, os.Args[1:]...)); err != nil {
+			fmt.Fprintf(os.Stderr, "Error running plugin adapter: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if len(os.Args) < 2 {
 		// If invoked as bapmcp.exe or containing "mcp", default to running the MCP server
 		if strings.Contains(strings.ToLower(os.Args[0]), "mcp") {

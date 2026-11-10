@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -1131,6 +1132,28 @@ func ensureDefaultAdapterScripts(destDir string) {
 	scriptsDir := filepath.Join(destDir, "scripts")
 	_ = os.MkdirAll(scriptsDir, 0755)
 
+	adapterExe := filepath.Join(scriptsDir, "bap-hook-adapter.exe")
+	if runtime.GOOS == "windows" {
+		if _, err := os.Stat(adapterExe); os.IsNotExist(err) {
+			exePath, err := os.Executable()
+			if err == nil && strings.HasSuffix(strings.ToLower(exePath), "bapedge.exe") {
+				_ = copyFile(exePath, adapterExe)
+			} else {
+				candidates := []string{
+					filepath.Join(destDir, "..", "..", "bapedge.exe"),
+					filepath.Join(destDir, "..", "..", "..", "bapedge.exe"),
+					filepath.Join(destDir, "..", "..", "cchook", "interceptor.exe"),
+				}
+				for _, c := range candidates {
+					if _, err := os.Stat(c); err == nil {
+						_ = copyFile(c, adapterExe)
+						break
+					}
+				}
+			}
+		}
+	}
+
 	adapterCmd := filepath.Join(scriptsDir, "bap-hook-adapter.cmd")
 	if _, err := os.Stat(adapterCmd); os.IsNotExist(err) {
 		cmdContent := `@echo off
@@ -1577,6 +1600,14 @@ func copyDirRecursive(src, dst string) error {
 		}
 		return os.WriteFile(target, data, info.Mode())
 	})
+}
+
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0755)
 }
 
 // -----------------------------------------------------------------------------

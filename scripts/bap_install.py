@@ -1202,6 +1202,23 @@ exec "$BAPEDGE_BIN" plugin adapter "$@"
                 except Exception:
                     pass
 
+        if sys.platform == "win32":
+            exe_path = os.path.join(scripts_dir, "bap-hook-adapter.exe")
+            if not os.path.isfile(exe_path):
+                bapedge_candidates = [
+                    os.path.join(bin_dir, "bapedge.exe"),
+                    os.path.join(os.getcwd(), "bapedge.exe"),
+                    shutil.which("bapedge.exe"),
+                    shutil.which("bapedge"),
+                ]
+                for cand in bapedge_candidates:
+                    if cand and os.path.isfile(cand):
+                        try:
+                            shutil.copy2(cand, exe_path)
+                            break
+                        except Exception:
+                            pass
+
         if agent_id == "claude":
             cp_dir = os.path.join(dst, ".claude-plugin")
             hk_dir = os.path.join(dst, "hooks")

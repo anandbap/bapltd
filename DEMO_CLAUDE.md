@@ -67,24 +67,34 @@ flowchart TD
 
 ---
 
-## 2. Prerequisites & Standard Verification
+## 2. Prerequisites & Standard Installation
 
-Every BAP deployment starts with standard verification of the five security domains:
+Every BAP deployment starts with the standard CLI onboarding sequence:
 
 ```powershell
-# Step 1: Verify environment integrity
+# Step 1: Install or upgrade the BAP package
+pip install --upgrade bap-ltd
+
+# Step 2: Run the user-mode installer
+# Standard minimal installation (production-ready, zero clutter):
+bap install
+
+# OR: Developer & Testing installation with profiling scripts:
+bap install --debug
+
+# Step 3: Verify environment integrity across all 5 security domains
 bap doctor
 ```
 
 `bap doctor` validates:
-1. Canonical binaries present in PATH (`bapedge.exe`, `bapgateway.exe`, `bapcontrolplane.exe`, `interceptor.exe`).
+1. Canonical binaries present in PATH (`bapedge.exe`, `bapgateway.exe`, `bapcontrolplane.exe`, `interceptor.exe`, `bapmcp.exe`).
 2. AI Agent CLIs installed (`claude`, `codex`, `agy`, `copilot`).
 3. Control Plane TLS latency and connectivity.
 4. Cedar baseline policy syntax compilation.
 5. Workspace `.bap/` and state custody.
 
 ```powershell
-# Step 2: Authenticate human developer identity with Corporate SSO
+# Step 4: Authenticate human developer identity with Corporate SSO
 bap login --server https://bap-controlplane.onrender.com
 # (Or local control plane: bap login --server https://localhost:8443)
 ```
