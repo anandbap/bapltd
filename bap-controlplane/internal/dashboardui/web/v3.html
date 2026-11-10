@@ -1111,7 +1111,7 @@
         if (i.kind === 'prompt') {
           nPrompt++;
           labelHtml = '<span>' + esc('Prompt ' + nPrompt + ' of ' + total) + '</span>';
-          if (!i.captured) text = 'Prompt text was not retained (capture is off). Intent: ' + (i.intent || 'unknown');
+          if (!text && !i.captured) text = 'Prompt text was not retained (capture is off). Intent: ' + (i.intent || 'unknown');
         } else if (i.kind === 'response') {
           labelHtml = '<span>Agent reply</span>';
           if (!i.captured) text = 'Reply text was not retained.';
@@ -1650,8 +1650,8 @@
             status: (s.status || 'active').toLowerCase(),
             close_reason: s.close_reason || '',
             reporting_layers: s.reporting_layers || [],
-            prompt_available: !!s.user_prompt,
-            prompt_capture_disabled: !!(s.intent && s.intent.prompt_hash && !s.intent.prompt_captured),
+            prompt_available: !!(s.user_prompt || (s.intent && s.intent.user_prompt)),
+            prompt_capture_disabled: !!(s.intent && s.intent.prompt_hash && s.intent.prompt_captured === false && !s.user_prompt),
             _t: t
           };
         });
@@ -1807,9 +1807,24 @@
               protectClass = toolEvidence ? 'g' : 'off';
               reportText = isUnmonitored ? 'Live (Unmonitored)' : (isStrict ? 'Live (Strict Tier 2)' : 'Live');
               reportClass = isUnmonitored ? 'a' : 'g';
+              var promptNote = '';
+              var appKey = (s.app_id || '').toLowerCase();
+              var isClaudeOrCodex = (appKey === 'claude-code' || appKey === 'claude' || appKey === 'codex' || appKey === 'opencode');
+              var isAntigravity = (appKey === 'antigravity' || appKey === 'agy');
+              if (s.prompt_available) {
+                promptNote = 'Prompt text reported.';
+              } else if (s.prompt_capture_disabled) {
+                promptNote = 'Prompt capture disabled by policy.';
+              } else if (isAntigravity) {
+                promptNote = 'Prompt text not reported (IDE chat hooks unavailable for Antigravity).';
+              } else if (isClaudeOrCodex) {
+                promptNote = 'Prompt text not reported yet (monitoring active via native lifecycle hooks).';
+              } else {
+                promptNote = 'Prompt text not reported.';
+              }
               means = (layers.length ? 'Reported layers: ' + layers.map(esc).join(', ') + '. ' : 'Reporting coverage has not been confirmed. ') +
                 (isUnmonitored ? 'Session running with tool hooks disabled (--no-hooks). ' : (isStrict ? 'Tier 2 Strict Tool Enforcement active (Mandated by Control Plane). ' : 'Tier 1 Standard Governance active (Default). ')) +
-                (s.prompt_available ? 'Prompt text reported.' : (s.prompt_capture_disabled ? 'Prompt capture disabled by policy.' : 'Prompt text not reported.'));
+                promptNote;
             } else {
               protectText = toolEvidence ? 'Evidence received' : (layers.indexOf('discovery') !== -1 ? 'Discovered' : 'Coverage unknown');
               protectClass = toolEvidence ? 'g' : 'off';

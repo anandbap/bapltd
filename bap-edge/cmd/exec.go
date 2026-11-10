@@ -198,12 +198,15 @@ func promptHumanStepUpApproval(ec *execContext, fullCommand, executable, reason 
 	targetEntity := decomp.TargetEntity
 	if targetEntity == "" || targetEntity == executable {
 		if parts := strings.Split(fullCommand, ">"); len(parts) > 1 {
-			targetEntity = strings.TrimSpace(strings.Trim(parts[len(parts)-1], "\"'`"))
+			candidate := strings.TrimSpace(strings.Trim(parts[len(parts)-1], "\"'`"))
+			if !authz.IsStandardDevicePath(candidate) {
+				targetEntity = candidate
+			}
 		}
 	}
 	workspaceRoot := authz.GetWorkspaceRoot()
 	var absTarget string
-	if targetEntity != "" {
+	if targetEntity != "" && !authz.IsStandardDevicePath(targetEntity) {
 		if filepath.IsAbs(targetEntity) {
 			absTarget = filepath.Clean(targetEntity)
 		} else if workspaceRoot != "" {

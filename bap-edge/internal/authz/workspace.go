@@ -157,6 +157,15 @@ func CheckCommandWorkspaceEscape(workspaceRoot, fullCommand string) bool {
 			}
 
 			tokVal := strings.Trim(tok, "\"'")
+			if IsStandardDevicePath(tokVal) {
+				continue
+			}
+			if strings.Contains(tokVal, ">") {
+				parts := strings.Split(tokVal, ">")
+				if len(parts) > 1 && IsStandardDevicePath(parts[len(parts)-1]) {
+					continue
+				}
+			}
 
 			// Check for --flag=path syntax
 			if idx := strings.Index(tokVal, "="); idx != -1 && strings.HasPrefix(tokVal, "-") {
@@ -194,7 +203,30 @@ func CheckCommandWorkspaceEscape(workspaceRoot, fullCommand string) bool {
 	return false
 }
 
+// IsStandardDevicePath returns true if target represents a standard stream or bitbucket pseudo-device
+// (such as /dev/null, /dev/zero, /dev/stdout, /dev/stderr, nul, $null, 2>&1).
+func IsStandardDevicePath(target string) bool {
+	clean := strings.ToLower(strings.TrimSpace(target))
+	clean = strings.Trim(clean, "\"'`")
+	if strings.HasPrefix(clean, "&") || strings.Contains(clean, ">&") {
+		return true
+	}
+	switch clean {
+	case "/dev/null", "/dev/zero", "/dev/stdout", "/dev/stderr", "/dev/stdin",
+		"nul", "nul:", "\\\\.\\nul", "$null", "none":
+		return true
+	}
+	norm := filepath.ToSlash(clean)
+	if norm == "/dev/null" || norm == "/dev/zero" || norm == "/dev/stdout" || norm == "/dev/stderr" || strings.HasSuffix(norm, "/nul") {
+		return true
+	}
+	return false
+}
+
 func isExplicitAbsolutePath(p string) bool {
+	if IsStandardDevicePath(p) {
+		return false
+	}
 	if len(p) >= 3 && p[1] == ':' && (p[2] == '\\' || p[2] == '/') {
 		return true // Windows drive: C:\ or C:/
 	}
@@ -362,8 +394,14 @@ func FindEscapingTargets(workspaceRoot, cmdArgs string) []string {
 		if idx := strings.Index(val, "="); idx != -1 && strings.HasPrefix(val, "-") {
 			val = val[idx+1:]
 		}
-		if val == "" {
+		if val == "" || IsStandardDevicePath(val) {
 			continue
+		}
+		if strings.Contains(val, ">") {
+			parts := strings.Split(val, ">")
+			if len(parts) > 1 && IsStandardDevicePath(parts[len(parts)-1]) {
+				continue
+			}
 		}
 		canon := ResolveCanonicalPath(val, cleanRoot)
 		if IsPathOutsideWorkspaceCanonical(cleanRoot, canon) {

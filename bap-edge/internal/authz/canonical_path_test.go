@@ -96,3 +96,45 @@ func TestIsPathOutsideWorkspaceCanonical(t *testing.T) {
 	}
 }
 
+
+
+func TestIsStandardDevicePath(t *testing.T) {
+	devices := []string{
+		"/dev/null", "/dev/zero", "/dev/stdout", "/dev/stderr",
+		"nul", "NUL", "nul:", "\\\\.\\nul", "$null", "none",
+		"&1", "2>&1",
+	}
+	for _, dev := range devices {
+		if !IsStandardDevicePath(dev) {
+			t.Errorf("expected %q to be recognized as standard device path", dev)
+		}
+	}
+
+	nonDevices := []string{
+		"C:\\Users\\User\\.env",
+		"../parent/file.txt",
+		"/etc/passwd",
+		"localfile.txt",
+	}
+	for _, non := range nonDevices {
+		if IsStandardDevicePath(non) {
+			t.Errorf("expected %q NOT to be recognized as standard device path", non)
+		}
+	}
+}
+
+func TestCheckCommandWorkspaceEscape_StandardDevices(t *testing.T) {
+	ws := t.TempDir()
+	safeCommands := []string{
+		"find . -name '*.go' 2>/dev/null",
+		"grep -rn 'TODO' . 2>/dev/null",
+		"git status >/dev/null 2>&1",
+		"ls -la 2>nul",
+		"echo hello >$null",
+	}
+	for _, cmd := range safeCommands {
+		if CheckCommandWorkspaceEscape(ws, cmd) {
+			t.Errorf("expected command %q with standard device redirection NOT to escape workspace %q", cmd, ws)
+		}
+	}
+}

@@ -294,7 +294,7 @@ func (a *Authorizer) EvaluateWithWorkspace(executable, fullCommand, args, worksp
 
 		// 2. Evaluate Redirections
 		for _, r := range n.Redirections {
-			if r.Target == "" {
+			if r.Target == "" || IsStandardDevicePath(r.Target) {
 				continue
 			}
 			canonical := ResolveCanonicalPath(r.Target, currentDir)

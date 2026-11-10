@@ -1463,10 +1463,70 @@ func promptTerminalHITL(workspaceRoot, sessionID, targetFile, toolName string) s
 	}
 }
 
-func isMutatingShellCommand(cmd string) bool {
-	lower := strings.ToLower(cmd)
-	if strings.Contains(lower, ">") {
+// isStandardDevicePath returns true if target represents a standard stream or bitbucket pseudo-device
+// (such as /dev/null, /dev/zero, /dev/stdout, /dev/stderr, nul, $null, 2>&1).
+func isStandardDevicePath(target string) bool {
+	clean := strings.ToLower(strings.TrimSpace(target))
+	clean = strings.Trim(clean, "\"'`")
+	if strings.HasPrefix(clean, "&") || strings.Contains(clean, ">&") {
 		return true
+	}
+	switch clean {
+	case "/dev/null", "/dev/zero", "/dev/stdout", "/dev/stderr", "/dev/stdin",
+		"nul", "nul:", "\\\\.\\nul", "$null", "none":
+		return true
+	}
+	norm := filepath.ToSlash(clean)
+	if norm == "/dev/null" || norm == "/dev/zero" || norm == "/dev/stdout" || norm == "/dev/stderr" || strings.HasSuffix(norm, "/nul") {
+		return true
+	}
+	return false
+}
+
+// stripStandardRedirections removes standard null/stream redirections like 2>/dev/null, >/dev/null, 2>&1, >nul, >$null
+func stripStandardRedirections(cmd string) string {
+	patterns := []string{
+		"&>/dev/null", "&> /dev/null",
+		"2>/dev/null", "2> /dev/null",
+		"1>/dev/null", "1> /dev/null",
+		">/dev/null", "> /dev/null",
+		"2>&1", "1>&2", "2>& 1", "1>& 2",
+		"*>$null", "2>$null", "2> $null",
+		"1>$null", "1> $null",
+		">$null", "> $null",
+		"2>nul", "2> nul",
+		"1>nul", "1> nul",
+		">nul", "> nul",
+	}
+	s := cmd
+	for _, p := range patterns {
+		s = strings.ReplaceAll(s, p, " ")
+	}
+	return s
+}
+
+func isMutatingShellCommand(cmd string) bool {
+	stripped := stripStandardRedirections(cmd)
+	lower := strings.ToLower(stripped)
+	if strings.Contains(lower, ">") {
+		parts := strings.Split(lower, ">")
+		hasRealRedirection := false
+		for i := 1; i < len(parts); i++ {
+			fields := strings.Fields(parts[i])
+			if len(fields) > 0 {
+				target := strings.TrimSpace(fields[0])
+				if !isStandardDevicePath(target) {
+					hasRealRedirection = true
+					break
+				}
+			} else {
+				hasRealRedirection = true
+				break
+			}
+		}
+		if hasRealRedirection {
+			return true
+		}
 	}
 	destructive := []string{
 		"rm ", "rm -", "del ", "erase ", "remove-item", "unlink", "rmdir", "rd /", "rd ",
@@ -1482,16 +1542,20 @@ func isMutatingShellCommand(cmd string) bool {
 }
 
 func extractCommandTarget(cmd string) string {
-	if parts := strings.Split(cmd, ">"); len(parts) > 1 {
-		return strings.TrimSpace(strings.Trim(parts[len(parts)-1], "\"'`"))
+	stripped := stripStandardRedirections(cmd)
+	if parts := strings.Split(stripped, ">"); len(parts) > 1 {
+		cand := strings.TrimSpace(strings.Trim(parts[len(parts)-1], "\"'`"))
+		if cand != "" && !isStandardDevicePath(cand) {
+			return cand
+		}
 	}
-	tokens := tokenizeHookCommand(cmd)
+	tokens := tokenizeHookCommand(stripped)
 	// Check for explicit -Path / -FilePath flag
 	for i := 0; i < len(tokens)-1; i++ {
 		lowerTok := strings.ToLower(tokens[i])
 		if lowerTok == "-path" || lowerTok == "-filepath" || lowerTok == "-target" || lowerTok == "-destination" || lowerTok == "-out" {
 			val := strings.Trim(tokens[i+1], "\"'`")
-			if val != "" {
+			if val != "" && !isStandardDevicePath(val) {
 				return val
 			}
 		}
@@ -1499,12 +1563,18 @@ func extractCommandTarget(cmd string) string {
 	// Look for paths containing .. or / or \
 	for _, tok := range tokens {
 		t := strings.Trim(tok, "\"'`(),; \t")
+		if isStandardDevicePath(t) {
+			continue
+		}
 		if (strings.Contains(t, "..") || strings.Contains(t, "/") || strings.Contains(t, "\\")) && !strings.HasPrefix(t, "-") && !strings.HasPrefix(t, "/") && len(t) > 1 {
 			return t
 		}
 	}
 	for i := 1; i < len(tokens); i++ {
 		t := strings.Trim(tokens[i], "\"'`")
+		if isStandardDevicePath(t) {
+			continue
+		}
 		if !strings.HasPrefix(t, "-") && !strings.HasPrefix(t, "/") && len(t) > 1 && !strings.EqualFold(t, "=") {
 			return t
 		}
@@ -3660,8 +3730,20 @@ func checkCommandWorkspaceEscape(workspaceRoot, fullCommand string) bool {
 				}
 			}
 			tokVal := strings.Trim(tok, "\"'")
+			if isStandardDevicePath(tokVal) {
+				continue
+			}
+			if strings.Contains(tokVal, ">") {
+				parts := strings.Split(tokVal, ">")
+				if len(parts) > 1 && isStandardDevicePath(parts[len(parts)-1]) {
+					continue
+				}
+			}
 			if idx := strings.Index(tokVal, "="); idx != -1 && strings.HasPrefix(tokVal, "-") {
 				tokVal = tokVal[idx+1:]
+			}
+			if isStandardDevicePath(tokVal) {
+				continue
 			}
 			if strings.Contains(tokVal, "..") {
 				var absArg string
@@ -3686,14 +3768,35 @@ func checkCommandWorkspaceEscape(workspaceRoot, fullCommand string) bool {
 }
 
 func isExplicitAbsolutePath(p string) bool {
+	if isStandardDevicePath(p) {
+		return false
+	}
 	if len(p) >= 3 && p[1] == ':' && (p[2] == '\\' || p[2] == '/') {
 		return true
 	}
 	if strings.HasPrefix(p, "\\\\") || strings.HasPrefix(p, "//") {
 		return true
 	}
-	if strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "/c") && !strings.HasPrefix(p, "/d") && !strings.HasPrefix(p, "/s") && !strings.HasPrefix(p, "/b") {
-		return true
+	if strings.HasPrefix(p, "/") {
+		if isStandardDevicePath(p) {
+			return false
+		}
+		if p == "/" || strings.Contains(p[1:], "/") || strings.Contains(p[1:], "\\") {
+			lower := strings.ToLower(strings.Trim(p, "/\\"))
+			switch lower {
+			case "dev/null", "dev/zero", "dev/stdout", "dev/stderr", "dev/stdin":
+				return false
+			}
+			return true
+		}
+		if len(p) == 2 {
+			return false
+		}
+		lower := strings.ToLower(p[1:])
+		switch lower {
+		case "etc", "tmp", "var", "bin", "usr", "home", "opt", "dev", "root", "proc", "sys":
+			return true
+		}
 	}
 	return false
 }

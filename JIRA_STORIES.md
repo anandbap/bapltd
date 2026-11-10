@@ -106,6 +106,7 @@ This document represents the complete functional and non-functional requirements
 | `BAP-829` | Two-Tier Enterprise Governance Architecture: Tier 1 Standard (Default) & Control-Plane Commanded Tier 2 Strict | **DONE** | Establishes Two-Tier Governance: Tier 1 Standard (Prompt Observability + Inviolable Credential Boundaries, zero AST cmdlet friction) is ON by default everywhere. Tier 2 Strict Tool Enforcement is OFF by default and can ONLY be enabled when explicitly commanded by the Central Control Plane. |
 | `BAP-830` | Non-Interactive Agent Execution Bottleneck Prevention & Dual-Layer Token Isolation Hardening | **DONE** | Diagnoses and resolves headless subshell HITL stdin hangs and Restricted Token ambient credential shielding on unlisted CLI tools (e.g. gh); preserves layer reporting contract in UI tests. |
 | `BAP-831` | GitHub CLI (gh) Whitelisting & Non-Interactive Agent Immunity from Terminal HITL Prompts | **DONE** | Whitelists `gh` across Cedar policies, AST classifier, and decomposer; guarantees interactive terminal HITL prompts are strictly disabled for all AI coding agents (Antigravity, Codex, OpenCode, Claude Code, Copilot) across environment variables and process ancestry. |
+| `BAP-832` | Standard Bitbucket & Stream Redirection Immunity with Native Lifecycle Prompt Monitoring Parity | **DONE** | Eliminates false-positive workspace boundary escape denials on standard device redirections (`2>/dev/null`, `>/dev/null`, `2>&1`, `>nul`, `>$null`); preserves Tier 1 Standard read-only command flow; updates V3 Cockpit prompt reporting to distinguish native lifecycle prompt monitoring (Claude Code, Codex) from IDE chat boundaries (Antigravity). |
 
 ### MVP exit sequence
 
@@ -4798,3 +4799,44 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - **Agent Observation & HITL Immunity**: `bap-edge/cmd/exec.go` (`isAgentEnvironment`, ancestry caller discovery, `non_interactive_deny`), `bap-edge/cmd/agent_observation.go` (`agentApp` with `language_server`).
   - **Fleet Synchronization**: 35 copies verified in sync; pinned in `~/.bapstate/pins.json`.
   - **Unit Tests**: `test_hitl_and_supply_chain.py` (15/15 PASS), `cchook` Go tests (47/47 PASS), `test_v3_controls.cjs` (PASS).
+
+
+#### Story BAP-832: Standard Bitbucket & Stream Redirection Immunity with Native Lifecycle Prompt Monitoring Parity
+- **Type**: Bug Fix / Enhancement | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**:
+  Resolve false-positive workspace boundary escape denials on read-only commands utilizing null/device stream redirections (`find . -name '*.go' 2>/dev/null`, `grep ... 2>&1`, `>nul`, `>$null`), and align V3 Cockpit prompt telemetry reporting so native lifecycle hooks (Claude Code, Codex) are accurately distinguished from IDE chat extensions (Antigravity).
+
+- **Root Causes**:
+  1. `ResolveCanonicalPath` and `IsPathOutsideWorkspaceCanonical` in `bap-edge/internal/authz/authorizer.go` and `cchook/interceptor.go` treated `/dev/null` as a path escaping workspace boundaries (`C:\dev\null` or `/dev/null`), blocking benign read-only commands with `"Path escapes workspace boundary"`.
+  2. In `cchook/interceptor.go`, `isMutatingShellCommand()` inspected `strings.Contains(cmd, ">")` without stripping null redirections, treating `find ... 2>/dev/null` as a mutating shell command.
+  3. In `v3.html`, line 1114 checked `if (!i.captured)` which overwrote existing prompt text (`i.text`) with `Prompt text was not retained (capture is off)`.
+  4. In `v3.html`, line 1812 displayed generic `'Prompt text not reported.'` or `'Prompt capture disabled by policy.'` for active sessions awaiting their first prompt, causing Claude Code sessions to falsely report that prompt capture was turned off by policy.
+
+- **Key Changes**:
+  1. **Standard Device Recognition (`IsStandardDevicePath`)**:
+     - Added `IsStandardDevicePath(target string) bool` across `bap-edge/internal/authz/workspace.go` and `cchook/interceptor.go`.
+     - Recognizes `/dev/null`, `/dev/zero`, `/dev/stdout`, `/dev/stderr`, `/dev/stdin`, `nul`, `nul:`, `\\.\nul`, `$null`, `none`, `&1`, `&2`, `2>&1`, `1>&2`, `>&1`, etc.
+     - Strips null redirections in `isMutatingShellCommand()`, `extractCommandTarget()`, `checkCommandWorkspaceEscape()`, and `bap-edge` redirection verification.
+  2. **Tier 1 Standard Governance Integrity**:
+     - Read-only inspection commands with standard device redirections stay strictly within Tier 1 Standard native execution without false-positive directory traversal denials or interactive HITL prompts.
+  3. **V3 Cockpit Prompt Telemetry Parity**:
+     - Line 1114: Preserves `i.text` whenever prompt text exists (`if (!text && !i.captured)`).
+     - Lines 1653-1654: Evaluates `s.user_prompt || s.intent.user_prompt` and only flags `prompt_capture_disabled` when explicitly turned off by policy.
+     - Line 1812: Differentiates agent prompt monitoring capabilities:
+       - Claude Code / Codex: `Prompt text reported.` or `Prompt text not reported yet (monitoring active via native lifecycle hooks).`
+       - Google Antigravity: `Prompt text not reported (IDE chat hooks unavailable for Antigravity).`
+       - Policy Off: `Prompt capture disabled by policy.`
+
+- **Acceptance Criteria**:
+  - `Given` a Claude Code or CLI command with stderr/stdout null redirection (e.g. `find . -name '*.go' 2>/dev/null`),
+  - `When` checked by `bapedge check` and `cchook`,
+  - `Then` it evaluates to `allowed: true` with zero workspace boundary escape denials.
+  - `Given` an active Claude Code session in V3 Control Plane,
+  - `When` prompt telemetry is evaluated,
+  - `Then` it confirms active lifecycle hook monitoring without false "capture disabled by policy" warnings.
+
+- **Implementation Evidence**:
+  - **Authz Engine**: `bap-edge/internal/authz/workspace.go`, `bap-edge/internal/authz/authorizer.go`, `bap-edge/cmd/exec.go`.
+  - **Interceptor Hook**: `cchook/interceptor.go` (`isStandardDevicePath`, `stripStandardRedirections`, `isMutatingShellCommand`, `extractCommandTarget`, `checkCommandWorkspaceEscape`).
+  - **Cockpit UI**: `bap-controlplane/internal/dashboardui/web/v3.html` (lines 1114, 1653-1654, 1810-1825).
+  - **Tests**: `bap-edge/internal/authz/canonical_path_test.go` (`TestIsStandardDevicePath`, `TestCheckCommandWorkspaceEscape_StandardDevices` PASS), `node tests/test_v3_controls.cjs` (PASS), `go test -C cchook -v ./...` (47/47 PASS).
