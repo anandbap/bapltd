@@ -32,7 +32,8 @@ permit (
         "get-location", "gl", "get-item", "gi", "get-member", "gm", "get-process", "gps",
         "get-acl", "get-command", "resolve-path", "join-path", "split-path", "icacls", "attrib",
         "out-null", "out-default", "out-host", "convertto-json", "convertfrom-json", "tee-object", "start-sleep", "measure-command", "get-date",
-        "bapedge", "ltd-agent", "bapcontrolplane", "bapgateway", "bapmcp", "bap", "bapdashboard"
+        "bapedge", "ltd-agent", "bapcontrolplane", "bapgateway", "bapmcp", "bap", "bapdashboard",
+        "xargs", "rg", "jq", "yq", "tree", "basename", "dirname", "realpath", "readlink", "stat", "file", "printf", "fd"
     ].contains(context.executable) ||
     [
         "toolchain", "shell_builtin", "script_runtime", "expression", "filesystem", "system_utility"

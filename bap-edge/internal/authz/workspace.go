@@ -1,6 +1,7 @@
 package authz
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -220,6 +221,52 @@ func IsStandardDevicePath(target string) bool {
 	if norm == "/dev/null" || norm == "/dev/zero" || norm == "/dev/stdout" || norm == "/dev/stderr" || strings.HasSuffix(norm, "/nul") {
 		return true
 	}
+	return false
+}
+
+// IsStrictTierMandated checks whether the Central Control Plane has commanded
+// Tier 2 Strict Tool Enforcement for this workload.
+// By default, Tier 1 (Standard Governance: Prompt-First Observability + Boundary Invariants)
+// is active everywhere. Tier 2 is OFF by default unless explicitly commanded by Control Plane.
+func IsStrictTierMandated() bool {
+	// 1. Explicit environment overrides
+	if tierEnv := strings.TrimSpace(os.Getenv("BAP_TIER")); tierEnv == "1" || strings.EqualFold(tierEnv, "standard") {
+		return false
+	} else if tierEnv == "2" || strings.EqualFold(tierEnv, "strict") {
+		return true
+	}
+	if strictEnv := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_STRICT_TOOLS"))); strictEnv == "true" || strictEnv == "1" {
+		return true
+	}
+
+	// 2. Query cached policy-state.json pushed by Central Control Plane
+	candidates := []string{
+		filepath.Join(".bap", "policy-state.json"),
+		filepath.Join("..", ".bap", "policy-state.json"),
+		"policy-state.json",
+		"../policy-state.json",
+		filepath.Join("bap-edge", "policy-state.json"),
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		candidates = append(candidates, filepath.Join(home, ".bapstate", "policy", "policy-state.json"))
+		candidates = append(candidates, filepath.Join(home, ".bap", "policy-state.json"))
+	}
+
+	for _, cand := range candidates {
+		if data, err := os.ReadFile(cand); err == nil {
+			var st struct {
+				StrictToolEnforcement bool   `json:"strict_tool_enforcement"`
+				EnforcementTier       string `json:"enforcement_tier"`
+			}
+			if json.Unmarshal(data, &st) == nil {
+				if st.StrictToolEnforcement || strings.EqualFold(st.EnforcementTier, "tier_2_strict") || strings.EqualFold(st.EnforcementTier, "strict") {
+					return true
+				}
+			}
+		}
+	}
+
+	// Default: Tier 2 is ALWAYS OFF by default! Tier 1 Standard applies.
 	return false
 }
 

@@ -52,6 +52,10 @@
                 "type": "Boolean",
                 "required": false
               },
+              "enforcement_tier": {
+                "type": "String",
+                "required": false
+              },
               "executable_class": {
                 "type": "String",
                 "required": false

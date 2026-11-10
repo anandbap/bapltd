@@ -442,11 +442,17 @@ func (a *Authorizer) evaluateAtomicNode(executable, fullCommand, args, workspace
 		}
 	}
 
+	enforcementTier := "tier_1_standard"
+	if IsStrictTierMandated() {
+		enforcementTier = "tier_2_strict"
+	}
+
 	contextMap := cedar.RecordMap{
 		cedar.String("executable"):         cedar.String(normalizedExec),
 		cedar.String("full_command"):       cedar.String(normalizedFull),
 		cedar.String("args"):               cedar.String(normalizedArgs),
 		cedar.String("escapes_workspace"):  cedar.Boolean(effectiveEscapesWorkspace),
+		cedar.String("enforcement_tier"):   cedar.String(enforcementTier),
 		cedar.String("department"):         cedar.String(a.identity.Department),
 		cedar.String("user_email"):         cedar.String(a.identity.UserEmail),
 		cedar.String("action_canonical"):   cedar.String(decomp.CanonicalAction),
@@ -676,8 +682,12 @@ permit (
         "test-path", "copy-item", "cpi", "move-item", "mi", "remove-item", "ri", "new-item", "ni", "set-content", "sc", "add-content", "ac", "out-file", "write-output", "write-host", "format-table", "ft", "format-list", "fl",
         "taskkill", "kill", "pkill", "killall",
         "get-acl", "get-command", "resolve-path", "icacls", "attrib",
-        "bapedge", "ltd-agent", "bapcontrolplane", "bapgateway", "bapmcp", "bap", "bapdashboard"
-    ].contains(context.executable)
+        "bapedge", "ltd-agent", "bapcontrolplane", "bapgateway", "bapmcp", "bap", "bapdashboard",
+        "xargs", "rg", "jq", "yq", "tree", "basename", "dirname", "realpath", "readlink", "stat", "file", "printf", "fd"
+    ].contains(context.executable) ||
+    [
+        "toolchain", "shell_builtin", "script_runtime", "expression", "filesystem", "system_utility"
+    ].contains(context.executable_class)
 };
 
 forbid (
@@ -734,6 +744,7 @@ const defaultBaselineSchema = `{
               "full_command": { "type": "String", "required": true },
               "args": { "type": "String", "required": false },
               "escapes_workspace": { "type": "Boolean", "required": false },
+              "enforcement_tier": { "type": "String", "required": false },
               "executable_class": { "type": "String", "required": false },
               "action_type": { "type": "String", "required": false },
               "action_canonical": { "type": "String", "required": false },

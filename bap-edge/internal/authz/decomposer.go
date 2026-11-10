@@ -45,6 +45,8 @@ func Decompose(executable, fullCommand, args string) DecomposedAction {
 		return decomposeGit(tokens)
 	case "gh":
 		return decomposeGH(tokens)
+	case "xargs":
+		return decomposeXargs(tokens)
 	case "kubectl":
 		return decomposeKubectl(tokens)
 	case "helm":
@@ -269,6 +271,38 @@ func decomposeGH(tokens []string) DecomposedAction {
 		CanonicalResource: "repo:github",
 		ActionType:        actionType,
 		TargetEntity:      sub,
+	}
+}
+
+func decomposeXargs(tokens []string) DecomposedAction {
+	subCmdIndex := -1
+	skipNext := false
+	for i := 1; i < len(tokens); i++ {
+		t := tokens[i]
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		if t == "-I" || t == "-n" || t == "-L" || t == "-s" || t == "-P" || t == "-d" || t == "-E" || t == "--max-args" || t == "--max-lines" {
+			skipNext = true
+			continue
+		}
+		if strings.HasPrefix(t, "-") {
+			continue
+		}
+		subCmdIndex = i
+		break
+	}
+	if subCmdIndex != -1 {
+		subTokens := tokens[subCmdIndex:]
+		innerSub := subTokens[0]
+		return Decompose(innerSub, strings.Join(subTokens, " "), strings.Join(subTokens[1:], " "))
+	}
+	return DecomposedAction{
+		CanonicalAction:   "fs:file:read",
+		CanonicalResource: "file://local",
+		ActionType:        "read",
+		TargetEntity:      "local",
 	}
 }
 

