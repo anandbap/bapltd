@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"bap-controlplane/internal/audit"
+	"bap-controlplane/pkg/types"
 
 	_ "modernc.org/sqlite"
 )
@@ -58,8 +59,10 @@ type Session struct {
 	RootAgentID     string   `json:"root_agent_id,omitempty"`
 	GrantID         string   `json:"grant_id,omitempty"`
 	Lineage         []string `json:"lineage,omitempty"`
-	LineageTree     string   `json:"lineage_tree,omitempty"`
-	ReconciledTo    string   `json:"reconciled_to,omitempty"`
+	LineageTree         string        `json:"lineage_tree,omitempty"`
+	ReconciledTo        string        `json:"reconciled_to,omitempty"`
+	PrincipalID         string        `json:"principal_id,omitempty"`
+	PrincipalSVID       string        `json:"principal_svid,omitempty"`
 }
 
 // IntentContext is mission context produced deterministically at BAP Edge.
@@ -106,6 +109,8 @@ type SessionStartRequest struct {
 	GrantID             string        `json:"grant_id,omitempty"`
 	Lineage             []string      `json:"lineage,omitempty"`
 	LineageTree         string        `json:"lineage_tree,omitempty"`
+	PrincipalID         string        `json:"principal_id,omitempty"`
+	PrincipalSVID       string        `json:"principal_svid,omitempty"`
 }
 
 // CanonicalIntentCategories lists all recognized mission categories.
@@ -155,24 +160,28 @@ type IntentWindows struct {
 
 // Store manages sessions in memory with thread safety and optional SQLite durability.
 type Store struct {
-	mu           sync.RWMutex
-	sessions     map[string]*Session
-	order        []string // chronological order of session IDs
-	revokedUsers map[string]bool
-	intentCounts map[string]int
-	totalPrompts int
-	prompts      []PromptRecord
-	db           *sql.DB // persistent SQLite storage
+	mu                sync.RWMutex
+	sessions          map[string]*Session
+	order             []string // chronological order of session IDs
+	revokedUsers      map[string]bool
+	intentCounts      map[string]int
+	totalPrompts      int
+	prompts           []PromptRecord
+	principals        map[string]*types.AgentPrincipal
+	sessionPrincipals map[string]string
+	db                *sql.DB // persistent SQLite storage
 }
 
 // NewStore creates an in-memory Store (for tests or backward compatibility).
 func NewStore() *Store {
 	return &Store{
-		sessions:     make(map[string]*Session),
-		order:        make([]string, 0),
-		revokedUsers: make(map[string]bool),
-		intentCounts: initIntentMap(),
-		prompts:      make([]PromptRecord, 0),
+		sessions:          make(map[string]*Session),
+		order:             make([]string, 0),
+		revokedUsers:      make(map[string]bool),
+		intentCounts:      initIntentMap(),
+		prompts:           make([]PromptRecord, 0),
+		principals:        make(map[string]*types.AgentPrincipal),
+		sessionPrincipals: make(map[string]string),
 	}
 }
 
@@ -236,12 +245,14 @@ func NewStoreWithDB(dbPath string) (*Store, error) {
 	_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN reporting_json TEXT`)
 
 	store := &Store{
-		sessions:     make(map[string]*Session),
-		order:        make([]string, 0),
-		revokedUsers: make(map[string]bool),
-		intentCounts: initIntentMap(),
-		prompts:      make([]PromptRecord, 0),
-		db:           db,
+		sessions:          make(map[string]*Session),
+		order:             make([]string, 0),
+		revokedUsers:      make(map[string]bool),
+		intentCounts:      initIntentMap(),
+		prompts:           make([]PromptRecord, 0),
+		principals:        make(map[string]*types.AgentPrincipal),
+		sessionPrincipals: make(map[string]string),
+		db:                db,
 	}
 
 	if err := store.loadFromDB(); err != nil {
@@ -516,7 +527,29 @@ func (s *Store) Start(req SessionStartRequest) (*Session, error) {
 		HooksDisabled:       req.HooksDisabled || req.ReportingLayer == "unmonitored",
 		ReportingLayer:      req.ReportingLayer,
 		EnforcementTier:     func() string { if req.EnforcementTier != "" { return req.EnforcementTier }; return "tier_1_standard" }(),
+		PrincipalID:         func() string { if req.PrincipalID != "" { return req.PrincipalID }; return GeneratePrincipalID(appID) }(),
 	}
+	sess.PrincipalSVID = fmt.Sprintf("spiffe://bap.internal/principal/%s", sess.PrincipalID)
+
+	if s.principals == nil {
+		s.principals = make(map[string]*types.AgentPrincipal)
+	}
+	if s.sessionPrincipals == nil {
+		s.sessionPrincipals = make(map[string]string)
+	}
+	s.principals[sess.PrincipalID] = &types.AgentPrincipal{
+		PrincipalID:    sess.PrincipalID,
+		AgentSessionID: sessionID,
+		ClientType:     appID,
+		HumanOwner:     userEmail,
+		WorkstationID:  req.InstanceID,
+		PrincipalSVID:  sess.PrincipalSVID,
+		Status:         "active",
+		Permissions:    []string{"workspace:read", "workspace:write"},
+		CreatedAt:      now,
+		LastActiveAt:   now,
+	}
+	s.sessionPrincipals[sessionID] = sess.PrincipalID
 
 	s.sessions[sessionID] = sess
 	s.order = append(s.order, sessionID)

@@ -42,7 +42,7 @@ The Bounded Authority Plane (BAP) enforces zero-trust execution boundaries, cryp
 
 ### 1.1. The Five Foundational Invariants (Frozen Baseline)
 
-The entire BAP architecture is anchored on five inviolable architectural invariants:
+The entire BAP architecture is anchored on seven inviolable architectural invariants:
 
 > **I1 — Intent is context, never authority.**  
 > An agent declaring intent to "update customer 123" does not grant executable privilege to write, cancel, or modify resources. Intent provides context for policy evaluation and audit evidence, never executable permission.
@@ -58,6 +58,12 @@ The entire BAP architecture is anchored on five inviolable architectural invaria
 
 > **I5 — Observability establishes causality and evidence across Runtime → Authority → PEP → Execution, but telemetry itself is never treated as authorization.**  
 > The Observability Plane reconstructs the end-to-end timeline for forensic integrity, but telemetry reporting or health signals never substitute for cryptographic authorization tokens.
+
+> **I6 — Zero Standing Privileges (ZSP) and the Atomic 4-Tuple Task Contract.**  
+> The agent's starting permission set is strictly ZERO ($\emptyset$). Identity tells *who you are*; authorization determines *what you are eligible to do*. To execute work, an agent must submit an atomic 4-tuple task authorization envelope $(Who, AuthorizedBy, Intent, PermissionAsk)$ signed with an ephemeral Ed25519 key. Broad permissions are monotonically attenuated by deterministic Cedar policy, issuing a single-use JIT `TaskGrant` burned atomically upon execution.
+
+> **I7 — Developer Override & Agent Immunity.**  
+> Autonomous agents are strictly forbidden from activating developer overrides (`bapedge dev-override on`), granting themselves trust, or bypassing boundary checks. Overrides require interactive, authenticated human developer authorization.
 
 ---
 
@@ -1485,6 +1491,136 @@ To guarantee that edge developers never experience IDE freezes or tool latency w
 2. **Safe Fallback Invariant**:
    - If `policy-state.json` is missing, unreadable, or corrupted, the interceptor safely defaults to **Tier 1 (Standard)**.
    - Hard boundary checks (`.env`, `~/.aws`, `~/.ssh`, BAP anti-tamper) are compiled directly into the interceptor binary and execute deterministically regardless of policy bundle availability.
+
+---
+
+## 19. Pure Zero-Trust AI Agent Architecture: Cryptographic Identity, Zero Standing Privileges & JIT Task Governance (BAP-900 Series: BAP-900–BAP-918)
+
+### 19.1. Architectural Philosophy: Why Ambient Privileges Fail
+Enterprise security cannot treat AI agents as human developers or static services. Autonomous coding agents are probabilistic, non-deterministic execution engines. When granted ambient standing privileges or allowed to execute unbrokered shell tools, any prompt injection, malicious dependency, or model hallucination can compromise the entire infrastructure.
+
+BAP grounds agent governance on three core truths:
+1. **Identity tells *who you are*.** The agent principal must be distinct from both its human owner and its hosting runtime, backed by an ephemeral in-memory Ed25519 keypair and signed `CryptographicAgentSVID`.
+2. **Authorization determines *what you are eligible to do*.** In Zero-Trust, starting permissions are strictly ZERO ($\emptyset$). The agent possesses no ambient privileges.
+3. **Execution requires an explicit task contract.** To execute any operation, the agent must submit an atomic **4-Tuple Task Authorization Envelope**:
+   $$E = \Big(\text{Who}, \text{AuthorizedBy}, \text{Intent}, \text{PermissionAsk}\Big)$$
+   Deterministic Cedar policy validates developer eligibility, attenuates over-broad requests, issues an ephemeral, single-use `TaskGrant`, executes the task within the broker, burns the grant atomically, and generates an unforgeable cryptographic **Audit Lineage Proof**.
+
+```mermaid
+flowchart TD
+    subgraph HumanIdP ["Human Enterprise Identity (SSO / OIDC)"]
+        User["Human Developer (user@enterprise.com)"]
+        OIDC["OIDC Identity Provider (Entra / Okta / IdP)"]
+        User --- OIDC
+    end
+
+    subgraph AgentWorkstation ["Agent Execution Boundary (bap-edge)"]
+        Agent["AI Agent Runtime (Claude Code / Codex / Antigravity)"]
+        KeyGen["In-Memory Ed25519 Keypair (Ephemeral)"]
+        SVID["CryptographicAgentSVID (spiffe://bap.local/agent/...)"]
+        Envelope["4-Tuple Task Envelope\n(Who, AuthorizedBy, Intent, PermissionAsk)"]
+        ZSP["Zero Standing Privileges Engine (ZSPEngine)"]
+        CedarEngine["Cedar Policy & Scope Attenuation Engine"]
+        Grant["Single-Use JIT TaskGrant (TTL: 300s, MaxUses: 1)"]
+        Broker["Credential-Isolated Broker (bapedge.exe exec)"]
+        FIMShield["FIM Boundary Shield (.env, ~/.aws, private keys)"]
+
+        Agent --> KeyGen
+        KeyGen --> SVID
+        SVID --> Envelope
+        User -.->|AuthorizedBy Anchor| Envelope
+        Envelope -->|Submit Signed Envelope| ZSP
+        ZSP -->|Evaluate Eligibility| CedarEngine
+        CedarEngine -->|Attenuate Broad Scope| ZSP
+        ZSP -->|Mint Single-Use Grant| Grant
+        Grant -->|Burn Grant on Execution| Broker
+        Broker -->|Boundary Validation| FIMShield
+        Broker -->|Isolate Credentials / Execute| Agent
+    end
+
+    subgraph GovernancePlane ["Evidence & Central Control Plane"]
+        Proof["AuditLineageProof (HMAC-SHA256 Non-Repudiation)"]
+        CP["Central Control Plane (:8443 / Render)"]
+        Gateway["BAP Gateway PEP (:9090)"]
+
+        Broker --> Proof
+        Proof --> CP
+        Broker -.->|Outbound SaaS / Cloud| Gateway
+    end
+```
+
+### 19.2. Explicit Cryptographic Agent Principal & SVID Binding (BAP-911, BAP-915)
+Every registered agent has an identifiable principal distinct from its human owner and hosting runtime:
+- **Ephemeral Keypair**: On agent session startup, `GenerateAgentKeypair()` generates an in-memory Ed25519 public/private keypair. Private keys are never persisted to disk or transmitted over the network.
+- **CryptographicAgentSVID**: `MintAgentSVID()` produces a signed SVID binding:
+  - `AgentKeyID`: Unique public key fingerprint (e.g. `key-ed25519-915a`).
+  - `SPIFFE_ID`: `spiffe://bap.local/agent/<runtime-family>/<key-id>`.
+  - `HumanOwnerID`: Corporate email of the developer (`user@enterprise.com`).
+  - `OIDCSub`: Enterprise OIDC Subject identifier (`sub-azure-99128`).
+  - `WorkstationID`: Machine fingerprint (`wkstn-84192b0e-User`).
+  - `RuntimeFamily`: Hosting runtime (`claude-code`, `codex`, `antigravity`, `copilot`).
+- **Cryptographic Verification**: `VerifyAgentSVID()` validates the signature and ensures the agent SVID has not expired (default TTL 8 hours).
+
+### 19.3. Complete Network & Control Channel Architecture (BAP-912)
+Communication paths across BAP components are formally specified in machine-readable inventory `docs/control_channels.json`:
+- **CH-01**: HookWatch / Native Hooks $\rightarrow$ Agent Runtime (`bapedge.exe`). IPC named pipe/stdio, JSON-RPC, fail-closed on timeout.
+- **CH-02**: Agent Runtime $\rightarrow$ Control Plane (`bapcontrolplane`). mTLS 1.3, authenticated via Workstation SVID, async bounded spooling.
+- **CH-03**: Workstation $\rightarrow$ SPIFFE / STS Infrastructure. mTLS 1.3, RFC 8693 token exchange.
+- **CH-04**: Edge Broker $\rightarrow$ Target System (Direct Brokered Execution). Local process containment, Windows Restricted Token / Linux cgroups.
+- **CH-05**: Agent Runtime $\rightarrow$ BAP Gateway PEP (`:9090`). HTTP proxy with grant verification.
+- **CH-06**: Gateway PEP $\rightarrow$ Target Cloud / SaaS APIs. Outbound egress with isolated target credentials.
+- **CH-07**: Control Plane $\rightarrow$ Enterprise IdP (Entra / Okta). OIDC Device Authorization & PKCE.
+- **CH-08**: Administrative Interface $\rightarrow$ Control Plane. HTTPS, Bearer Admin Token with scoped RBAC.
+
+### 19.4. Customer-Network Credential & Enforcement Boundary (BAP-913)
+Strict trust boundaries separate the central decision plane, local execution infrastructure, and credential broker:
+1. **Decision Plane Isolation**: The centralized policy service (`bapcontrolplane`) evaluates policy and distributes signed bundles; it **cannot** directly execute local actions on workstations or retrieve target secrets.
+2. **Local Execution Isolation**: Workstations execute approved commands under Windows Restricted Tokens (`bapedge/internal/authz/boundary.go`).
+3. **Target Credential Isolation**: Credentials for external SaaS and databases are stored in dedicated credential managers and injected exclusively at the Gateway PEP or trusted broker. AI agents never receive raw credentials in tool arguments, outputs, or logs.
+
+### 19.5. LLM Call Inventory & Security Non-Reliance Governance (BAP-914)
+All model calls performed by agents or BAP governance components are inventoried in `docs/llm_call_inventory.json`:
+- **Intent Evaluation (`LLM-01`)**: Purpose: classifying user prompts into 10 canonical CIO categories. Trust Boundary: Edge Interceptor. Policy: Evaluated for telemetry only (Invariant 1).
+- **Permission Planning (`LLM-02`)**: Purpose: synthesizing least-privilege proposals from agent prompts. Trust Boundary: Edge ZSP Engine. Policy: AI output is strictly non-binding advisory.
+- **Content Sanitization / DLP (`LLM-03`)**: Purpose: masking PII, credentials, and tokens in prompt streams.
+- **Invariant Enforcement**: Under `ValidateNonReliance()`, security-critical decisions **never rely solely on untrusted LLM outputs**. Cedar policy invariants deterministically supersede any AI-generated permission plan.
+
+### 19.6. Intent Planning, Policy Narrowing & Monotonic Scope Attenuation (BAP-901, BAP-902, BAP-906)
+- **BAP-901 (Intent-to-Permission Planning)**: Captures declared intent and translates it into a least-privilege proposal.
+- **BAP-902 (Policy Narrowing & Conditional Authorization)**: Enforces four decision outcomes: `ALLOW`, `DENY`, `NARROW`, and `REQUIRE_APPROVAL`. Monotonic scope attenuation strips excessive wildcards (`repo:*` $\rightarrow$ `repo:read`, `repo:push`).
+- **BAP-906 (Data Sensitivity-Aware Authorization)**: Restricts access to sensitive data classifications (e.g. `RESTRICTED_CUSTOMER_DATA`) without explicit human approval.
+
+### 19.7. Atomic 4-Tuple Task Authorization Envelope (BAP-916)
+Work execution requires an immutable `TaskAuthorizationEnvelope`:
+```go
+type TaskAuthorizationEnvelope struct {
+    EnvelopeID     string                 // Unique envelope ID
+    Who            CryptographicAgentSVID // Ephemeral Agent Identity
+    AuthorizedBy   HumanPrincipalBinding  // Human Enterprise IdP Identity
+    Intent         DeclaredTaskIntent     // Canonical CIO Category & Statement
+    PermissionAsk  RequestedPermissions   // Resources, Actions, TargetAudience
+    Timestamp      time.Time              // UTC Creation timestamp
+    AgentSignature string                 // Ed25519 signature by Agent private key
+}
+```
+The envelope digest is computed over canonical representations of all four fields. The agent signs this digest using its private Ed25519 key, providing non-repudiation that the specific agent workload requested the exact task.
+
+### 19.8. Zero Standing Privileges (ZSP) Engine & Single-Use JIT Grants (BAP-917)
+The BAP `ZSPEngine` governs task lifecycle:
+1. **Zero Standing Privileges Baseline**: Default permissions for any registered agent are strictly empty ($\emptyset$). Unsolicited tool calls fail closed immediately.
+2. **Envelope Evaluation (`AuthorizeTaskEnvelope`)**: Validates the agent signature, verifies the human IdP binding, applies Cedar policy, and attenuates permissions.
+3. **Single-Use JIT Grant Issuance**: Mints a `TaskGrant` with:
+   - `GrantID`: Cryptographic identifier (e.g. `grant-task-84912d09`).
+   - `MaxUses`: Exactly 1 (`Single-Use`).
+   - `TTL`: 300 seconds (5 minutes).
+4. **Atomic Grant Burning (`ConsumeTaskGrant`)**: At execution time, the broker verifies the grant and immediately sets `Consumed = true`. Any attempt to replay, double-spend, or re-execute with the same grant fails with `GrantAlreadyConsumed`.
+
+### 19.9. Cryptographic Non-Repudiation Audit Lineage Proofs (BAP-918)
+Every executed action generates an unforgeable `AuditLineageProof`:
+- **HMAC-SHA256 Signature**: Computed using the BAP workstation secret key across:
+  $$\text{HMAC}\Big(K, \text{HumanOwner} \,\|\, \text{AgentSVID} \,\|\, \text{EnvelopeDigest} \,\|\, \text{GrantID} \,\|\, \text{Command} \,\|\, \text{CommandHash} \,\|\, \text{BinaryHash} \,\|\, \text{ProcessTree} \,\|\, \text{ExitCode}\Big)$$
+- **Forensic Guarantee**: Enables complete, independent reconstruction of any action: who authorized it, which agent ran it, what policy evaluated it, what exact binary executed, and proof that the grant was burned.
+
 
 
 

@@ -81,6 +81,12 @@ flowchart TD
 5. **`I5` — Observability establishes causality and evidence across Runtime → Authority → PEP → Execution:**  
    Every prompt, grant issuance, PEP decision, and command execution is cryptographically linked with SHA-256 Merkle hash chaining. If telemetry fails, the system fails closed; telemetry itself is never treated as authorization.
 
+6. **`I6` — Zero Standing Privileges (ZSP) and the Atomic 4-Tuple Task Contract:**  
+   Identity tells *who you are*; authorization determines *what you are eligible to do*. Starting permissions are strictly ZERO ($\emptyset$). Agents have zero ambient authority. Execution requires submitting an atomic 4-tuple task envelope $(Who, AuthorizedBy, Intent, PermissionAsk)$ signed with an ephemeral Ed25519 key, issuing a single-use JIT `TaskGrant` burned atomically upon execution.
+
+7. **`I7` — Developer Override & Agent Immunity:**  
+   Autonomous agents are strictly forbidden from activating developer overrides (`bapedge dev-override on`), granting themselves trust, or bypassing boundary checks. Overrides require interactive, authenticated human developer authorization.
+
 ---
 
 ### The Four Frozen Architecture Rules (Operations & Governance)
@@ -103,7 +109,7 @@ Alongside the invariants, four operational rules govern all interventions:
 
 ### Extended Causal Governance Chain
 
-$$\text{Task} \longrightarrow \text{Intent Context} \longrightarrow \text{Action Proposal} \longrightarrow \text{Policy Decision} \longrightarrow \text{Bounded Grant} \longrightarrow \text{Gateway PEP} \longrightarrow \text{Execution} \longrightarrow \text{Evidence}$$
+$$\text{Human IdP} \longrightarrow \text{Cryptographic Agent SVID} \longrightarrow \text{4-Tuple Task Envelope} \longrightarrow \text{Policy Narrowing} \longrightarrow \text{Single-Use JIT Grant} \longrightarrow \text{Broker Execution & Burn} \longrightarrow \text{HMAC Lineage Proof}$$
 
 ---
 

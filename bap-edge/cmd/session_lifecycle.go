@@ -161,6 +161,10 @@ func EnsureSessionStarted(sessionID, appID string, clientPID int, initialPrompt 
 	}
 
 	// 5. Pre-flight registration with Central Control Plane
+	hPID := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%d:%d", sessionID, normAppID, clientPID, time.Now().UnixNano())))
+	principalID := fmt.Sprintf("urn:bap:principal:agent:%s-%s", normAppID, hex.EncodeToString(hPID[:4]))
+	principalSVID := fmt.Sprintf("spiffe://bap.internal/principal/%s", principalID)
+
 	startPayload := map[string]any{
 		"session_id":            sessionID,
 		"app_id":                normAppID,
@@ -173,6 +177,8 @@ func EnsureSessionStarted(sessionID, appID string, clientPID int, initialPrompt 
 		"session_svid":          sessionSVID,
 		"workstation_spiffe_id": credSPIFFE,
 		"spiffe_id":             credSPIFFE,
+		"principal_id":          principalID,
+		"principal_svid":        principalSVID,
 		"reporting_layer":       repLayer,
 		"hooks_disabled":        hooksDisabled,
 	}

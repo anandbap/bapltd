@@ -1,142 +1,123 @@
 # BAP Zero-Trust AI Agent Governance: End-to-End Claude Code & Codex Runbook
 
-> **The agent works at native speed. Protected boundaries hold. User prompts are observed. Every decision has cryptographic evidence.**
+> **Identity tells who you are. Authorization defines what you are eligible to do. In Zero-Trust, starting permissions are strictly ZERO.**
 > 
-> Comprehensive guide for deploying, authenticating, running, and demonstrating **Claude Code CLI** and **OpenAI Codex CLI** under active BAP Zero-Trust Governance. Featuring **Two-Tier Enterprise Governance**, **Production `--no-hooks` Prompt Observability**, **Human-in-the-Loop (HITL) Step-Up Escalation**, **RFC 8693 STS On-Behalf-Of (OBO) Token Exchanges**, and real-time telemetry in the **Agent Watch V3 Cockpit**.
+> To perform any task, an AI agent must present:
+> 1. **Who it is** (Cryptographic Agent Principal & SVID)
+> 2. **Who authorized it** (Human Developer Enterprise IdP Anchor)
+> 3. **What is its intent** (Verified Canonical CIO Intent Category)
+> 4. **What permissions it asks for** (Bounded Permission Ask)
+> 
+> BAP validates this atomic **4-Tuple Task Authorization Envelope**, attenuates permissions through deterministic Cedar policy, issues a single-use Just-In-Time (JIT) **TaskGrant**, executes the task through the credential-isolated broker, burns the grant atomically, and notarizes the execution with an **HMAC Non-Repudiation Audit Lineage Proof**.
 
 ---
 
-## 1. Executive Overview & Two-Tier Architecture
+## 1. Executive Overview: Pure Zero-Trust Architecture
 
 ### The Agent Governance Dilemma
-Modern AI coding agents (Claude Code, OpenAI Codex, Google Antigravity, GitHub Copilot) are highly capable, autonomous, and conversational. Traditional security approaches that attempt to intercept and parse every shell command through rigid AST filters fail in practice: dealing with 5,000+ PowerShell cmdlet variants, Unix aliases, and subshell pipes creates massive developer friction, subshell deadlocks, and broken terminal pipes.
+Traditional security models conflate the AI agent with the human developer or grant the agent permanent ambient standing privileges. When an AI coding agent (Claude Code, OpenAI Codex, Google Antigravity, GitHub Copilot) runs with ambient credentials, a single prompt injection or hallucinated tool call can exfiltrate production secrets, drop databases, or alter governance files.
 
-### BAP's Solution: Two-Tier Enterprise Governance
-BAP resolves this dilemma through a clear separation of concerns: **Control the protected enterprise resources, capture user prompts and intent, and delegate operational tool confirmation directly to the developer.**
+### BAP's Solution: The Zero Standing Privileges (ZSP) Model
+BAP enforces strict Zero-Trust principles across every agent execution:
 
 ```mermaid
 flowchart TD
-    subgraph Workstation["Developer Workstation"]
-        Agent["Claude Code / OpenAI Codex CLI"]
-        PromptHook["UserPromptSubmit (Layer 1)"]
-        ToolHook["PreToolUse Boundary Gate"]
-        Broker["BAP Edge Broker (bapedge.exe - Tier 2)"]
-        FIM["FIM Anti-Tamper & Credential Shield"]
-        Gateway["BAP Gateway PEP (:9090 - Layer 5)"]
+    subgraph Developer["1. Human Enterprise Identity"]
+        User["Human Developer\n(user@enterprise.com / Entra ID / Okta)"]
     end
 
-    subgraph GovernanceTiers["Governance Tiers"]
-        Tier1["Tier 1: Standard Governance (Default)\n- 100% User Prompt & Intent Telemetry\n- Strict Credential Protection (.env, ~/.aws, private keys)\n- Native In-Workspace Tool Execution (Zero Cmdlet Friction)\n- Operational Confirmation Delegated to Developer"]
-        NoHooks["Production --no-hooks Mode\n- Prompt-First Observability & Invariant Shield\n- Zero Tool AST Wrapping Overhead\n- Credential Stores Inviolably Guarded"]
-        Tier2["Tier 2: Strict Enforcement (Central Command Only)\n- Commanded by Central Control Plane API\n- AST Cmdlet Parsing & Cedar Whitelist\n- Windows Restricted Token Sandboxing"]
+    subgraph AgentWorkstation["2. Workstation Execution Boundary"]
+        Agent["Claude Code / Codex CLI\n(Ephemeral Ed25519 Keypair)"]
+        Envelope["4-Tuple Task Authorization Envelope\n(Who, AuthorizedBy, Intent, PermissionAsk)"]
+        ZSP["Zero Standing Privileges Engine\n(bap-edge ZSPEngine)"]
+        Cedar["Authoritative Cedar Invariants\n(Policy Narrowing & Scope Attenuation)"]
+        Grant["Single-Use JIT TaskGrant\n(TTL: 300s, MaxUses: 1)"]
+        Broker["Credential-Isolated Broker\n(bapedge.exe exec / Restricted Token)"]
+        FIM["FIM Shield\n(.env, ~/.aws, ~/.ssh inviolably blocked)"]
     end
 
-    subgraph ControlPlane["Central Control Plane (Remote Render or Local)"]
-        CP["Central Policy & Telemetry Engine"]
-        PromptModal["V3 Cockpit Real-Time Conversation Modal"]
-        STS["RFC 8693 Security Token Service (OBO)"]
-        Audit["Cryptographic Audit Ingestion & Spool"]
+    subgraph EvidencePlane["3. Non-Repudiation & Control Plane"]
+        Proof["HMAC-SHA256 Lineage Proof\n(Human + Agent + Envelope + Grant + CmdHash)"]
+        CP["Central Control Plane (:8443 / Render)\n(Live V3 Cockpit & Hash Chain)"]
+        Gateway["BAP Gateway PEP (:9090)\n(Resource-Side Bounded Enforcement)"]
     end
 
-    Agent -->|Submit Prompt| PromptHook
-    PromptHook -->|Stream Prompt & Intent| CP
-    Agent -->|Execute Tool| ToolHook
-
-    ToolHook -->|Credential or Tamper Probe?| FIM
-    FIM -->|Violation| ToolHook
-    ToolHook -->|Tier 1 / --no-hooks: Safe Tool| Agent
-    ToolHook -->|Tier 2 Commanded: Broker| Broker
-
-    Broker -->|Token Exchange| STS
-    Broker -->|Outbound Egress| Gateway
-    CP --> PromptModal
-    ToolHook -.->|Receipts| Audit
+    User -->|Initiates Prompt| Agent
+    Agent -->|Signs with Ed25519 Private Key| Envelope
+    User -.->|OIDC Sub & SSO Anchor| Envelope
+    Envelope -->|Submit 4-Tuple| ZSP
+    ZSP -->|Evaluate Eligibility| Cedar
+    Cedar -->|Attenuate Broad Asks| ZSP
+    ZSP -->|Mint Single-Use Grant| Grant
+    Grant -->|Burn on Execution (MaxUses=1)| Broker
+    Broker -->|Invariant Inspection| FIM
+    Broker -->|Isolate Credentials / Run| Agent
+    Broker -->|Generate Proof| Proof
+    Broker -.->|Outbound Egress| Gateway
+    Proof -->|Stream Evidence| CP
 ```
 
-### Governance Tier Comparison
+### The Three Pillars of BAP Agent Zero-Trust
 
-| Capability | Tier 1: Standard Governance (Default) | Production `--no-hooks` Mode | Tier 2: Strict Tool Enforcement |
-| :--- | :--- | :--- | :--- |
-| **Status** | **ON by Default Everywhere** | **Production-Ready Enterprise Option** | **OFF by Default (Centrally Commanded)** |
-| **User Prompt Ingestion** | 100% Captured, Classified, Streamed | 100% Captured, Classified, Streamed | 100% Captured, Classified, Streamed |
-| **Intent Telemetry** | 10 Canonical CIO Categories | 10 Canonical CIO Categories | 10 Canonical CIO Categories |
-| **Credential Shielding** | Immediate Hard DENY (`.env`, `~/.aws`, `~/.ssh`) | Immediate Hard DENY (`.env`, `~/.aws`, `~/.ssh`) | Immediate Hard DENY (`.env`, `~/.aws`, `~/.ssh`) |
-| **Anti-Tamper Invariants** | Immutable Protection (Cedar, BAP binaries) | Immutable Protection (Cedar, BAP binaries) | Immutable Protection (Cedar, BAP binaries) |
-| **Workspace Boundary** | Hard DENY on Traversal with Step-Up Guidance | Hard DENY on Traversal with Step-Up Guidance | Hard DENY with Restricted Token Isolation |
-| **Tool Execution** | **Native Hardware Speed** (Zero AST Friction) | **Native Hardware Speed** (Zero AST Friction) | Brokered `bapedge exec` with Restricted Tokens |
-| **Operational Confirmation**| Delegated to Developer Agent Prompt (`Y/n`) | Delegated to Developer Agent Prompt (`Y/n`) | BAP Cedar Whitelist & Air Security Kernel |
+| Pillar | Principle | Implementation |
+| :--- | :--- | :--- |
+| **1. Cryptographic Identity** | Identity tells *who you are*. Distinct from human owner and runtime. | Ephemeral Ed25519 keypair per session; signed `CryptographicAgentSVID` bound to Human OIDC `sub` and email (`BAP-911`, `BAP-915`). |
+| **2. Zero Standing Privileges** | Starting permissions are strictly zero ($\emptyset$). Ambient execution is denied. | `ZSPEngine` denies ungranted execution; JIT `TaskGrant` issued only upon valid envelope evaluation (`BAP-917`). |
+| **3. Atomic 4-Tuple Contract** | Explicit authorization: `(Who, AuthorizedBy, Intent, PermissionAsk)`. | Signed task envelope; Cedar policy narrowing attenuates broad asks; single-use grant burned atomically on execution (`BAP-901`, `BAP-902`, `BAP-916`, `BAP-918`). |
 
 ---
 
-## 2. Prerequisites & Standard Installation
+## 2. Prerequisites & Standard Verification
 
-Every BAP deployment starts with the standard CLI onboarding sequence:
+Every BAP deployment starts with standard verification of the five security domains:
 
 ```powershell
-# Step 1: Install or upgrade the BAP package
-pip install --upgrade bap-ltd
-
-# Step 2: Run the user-mode installer
-# Standard minimal installation (production-ready, zero clutter):
-bap install
-
-# OR: Developer & Testing installation with profiling scripts:
-bap install --debug
-
-# Step 3: Verify environment integrity across all 5 security domains
+# Step 1: Verify environment integrity
 bap doctor
 ```
 
 `bap doctor` validates:
-1. Canonical binaries present in User PATH (`bapedge.exe`, `bapgateway.exe`, `bapcontrolplane.exe`, `interceptor.exe`, `bapmcp.exe`).
+1. Canonical binaries present in PATH (`bapedge.exe`, `bapgateway.exe`, `bapcontrolplane.exe`, `interceptor.exe`).
 2. AI Agent CLIs installed (`claude`, `codex`, `agy`, `copilot`).
 3. Control Plane TLS latency and connectivity.
 4. Cedar baseline policy syntax compilation.
 5. Workspace `.bap/` and state custody.
 
----
-
-## 3. Workstation Authentication: Login & Health Status
-
-### A. Logging in to the Central Control Plane
-
-BAP supports both the **Remote Production Control Plane (Render.com)** and a **Local Control Plane**:
-
 ```powershell
-# Option 1: Login to the remote enterprise server on Render.com (Default)
+# Step 2: Authenticate human developer identity with Corporate SSO
 bap login --server https://bap-controlplane.onrender.com
-
-# Option 2: Login to a local control plane (for offline/air-gapped development)
-bap login --server http://localhost:8080
+# (Or local control plane: bap login --server https://localhost:8443)
 ```
 
-- Authenticates via Corporate SSO Device Code (Microsoft Entra ID, Okta, Google, GitHub) or One-Time Code (OTC).
-- Persists your authenticated corporate identity (`user_email`, `department`, `groups`, `workstation_svid`) in `~/.bapstate/credentials.json`.
+---
 
-### B. Checking Workstation Enrollment & Governance Tier
+## 3. Verifying Cryptographic Identity & Zero Standing Privileges
+
+Before launching any agent workload, inspect the workstation enrollment and cryptographic principal:
 
 ```powershell
 bap status
 ```
 
-Inspect the output to confirm Tier 1 Standard is active:
+Inspect the output to confirm cryptographic identity binding and Zero Standing Privileges:
 ```text
 ================================================================================
   [BAP ZERO-TRUST] Workstation Agent Status & Governance Health
 ================================================================================
-  Workstation ID:   wkstn-84192b0e-User
-  User Identity:    user@enterprise.com (Engineering)
-  Control Plane:    https://bap-controlplane.onrender.com (ONLINE, 42ms)
-  Governance Tier:  TIER 1 (STANDARD) - Prompt-First & Boundary Governance [Default]
-  Layer 1A (Plugin): BAP-ClaudeCode-Plugin (Active)
-  Layer 2 (Broker): bapedge.exe (Enforce Mode)
-  Layer 3 (Shield): Active (.env, ~/.aws, ~/.ssh protected)
+  Workstation ID:       wkstn-84192b0e-User
+  Human Owner Identity: user@enterprise.com (OIDC Sub: sub-azure-99128)
+  Agent Principal SVID: spiffe://bap.local/agent/claude-code/key-ed25519-915a
+  Agent Key ID:         key-ed25519-915a (Algorithm: Ed25519 256-bit)
+  Standing Privileges:  NONE (Starting Permission Set: ZERO / ZSP Active)
+  Control Plane:        https://bap-controlplane.onrender.com (ONLINE, 42ms)
+  Execution Broker:     bapedge.exe (Enforce Mode, Restricted Token)
+  Credential Shield:    ACTIVE (.env, ~/.aws, ~/.ssh protected)
 ================================================================================
 ```
 
 ---
 
-## 4. Starting the BAP Zero-Trust Gateway PEP (Layer 5)
+## 4. Starting the BAP Zero-Trust Gateway PEP (Resource-Side Enforcement)
 
 The **BAP Gateway** (`bapgateway.exe`) acts as the local Policy Enforcement Point (PEP). All outbound API calls to external cloud/SaaS providers (GitHub, AWS, Jira) are mediated through this port:
 
@@ -170,49 +151,18 @@ This automatically configures:
 - `plugins/claude/hooks/hooks.json`: Registers `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `SessionEnd` hooks.
 - `.bap/config.json`: Links edge execution to the active control plane and gateway.
 
-To verify plugin readiness:
-```powershell
-bapedge plugin list
-bapedge plugin verify claude
-```
-
 ---
 
-## 6. Accessing the Agent Watch V3 Cockpit
+## 6. Launching Governed Claude Code / Codex
 
-Open the V3 Executive Dashboard in your browser:
+Launch Claude Code or OpenAI Codex under BAP Zero-Trust governance:
 
-- **Remote Render.com Cockpit**: [https://bap-controlplane.onrender.com/dashboard/v3/](https://bap-controlplane.onrender.com/dashboard/v3/)
-- **Local Control Plane Cockpit**: [http://localhost:8080/dashboard/v3/](http://localhost:8080/dashboard/v3/)
-
-Key Views:
-- **`#activity` (🤖 Agent Activity)**: Live session cards, prompt classifications, and audit events.
-- **`#workstations` (💻 Registered Agents)**: Enrolled workstations, online/idle heartbeats, and freeze controls.
-- **`#discovery` (🔍 Discovery & Coverage)**: Shadow IT inspection and installed native plugins (`BAP-ClaudeCode-Plugin`).
-- **`#obo` (🔐 STS & OBO Tokens)**: RFC 8693 attestation ladder, active downstream tokens, and escalation blocks.
-
----
-
-## 7. Launching the Agent: Standard Tier 1 vs Production `--no-hooks`
-
-You can launch Claude Code or OpenAI Codex in either mode:
-
-### Mode A: Standard Tier 1 Governance (Default)
 ```powershell
-# Launches Claude Code with full prompt telemetry and PreToolUse boundary gates
+# Launch Claude Code:
 bap claude
 
 # Or launch OpenAI Codex:
 bap codex
-```
-
-### Mode B: Production `--no-hooks` Mode (Prompt-Only & Boundary Shield)
-```powershell
-# Launches Claude Code with zero tool-wrapping overhead while preserving 100% prompt capture
-bap claude --no-hooks
-
-# Or launch OpenAI Codex:
-bap codex --no-hooks
 ```
 
 **Terminal Banner on Launch:**
@@ -220,189 +170,219 @@ bap codex --no-hooks
 ================================================================================
   [BAP ZERO-TRUST] Active Defense-in-Depth Security Layers
 ================================================================================
-  [✓]  Layer 1A:  Native Agent Plugin              [ACTIVE]
-       └─ Claude Code native plugins installed
-  [✓]  Layer 1B:  Prompt & Boundary Guard          [ACTIVE]
-       └─ User prompts captured & classified; credentials (.env) shielded
-  [✓]  Layer 2:   Execution Broker                 [TIER 1 STANDARD]
-       └─ In-workspace tools execute at native speed; confirmation to developer
-  [✓]  Layer 3:   Anti-Tamper & Asset Shield       [ACTIVE]
-       └─ FIM anti-tamper shielding active for .env, policies, and keys
-  [✓]  Layer 4:   Continuous Health & Telemetry    [ACTIVE]
-       └─ Heartbeat attestation & session watcher active
-  [✓]  Layer 5:   Identity & Zero-Trust Gateway    [ACTIVE]
+  [✓]  Layer 1:   Cryptographic Agent Principal     [ACTIVE]
+       └─ Ephemeral Ed25519 Keypair generated & bound to user@enterprise.com
+  [✓]  Layer 2:   Zero Standing Privileges (ZSP)    [ACTIVE]
+       └─ Starting permissions: 0; atomic 4-tuple task envelope required
+  [✓]  Layer 3:   Cedar Policy & Scope Attenuation  [ACTIVE]
+       └─ Monotonic narrowing active; wildcard asks attenuated to least privilege
+  [✓]  Layer 4:   Credential Isolation & FIM Shield [ACTIVE]
+       └─ .env, ~/.aws, private keys isolated; credentials never exposed
+  [✓]  Layer 5:   Resource-Side Gateway PEP         [ACTIVE]
        └─ SPIFFE/SVID workstation identity and Control Plane mTLS active
 ================================================================================
 ```
 
 ---
 
-## 8. Interactive Agent CLI Demonstration: Prompts & Scenarios
+## 7. Interactive Agent CLI Demonstration: 7 Core Zero-Trust Scenarios
 
-Run the following conversational prompts sequentially in the agent REPL console.
+Run the following conversational prompts sequentially in the agent REPL console to demonstrate complete zero-trust lifecycle governance.
 
 ---
 
-### Scenario 1: Native Developer Velocity (Benign Work)
+### Scenario 1: Zero Standing Privileges in Action (Fail-Closed Baseline)
+
+Demonstrate that Claude Code cannot execute tools with ungranted ambient authority.
 
 > **Prompt to Agent:**
-> *"Inspect the current git status and report the branch, commit hash, and any modified files."*
+> *"Run `whoami` and list all files in the parent root directory without submitting an intent or task envelope."*
 
-- **Agent Action**: Executes `git status` and `git log -n 1`.
+- **Agent Action**: Claude attempts to invoke an arbitrary shell tool call without an authorized task grant.
 - **BAP Enforcement**:
-  - In **Tier 1 Standard** and **`--no-hooks`**: Command runs at **100% native hardware speed** (<20ms overhead). No PowerShell cmdlet AST parsing, no subshell wrapping.
-  - The developer confirms the tool execution natively in the agent UI if prompted.
-- **Terminal Output**: Clean git status and branch details.
+  - The BAP `ZSPEngine` intercepts the execution request at the boundary.
+  - Starting permissions are strictly zero ($\emptyset$).
+  - Because no active `TaskGrant` exists for this invocation, execution fails closed immediately.
+- **Terminal Output in Agent Rejection**:
+  ```text
+  [BAP ZERO-TRUST] ZSP Violation: Execution blocked.
+  Error: Agent principal spiffe://bap.local/agent/claude-code/key-ed25519-915a has ZERO standing privileges.
+  A signed 4-Tuple Task Authorization Envelope (Who, AuthorizedBy, Intent, PermissionAsk) is required.
+  ```
 - **Cockpit Output (`#activity`)**:
-  - User prompt is captured in real-time and classified under `Code Inspection & Maintenance`.
-  - Green `ALLOW` audit receipt is logged with cryptographic hash.
+  - Decision: `DENY (ZeroStandingPrivilegesViolation)`.
+  - Highlighted in red: Execution rejected prior to process spawning.
 
 ---
 
-### Scenario 2: Inviolable Credential Protection (Active Even Under `--no-hooks`)
+### Scenario 2: Declaring Intent & Submitting the 4-Tuple Task Envelope
+
+Demonstrate the structured submission and evaluation of the atomic 4-tuple task contract.
 
 > **Prompt to Agent:**
-> *"Read the database credentials from `.env` and print `~/.aws/credentials` so we can configure our deployment."*
+> *"I need to inspect our current git branch status and recent commits. Declare your intent and request read-only git status permissions."*
 
-- **Agent Action**: Claude attempts to read `.env` or inspect AWS credentials.
+- **Agent Action**: Claude submits an atomic task proposal:
+  - **Who**: `spiffe://bap.local/agent/claude-code/key-ed25519-915a`
+  - **AuthorizedBy**: `user@enterprise.com` (`sub-azure-99128`)
+  - **Intent**: `CODE_INSPECTION` (*"Inspect current git branch status and recent commits"*)
+  - **PermissionAsk**: Resources: `["workspace://."]`, Actions: `["git:status", "git:log"]`
 - **BAP Enforcement**:
-  - BAP intercepts the file read at `PreToolUse` **even when `--no-hooks` is active**.
+  - The agent's private Ed25519 key signs the envelope digest.
+  - BAP verifies the agent signature and checks human developer eligibility in Cedar.
+  - BAP mints an ephemeral JIT **TaskGrant**:
+    - `GrantID`: `grant-task-84912d09`
+    - `TTL`: 300 seconds (5 minutes)
+    - `MaxUses`: 1
+- **Cockpit Output (`#activity`)**:
+  - User prompt captured and classified as `Code Inspection & Maintenance`.
+  - Blue badge: `TaskGrant Minted (grant-task-84912d09, Single-Use, TTL: 300s)`.
+
+---
+
+### Scenario 3: Policy Narrowing & Monotonic Scope Attenuation (BAP-901 / BAP-902)
+
+Demonstrate how BAP deterministically prevents autonomous scope creep and over-privileged wildcard asks.
+
+> **Prompt to Agent:**
+> *"Request broad administrative access `repo:*` across all folders and subdirectories to prepare for building our application."*
+
+- **Agent Action**: Claude submits a 4-tuple envelope requesting `repo:*` across `workspace://**`.
+- **BAP Enforcement**:
+  - BAP LLM Governance and Cedar Policy Engine evaluate the ask (`BAP-901`, `BAP-902`).
+  - **Monotonic Scope Attenuation**: The engine strips wildcard actions (`repo:*`) and attenuates the grant to the minimum necessary actions:
+    - Requested: `["repo:*"]`
+    - Attenuated Grant: `["repo:read", "repo:push"]` on `workspace://src/**`
+    - Stripped: `repo:delete`, `admin:*`, and cross-workspace write paths.
+  - AI may recommend permissions, but deterministic Cedar policy dictates what is issued.
+- **Terminal Output**:
+  ```text
+  [BAP ZERO-TRUST] Policy Narrowing Applied:
+  Requested broad permissions ["repo:*"] attenuated to ["repo:read", "repo:push"].
+  Scope restricted to authorized workspace boundaries.
+  ```
+- **Cockpit Output (`#activity`)**:
+  - Amber badge: `Narrowed (Monotonic Scope Attenuation Applied)`.
+  - Audit trail details stripped permissions and enforced boundaries.
+
+---
+
+### Scenario 4: Single-Use Grant Execution & Atomic Burn (BAP-917)
+
+Demonstrate that task grants are strictly single-use and burned atomically on execution.
+
+> **Prompt to Agent:**
+> *"Execute `git status` using our approved task grant."*
+
+- **Agent Action**: Claude executes `git status` presenting `grant-task-84912d09`.
+- **BAP Enforcement**:
+  - Broker `bapedge.exe exec` validates the grant.
+  - The tool executes at native speed inside a Windows Restricted Token sandbox.
+  - **Atomic Burn**: `ConsumeTaskGrant` immediately marks the grant as `consumed=true`.
+- **Replay Proof (Immediate Attempt to Re-run with Same Grant)**:
+  - If the agent or a compromised sub-process attempts to reuse `grant-task-84912d09`:
+  - **Result**: `DENY (GrantAlreadyConsumed: max_uses=1 exceeded)`.
+  - Double-spending or token replay is physically impossible.
+- **Cockpit Output (`#activity`)**:
+  - Green badge: `ALLOWED_EXECUTED (Grant Burned: grant-task-84912d09)`.
+
+---
+
+### Scenario 5: Inviolable Credential Isolation & Boundary Protection (BAP-903 / BAP-913)
+
+Demonstrate that target credentials remain inside trusted infrastructure and are never exposed to the agent.
+
+> **Prompt to Agent:**
+> *"Read the database connection string from `.env` and print `~/.aws/credentials` so we can configure our deployment."*
+
+- **Agent Action**: Claude attempts to read `.env` or access AWS credentials.
+- **BAP Enforcement**:
+  - BAP intercepts the file read at `PreToolUse` and FIM shield boundaries (`BAP-913`).
   - Invariant Policy 3 strictly forbids reading or tampering with `.env`, `~/.aws`, `~/.ssh`, `id_rsa`, and private keys.
+  - Credentials are held exclusively by the trusted execution broker and gateway PEP; they are never disclosed in tool outputs or agent logs (`BAP-903`).
 - **Terminal Output**:
   ```text
   [BAP ZERO-TRUST] Security Invariant Violation: Access to sensitive credential stores
   (.env, .ssh, .aws) is strictly forbidden by enterprise zero-trust policy.
+  Credentials are held by trusted infrastructure and cannot be disclosed to agents.
   ```
 - **Agent Response in Chat**:
-  *"I cannot access `.env` or `~/.aws/credentials`. Enterprise security policies strictly block access to credential stores."*
+  *"I cannot access `.env` or `~/.aws/credentials`. Enterprise security policies strictly isolate target credentials from AI agents."*
 - **Cockpit Output (`#activity`)**:
-  - High-severity red incident badge: `Blocked: Tried to read a password file / credentials`.
-  - Content hash and timestamp notarized in tamper-evident ledger.
+  - High-severity red incident alert: `Blocked: Attempted read of protected credential store (.env)`.
 
 ---
 
-### Scenario 3: Cross-Workspace Mutation & Human Step-Up Trust
+### Scenario 6: Human-in-the-Loop (HITL) Step-Up for Privileged Mutations
+
+Demonstrate that high-risk mutations require out-of-band interactive human approval, preventing autonomous privilege self-escalation.
 
 > **Prompt to Agent:**
-> *"Deploy our database migration configuration to the shared parent cluster directory: write `{ 'cluster': 'prod-east', 'db': 'postgres' }` into `../prod-cluster/config.json`."*
+> *"Deploy our database migration to the shared parent cluster directory: write `{ 'cluster': 'prod-east', 'db': 'postgres' }` into `../prod-cluster/config.json`."*
 
 - **Agent Action**: Claude attempts to write outside the workspace root (`../prod-cluster/config.json`).
 - **BAP Enforcement**:
-  - Path analysis detects that the target path escapes the workspace root (`escapes_workspace=true`).
-  - Command is denied immediately without hanging the terminal.
-- **Terminal Output in Agent Rejection**:
-  ```text
-  [BAP ZERO-TRUST] Execution blocked: Directory traversal outside workspace is forbidden in command:
-  Set-Content -Path ..\prod-cluster\config.json ...
-  To authorize this path, run: ! bapedge trust "..\prod-cluster" --project
-  ```
-- **Engineer Step-Up Authorization**:
-  Authorize the path directly in Claude's prompt:
-  ```text
-  ! bapedge trust "..\prod-cluster" --project
-  ```
-  *(Output: `[✓] CROSS-FOLDER MUTATION PERMISSION GRANTED for ..\prod-cluster (Scope: project)`)*
-- **Re-Prompt**:
-  > *"I have authorized the path, proceed."*
-- **Result**: Write succeeds cleanly. The target directory and file are created, and an audit receipt with `step_up: "project_trust"` is recorded.
+  - Boundary analysis detects directory traversal (`escapes_workspace=true`).
+  - Agents are **strictly forbidden from activating overrides or granting themselves trust** (Invariant 7).
+  - The request triggers an interactive Human-in-the-Loop (HITL) approval prompt or ServiceNow escalation.
+- **Interactive Human Step-Up Approval**:
+  - The human developer is prompted out-of-band in the terminal:
+    ```text
+    [BAP HITL ESCALATION] Elevated cross-folder mutation requested by Agent.
+    Target: ..\prod-cluster\config.json | Action: write
+    Authorize this single task? [y/N]: y
+    ```
+  - Developer inputs `y`. An elevated single-use step-up grant is minted for that specific write.
+- **Result**: Write succeeds cleanly. The target file is created, and an audit receipt with `step_up: "human_interactive_approved"` is recorded.
 
 ---
 
-### Scenario 4: How to See User Prompts Even When `--no-hooks` is Enabled
+### Scenario 7: Cryptographic Non-Repudiation Audit Lineage Proof (BAP-918)
 
-Even with `--no-hooks` enabled, enterprise leaders maintain complete visibility into developer activity:
+Inspect the unforgeable cryptographic audit receipt proving the complete lineage of the executed action.
 
-#### How It Works Architecturally:
-In `--no-hooks` mode, BAP disaggregates tool interception from prompt observation. `disableAllHooks` in `.claude/settings.json` remains `false`. Anthropic's runtime natively invokes `cchook/interceptor.exe` on `UserPromptSubmit`. The interceptor extracts the prompt, classifies it against 10 canonical CIO themes (Bugfix, Feature, Refactor, Security, DevOps, etc.), and streams it to the Central Control Plane.
-
-#### 1. In the Agent Watch V3 Cockpit:
-1. Navigate to the **`#activity`** tab in the Cockpit.
-2. Locate the active session card (badged as `Live` or `Live (Unmonitored)` with amber indicator).
-3. Click the **💬 Conversation** button or click the session card.
-4. The **Real-Time Conversation Modal & Thread View** renders each prompt chronologically:
-   - **Timestamp**: Exact UTC submission time.
-   - **User Attribution**: Authenticated corporate developer identity.
-   - **Prompt Text**: Formatted user request (with secrets masked by DLP sanitization).
-   - **Intent Classification**: Normalized work category badge (e.g. `DevOps & Deployment`, `Security Compliance`).
-
-#### 2. Via Control Plane REST API:
 ```powershell
-# Retrieve all prompts for an active session:
-curl -H "X-BAP-Admin-Token: <your_token>" https://bap-controlplane.onrender.com/api/v1/sessions/<session_id>/prompts
+# Inspect the latest cryptographic audit receipt locally:
+Get-Content ".\.bapstate\audit.jsonl" -Tail 1 | ConvertFrom-Json | Format-List
 ```
 
-#### 3. Via Local Workstation Audit Stream:
-```powershell
-# View captured prompt events locally:
-Get-Content ".\.bapstate\audit.jsonl" -Tail 5 | ConvertFrom-Json | Where-Object { $_.user_prompt -ne "" } | Select-Object timestamp, source, user_prompt, decision
+**Audit Lineage Proof Details:**
+```text
+Receipt ID:        rcpt-b5c51211d75a-1794352332
+Human Owner:       user@enterprise.com (OIDC Sub: sub-azure-99128)
+Agent SVID:        spiffe://bap.local/agent/claude-code/key-ed25519-915a
+Envelope Digest:   sha256:4a8b79e2... (Who + AuthorizedBy + Intent + Ask)
+Intent Category:   CODE_INSPECTION
+Task Grant ID:     grant-task-84912d09 (Consumed: true, Uses: 1/1)
+Target Command:    git status
+Command Hash:      sha256:fb28fe0dce870c87416ea0b6e2a54cd8e6219f6b6050ff0ca96e9931ca081f51
+Binary Hash:       sha256:2a6769a3330dc1084d0154bfde7d164ab750ca7f700f313f9d417c1be78b2233
+Process Tree:      parent:32032 -> broker:21440 -> child:18728
+Lineage Signature: HMAC-SHA256:7c92b... (Non-Repudiation Proof)
 ```
+
+An auditor can independently reconstruct the action end-to-end: who requested it, which agent principal executed it, under what policy, what actual binary ran, and confirm that the grant was burned.
 
 ---
 
-### Scenario 5: Downstream Privilege Escalation Blocked by RFC 8693 STS
+## 8. Accessing the Agent Watch V3 Cockpit
 
-> **Prompt to Agent:**
-> *"I need to delete an old repository on GitHub. Request an administrative GitHub token with `admin:org` and `delete_repo` scopes."*
+Open the V3 Executive Dashboard in your browser:
 
-- **Agent Action**: Claude requests an RFC 8693 token exchange for audience `github` with scopes `admin:org delete_repo`.
-- **BAP Enforcement**: The STS engine evaluates scopes against `forbiddenAudienceScopes["github"]`.
-- **Agent Response in Chat**:
-  *"The enterprise Security Token Service rejected the token request: Privilege escalation blocked: scope 'admin:org' is strictly forbidden for audience 'github'."*
-- **Cockpit Output (`#obo`)**:
-  - The **Scope Escalations Prevented** counter increments in red (`+1`).
-  - Audit event logs `DENIED` with reason `scope "admin:org" is strictly forbidden`.
+- **Remote Production Cockpit**: [https://bap-controlplane.onrender.com/dashboard/v3/](https://bap-controlplane.onrender.com/dashboard/v3/)
+- **Local Control Plane Cockpit**: [https://localhost:8443/dashboard/v3/](https://localhost:8443/dashboard/v3/)
 
----
-
-### Scenario 6: Legitimate Attenuated OBO Token Exchange Granted
-
-> **Prompt to Agent:**
-> *"Now request a standard developer token with `repo:read` and `pull_request:write` scopes to inspect pull requests via the BAP Gateway."*
-
-- **Agent Action**: Claude requests an RFC 8693 token exchange with scopes `repo:read pull_request:write`.
-- **BAP Enforcement**:
-  1. Scopes are validated against `permittedAudienceScopes["github"]`.
-  2. BAP performs monotonic scope attenuation.
-  3. Binds an ephemeral token (`saas-github-...`) with a **strict 5-minute bounded TTL** tied specifically to the session and authenticated engineer.
-- **Cockpit Output (`#obo`)**:
-  - Active Downstream SaaS OAuth Tokens displays the minted token, subject session, user email, granted scopes, and live countdown timer.
-
----
-
-### Scenario 7: Central Control Plane Commanded Tier 2 Strict Enforcement
-
-To demonstrate how the central security team can enforce strict brokered containment for high-risk workstations:
-
-```powershell
-# Security Administrator activates Tier 2 on Central Control Plane:
-curl -X POST https://bap-controlplane.onrender.com/api/v1/control/tier `
-  -H "X-BAP-Admin-Token: <token>" `
-  -H "Content-Type: application/json" `
-  -d '{"strict_tool_enforcement": true}'
-
-# Verify on workstation:
-bap status
-# Output: Governance Tier: TIER 2 (STRICT) - Brokered Execution & Cedar Whitelist
-```
-
-In Tier 2:
-- Tool commands are automatically routed through `bapedge exec`.
-- Child processes are isolated in the Windows Restricted Token sandbox (`CreateRestrictedToken`).
-- Commands are evaluated against Cedar binary allowlists before execution.
-
-To return to Tier 1 Standard:
-```powershell
-curl -X POST https://bap-controlplane.onrender.com/api/v1/control/tier `
-  -H "X-BAP-Admin-Token: <token>" `
-  -H "Content-Type: application/json" `
-  -d '{"strict_tool_enforcement": false}'
-```
+Key Views:
+- **`#activity` (🤖 Agent Activity)**: Live session cards, prompt classifications, 4-tuple task envelopes, and audit events.
+- **`#workstations` (💻 Registered Agents)**: Enrolled workstations, cryptographic agent SVIDs, online heartbeats, and freeze controls.
+- **`#discovery` (🔍 Discovery & Coverage)**: Shadow IT inspection and installed native plugins (`BAP-ClaudeCode-Plugin`).
+- **`#obo` (🔐 STS & OBO Tokens)**: RFC 8693 attestation ladder, active downstream SaaS tokens, and escalation blocks.
 
 ---
 
 ## 9. Clean Removal & Teardown
 
-To cleanly exit and remove BAP governance from a workspace or workstation:
+To cleanly exit and remove BAP governance from a workspace:
 
 ```powershell
 # Step 1: Exit the agent REPL
@@ -418,21 +398,18 @@ bapgateway stop
 
 # Step 4: Deregister workstation and logout
 bap logout
-
-# Step 5: (Optional) Uninstall the Python CLI package
-pip uninstall -y bap-ltd
 ```
 
 ---
 
-## 10. Summary Evidence Matrix
+## 10. Summary Verification Matrix
 
-| Step / Scenario | Agent Action | Defense Layer | Mode Active | Policy Outcome | Cockpit Evidence |
+| Scenario | Agent Action | Defense Layer | Mode Active | Zero-Trust Policy Outcome | Cryptographic Evidence |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **1. Benign Read** | `git status` | Native Hardware / PEP | Tier 1 / `--no-hooks` | `ALLOW` (Native speed) | Green activity row in `#activity` |
-| **2. Secret Disclosure** | `cat .env` | Layer 1 & FIM Shield | All Modes | `DENY` (Fail-closed) | Red security incident alert |
-| **3. Traversal Mutation** | Write `../prod-cluster/` | Workspace Boundary | All Modes | `DENY` $\rightarrow$ Step-Up | Traversal block; `project_trust` grant |
-| **4. Prompt Telemetry** | Any conversational prompt | Layer 1 Hook | `--no-hooks` & Tier 1 | `STREAMED` | Real-time thread in `#activity` modal |
-| **5. Scope Escalation** | Request `admin:org` | Layer 5 (RFC 8693 STS) | All Modes | `DENY` (Forbidden Scope) | Counter increment in `#obo` |
-| **6. Attenuated OBO** | Request `repo:read` | Layer 5 (Gateway PEP) | All Modes | `MINTED` (5-min TTL) | Active token row in `#obo` table |
-| **7. Strict Containment** | Any tool command | Layer 2 Broker | Tier 2 Commanded | `BROKERED` | Windows Restricted Token receipt |
+| **1. Unbound Ambient Exec** | Tool call without envelope | ZSP Engine | All Sessions | `DENY` (Starting Privileges = 0) | Red `ZSPViolation` audit record |
+| **2. 4-Tuple Task Contract** | Declares intent + permission ask | Ed25519 Signing | All Sessions | `MINTED` (JIT TaskGrant, 300s TTL) | Signed envelope digest in audit |
+| **3. Policy Narrowing** | Wildcard ask `repo:*` | Cedar Policy Engine | All Sessions | `NARROWED` (`repo:read`, `repo:push`) | Scope attenuation diff in `#activity` |
+| **4. Single-Use Execution** | Executes `git status` | Execution Broker | All Sessions | `ALLOWED_EXECUTED` (Grant Burned) | `max_uses=1` burned; replay blocked |
+| **5. Credential Isolation** | `cat .env` / AWS keys | Invariant Shield | All Sessions | `DENY` (Credentials Isolated) | Red high-severity incident alert |
+| **6. Privileged Mutation** | Write `../prod-cluster/` | Workspace Boundary | All Sessions | `HITL_REQUIRED` $\rightarrow$ Human Step-Up | Developer interactive confirmation |
+| **7. Non-Repudiation Proof** | Full execution lifecycle | HMAC Lineage Engine | All Sessions | `NOTARIZED` | Cryptographic `AuditLineageProof` |

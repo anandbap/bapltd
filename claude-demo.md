@@ -43,10 +43,10 @@ The dashboard’s guided demo is useful for rehearsal, but its illustrative acti
 **Local resilience rehearsal:** use a dedicated test control plane, an isolated state directory, and a stable signing key supplied through your secret manager. An operator can start the server in a separate terminal:
 
 ```powershell
-.\bapcontrolplane.exe -port 18443 -https -db memory -demo-mode -allow-remote-admin
+.\bapcontrolplane.exe -port 18443 -https -db memory -allow-remote-admin
 ```
 
-This deliberately uses ephemeral central state for the restart scene. Supply `BAP_SECRET_KEY` and `BAP_ADMIN_TOKEN` securely before starting it; keep the signing key unchanged on restart. Open `https://localhost:18443/dashboard/` and enroll clients against `https://localhost:18443`. Local test certificates are a loopback exception; remote authenticated traffic requires verified HTTPS.
+This deliberately uses ephemeral central state for the restart scene without synthetic demo dataset flags, guaranteeing pure unsimulated zero-trust telemetry. Supply `BAP_SECRET_KEY` and `BAP_ADMIN_TOKEN` securely before starting it; keep the signing key unchanged on restart. Open `https://localhost:18443/dashboard/` and enroll clients against `https://localhost:18443`. Local test certificates are a loopback exception; remote authenticated traffic requires verified HTTPS.
 
 ### Install and enroll the matching client
 

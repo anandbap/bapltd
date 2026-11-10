@@ -351,6 +351,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/sessions/transcript", s.handleSessionTranscript)
 	s.mux.HandleFunc("/api/v1/sessions", s.handleListSessions)
 	s.mux.HandleFunc("/api/v1/sessions/", s.handleGetSession)
+	s.mux.HandleFunc("/api/v1/principals", s.handlePrincipals)
+	s.mux.HandleFunc("/api/v1/principals/", s.handlePrincipalByID)
 	s.mux.HandleFunc("/api/v1/auth/envoy", s.handleEnvoyExtAuthz)
 	s.mux.HandleFunc("/api/v1/financial-records", s.handleFinancialRecords)
 	s.mux.HandleFunc("/api/v1/inspector/data", s.handleInspectorData)
@@ -3546,6 +3548,10 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := strings.TrimPrefix(r.URL.Path, prefix)
 	if sessionID == "" {
 		writeError(w, http.StatusBadRequest, "session_id is required in path")
+		return
+	}
+	if strings.HasSuffix(sessionID, "/principal") {
+		s.handleSessionPrincipal(w, r)
 		return
 	}
 	sess, err := s.sessionStore.Get(sessionID)

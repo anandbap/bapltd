@@ -159,6 +159,7 @@ This document represents the complete functional and non-functional requirements
    - [Epic 42: Workstation Fleet Identity, Remote Governance & Two-Tier Execution Model (BAP-EPIC-42)](#bap-790-series-workstation-fleet-identity-remote-governance--two-tier-execution-model-bap-epic-38)
    - [Epic 43: Workstation Master Anchor Registration & Ephemeral Session SVIDs (BAP-EPIC-43)](#epic-43-workstation-master-anchor-registration--ephemeral-session-svids-bap-epic-43--bap-800)
    - [Epic 44: Native Agent Plugin Framework & Multi-Layer Tool Defense (BAP-EPIC-44 / BAP-806 & BAP-807)](#epic-44-native-agent-plugin-framework--multi-layer-tool-defense-bap-epic-44--bap-806--bap-807)
+   - [Epic 45: Intelligent Authorization, Credential Isolation & Zero-Trust Execution (BAP-EPIC-45 / BAP-900 Series)](#epic-45-intelligent-authorization-credential-isolation--zero-trust-execution-bap-epic-45--bap-900-series)
    - [Core Architectural Invariants & Adversarial Test Matrix](#core-architectural-invariants--adversarial-test-matrix)
 
 ---
@@ -210,6 +211,7 @@ This document represents the complete functional and non-functional requirements
 | `BAP-EPIC-42` | Workstation Fleet Identity, Remote Governance & Two-Tier Execution Model (BAP-791–BAP-795) | Enterprise Hardening v2.7 | **DONE** |
 | `BAP-EPIC-43` | Workstation Master Anchor Registration & Ephemeral Session SVIDs (BAP-801–BAP-805) | Enterprise Security v3.0 | **DONE** |
 | `BAP-EPIC-44` | Native Agent Plugin Framework & Multi-Layer Tool Defense (BAP-806 & BAP-807) | Enterprise Defense v3.1 | **DONE** |
+| `BAP-EPIC-45` | Intelligent Authorization, Credential Isolation & Zero-Trust Execution (BAP-900 to BAP-918) | Enterprise Zero-Trust v3.2 | **DONE** |
 
 ---
 
@@ -464,8 +466,9 @@ This document represents the complete functional and non-functional requirements
 
 ### Epic 9: EDR Immunity, Binary Deduplication, & Test Isolation (BAP-EPIC-9)
 **Summary**: Clean up build distributions, eliminate heuristic EDR flags, and guarantee identical byte-for-byte binary compilation.
+> **Key Re-allocation Note**: The legacy prototype stories in Epic 9 below have been rekeyed from BAP-901–903 to BAP-091–093 (with legacy aliases) so that the official enterprise **BAP-900 Series: Intelligent Authorization, Credential Isolation & Zero-Trust Execution** (Epic 45: BAP-900 to BAP-914) owns the 900 range.
 
-#### Story BAP-901: Binary Architecture Deduplication & Flag Unification
+#### Story BAP-091: Binary Architecture Deduplication & Flag Unification (Legacy MVP-901)
 - **Type**: Story | **Points**: 5 | **Priority**: High | **Status**: `DONE`
 - **Description**: Unify `build_binaries.bat` and `build_all_platforms.ps1` with `-trimpath -ldflags "-s -w"`. Purge 14 stale legacy copies (`server.exe`, `ltd-agent.exe`, `*.old`, staging folders). Standardize on `interceptor.exe`.
 - **Acceptance Criteria**:
@@ -473,7 +476,7 @@ This document represents the complete functional and non-functional requirements
   - `When` compiled across scripts,
   - `Then` binary sizes are 100% identical and unstripped duplicates are eliminated.
 
-#### Story BAP-902: Removal of Escalated Commands & EDR Heuristic Strings
+#### Story BAP-092: Removal of Escalated Commands & EDR Heuristic Strings (Legacy MVP-902)
 - **Type**: Story | **Points**: 5 | **Priority**: Highest | **Status**: `DONE`
 - **Description**: Audit all `.bat` and `.ps1` files to ensure zero offensive strings (`DisableRealtimeMonitoring`, `Set-MpPreference`) exist in scripts. Replace attack simulations in `test_complex_cases.ps1` with benign service tests.
 - **Acceptance Criteria**:
@@ -481,7 +484,7 @@ This document represents the complete functional and non-functional requirements
   - `When` evaluating `.bat` and `.ps1` files,
   - `Then` zero privilege escalation or defense evasion heuristic alerts trigger.
 
-#### Story BAP-903: Negative Test Isolation Policy & `.cursorignore`
+#### Story BAP-093: Negative Test Isolation Policy & `.cursorignore` (Legacy MVP-903)
 - **Type**: Story | **Points**: 3 | **Priority**: Medium | **Status**: `DONE`
 - **Description**: Isolate simulation payloads strictly into `run_negative_testcases.bat` for manual execution. Add to `.cursorignore` and exclude from automated regression suites.
 - **Acceptance Criteria**:
@@ -4909,3 +4912,312 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - `TestIsStrictToolEnforcementMandated` in `cchook/unmonitored_hooks_test.go` (PASS).
   - `node tests/test_v3_controls.cjs` (PASS).
   - All 104 asset copies verified in sync.
+
+
+---
+
+### Epic 45: Intelligent Authorization, Credential Isolation & Zero-Trust Execution (BAP-EPIC-45 / BAP-900 Series)
+
+**Epic**: `BAP-900: Intent-Aware Authorization and Secure Agent Execution`
+- **Type**: Epic | **Target Milestone**: Enterprise Zero-Trust v3.2 | **Status**: `DONE`
+- **Objective**: Extend Agent Watch to evaluate agent intent, determine minimum necessary privileges, securely broker credentials, and enforce every authorized action without exposing target credentials to AI agents. Incorporates the strongest capabilities from enterprise zero-trust vendor architectures while preserving the existing HookWatch $\rightarrow$ Agent Runtime $\rightarrow$ Control Plane design.
+- **Business Outcome**: Every agent receives only the authority needed for a specific task, for a limited duration, with complete accountability.
+- **Architecture Principles**:
+  1. Centralized governance with distributed enforcement.
+  2. Zero Standing Privileges (ZSP).
+  3. Agent identity separated from delegated authority.
+  4. Credentials never exposed to the agent where brokered execution is supported.
+  5. Deterministic authorization; AI may recommend permissions but cannot grant them.
+  6. Every protected execution produces auditable evidence.
+- **Deduplication & Predecessor Mapping**:
+  - Unifies and formalizes earlier capabilities across BAP-535 (credential shielding), BAP-540 (5-layer tool defense), BAP-702 (token exchange), BAP-713 (deny-by-default runtime auth), BAP-721 (action attribution), BAP-724 (revocation), BAP-801..805 (workstation master anchors), BAP-809 (lifecycle attestation), BAP-810/811 (STS OBO exchange), BAP-821 (signed policy distribution), and BAP-829 (two-tier governance).
+
+
+#### Story BAP-901: Intent-to-Permission Planning
+- **Type**: Story | **Points**: 8 | **Priority**: P0 - Highest | **Status**: `DONE`
+- **Description**:
+  As an identity security administrator, I want Agent Watch to translate an agent's declared intent into a minimum-permission execution plan.
+  Capture declared intent from HookWatch (`UserPromptSubmit`, `PreToolUse`), identify requested resources and actions, generate a least-privilege proposal (`PermissionPlan`), and validate it through deterministic Cedar policies.
+- **Acceptance Criteria**:
+  - `Given` Claude Code or another coding agent requests broad repository access (`repo:*`, `workspace://*`),
+  - `When` evaluated by `IntentToPermissionPlanner.Plan()`,
+  - `Then` it receives only the narrowed permissions required for the approved task (`repo:read`, `workspace://current`), and AI-generated plans cannot override policy invariants.
+- **Implementation Evidence**:
+  - `bap-edge/internal/authz/llm_governance.go` (`IntentToPermissionPlanner`, `applyNarrowing`).
+  - Unit tests: `TestBAP901_IntentToPermissionPlanning` in `bap-edge/internal/authz/llm_governance_test.go` (PASS).
+
+
+#### Story BAP-902: Policy Narrowing and Conditional Authorization
+- **Type**: Story | **Points**: 8 | **Priority**: P0 - Highest | **Status**: `DONE`
+- **Description**:
+  As a security administrator, I want authorization to support allow, deny, narrow, and require-approval decisions.
+  Implement a common decision contract (`DecisionAllow`, `DecisionDeny`, `DecisionNarrow`, `DecisionRequireApproval`), enforce narrowed permissions at the execution boundary, and integrate human approvals through ServiceNow (`SNOW-REQ-*`) or HITL step-up.
+- **Acceptance Criteria**:
+  - `Given` an agent declaring an `INVESTIGATION` or `AUDIT` task requesting production write/delete access (`repo:write`, `repo:delete`),
+  - `When` evaluated by the authorizer,
+  - `Then` permissions are automatically narrowed to read-only (`repo:read`), the decision is `NARROW`, and attempts to exceed the narrowed scope are blocked.
+- **Implementation Evidence**:
+  - `bap-edge/internal/authz/llm_governance.go` (`DecisionType`, `applyNarrowing`).
+  - Unit tests: `TestBAP902_PolicyNarrowingAndConditionalAuthorization` in `bap-edge/internal/authz/llm_governance_test.go` (PASS).
+
+
+#### Story BAP-903: Credential Isolation and Brokered Execution
+- **Type**: Story | **Points**: 8 | **Priority**: P0 - Highest | **Status**: `DONE`
+- **Description**:
+  As an identity architect, I want target credentials held by trusted infrastructure rather than exposed to the agent.
+  Integrate credential brokering with just-in-time issuance, inject credentials only at trusted execution points (`bapedge exec` child process boundary), scrub ambient environments (`AWS_*`, `GITHUB_*`, `OPENAI_*`), and prevent disclosure through tool output or logs (`[BAP_REDACTED_*]`).
+- **Acceptance Criteria**:
+  - `Given` an agent performing an authorized API operation,
+  - `When` executed through the BAP broker,
+  - `Then` the child process receives the target credential via isolated process memory without exposing it to the agent harness, and ambient credentials are completely scrubbed from process environment and logs.
+- **Implementation Evidence**:
+  - `bap-edge/internal/authz/boundary.go` (`SanitizeBrokerEnv`).
+  - `bap-edge/cmd/exec.go` and `bap-edge/internal/authz/redaction.go`.
+
+
+#### Story BAP-904: Universal Enforcement Across MCP, Shell and APIs
+- **Type**: Story | **Points**: 8 | **Priority**: P0 - Highest | **Status**: `DONE`
+- **Description**:
+  As a platform security owner, I want equivalent actions governed consistently across supported execution mechanisms.
+  Extend Agent Runtime adapters for MCP, shell, HTTP, and direct tool invocation. Normalize actions into a shared authorization envelope and block alternative execution paths within managed boundaries.
+- **Acceptance Criteria**:
+  - `Given` Claude Code, Antigravity, or Copilot running inside the protected environment,
+  - `When` attempting a prohibited operation (e.g. secret reading or unauthorized egress),
+  - `Then` switching from MCP (`bap_read_file`) to shell (`cat`) or HTTP (`curl`) is governed by identical Cedar invariant hard gates, blocking all alternative escape paths.
+- **Implementation Evidence**:
+  - Shared Cedar invariants (Policies 1-7 in `policy.cedar`), `bapmcp.exe`, `bapedge.exe`, `cchook-interceptor.exe`.
+  - Verified by `test_multi_layer_defense.py` and `bapedge plugin layers`.
+
+
+#### Story BAP-905: Identity Assertion and Delegated Token Exchange
+- **Type**: Story | **Points**: 8 | **Priority**: P0 - Highest | **Status**: `DONE`
+- **Description**:
+  As an identity architect, I want to preserve the relationship between human, agent, and delegated authority across enterprise applications.
+  Implement standards-based token exchange (RFC 8693 / ID-JAG), integrate Entra/Okta and SPIFFE identities, bind exchanged credentials to specific audiences and permissions, and support targets that do not implement native ID-JAG.
+- **Acceptance Criteria**:
+  - `Given` an authorized Claude Code action,
+  - `When` traced through the system,
+  - `Then` it traces from initiating user (`user_email`) through agent workload (`AgentPrincipal`) to the target-specific access token (`saas-github-*`), with monotonic scope attenuation and single-use grant burning.
+- **Implementation Evidence**:
+  - `bap-controlplane/internal/api/sts.go` (`/api/v1/sts/token`, `/api/v1/oauth/token`).
+  - Unit tests: `TestSaaSTokenManager_BindingAndVerification` in `bap-controlplane/internal/authz/saas_tokens_test.go` (PASS).
+
+
+#### Story BAP-906: Data Sensitivity-Aware Authorization
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**:
+  As a data security administrator, I want data classification to influence the permissions issued to agents.
+  Consume enterprise classification metadata (`PUBLIC`, `INTERNAL`, `CONFIDENTIAL`, `RESTRICTED`), apply classification-aware Cedar policies, and restrict unauthorized sensitive-data access or transfer without explicit step-up approval.
+- **Acceptance Criteria**:
+  - `Given` an agent authorized to read internal repository code,
+  - `When` attempting access to restricted customer data (`SensitivityRestricted`),
+  - `Then` the request is denied or routed to step-up approval (`SNOW-REQ-*`) without granting unauthorized access.
+- **Implementation Evidence**:
+  - `bap-edge/internal/authz/llm_governance.go` (`SensitivityLevel`, `Plan`).
+  - Unit tests: `TestBAP906_DataSensitivityAwareAuthorization` (PASS).
+
+
+#### Story BAP-907: Central Policy Governance with Local Decision Execution
+- **Type**: Story | **Points**: 8 | **Priority**: P0 - Highest | **Status**: `DONE`
+- **Description**:
+  As a platform architect, I want authoritative policies centrally managed while eligible decisions are evaluated locally.
+  Distribute cryptographically signed, versioned policies (RFC 7515 JWS) to Agent Runtime; support bounded caching (15-min offline grace period), synchronization, revocation, and escalation for high-risk actions.
+- **Acceptance Criteria**:
+  - `Given` Windows and Linux runtimes enforcing policy,
+  - `When` running locally,
+  - `Then` low-risk in-workspace developer actions continue under valid cached authorization, and high-risk actions fail closed without central approval.
+- **Implementation Evidence**:
+  - `bap-controlplane/internal/api/policy_bundle.go`, `bap-edge/internal/authz/authorizer.go`.
+  - Verified by `bapedge check` and `authorizer_test.go`.
+
+
+#### Story BAP-908: Complete Authorization and Execution Evidence
+- **Type**: Story | **Points**: 8 | **Priority**: P0 - Highest | **Status**: `DONE`
+- **Description**:
+  As an auditor, I want every protected agent action linked to its identity, intent, authorization, credentials, and execution outcome.
+  Correlate HookWatch, Agent Runtime, policy decisions, broker operations, approvals, and execution records using shared trace identifiers (`trace_id`, `receipt_id`, `plan_id`). Protect evidence integrity via SHA-256 hash chaining.
+- **Acceptance Criteria**:
+  - `Given` an auditor auditing an agent operation,
+  - `When` inspecting the audit ledger,
+  - `Then` they can reconstruct the end-to-end chain: why it was allowed or denied, which Cedar policy applied, the bound AgentPrincipal, and what actually executed.
+- **Implementation Evidence**:
+  - `bap-edge/pkg/types/types.go` (`ExecutionReceipt`).
+  - `bap-controlplane/internal/audit/store.go` (hash-chained tamper-evident ledger).
+
+
+#### Story BAP-909: Credential Expiry, Revocation and Session Cleanup
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**:
+  As a security administrator, I want temporary access automatically terminated when the task, grant, or agent session ends.
+  Enforce grant expiration (300s TTL), revoke target credentials upon session end (`EnsureSessionEnded`), clean up temporary identities, invalidate cached authorizations, and terminate in-flight child execution processes.
+- **Acceptance Criteria**:
+  - `Given` an active session that expires or is revoked,
+  - `When` checked by the STS broker or execution engine,
+  - `Then` expired or burned credentials cannot initiate new protected operations (`GrantAlreadyBurned`), and temporary session markers are purged.
+- **Implementation Evidence**:
+  - `bap-edge/cmd/session_lifecycle.go` (`EnsureSessionEnded`).
+  - `bap-controlplane/internal/authz/saas_tokens.go` (`BurnGrantOnce`).
+
+
+#### Story BAP-910: Control Plane Resilience and Secure Degraded Operation
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**:
+  As a platform owner, I want Agent Watch to behave safely and predictably during network or Control Plane outages.
+  Define fail-closed behavior, valid offline policy boundaries, audit buffering (`.bapstate/telemetry_spool/`), replay protection, and automated reconnection procedures.
+- **Acceptance Criteria**:
+  - `Given` an outage or disconnection between Edge Runtime and Central Control Plane,
+  - `When` evaluated,
+  - `Then` authorization does not permit privilege escalation, and buffered audit records are safely delivered once connectivity returns.
+- **Implementation Evidence**:
+  - `bap-edge/cmd/discovery_worker.go` (offline spool sweep and sync).
+  - ADR-004 (Fail-closed offline boundaries).
+
+
+#### Story BAP-911: Explicit Agent Principal and Identity Binding
+- **Type**: Story | **Points**: 13 | **Priority**: P0 - Blocker | **Status**: `DONE`
+- **Description**:
+  Ensure every registered agent has an identifiable principal (`AgentPrincipal`) distinct from its human owner and hosting runtime.
+  Model `AgentPrincipal` with unique `PrincipalID` (`urn:bap:principal:agent:<uuid>`), `PrincipalSVID`, bound `SessionID`, `ClientType`, `HumanOwner`, permissions, and lifecycle state.
+  Expose REST inspection endpoints `/api/v1/principals` and `/api/v1/sessions/{id}/principal`.
+- **Definition of Done**:
+  An auditor can distinguish two Claude Code sessions running under the same Windows user and identify their separate permissions, actions, and lifecycle.
+- **Acceptance Criteria**:
+  - `Given` two concurrent Claude Code sessions initiated under Windows user `User`,
+  - `When` evaluated by the Control Plane,
+  - `Then` each session is bound to a distinct `AgentPrincipal` with its own unique URN (`urn:bap:principal:agent:claude-code-...`), distinct SPIFFE SVID, and separate permissions.
+  - `When` an auditor queries `GET /api/v1/principals`,
+  - `Then` both principals are returned with clear separation of actions and lifecycle.
+- **Implementation Evidence**:
+  - Domain Types: `bap-controlplane/pkg/types/types.go` and `bap-edge/pkg/types/types.go` (`AgentPrincipal`).
+  - Session Store: `bap-controlplane/internal/session/principal.go` (`RegisterPrincipal`, `GetPrincipal`, `GetSessionPrincipal`, `ListPrincipals`).
+  - REST Handlers: `bap-controlplane/internal/api/principal_handlers.go` (`handlePrincipals`, `handlePrincipalByID`, `handleSessionPrincipal`).
+  - Edge Session Start: `bap-edge/cmd/session_lifecycle.go` (`EnsureSessionStarted` generates and binds explicit `principal_id`).
+  - Unit Tests: `bap-controlplane/internal/api/principal_test.go` (`TestBAP911_ExplicitAgentPrincipalAndIdentityBinding` PASS).
+
+
+#### Story BAP-912: Complete Network and Control Channel Architecture
+- **Type**: Story | **Points**: 8 | **Priority**: P0 - Blocker | **Status**: `DONE`
+- **Description**:
+  Document every communication path across HookWatch, Agent Runtime, Control Plane, SPIFFE infrastructure, STS, IdP, target systems, and administrative interfaces.
+  Produce an architecture diagram and machine-readable channel inventory identifying direction, protocol, authentication, encryption, purpose, and failure behavior for every channel, including revocation and restart.
+- **Definition of Done**:
+  Security reviewers receive an architecture diagram and machine-readable channel inventory identifying direction, protocol, authentication, encryption, purpose, and failure behavior for every channel, including revocation and restart.
+- **Implementation Evidence**:
+  - Machine-Readable Inventory: `docs/control_channels.json` (documenting channels CH-01 through CH-08).
+  - Architecture Specification: `docs/NETWORK_ARCHITECTURE.md` (complete Mermaid topology and sequence diagrams, security review matrix).
+
+
+#### Story BAP-913: Customer-Network Credential and Enforcement Boundary
+- **Type**: Story | **Points**: 8 | **Priority**: P0 - Blocker | **Status**: `DONE`
+- **Description**:
+  Establish explicit trust boundaries between the decision plane, local execution infrastructure, and credential broker.
+  Enforce inversion-of-control: Central policy service cannot directly execute target actions or retrieve target secrets unless separately and explicitly authorized. Target credentials remain strictly within local execution infrastructure and broker boundary.
+- **Definition of Done**:
+  Target credentials remain within approved trust boundaries; a centralized policy service cannot directly execute target actions or retrieve target secrets unless separately and explicitly authorized.
+- **Acceptance Criteria**:
+  - `Given` a central control plane service,
+  - `When` attempting direct command execution or secret extraction (`.env`, `.aws`, `.ssh`) on a customer workstation,
+  - `Then` the boundary validator strictly rejects the request (`ErrTrustBoundaryViolation`), failing closed.
+  - `When` credentials are injected for brokered tool execution,
+  - `Then` ambient environments are scrubbed and credentials never leak to agent memory or telemetry.
+- **Implementation Evidence**:
+  - Edge Boundary Engine: `bap-edge/internal/authz/boundary.go` (`ValidateCentralRequest`, `SanitizeBrokerEnv`).
+  - Decision Plane Boundary: `bap-controlplane/internal/authz/boundary.go` (`CheckTargetActionExecution`, `CheckSecretRetrieval`).
+  - Unit Tests: `TestBAP913_CustomerNetworkCredentialAndEnforcementBoundary` in `llm_governance_test.go` (PASS) and `boundary_test.go` in controlplane (PASS).
+
+
+#### Story BAP-914: LLM Call Inventory and Security Governance
+- **Type**: Story | **Points**: 8 | **Priority**: P1 - High | **Status**: `DONE`
+- **Description**:
+  Inventory all model calls performed by agents and Agent Watch itself, including intent evaluation, permission planning, and content sanitization.
+  Enforce non-reliance invariant: Security-critical decisions cannot rely solely on untrusted LLM output. Deterministic Cedar policies and kernel sandbox boundaries strictly supersede AI recommendations.
+- **Definition of Done**:
+  Every supported model call has an identified purpose, model/provider, data classification, trust boundary, authorization policy, and audit correlation. Security-critical decisions cannot rely solely on untrusted LLM output.
+- **Acceptance Criteria**:
+  - `Given` an untrusted LLM generating an adversarial permission plan or intent output targeting secret credential stores (`.env`, `id_rsa`) or exfiltration,
+  - `When` evaluated by the BAP authorizer,
+  - `Then` `ValidateNonReliance` deterministically rejects the proposal with `ErrLLMPlanViolatesPolicyInvariant`, proving decisions never blindly rely on model outputs.
+- **Implementation Evidence**:
+  - Machine-Readable Inventory: `docs/llm_call_inventory.json` (tracking LLM-CALL-01, 02, 03).
+  - Non-Reliance Governance Engine: `bap-edge/internal/authz/llm_governance.go` (`ValidateNonReliance`, `LLMCallGovernance`).
+  - Unit Tests: `TestBAP914_LLMCallInventoryAndSecurityGovernance` in `llm_governance_test.go` (PASS).
+
+
+#### Story BAP-915: Cryptographic Agent Identity and Human-Anchored Keypair Minting
+- **Type**: Story | **Points**: 8 | **Priority**: P0 - Highest | **Status**: `DONE`
+- **Description**:
+  As a security architect, I want every agent session to generate an ephemeral cryptographic keypair and receive a verifiable workload identity document (SVID/JWS assertion) bound to the human owner's identity, so that agent actions can never be forged or detached from human accountability.
+  1. On session start, the Agent Runtime generates an ephemeral in-memory Ed25519 keypair (`AgentKeypair`).
+  2. BAP Workstation Identity Minter mints a cryptographically signed `CryptographicAgentSVID` containing `{iss, sub, human_owner, human_oidc_sub, workstation_id, session_id, client_type, public_key_hex, iat, exp}` signed with the BAP Workstation CA secret.
+  3. The private key never leaves local process memory and is never exposed to the agent LLM.
+- **Acceptance Criteria**:
+  - `Given` a newly initialized Claude Code, Antigravity, or Copilot session,
+  - `When` `MintAgentSVID` runs,
+  - `Then` an authentic Ed25519 keypair and signed `CryptographicAgentSVID` are minted and tied to the developer's verified human identity (`UserEmail`).
+  - `When` an attacker tampers with the human owner or expires the token,
+  - `Then` `VerifyAgentSVID` strictly rejects the identity document (`ErrTamperedAgentSVID` / `ErrExpiredAgentSVID`).
+- **Implementation Evidence**:
+  - Types: `bap-edge/pkg/types/types.go` and `bap-controlplane/pkg/types/types.go` (`CryptographicAgentSVID`).
+  - Keypair & Minter Engine: `bap-edge/internal/identity/cryptographic_agent.go` (`GenerateAgentKeypair`, `MintAgentSVID`, `VerifyAgentSVID`).
+  - Unit Tests: `TestBAP915_CryptographicAgentIdentityMintingAndVerification` in `zsp_engine_test.go` (PASS).
+
+
+#### Story BAP-916: Atomic 4-Tuple Task Authorization Contract (Who, AuthorizedBy, Intent, PermissionAsk)
+- **Type**: Story | **Points**: 8 | **Priority**: P0 - Highest | **Status**: `DONE`
+- **Description**:
+  As a platform security owner, I want every agent task to submit an atomic 4-tuple authorization envelope signed by the agent's cryptographic key before execution begins:
+  1. **Who you are**: Authenticated `CryptographicAgentSVID` bound to Human Owner.
+  2. **Who authorized this**: `DelegationIdentity` capturing human prompt authorization, supervisor delegation, or step-up ticket.
+  3. **What is the declared intent**: `TaskIntent` with primary mission category (`BUG_FIX`, etc.), declared goal, and prompt hash.
+  4. **Asked permissions**: `PermissionAsk` defining requested actions and resource boundaries (starting set is strictly ZERO).
+  5. The envelope is hashed via SHA-256 and signed with the agent's ephemeral private key.
+- **Acceptance Criteria**:
+  - `Given` an agent declaring a task,
+  - `When` submitting the `TaskAuthorizationEnvelope`,
+  - `Then` the signature is verified against the agent's public key from its SVID (`VerifyEnvelopeSignature`).
+  - `When` any field of the envelope (intent, asked permissions, or human owner) is modified in-flight,
+  - `Then` signature verification fails (`ErrInvalidAgentSignature`) and execution is blocked.
+- **Implementation Evidence**:
+  - Types: `bap-edge/pkg/types/types.go` and `bap-controlplane/pkg/types/types.go` (`TaskAuthorizationEnvelope`, `DelegationIdentity`, `TaskIntent`, `PermissionAsk`).
+  - Signing & Verification: `bap-edge/internal/identity/cryptographic_agent.go` (`ComputeEnvelopeHash`, `VerifyEnvelopeSignature`).
+  - Unit Tests: `TestBAP916_Atomic4TupleTaskAuthorizationEnvelope` in `zsp_engine_test.go` (PASS).
+
+
+#### Story BAP-917: Zero Standing Privileges (ZSP) and Just-In-Time Task Grant Engine
+- **Type**: Story | **Points**: 13 | **Priority**: P0 - Blocker | **Status**: `DONE`
+- **Description**:
+  As a zero-trust administrator, I want agents to start with strictly ZERO permissions, receiving only task-scoped, ephemeral, monotonically attenuated grants that are atomically burned upon execution.
+  1. **Initial Authority = 0**: Without an active task grant, any command execution is blocked immediately with `ErrZeroStandingPrivilegeViolation`.
+  2. **Grant Issuance**: Local PEP evaluates the signed 4-tuple envelope against Cedar invariants and human role eligibility, issuing an attenuated `TaskGrant` (`GrantID`, `SessionID`, `AllowedActions`, `AllowedResources`, `MaxUses`, `ExpiresAt`).
+  3. **Atomic Consumption**: When `bapedge exec` runs, it consumes the grant, decrements `RemainingUses`, and if `RemainingUses == 0`, burns the grant (`IsBurned = true`). Replay attempts are rejected with `ErrGrantBurned`.
+  4. **Scope Enforcement**: Actions or resources exceeding the granted boundary return `ErrActionNotGranted` or `ErrResourceNotGranted`.
+- **Acceptance Criteria**:
+  - `Given` an agent attempting execution without a grant,
+  - `When` checked by the ZSP engine,
+  - `Then` execution fails closed with `ZeroStandingPrivilegeViolation`.
+  - `Given` a single-use grant (`MaxUses = 1`),
+  - `When` an authorized action executes,
+  - `Then` execution succeeds, and any subsequent replay attempt fails with `ErrGrantBurned`.
+  - `When` attempting an ungranted action (e.g. `rm -rf /`),
+  - `Then` execution is blocked with `ErrActionNotGranted`.
+- **Implementation Evidence**:
+  - Types: `bap-edge/pkg/types/types.go` and `bap-controlplane/pkg/types/types.go` (`TaskGrant`).
+  - ZSP Engine: `bap-edge/internal/authz/zsp_engine.go` (`ZSPEngine`, `AuthorizeTaskEnvelope`, `ConsumeTaskGrant`).
+  - Unit Tests: `TestBAP917_ZeroStandingPrivilegesAndJITTaskGrants` in `zsp_engine_test.go` (PASS).
+
+
+#### Story BAP-918: Cryptographic Audit Lineage and Mathematical Non-Repudiation Proof
+- **Type**: Story | **Points**: 8 | **Priority**: P0 - Highest | **Status**: `DONE`
+- **Description**:
+  As an auditor, I want every execution receipt to include the cryptographic proof linking the Human Identity, Agent Keypair, Declared Intent, Task Grant, and Executed Process, providing mathematical non-repudiation.
+  1. Each executed action produces an immutable `AuditLineageProof` signed with the PEP authority key.
+  2. The proof contains: `HumanOwner`, `AgentPrincipalSVID`, `IntentMission`, `GrantID`, `CommandExecuted`, `ExecutedBinaryHash`, `ProcessAncestry`, and `LedgerSignature`.
+  3. Provides mathematical proof that: *Human Owner authorized Agent Key to execute Command under Intent within Grant Boundaries*.
+- **Acceptance Criteria**:
+  - `Given` an executed agent command,
+  - `When` the audit proof is inspected,
+  - `Then` it cryptographically binds `HumanOwner`, `AgentPrincipalSVID`, `GrantID`, and `CommandExecuted` with a verifiable HMAC-SHA256 signature, eliminating identity repudiation.
+- **Implementation Evidence**:
+  - Types: `bap-edge/pkg/types/types.go` and `bap-controlplane/pkg/types/types.go` (`AuditLineageProof`).
+  - Ledger Proof Generator: `bap-edge/internal/authz/zsp_engine.go` (`signProof`, `ConsumeTaskGrant`).
+  - Unit Tests: `TestBAP918_CryptographicAuditLineageAndNonRepudiation` in `zsp_engine_test.go` (PASS).

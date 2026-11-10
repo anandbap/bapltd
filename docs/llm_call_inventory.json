@@ -1,0 +1,47 @@
+{
+  "version": "1.0.0",
+  "generated_at": "2026-11-10T21:50:00Z",
+  "title": "BAP LLM Call Inventory and Security Governance (BAP-914)",
+  "non_reliance_invariant": "Security-critical authorization decisions cannot rely solely on untrusted LLM output. Deterministic Cedar policies and kernel sandbox boundaries strictly supersede AI recommendations.",
+  "calls": [
+    {
+      "call_id": "LLM-CALL-01",
+      "purpose": "intent_evaluation",
+      "description": "Translates raw developer prompt into standardized mission intent categories for CIO observability and governance context.",
+      "model_provider": "Edge-Deterministic / Anthropic / OpenAI / Google",
+      "model_name": "Deterministic Edge AST Classifier / Gemini 1.5 Pro / Claude 3.5 Sonnet",
+      "data_classification": "INTERNAL",
+      "trust_boundary": "HookWatch Interceptor & Local Workstation Boundary",
+      "authorization_policy": "Cedar Mission Telemetry Policy (Fail-Safe UNKNOWN, zero privilege elevation)",
+      "audit_correlation": "prompt_hash, session_id, audit_receipt_id",
+      "non_reliance_verified": true,
+      "governance_rule": "Deterministic edge classifier executes locally; UNKNOWN intent fails safe and never permits escalated execution."
+    },
+    {
+      "call_id": "LLM-CALL-02",
+      "purpose": "permission_planning",
+      "description": "Analyzes agent task goals and proposes minimum-necessary scoped permissions for execution.",
+      "model_provider": "Enterprise LLM Gateway PEP",
+      "model_name": "Claude 3.5 Sonnet / GPT-4o / Gemini 1.5 Pro",
+      "data_classification": "CONFIDENTIAL",
+      "trust_boundary": "Decision Plane & RFC 8693 STS Broker Boundary",
+      "authorization_policy": "Cedar Policy 1-7 Monotonic Attenuation & Anti-Escalation Gate",
+      "audit_correlation": "plan_id, proposal_hash, principal_id, trace_id",
+      "non_reliance_verified": true,
+      "governance_rule": "AI permission plans are strictly advisory proposals. Cedar authorizer deterministically screens all proposals against forbid invariants."
+    },
+    {
+      "call_id": "LLM-CALL-03",
+      "purpose": "content_sanitization",
+      "description": "Inspects tool stdout/stderr and conversational messages for sensitive tokens, honeytokens, and prompt injection signatures.",
+      "model_provider": "Local Broker Regex + DLP Classifier",
+      "model_name": "BAP Native DLP Regex Engine",
+      "data_classification": "RESTRICTED",
+      "trust_boundary": "Execution Broker & Kernel Sandbox Boundary",
+      "authorization_policy": "Cedar Policy 2 & Invariant 1 (Credential Shielding)",
+      "audit_correlation": "redaction_hash, session_id, receipt_id",
+      "non_reliance_verified": true,
+      "governance_rule": "Deterministic regex and ambient environment scrubbing execute unconditionally in-kernel; model output cannot bypass redaction."
+    }
+  ]
+}
