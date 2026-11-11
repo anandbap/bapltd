@@ -462,6 +462,8 @@ def main():
 
             # Execute edge commands with --session-id and --server (simulating Claude Code / cchook)
             old_test_mode = os.environ.get("BAP_TEST_MODE")
+            old_zsp = os.environ.get("BAP_ZSP")
+            os.environ["BAP_ZSP"] = "off"
             if "BAP_TEST_MODE" in os.environ:
                 del os.environ["BAP_TEST_MODE"]
             try:
@@ -485,6 +487,10 @@ def main():
             finally:
                 if old_test_mode is not None:
                     os.environ["BAP_TEST_MODE"] = old_test_mode
+                if old_zsp is None:
+                    os.environ.pop("BAP_ZSP", None)
+                else:
+                    os.environ["BAP_ZSP"] = old_zsp
 
             time.sleep(0.3)
 
@@ -538,6 +544,8 @@ def main():
 
             # Stream allowed & denied commands from Antigravity
             old_test_mode = os.environ.get("BAP_TEST_MODE")
+            old_zsp = os.environ.get("BAP_ZSP")
+            os.environ["BAP_ZSP"] = "off"
             if "BAP_TEST_MODE" in os.environ:
                 del os.environ["BAP_TEST_MODE"]
             try:
@@ -561,6 +569,10 @@ def main():
             finally:
                 if old_test_mode is not None:
                     os.environ["BAP_TEST_MODE"] = old_test_mode
+                if old_zsp is None:
+                    os.environ.pop("BAP_ZSP", None)
+                else:
+                    os.environ["BAP_ZSP"] = old_zsp
 
             time.sleep(0.3)
 

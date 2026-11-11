@@ -95,6 +95,8 @@ class TestE2EAdversarialHardening(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp_dir = tempfile.mkdtemp(prefix="bap_adv_")
+        cls._prev_zsp = os.environ.get("BAP_ZSP")
+        os.environ["BAP_ZSP"] = "off"
         db_path = os.path.join(cls.tmp_dir, "adv-hardening.db")
 
         env = os.environ.copy()
@@ -128,7 +130,11 @@ class TestE2EAdversarialHardening(unittest.TestCase):
             time.sleep(0.15)
 
         if not healthy:
-            if cls.cp_proc:
+            if cls._prev_zsp is None:
+            os.environ.pop("BAP_ZSP", None)
+        else:
+            os.environ["BAP_ZSP"] = cls._prev_zsp
+        if cls.cp_proc:
                 cls.cp_proc.terminate()
             raise RuntimeError(f"Control plane failed to start on port {CP_PORT}")
 
@@ -157,6 +163,10 @@ class TestE2EAdversarialHardening(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        if cls._prev_zsp is None:
+            os.environ.pop("BAP_ZSP", None)
+        else:
+            os.environ["BAP_ZSP"] = cls._prev_zsp
         if cls.cp_proc:
             cls.cp_proc.terminate()
             try:

@@ -280,17 +280,18 @@ func isExplicitAbsolutePath(p string) bool {
 	if strings.HasPrefix(p, "\\\\") || strings.HasPrefix(p, "//") {
 		return true // UNC path
 	}
-	if strings.HasPrefix(p, "/") {
-		// Bare root "/" or paths with subpaths "/dir/file" are absolute POSIX paths
-		if p == "/" || strings.Contains(p[1:], "/") || strings.Contains(p[1:], "\\") {
+	normP := strings.ReplaceAll(p, "\\", "/")
+	if strings.HasPrefix(normP, "/") {
+		// Bare root "/" ("\") or paths with subpaths "/dir/file" are absolute paths
+		if normP == "/" || strings.Contains(normP[1:], "/") {
 			return true
 		}
 		// Single-letter switch flags (e.g. /c, /d, /s, /b, /q, /y) on Windows are flags, not paths
-		if len(p) == 2 {
+		if len(normP) == 2 && strings.HasPrefix(p, "/") {
 			return false
 		}
 		// Root-level dirs like /etc, /tmp, /var, /bin, /usr, /home, /opt, /dev
-		lower := strings.ToLower(p[1:])
+		lower := strings.ToLower(normP[1:])
 		switch lower {
 		case "etc", "tmp", "var", "home", "root", "bin", "usr", "opt", "mnt", "proc", "dev", "sys", "lib", "lib64", "srv", "windows", "program files", "users":
 			return true

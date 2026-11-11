@@ -84,12 +84,21 @@ class TestBAP200SoleExecutor(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.test_state_dir = tempfile.mkdtemp(prefix="bap-test-bap200-")
+        cls._prev_state_dir = os.environ.get("BAP_STATE_DIR")
+        cls._prev_zsp = os.environ.get("BAP_ZSP")
         os.environ["BAP_STATE_DIR"] = cls.test_state_dir
+        os.environ["BAP_ZSP"] = "off"
 
     @classmethod
     def tearDownClass(cls):
-        if os.environ.get("BAP_STATE_DIR") == cls.test_state_dir:
+        if cls._prev_state_dir is None:
             os.environ.pop("BAP_STATE_DIR", None)
+        else:
+            os.environ["BAP_STATE_DIR"] = cls._prev_state_dir
+        if cls._prev_zsp is None:
+            os.environ.pop("BAP_ZSP", None)
+        else:
+            os.environ["BAP_ZSP"] = cls._prev_zsp
         shutil.rmtree(cls.test_state_dir, ignore_errors=True)
 
     def setUp(self):

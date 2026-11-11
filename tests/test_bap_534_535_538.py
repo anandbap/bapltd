@@ -21,8 +21,14 @@ class TestBap534_535_538(unittest.TestCase):
         self.test_session = f"sess-test-534-535-538-{os.getpid()}"
         self.temp_dir = os.path.join(REPO_ROOT, "scratch", f"snap_test_{os.getpid()}")
         os.makedirs(self.temp_dir, exist_ok=True)
+        self._prev_zsp = os.environ.get("BAP_ZSP")
+        os.environ["BAP_ZSP"] = "off"
 
     def tearDown(self):
+        if self._prev_zsp is None:
+            os.environ.pop("BAP_ZSP", None)
+        else:
+            os.environ["BAP_ZSP"] = self._prev_zsp
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_01_bap_535_ambient_credential_shielding(self):

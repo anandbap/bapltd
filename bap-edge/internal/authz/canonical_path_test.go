@@ -138,3 +138,24 @@ func TestCheckCommandWorkspaceEscape_StandardDevices(t *testing.T) {
 		}
 	}
 }
+
+func TestIsExplicitAbsolutePath_BackslashNormalization(t *testing.T) {
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"\\", true},
+		{"\\etc\\passwd", true},
+		{"/", true},
+		{"/etc/passwd", true},
+		{"C:\\Windows", true},
+		{"\\\\server\\share", true},
+		{"/c", false},
+		{"relative/file.txt", false},
+	}
+	for _, tc := range cases {
+		if got := isExplicitAbsolutePath(tc.path); got != tc.want {
+			t.Errorf("isExplicitAbsolutePath(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}

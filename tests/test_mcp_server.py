@@ -33,6 +33,8 @@ class MCPClient:
         cmd = [binary_path]
         if args:
             cmd.extend(args)
+        env = os.environ.copy()
+        env["BAP_ZSP"] = "off"
         self.proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -41,6 +43,7 @@ class MCPClient:
             text=True,
             bufsize=1,
             cwd=ROOT_DIR,
+            env=env,
         )
         self.msg_id = 0
 

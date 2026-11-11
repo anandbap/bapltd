@@ -140,7 +140,7 @@ class TestMultiAgentLifecycleMatrix(unittest.TestCase):
                 "command": "git status"
             }
         }
-        resp = invoke_hook(payload, env_overrides={"LTD_SOURCE": "codex", "BAP_ENFORCEMENT_MODE": "enforce"})
+        resp = invoke_hook(payload, env_overrides={"LTD_SOURCE": "codex", "BAP_ENFORCEMENT_MODE": "enforce", "BAP_ZSP": "off"})
         h_out = resp.get("hookSpecificOutput", {})
         self.assertEqual(h_out.get("permissionDecision"), "allow")
         updated_input = h_out.get("updatedInput") or resp.get("tool_input", {})

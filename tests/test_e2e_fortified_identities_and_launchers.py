@@ -110,6 +110,7 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
             env["LTD_SOURCE"] = agent_name
             env["BAP_SPIFFE_ID"] = expected_spiffe
             env["BAP_SESSION_ID"] = sess_id
+            env["BAP_ZSP"] = "off"
 
             res = subprocess.run(
                 [BAPEDGE_BIN, "exec", "--raw", "-json", "-source", agent_name, "git --version"],
@@ -215,6 +216,7 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
             env_ag = os.environ.copy()
             env_ag["LTD_SOURCE"] = "antigravity"
             env_ag["BAP_SESSION_ID"] = sess_antigravity
+            env_ag["BAP_ZSP"] = "off"
 
             res_ag = subprocess.run(
                 [BAPEDGE_BIN, "exec", "--raw", "git --version"],

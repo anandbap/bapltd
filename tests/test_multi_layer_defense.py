@@ -39,6 +39,7 @@ class TestMultiLayerDefense(unittest.TestCase):
         subprocess.run(["git", "init", "--quiet", cls.workspace], check=True)
         cls.env = os.environ.copy()
         cls.env["BAP_WORKSPACE_ROOT"] = cls.workspace
+        cls.env["BAP_ZSP"] = "off"
         cls.env["BAP_STATE_DIR"] = os.path.join(cls.workspace, "state")
         cls.env["BAP_CREDENTIALS"] = os.path.join(cls.workspace, "workstation.json")
         cls.env["USERPROFILE"] = os.path.join(cls.workspace, "home")
