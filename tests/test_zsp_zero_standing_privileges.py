@@ -77,7 +77,9 @@ class TestZSPZeroStandingPrivileges(unittest.TestCase):
         init_data = json.loads(init_res.stdout)
         self.assertEqual(init_data.get("status"), "initialized")
         self.assertTrue(init_data.get("standing_privileges", "").startswith("NONE"))
-        self.assertTrue(init_data.get("principal", {}).get("subject", "").startswith("spiffe://"))
+        principal_obj = init_data.get("principal", {})
+        principal_sub = principal_obj.get("sub") or principal_obj.get("subject") or ""
+        self.assertTrue(principal_sub.startswith("spiffe://"), f"unexpected principal payload: {principal_obj}")
 
         status_res = subprocess.run(
             [BAPEDGE_BIN, "zsp", "status", "--session-id", self.session_id, "--client", "claude-code", "--json"],

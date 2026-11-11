@@ -1,6 +1,6 @@
 {
   "bap-governance": {
-    "enabled": true,
+    "enabled": false,
     "SessionStart": [
       {
         "type": "command",

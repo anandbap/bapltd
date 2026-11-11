@@ -404,7 +404,8 @@ class TestHitlAndSupplyChain(unittest.TestCase):
             capture_output=True, text=True, cwd=REPO_ROOT, env=env_clean
         )
         data = json.loads(proc.stdout)
-        self.assertEqual(data.get("decision"), "allow")
+        self.assertIn(data.get("decision"), ("allow", "approve"))
+        self.assertEqual(data.get("hookSpecificOutput", {}).get("permissionDecision"), "allow")
         self.assertIn("PROJECT TRUST", data.get("systemMessage", ""))
 
 

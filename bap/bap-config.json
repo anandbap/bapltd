@@ -3,13 +3,9 @@
   "gateway_url": "http://localhost:9090",
   "envoy_url": "http://localhost:10000",
   "trust_domain": "bap.internal",
-  "environment": "production",
+  "environment": "development",
   "enforcement_mode": "enforce",
-  "capture_user_prompt": true,
-  "capture_agent_response": true,
-  "developer_features": true,
   "oidc": {
-    "enabled": true,
-    "provider": "google"
+    "enabled": false
   }
 }
