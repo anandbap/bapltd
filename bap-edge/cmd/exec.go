@@ -1134,7 +1134,7 @@ func RunExec(args []string) {
 						resp := types.ExecResponse{
 							Allowed:    false,
 							Reason:     fmt.Sprintf("ZeroStandingPrivilegeViolation: %v", zspErr),
-							Suggestion: fmt.Sprintf("Submit a signed 4-Tuple Task Authorization Envelope first via 'bapedge zsp authorize --session-id %q --mission TASK_EXECUTION --goal %q --actions %q --resources workspace://current'.", ec.sessionID, ec.fullCommand, action),
+							Suggestion: authz.FormatZSPAgentSuggestion(ec.zspPrincipal, ec.sessionID, ec.fullCommand, action, 1),
 							Mode:       ec.enforcementMode,
 						}
 						ec.exit(resp, 1)
@@ -1344,16 +1344,14 @@ func RunExec(args []string) {
 	// Agents start with ZERO standing permissions and must hold an active signed TaskGrant covering the action & resource,
 	// except when invoking atomic ZSP control commands (e.g. 'bapedge zsp authorize' / 'bapedge status').
 	if allowed && isZSPRequiredForExec(ec) && authz.IsZSPEnforced() && !authz.IsZSPControlCommand(fullCommand) {
-		zspAction, zspRes, zspEscapes := authz.ResolveZSPActionAndResource(fullCommand, executable, cmdArguments, "", "", workspaceRoot)
-		svid, grant, _, zspErr := authz.VerifyOrConsumeSessionZSP(
+		zspChecks := authz.ResolveZSPCommandChecks(fullCommand, executable, cmdArguments, "", "", workspaceRoot)
+		svid, grant, _, zspErr := authz.VerifyOrConsumeSessionZSPChecks(
 			authz.ResolveZSPDir(),
 			ec.sessionID,
 			ec.source,
-			zspAction,
-			zspRes,
+			zspChecks,
 			fullCommand,
 			workspaceRoot,
-			zspEscapes,
 			!ec.decisionOnly,
 			[]string{fmt.Sprintf("parent:%d", ec.parentPID), fmt.Sprintf("broker:%d", os.Getpid())},
 		)
@@ -1368,10 +1366,11 @@ func RunExec(args []string) {
 				ec.shadowReason = reason
 				allowed = true
 			} else {
+				suggestedActions := authz.SummarizeZSPActions(zspChecks)
 				resp := types.ExecResponse{
 					Allowed:        false,
 					Reason:         reason,
-					Suggestion:     fmt.Sprintf("Agent principal %s has ZERO standing privileges. Submit a signed 4-Tuple Task Authorization Envelope first via: bapedge zsp authorize --session-id %q --mission TASK_EXECUTION --goal %q --actions %q --resources workspace://current", ec.zspPrincipal, ec.sessionID, fullCommand, zspAction),
+					Suggestion:     authz.FormatZSPAgentSuggestion(ec.zspPrincipal, ec.sessionID, fullCommand, suggestedActions, len(zspChecks)),
 					Mode:           ec.enforcementMode,
 					StepUpDecision: "denied",
 				}

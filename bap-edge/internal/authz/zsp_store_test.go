@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -134,5 +135,41 @@ func TestIsZSPControlCommandQuotedOperatorsAndChaining(t *testing.T) {
 		if IsZSPControlCommand(cmd) {
 			t.Errorf("IsZSPControlCommand(%q) = true, want false", cmd)
 		}
+	}
+}
+
+func TestResolveZSPCommandChecksAndCompoundVerification(t *testing.T) {
+	ws := t.TempDir()
+	cmd := "git status --short --branch; git log --oneline -n 10"
+	checks := ResolveZSPCommandChecks(cmd, "git", "status --short --branch; git log --oneline -n 10", "", "", ws)
+	if got := SummarizeZSPActions(checks); got != "git:status,git:log" {
+		t.Fatalf("SummarizeZSPActions(%q) = %q, want %q", cmd, got, "git:status,git:log")
+	}
+	if len(checks) != 2 {
+		t.Fatalf("expected 2 atomic checks for compound command, got %d (%+v)", len(checks), checks)
+	}
+
+	sugg := FormatZSPAgentSuggestion("spiffe://bap.local/agent/claude-code", "sess-1", cmd, "git:status,git:log", len(checks))
+	if !strings.Contains(sugg, `--actions "git:status,git:log"`) || !strings.Contains(sugg, `--max-uses 2`) {
+		t.Fatalf("unexpected suggestion: %s", sugg)
+	}
+
+	zspDir := t.TempDir()
+	_, _, err := SubmitTaskEnvelope(zspDir, "sess-status-only", "claude-code", "CODE_INSPECTION", "git status", "check status", []string{"git:status"}, []string{"workspace://current"}, "", 2, 0)
+	if err != nil {
+		t.Fatalf("SubmitTaskEnvelope failed: %v", err)
+	}
+	if _, _, _, err := VerifyOrConsumeSessionZSPChecks(zspDir, "sess-status-only", "claude-code", checks, cmd, ws, true, nil); err == nil {
+		t.Fatal("expected compound command requiring git:status and git:log to fail against git:status-only grant")
+	}
+
+	_, _, err = SubmitTaskEnvelope(zspDir, "sess-both", "claude-code", "CODE_INSPECTION", "git status & log", "inspect branch and commits", []string{"git:status", "git:log"}, []string{"workspace://current"}, "", 1, 0)
+	if err != nil {
+		t.Fatalf("SubmitTaskEnvelope (both) failed: %v", err)
+	}
+	if _, grant, _, err := VerifyOrConsumeSessionZSPChecks(zspDir, "sess-both", "claude-code", checks, cmd, ws, true, nil); err != nil {
+		t.Fatalf("expected compound command to succeed and consume once with matching grant, got: %v", err)
+	} else if grant == nil || !grant.IsBurned || grant.RemainingUses != 0 {
+		t.Fatalf("expected 1-use grant to burn after compound execution, got: %+v", grant)
 	}
 }

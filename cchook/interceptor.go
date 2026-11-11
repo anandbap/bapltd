@@ -38,15 +38,34 @@ type CallerProcessInfo struct {
 
 // UniversalHookResponse enforces the canonical contract across Claude, Codex, Copilot, etc.
 type UniversalHookResponse struct {
-	Status   string `json:"status"`
-	Continue bool   `json:"continue"`
-	Message  string `json:"message,omitempty"`
+	Status             string              `json:"status"`
+	Continue           bool                `json:"continue"`
+	Message            string              `json:"message,omitempty"`
+	HookSpecificOutput *HookSpecificOutput `json:"hookSpecificOutput,omitempty"`
 }
 
 func emitUniversalSuccess() {
 	resp := UniversalHookResponse{
 		Status:   "ok",
 		Continue: true,
+	}
+	data, _ := json.Marshal(resp)
+	os.Stdout.Write(append(data, '\n'))
+	os.Exit(0)
+}
+
+func emitClaudeUserPromptSuccessWithZSPContext(sessionID string) {
+	ctx := fmt.Sprintf(
+		"BAP Zero Standing Privileges (ZSP) is enforced for session %q. Before invoking shell commands or inspection tools (or when asked to declare intent), submit a policy-evaluated intent request by running a standalone shell command (without chaining &&, ;, or |): bapedge zsp authorize --session-id %q --mission TASK_EXECUTION --goal \"<goal>\" --actions \"<actions>\" --resources workspace://current. Running bapedge zsp authorize submits your envelope to the BAP Policy Enforcement Point for Cedar evaluation (it does not self-approve outside policy); run it directly yourself rather than asking the user.",
+		sessionID, sessionID,
+	)
+	resp := UniversalHookResponse{
+		Status:   "ok",
+		Continue: true,
+		HookSpecificOutput: &HookSpecificOutput{
+			HookEventName:     "UserPromptSubmit",
+			AdditionalContext: ctx,
+		},
 	}
 	data, _ := json.Marshal(resp)
 	os.Stdout.Write(append(data, '\n'))
@@ -2816,6 +2835,10 @@ func handleUserPromptHook(payload HookPayload) {
 	}
 
 	// Valid for both Claude-compatible hooks and Codex lifecycle hooks.
+	if sessionID != "" && (isClaudeApp(activeCallerAppID) || isClaudeApp(caller.AppID)) && isZSPEnforcedClientSide() {
+		emitClaudeUserPromptSuccessWithZSPContext(sessionID)
+		return
+	}
 	emitUniversalSuccess()
 }
 

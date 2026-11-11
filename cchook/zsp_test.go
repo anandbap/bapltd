@@ -206,3 +206,96 @@ func TestInterceptorPreToolUseScenario2ZSPAuthorizeAndGitStatus(t *testing.T) {
 		t.Fatalf("expected allow for git status after zsp authorize, got: %s", outGit)
 	}
 }
+
+func TestInterceptorPreToolUseScenario2CompoundGitStatusAndLog(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows binary verification test")
+	}
+
+	repoRoot, bapOut, interOut := setupZSPHookTestEnv(t)
+	sessID := "sess-cchook-sc2-compound-" + time.Now().Format("150405.000")
+
+	// 0. UserPromptSubmit for claude-code MUST emit ZSP intent-declaration guidance.
+	promptPayload, _ := json.Marshal(map[string]any{
+		"hook_event_name": "UserPromptSubmit",
+		"app_id":          "claude-code",
+		"session_id":      sessID,
+		"user_prompt":     "I need to inspect our current git branch status and recent commits.",
+	})
+	promptCmd := exec.Command(interOut)
+	promptCmd.Dir = repoRoot
+	promptCmd.Stdin = bytes.NewReader(promptPayload)
+	promptOut, err := promptCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("UserPromptSubmit failed: %v\n%s", err, string(promptOut))
+	}
+	if !strings.Contains(string(promptOut), "bapedge zsp authorize") || !strings.Contains(string(promptOut), `"hookEventName":"UserPromptSubmit"`) {
+		t.Fatalf("expected UserPromptSubmit additionalContext with zsp authorize guidance, got: %s", string(promptOut))
+	}
+
+	runPreTool := func(command string) string {
+		t.Helper()
+		payload, _ := json.Marshal(map[string]any{
+			"hook_event_name": "PreToolUse",
+			"tool_name":       "PowerShell",
+			"app_id":          "claude-code",
+			"session_id":      sessID,
+			"cwd":             repoRoot,
+			"tool_input":      map[string]any{"command": command},
+		})
+		cmd := exec.Command(interOut)
+		cmd.Dir = repoRoot
+		cmd.Stdin = bytes.NewReader(payload)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("interceptor failed on %q: %v\n%s", command, err, string(out))
+		}
+		return string(out)
+	}
+
+	compoundCmd := "git status --short --branch; git log --oneline -n 10"
+
+	// 1. Ungranted compound command MUST deny and suggest BOTH git:status,git:log + --max-uses 2 + non-self-approval guidance.
+	outDeny := runPreTool(compoundCmd)
+	if !strings.Contains(outDeny, `"permissionDecision": "deny"`) && !strings.Contains(outDeny, `"permissionDecision":"deny"`) {
+		t.Fatalf("expected deny for ungranted compound git command, got: %s", outDeny)
+	}
+	for _, want := range []string{`git:status,git:log`, `--max-uses 2`, `NOT self-approval`} {
+		if !strings.Contains(outDeny, want) {
+			t.Fatalf("expected %q in ZSP denial suggestion, got: %s", want, outDeny)
+		}
+	}
+
+	// 2. Standalone zsp authorize using the exact suggested --goal (with ';') and --actions MUST be allowed by PreToolUse.
+	suggestedAuth := `bapedge zsp authorize --session-id "` + sessID + `" --mission TASK_EXECUTION --goal "git status --short --branch; git log --oneline -n 10" --actions "git:status,git:log" --resources workspace://current --max-uses 2`
+	outAuth := runPreTool(suggestedAuth)
+	if !strings.Contains(outAuth, `"permissionDecision": "allow"`) && !strings.Contains(outAuth, `"permissionDecision":"allow"`) {
+		t.Fatalf("expected allow for suggested standalone zsp authorize, got: %s", outAuth)
+	}
+
+	// Mint the grant with the built bapedge.exe using those exact actions & max-uses.
+	mintCmd := exec.Command(bapOut, "zsp", "authorize",
+		"--session-id", sessID,
+		"--mission", "TASK_EXECUTION",
+		"--goal", compoundCmd,
+		"--actions", "git:status,git:log",
+		"--resources", "workspace://current",
+		"--max-uses", "2",
+	)
+	mintCmd.Dir = repoRoot
+	if mintOut, err := mintCmd.CombinedOutput(); err != nil {
+		t.Fatalf("bapedge zsp authorize failed: %v\n%s", err, string(mintOut))
+	}
+
+	// 3. Compound command retry MUST now be allowed by both cchook PreToolUse and ZSP checks.
+	outAllow := runPreTool(compoundCmd)
+	if !strings.Contains(outAllow, `"permissionDecision": "allow"`) && !strings.Contains(outAllow, `"permissionDecision":"allow"`) {
+		t.Fatalf("expected allow for compound git command after suggested zsp authorize, got: %s", outAllow)
+	}
+
+	// 4. Compound command with an UNGRANTED trailing command MUST still be denied!
+	outEscalate := runPreTool("git status --short --branch; git push origin main")
+	if !strings.Contains(outEscalate, `"permissionDecision": "deny"`) && !strings.Contains(outEscalate, `"permissionDecision":"deny"`) {
+		t.Fatalf("expected deny when compound command adds ungranted git push, got: %s", outEscalate)
+	}
+}

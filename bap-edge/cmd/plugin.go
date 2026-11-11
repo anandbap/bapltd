@@ -1749,7 +1749,7 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 			}
 		}
 		execName, execArgs := sandbox.ParseCommand(command)
-		zspAction, zspRes, zspEscapes := authz.ResolveZSPActionAndResource(command, execName, execArgs, toolName, filePath, wsRoot)
+		zspChecks := authz.ResolveZSPCommandChecks(command, execName, execArgs, toolName, filePath, wsRoot)
 
 		// Avoid double-burning a single-use grant if standalone .claude/settings.json hook
 		// is also configured to wrap shell execution through `bapedge exec`.
@@ -1760,18 +1760,26 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 			}
 		}
 
-		svid, grant, _, zspErr := authz.VerifyOrConsumeSessionZSP(
-			authz.ResolveZSPDir(), sessionID, normClient, zspAction, zspRes, command, wsRoot, zspEscapes, consumeHere, nil,
+		svid, grant, _, zspErr := authz.VerifyOrConsumeSessionZSPChecks(
+			authz.ResolveZSPDir(), sessionID, normClient, zspChecks, command, wsRoot, consumeHere, nil,
 		)
 		if svid != nil {
 			principalIdentity = svid.Subject
 		}
 		if zspErr != nil {
+			suggestedActions := authz.SummarizeZSPActions(zspChecks)
+			goalTarget := command
+			if goalTarget == "" {
+				goalTarget = toolName
+				if filePath != "" {
+					goalTarget = toolName + " " + filePath
+				}
+			}
 			return types.ExecResponse{
 				Allowed:    false,
 				ExitCode:   1,
 				Reason:     fmt.Sprintf("ZeroStandingPrivilegeViolation: %v", zspErr),
-				Suggestion: fmt.Sprintf("Agent principal %s has ZERO standing privileges. Submit a signed 4-Tuple Task Authorization Envelope first via: bapedge zsp authorize --session-id %q --mission TASK_EXECUTION --goal %q --actions %q --resources workspace://current", principalIdentity, sessionID, command, zspAction),
+				Suggestion: authz.FormatZSPAgentSuggestion(principalIdentity, sessionID, goalTarget, suggestedActions, len(zspChecks)),
 			}
 		}
 		if grant != nil {

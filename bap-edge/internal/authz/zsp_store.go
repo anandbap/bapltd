@@ -423,12 +423,156 @@ func appendZSPProof(zspDir string, proof *types.AuditLineageProof) {
 	_, _ = f.Write(append(line, '\n'))
 }
 
+// ZSPActionCheck represents a normalized ZSP action/resource check for a command node or native tool.
+type ZSPActionCheck struct {
+	Action            string
+	CanonicalResource string
+	EscapesWorkspace  bool
+}
+
+func effectiveZSPResource(canonicalResource, workspaceRoot string, escapesWorkspace bool) string {
+	effectiveResource := canonicalResource
+	if escapesWorkspace {
+		if effectiveResource == "" || strings.HasPrefix(effectiveResource, "workspace://") || effectiveResource == "repo:local" {
+			return "outside-workspace://unescaped"
+		}
+		return effectiveResource
+	}
+	if workspaceRoot != "" && !strings.HasPrefix(effectiveResource, "system://") && !strings.HasPrefix(effectiveResource, "http") {
+		// In-workspace targets (repo:local, dir://..., file://...) map cleanly to workspace://current
+		// when no escape occurred.
+		return "workspace://current"
+	}
+	if effectiveResource == "" {
+		return "workspace://current"
+	}
+	return effectiveResource
+}
+
+func isInWorkspaceNavBuiltin(execName string) bool {
+	switch strings.ToLower(strings.Trim(execName, "\"'")) {
+	case "cd", "chdir", "pushd", "popd", "set-location", "sl":
+		return true
+	default:
+		return false
+	}
+}
+
+func collectAtomicZSPNodes(nodes []*ASTNode) []*ASTNode {
+	var out []*ASTNode
+	for _, n := range nodes {
+		if n == nil {
+			continue
+		}
+		if len(n.Args) > 0 {
+			out = append(out, n)
+		}
+		if len(n.SubCommands) > 0 {
+			out = append(out, collectAtomicZSPNodes(n.SubCommands)...)
+		}
+	}
+	return out
+}
+
+// ResolveZSPCommandChecks decomposes a shell command (including chained statements and subcommands)
+// or native tool call into every ZSP action/resource check that must be authorized.
+func ResolveZSPCommandChecks(fullCommand, executable, args, toolName, targetPath, workspaceRoot string) []ZSPActionCheck {
+	if strings.TrimSpace(fullCommand) == "" && strings.TrimSpace(toolName) != "" {
+		act, res, esc := ResolveZSPActionAndResource(fullCommand, executable, args, toolName, targetPath, workspaceRoot)
+		return []ZSPActionCheck{{Action: act, CanonicalResource: res, EscapesWorkspace: esc}}
+	}
+	if strings.TrimSpace(fullCommand) != "" {
+		if pipe, err := ParseAST(fullCommand); err == nil && pipe != nil {
+			atomicNodes := collectAtomicZSPNodes(pipe.Nodes)
+			if len(atomicNodes) > 0 {
+				var checks []ZSPActionCheck
+				for _, node := range atomicNodes {
+					nodeExec := node.Args[0]
+					nodeArgs := strings.Join(node.Args[1:], " ")
+					act, res, esc := ResolveZSPActionAndResource(node.FullCommand, nodeExec, nodeArgs, "", "", workspaceRoot)
+					if len(atomicNodes) > 1 && !esc && isInWorkspaceNavBuiltin(nodeExec) {
+						continue
+					}
+					checks = append(checks, ZSPActionCheck{
+						Action:            act,
+						CanonicalResource: res,
+						EscapesWorkspace:  esc,
+					})
+				}
+				if len(checks) > 0 {
+					return checks
+				}
+			}
+		}
+	}
+	act, res, esc := ResolveZSPActionAndResource(fullCommand, executable, args, toolName, targetPath, workspaceRoot)
+	return []ZSPActionCheck{{Action: act, CanonicalResource: res, EscapesWorkspace: esc}}
+}
+
+// SummarizeZSPActions formats a deduplicated comma-separated list of ZSP actions in order.
+func SummarizeZSPActions(checks []ZSPActionCheck) string {
+	seen := make(map[string]struct{}, len(checks))
+	var actions []string
+	for _, c := range checks {
+		act := strings.TrimSpace(c.Action)
+		if act == "" {
+			continue
+		}
+		key := strings.ToLower(act)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		actions = append(actions, act)
+	}
+	return strings.Join(actions, ",")
+}
+
+// FormatZSPAgentSuggestion builds an actionable ZSP authorization hint telling the agent
+// to submit a standalone `bapedge zsp authorize` request to the BAP PEP rather than delegating to the user.
+func FormatZSPAgentSuggestion(principal, sessionID, goal, actions string, checkCount int) string {
+	maxUsesArg := ""
+	if checkCount > 1 {
+		maxUsesArg = fmt.Sprintf(" --max-uses %d", checkCount)
+	}
+	return fmt.Sprintf(
+		"Agent principal %s has ZERO standing privileges. Declare your task intent and request a policy-evaluated JIT TaskGrant by running this standalone command yourself via your shell tool (without &&, ;, or |) — bapedge zsp authorize submits your envelope to the BAP Policy Enforcement Point for Cedar verification (it is NOT self-approval): bapedge zsp authorize --session-id %q --mission TASK_EXECUTION --goal %q --actions %q --resources workspace://current%s",
+		principal, sessionID, goal, actions, maxUsesArg,
+	)
+}
+
 // VerifyOrConsumeSessionZSP enforces Zero Standing Privileges against persisted TaskGrants
 // for sessionID. If consume is false (e.g. --decision-only), it verifies matching grant scope
 // without decrementing RemainingUses; if true, it burns one use and persists an AuditLineageProof.
 func VerifyOrConsumeSessionZSP(
 	zspDir, sessionID, clientType, action, canonicalResource, fullCommand, workspaceRoot string,
 	escapesWorkspace, consume bool,
+	processAncestry []string,
+) (*types.CryptographicAgentSVID, *types.TaskGrant, *types.AuditLineageProof, error) {
+	return VerifyOrConsumeSessionZSPChecks(
+		zspDir,
+		sessionID,
+		clientType,
+		[]ZSPActionCheck{{
+			Action:            action,
+			CanonicalResource: canonicalResource,
+			EscapesWorkspace:  escapesWorkspace,
+		}},
+		fullCommand,
+		workspaceRoot,
+		consume,
+		processAncestry,
+	)
+}
+
+// VerifyOrConsumeSessionZSPChecks enforces Zero Standing Privileges across every action/resource
+// check resolved from an invocation. A single command execution burns one grant use only after
+// every sub-action passes verification.
+func VerifyOrConsumeSessionZSPChecks(
+	zspDir, sessionID, clientType string,
+	checks []ZSPActionCheck,
+	fullCommand, workspaceRoot string,
+	consume bool,
 	processAncestry []string,
 ) (*types.CryptographicAgentSVID, *types.TaskGrant, *types.AuditLineageProof, error) {
 	if zspDir == "" {
@@ -445,31 +589,38 @@ func VerifyOrConsumeSessionZSP(
 		return svid, nil, nil, err
 	}
 
-	effectiveResource := canonicalResource
-	if escapesWorkspace {
-		if effectiveResource == "" || strings.HasPrefix(effectiveResource, "workspace://") || effectiveResource == "repo:local" {
-			effectiveResource = "outside-workspace://unescaped"
-		}
-	} else if workspaceRoot != "" && !strings.HasPrefix(effectiveResource, "system://") && !strings.HasPrefix(effectiveResource, "http") {
-		// In-workspace targets (repo:local, dir://..., file://...) map cleanly to workspace://current
-		// when no escape occurred.
-		effectiveResource = "workspace://current"
-	}
-	if effectiveResource == "" {
-		effectiveResource = "workspace://current"
-	}
-
 	if len(grants) == 0 {
 		return svid, nil, nil, fmt.Errorf(
 			"%w: agent principal %s has ZERO standing privileges (signed 4-tuple TaskAuthorizationEnvelope required)",
 			ErrZeroStandingPrivilegeViolation, svid.Subject,
 		)
 	}
+	if len(checks) == 0 {
+		checks = []ZSPActionCheck{{Action: "exec", CanonicalResource: "workspace://current"}}
+	}
+
+	checkGrantCoversAll := func(g *types.TaskGrant) (*types.TaskGrant, error) {
+		var checked *types.TaskGrant
+		for _, chk := range checks {
+			res := effectiveZSPResource(chk.CanonicalResource, workspaceRoot, chk.EscapesWorkspace)
+			cg, checkErr := engine.CheckTaskGrant(g.GrantID, chk.Action, res)
+			if checkErr != nil {
+				return nil, checkErr
+			}
+			checked = cg
+		}
+		return checked, nil
+	}
 
 	var firstErr error
 	for _, g := range grants {
-		if consume {
-			proof, consumeErr := engine.ConsumeTaskGrant(g.GrantID, action, effectiveResource, fullCommand, processAncestry)
+		checked, checkErr := checkGrantCoversAll(g)
+		if checkErr == nil {
+			if !consume {
+				return svid, checked, nil, nil
+			}
+			primaryRes := effectiveZSPResource(checks[0].CanonicalResource, workspaceRoot, checks[0].EscapesWorkspace)
+			proof, consumeErr := engine.ConsumeTaskGrant(g.GrantID, checks[0].Action, primaryRes, fullCommand, processAncestry)
 			if consumeErr == nil {
 				updated, _ := engine.GetGrant(g.GrantID)
 				if updated != nil {
@@ -478,7 +629,6 @@ func VerifyOrConsumeSessionZSP(
 				appendZSPProof(zspDir, proof)
 				return svid, updated, proof, nil
 			}
-			// Persist expiration burn if newly expired
 			if errors.Is(consumeErr, ErrGrantExpired) {
 				if updated, ok := engine.GetGrant(g.GrantID); ok {
 					_ = saveSessionGrant(zspDir, sessionID, updated)
@@ -487,14 +637,17 @@ func VerifyOrConsumeSessionZSP(
 			if firstErr == nil {
 				firstErr = consumeErr
 			}
-		} else {
-			checked, checkErr := engine.CheckTaskGrant(g.GrantID, action, effectiveResource)
-			if checkErr == nil {
-				return svid, checked, nil, nil
+			continue
+		}
+		if errors.Is(checkErr, ErrGrantExpired) {
+			if updated, ok := engine.GetGrant(g.GrantID); ok {
+				updated.IsBurned = true
+				updated.BurnReason = "TTL Expired"
+				_ = saveSessionGrant(zspDir, sessionID, updated)
 			}
-			if firstErr == nil {
-				firstErr = checkErr
-			}
+		}
+		if firstErr == nil {
+			firstErr = checkErr
 		}
 	}
 
