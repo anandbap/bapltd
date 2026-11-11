@@ -56,7 +56,7 @@ func emitUniversalSuccess() {
 
 func emitClaudeUserPromptSuccessWithZSPContext(sessionID string) {
 	ctx := fmt.Sprintf(
-		"BAP Zero Standing Privileges (ZSP) is enforced for session %q. Before invoking shell commands or inspection tools (or when asked to declare intent), submit a policy-evaluated intent request by running a standalone shell command (without chaining &&, ;, or |): bapedge zsp authorize --session-id %q --mission TASK_EXECUTION --goal \"<goal>\" --actions \"<actions>\" --resources workspace://current. Running bapedge zsp authorize submits your envelope to the BAP Policy Enforcement Point for Cedar evaluation (it does not self-approve outside policy); run it directly yourself rather than asking the user.",
+		"BAP Zero Standing Privileges (ZSP) is enforced for session %q. Before invoking shell commands or inspection tools (or when asked to declare intent), first run a standalone intent authorization command (without chaining &&, ;, or |) and wait for it to finish BEFORE dispatching dependent tool calls (including parallel batches): bapedge zsp authorize --session-id %q --mission TASK_EXECUTION --goal \"<goal>\" --actions \"<canonical:actions>\" --resources workspace://current --max-uses <N>. Use canonical colon-delimited actions without spaces (e.g. \"git:status,git:log,git:branch,git:diff,fs:read\"), and set --max-uses <N> to cover all planned sequential or parallel commands. Running bapedge zsp authorize submits your envelope to the BAP Policy Enforcement Point for Cedar evaluation (it does not self-approve outside policy); run it directly yourself rather than asking the user.",
 		sessionID, sessionID,
 	)
 	resp := UniversalHookResponse{

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -172,5 +173,112 @@ func TestResolveZSPCommandChecksAndCompoundVerification(t *testing.T) {
 		t.Fatalf("expected compound command to succeed and consume once with matching grant, got: %v", err)
 	} else if grant == nil || !grant.IsBurned || grant.RemainingUses != 0 {
 		t.Fatalf("expected 1-use grant to burn after compound execution, got: %+v", grant)
+	}
+}
+
+func TestSubmitTaskEnvelopeRejectsWhitespaceActions(t *testing.T) {
+	zspDir := t.TempDir()
+	_, _, err := SubmitTaskEnvelope(
+		zspDir,
+		"sess-bad-actions",
+		"claude-code",
+		"CODE_INSPECTION",
+		"inspect git",
+		"inspect git status",
+		[]string{"git status", "git:log"},
+		[]string{"workspace://current"},
+		"",
+		2,
+		0,
+	)
+	if err == nil {
+		t.Fatal("expected SubmitTaskEnvelope to reject space-separated action \"git status\"")
+	}
+	if !strings.Contains(err.Error(), "git:status") {
+		t.Fatalf("expected error to suggest canonical \"git:status\", got: %v", err)
+	}
+}
+
+func TestVerifyOrConsumeSessionZSPParallelGrantAccounting(t *testing.T) {
+	zspDir := t.TempDir()
+	ws := t.TempDir()
+	sessionID := "sess-parallel-zsp"
+
+	const maxUses = 6
+	const workers = 10
+	_, _, err := SubmitTaskEnvelope(
+		zspDir,
+		sessionID,
+		"claude-code",
+		"CODE_INSPECTION",
+		"parallel read-only git inspection",
+		"run git status in parallel",
+		[]string{"git:status", "git:log"},
+		[]string{"workspace://current"},
+		"",
+		maxUses,
+		0,
+	)
+	if err != nil {
+		t.Fatalf("SubmitTaskEnvelope failed: %v", err)
+	}
+
+	checks := ResolveZSPCommandChecks("git status -sb", "git", "status -sb", "", "", ws)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _, _, callErr := VerifyOrConsumeSessionZSPChecks(
+				zspDir,
+				sessionID,
+				"claude-code",
+				checks,
+				"git status -sb",
+				ws,
+				true,
+				nil,
+			)
+			errs <- callErr
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	successes := 0
+	failures := 0
+	for callErr := range errs {
+		if callErr == nil {
+			successes++
+		} else {
+			failures++
+		}
+	}
+	if successes != maxUses || failures != workers-maxUses {
+		t.Fatalf("expected %d successes and %d failures under concurrent grant consumption, got %d successes / %d failures",
+			maxUses, workers-maxUses, successes, failures)
+	}
+
+	rep, err := ListSessionZSPStatus(zspDir, sessionID, "claude-code")
+	if err != nil {
+		t.Fatalf("ListSessionZSPStatus failed: %v", err)
+	}
+	if len(rep.ActiveGrants) != 0 {
+		t.Fatalf("expected grant to be fully burned with 0 active grants, got: %+v", rep.ActiveGrants)
+	}
+
+	lineageData, err := os.ReadFile(filepath.Join(zspDir, "lineage.jsonl"))
+	if err != nil {
+		t.Fatalf("expected lineage.jsonl to be readable: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(lineageData)), "\n")
+	if len(lines) != maxUses {
+		t.Fatalf("expected %d lineage proof lines after concurrent executions, got %d", maxUses, len(lines))
 	}
 }

@@ -416,6 +416,10 @@ func runPluginAdapter(args []string) error {
 	if normEvent == "userpromptsubmit" || normEvent == "userprompt" {
 		_ = EnsureSessionStarted(sessionID, client, targetPID, promptText)
 		_ = SubmitUserPrompt(sessionID, client, promptText)
+		if sessionID != "" && normalizeClientAppID(client) == "claude-code" && authz.IsZSPEnforced() {
+			emitPluginUserPromptSuccessWithZSPContext(client, sessionID)
+			return nil
+		}
 		emitPluginSuccess(client, event)
 		return nil
 	}
@@ -1744,6 +1748,9 @@ func resolvePluginSessionID(client string, payload map[string]any) string {
 	if s := os.Getenv("BAP_SESSION_ID"); s != "" {
 		return s
 	}
+	if s := resolveDefaultZSPSessionID(""); s != "" && !strings.HasPrefix(s, "sess-agent-pid-") {
+		return s
+	}
 	return fmt.Sprintf("sess-%s-pid-%d", client, os.Getppid())
 }
 
@@ -2041,6 +2048,23 @@ func executeSyntheticProbe(client, eventJSON, eventName string) (types.ExecRespo
 	cmd, file := extractCommandAndFile(payload)
 	resp := evaluateWithBapedge("synthetic-probe-session", client, cmd, file)
 	return resp, nil
+}
+
+func emitPluginUserPromptSuccessWithZSPContext(client, sessionID string) {
+	ctx := fmt.Sprintf(
+		"BAP Zero Standing Privileges (ZSP) is enforced for session %q. Before invoking shell commands or inspection tools (or when asked to declare intent), first run a standalone intent authorization command (without chaining &&, ;, or |) and wait for it to finish BEFORE dispatching dependent tool calls (including parallel batches): bapedge zsp authorize --session-id %q --mission TASK_EXECUTION --goal \"<goal>\" --actions \"<canonical:actions>\" --resources workspace://current --max-uses <N>. Use canonical colon-delimited actions without spaces (e.g. \"git:status,git:log,git:branch,git:diff,fs:read\"), and set --max-uses <N> to cover all planned sequential or parallel commands. Running bapedge zsp authorize submits your envelope to the BAP Policy Enforcement Point for Cedar evaluation (it does not self-approve outside policy); run it directly yourself rather than asking the user.",
+		sessionID, sessionID,
+	)
+	out := map[string]any{
+		"status":   "ok",
+		"continue": true,
+		"hookSpecificOutput": map[string]any{
+			"hookEventName":     "UserPromptSubmit",
+			"additionalContext": ctx,
+		},
+	}
+	data, _ := json.Marshal(out)
+	fmt.Println(string(data))
 }
 
 func emitPluginSuccess(client, event string) {

@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"bap-edge/internal/identity"
@@ -154,6 +155,123 @@ func IsZSPControlCommand(fullCommand string) bool {
 	}
 }
 
+var (
+	zspProcessMu    sync.Mutex
+	zspSessionLocks = make(map[string]*sync.Mutex)
+)
+
+func sessionLockMutex(zspDir, key string) *sync.Mutex {
+	mapKey := filepath.Clean(zspDir) + "|" + sanitizeZSPKey(key)
+	zspProcessMu.Lock()
+	defer zspProcessMu.Unlock()
+	mu, ok := zspSessionLocks[mapKey]
+	if !ok {
+		mu = &sync.Mutex{}
+		zspSessionLocks[mapKey] = mu
+	}
+	return mu
+}
+
+// withZSPStoreLock serializes access to ZSP state across both in-process goroutines
+// and concurrent OS processes (e.g., parallel tool executions calling bapedge exec).
+func withZSPStoreLock(zspDir, lockKey string, fn func() error) error {
+	if zspDir == "" {
+		zspDir = ResolveZSPDir()
+	}
+	mu := sessionLockMutex(zspDir, lockKey)
+	mu.Lock()
+	defer mu.Unlock()
+
+	locksDir := filepath.Join(zspDir, "locks")
+	if err := os.MkdirAll(locksDir, 0700); err != nil {
+		return err
+	}
+	lockPath := filepath.Join(locksDir, sanitizeZSPKey(lockKey)+".lock")
+	deadline := time.Now().Add(5 * time.Second)
+	var lockFile *os.File
+	for {
+		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if err == nil {
+			lockFile = f
+			break
+		}
+		if !os.IsExist(err) {
+			return err
+		}
+		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > 15*time.Second {
+			_ = os.Remove(lockPath)
+			continue
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for ZSP store lock %s", lockPath)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	_, _ = fmt.Fprintf(lockFile, "%d\n", os.Getpid())
+	_ = lockFile.Close()
+	defer os.Remove(lockPath)
+
+	return fn()
+}
+
+func writeFileAtomic(targetPath string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(targetPath)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(targetPath)+".*.tmp")
+	if err != nil {
+		return os.WriteFile(targetPath, data, perm)
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
+}
+
+// ValidateZSPActionName verifies that a ZSP action uses non-empty canonical token syntax
+// without whitespace (for example "git:status", "fs:read", or "exec").
+func ValidateZSPActionName(action string) error {
+	trimmed := strings.TrimSpace(action)
+	if trimmed == "" {
+		return fmt.Errorf("%w: empty action name", ErrInvalidEnvelope)
+	}
+	if strings.ContainsAny(trimmed, " \t\r\n") {
+		parts := strings.Fields(trimmed)
+		suggestion := strings.ToLower(strings.Join(parts, ":"))
+		return fmt.Errorf(
+			"%w: invalid action %q (contains whitespace); use canonical colon notation without spaces (e.g. %q)",
+			ErrInvalidEnvelope, trimmed, suggestion,
+		)
+	}
+	if strings.HasPrefix(trimmed, ":") || strings.HasSuffix(trimmed, ":") || strings.Contains(trimmed, "::") {
+		return fmt.Errorf(
+			"%w: malformed canonical action %q; expected non-empty segments like \"git:status\"",
+			ErrInvalidEnvelope, trimmed,
+		)
+	}
+	return nil
+}
+
 func loadOrCreatePEPSecret(zspDir string) (string, error) {
 	if err := os.MkdirAll(zspDir, 0700); err != nil {
 		return "", err
@@ -165,15 +283,23 @@ func loadOrCreatePEPSecret(zspDir string) (string, error) {
 			return secret, nil
 		}
 	}
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	secret := hex.EncodeToString(buf)
-	if err := os.WriteFile(keyPath, []byte(secret+"\n"), 0600); err != nil {
-		return "", err
-	}
-	return secret, nil
+	var out string
+	err := withZSPStoreLock(zspDir, "__pep__", func() error {
+		if data, err := os.ReadFile(keyPath); err == nil {
+			secret := strings.TrimSpace(string(data))
+			if len(secret) >= 32 {
+				out = secret
+				return nil
+			}
+		}
+		buf := make([]byte, 32)
+		if _, err := rand.Read(buf); err != nil {
+			return err
+		}
+		out = hex.EncodeToString(buf)
+		return writeFileAtomic(keyPath, []byte(out+"\n"), 0600)
+	})
+	return out, err
 }
 
 func resolveWorkstationOwner() (workstationID, ownerEmail, oidcSub string) {
@@ -264,38 +390,63 @@ func EnsureSessionPrincipal(zspDir, sessionID, clientType string) (*types.Crypto
 		return nil, nil, nil, "", err
 	}
 	pPath := filepath.Join(principalsDir, sanitizeZSPKey(sessionID)+".json")
-	if data, err := os.ReadFile(pPath); err == nil {
-		var pp persistedPrincipal
-		if json.Unmarshal(data, &pp) == nil && minter.VerifyAgentSVID(&pp.SVID) == nil {
-			privBytes, err1 := hex.DecodeString(pp.PrivateKeyHex)
-			pubBytes, err2 := hex.DecodeString(pp.PublicKeyHex)
-			if err1 == nil && err2 == nil && len(privBytes) == ed25519.PrivateKeySize && len(pubBytes) == ed25519.PublicKeySize {
-				kp := &identity.AgentKeypair{
-					PublicKey:  ed25519.PublicKey(pubBytes),
-					PrivateKey: ed25519.PrivateKey(privBytes),
-				}
-				return &pp.SVID, kp, minter, pepSecret, nil
-			}
+	loadExistingPrincipal := func() (*types.CryptographicAgentSVID, *identity.AgentKeypair, bool) {
+		data, readErr := os.ReadFile(pPath)
+		if readErr != nil {
+			return nil, nil, false
 		}
+		var pp persistedPrincipal
+		if json.Unmarshal(data, &pp) != nil || minter.VerifyAgentSVID(&pp.SVID) != nil {
+			return nil, nil, false
+		}
+		privBytes, err1 := hex.DecodeString(pp.PrivateKeyHex)
+		pubBytes, err2 := hex.DecodeString(pp.PublicKeyHex)
+		if err1 != nil || err2 != nil || len(privBytes) != ed25519.PrivateKeySize || len(pubBytes) != ed25519.PublicKeySize {
+			return nil, nil, false
+		}
+		kp := &identity.AgentKeypair{
+			PublicKey:  ed25519.PublicKey(pubBytes),
+			PrivateKey: ed25519.PrivateKey(privBytes),
+		}
+		return &pp.SVID, kp, true
+	}
+	if svid, kp, ok := loadExistingPrincipal(); ok {
+		return svid, kp, minter, pepSecret, nil
 	}
 
-	kp, err := identity.GenerateAgentKeypair()
-	if err != nil {
-		return nil, nil, nil, "", err
-	}
-	workstationID, ownerEmail, oidcSub := resolveWorkstationOwner()
-	svid, err := minter.MintAgentSVID(kp, ownerEmail, oidcSub, workstationID, sessionID, clientType, 8*time.Hour)
-	if err != nil {
-		return nil, nil, nil, "", err
-	}
-
-	pp := persistedPrincipal{
-		SVID:          *svid,
-		PrivateKeyHex: hex.EncodeToString(kp.PrivateKey),
-		PublicKeyHex:  hex.EncodeToString(kp.PublicKey),
-	}
-	if encoded, err := json.MarshalIndent(pp, "", "  "); err == nil {
-		_ = os.WriteFile(pPath, encoded, 0600)
+	var (
+		svid *types.CryptographicAgentSVID
+		kp   *identity.AgentKeypair
+	)
+	lockErr := withZSPStoreLock(zspDir, "principal-"+sessionID, func() error {
+		if existingSVID, existingKP, ok := loadExistingPrincipal(); ok {
+			svid = existingSVID
+			kp = existingKP
+			return nil
+		}
+		genKP, genErr := identity.GenerateAgentKeypair()
+		if genErr != nil {
+			return genErr
+		}
+		workstationID, ownerEmail, oidcSub := resolveWorkstationOwner()
+		minted, mintErr := minter.MintAgentSVID(genKP, ownerEmail, oidcSub, workstationID, sessionID, clientType, 8*time.Hour)
+		if mintErr != nil {
+			return mintErr
+		}
+		pp := persistedPrincipal{
+			SVID:          *minted,
+			PrivateKeyHex: hex.EncodeToString(genKP.PrivateKey),
+			PublicKeyHex:  hex.EncodeToString(genKP.PublicKey),
+		}
+		if encoded, mErr := json.MarshalIndent(pp, "", "  "); mErr == nil {
+			_ = writeFileAtomic(pPath, encoded, 0600)
+		}
+		svid = minted
+		kp = genKP
+		return nil
+	})
+	if lockErr != nil {
+		return nil, nil, nil, "", lockErr
 	}
 	return svid, kp, minter, pepSecret, nil
 }
@@ -309,12 +460,20 @@ func SubmitTaskEnvelope(
 	maxUses int,
 	ttl time.Duration,
 ) (*types.TaskGrant, *types.TaskAuthorizationEnvelope, error) {
+	if zspDir == "" {
+		zspDir = ResolveZSPDir()
+	}
 	svid, kp, minter, pepSecret, err := EnsureSessionPrincipal(zspDir, sessionID, clientType)
 	if err != nil {
 		return nil, nil, err
 	}
 	if len(actions) == 0 {
 		return nil, nil, fmt.Errorf("%w: permission ask requires at least one action", ErrInvalidEnvelope)
+	}
+	for _, act := range actions {
+		if valErr := ValidateZSPActionName(act); valErr != nil {
+			return nil, nil, valErr
+		}
 	}
 	if len(resources) == 0 {
 		resources = []string{"workspace://current"}
@@ -374,7 +533,9 @@ func SubmitTaskEnvelope(
 		return nil, env, err
 	}
 
-	if err := saveSessionGrant(zspDir, sessionID, grant); err != nil {
+	if err := withZSPStoreLock(zspDir, "grants-"+sessionID, func() error {
+		return saveSessionGrant(zspDir, sessionID, grant)
+	}); err != nil {
 		return nil, env, err
 	}
 	return grant, env, nil
@@ -389,14 +550,11 @@ func saveSessionGrant(zspDir, sessionID string, g *types.TaskGrant) error {
 		zspDir = ResolveZSPDir()
 	}
 	dir := grantsDirForSession(zspDir, sessionID)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(g, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, sanitizeZSPKey(g.GrantID)+".json"), data, 0600)
+	return writeFileAtomic(filepath.Join(dir, sanitizeZSPKey(g.GrantID)+".json"), data, 0600)
 }
 
 func loadSessionGrants(zspDir, sessionID string, engine *ZSPEngine) ([]*types.TaskGrant, error) {
@@ -441,17 +599,22 @@ func appendZSPProof(zspDir string, proof *types.AuditLineageProof) {
 	if zspDir == "" {
 		zspDir = ResolveZSPDir()
 	}
-	_ = os.MkdirAll(zspDir, 0700)
 	line, err := json.Marshal(proof)
 	if err != nil {
 		return
 	}
-	f, err := os.OpenFile(filepath.Join(zspDir, "lineage.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	_, _ = f.Write(append(line, '\n'))
+	_ = withZSPStoreLock(zspDir, "lineage", func() error {
+		if mkErr := os.MkdirAll(zspDir, 0700); mkErr != nil {
+			return mkErr
+		}
+		f, openErr := os.OpenFile(filepath.Join(zspDir, "lineage.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+		if openErr != nil {
+			return openErr
+		}
+		defer f.Close()
+		_, writeErr := f.Write(append(line, '\n'))
+		return writeErr
+	})
 }
 
 // ZSPActionCheck represents a normalized ZSP action/resource check for a command node or native tool.
@@ -615,75 +778,96 @@ func VerifyOrConsumeSessionZSPChecks(
 	}
 
 	engine := NewZSPEngine(minter, pepSecret)
-	grants, err := loadSessionGrants(zspDir, sessionID, engine)
-	if err != nil {
-		return svid, nil, nil, err
-	}
-
-	if len(grants) == 0 {
-		return svid, nil, nil, fmt.Errorf(
-			"%w: agent principal %s has ZERO standing privileges (signed 4-tuple TaskAuthorizationEnvelope required)",
-			ErrZeroStandingPrivilegeViolation, svid.Subject,
-		)
-	}
 	if len(checks) == 0 {
 		checks = []ZSPActionCheck{{Action: "exec", CanonicalResource: "workspace://current"}}
 	}
 
-	checkGrantCoversAll := func(g *types.TaskGrant) (*types.TaskGrant, error) {
-		var checked *types.TaskGrant
-		for _, chk := range checks {
-			res := effectiveZSPResource(chk.CanonicalResource, workspaceRoot, chk.EscapesWorkspace)
-			cg, checkErr := engine.CheckTaskGrant(g.GrantID, chk.Action, res)
-			if checkErr != nil {
-				return nil, checkErr
-			}
-			checked = cg
+	var (
+		matchedGrant *types.TaskGrant
+		consumedProof *types.AuditLineageProof
+		firstErr      error
+	)
+	lockErr := withZSPStoreLock(zspDir, "grants-"+sessionID, func() error {
+		grants, loadErr := loadSessionGrants(zspDir, sessionID, engine)
+		if loadErr != nil {
+			return loadErr
 		}
-		return checked, nil
-	}
+		if len(grants) == 0 {
+			firstErr = fmt.Errorf(
+				"%w: agent principal %s has ZERO standing privileges (signed 4-tuple TaskAuthorizationEnvelope required)",
+				ErrZeroStandingPrivilegeViolation, svid.Subject,
+			)
+			return nil
+		}
 
-	var firstErr error
-	for _, g := range grants {
-		checked, checkErr := checkGrantCoversAll(g)
-		if checkErr == nil {
-			if !consume {
-				return svid, checked, nil, nil
-			}
-			primaryRes := effectiveZSPResource(checks[0].CanonicalResource, workspaceRoot, checks[0].EscapesWorkspace)
-			proof, consumeErr := engine.ConsumeTaskGrant(g.GrantID, checks[0].Action, primaryRes, fullCommand, processAncestry)
-			if consumeErr == nil {
-				updated, _ := engine.GetGrant(g.GrantID)
-				if updated != nil {
-					_ = saveSessionGrant(zspDir, sessionID, updated)
+		checkGrantCoversAll := func(g *types.TaskGrant) (*types.TaskGrant, error) {
+			var checked *types.TaskGrant
+			for _, chk := range checks {
+				res := effectiveZSPResource(chk.CanonicalResource, workspaceRoot, chk.EscapesWorkspace)
+				cg, checkErr := engine.CheckTaskGrant(g.GrantID, chk.Action, res)
+				if checkErr != nil {
+					return nil, checkErr
 				}
-				appendZSPProof(zspDir, proof)
-				return svid, updated, proof, nil
+				checked = cg
 			}
-			if errors.Is(consumeErr, ErrGrantExpired) {
+			return checked, nil
+		}
+
+		for _, g := range grants {
+			checked, checkErr := checkGrantCoversAll(g)
+			if checkErr == nil {
+				if !consume {
+					matchedGrant = checked
+					return nil
+				}
+				primaryRes := effectiveZSPResource(checks[0].CanonicalResource, workspaceRoot, checks[0].EscapesWorkspace)
+				proof, consumeErr := engine.ConsumeTaskGrant(g.GrantID, checks[0].Action, primaryRes, fullCommand, processAncestry)
+				if consumeErr == nil {
+					updated, _ := engine.GetGrant(g.GrantID)
+					if updated != nil {
+						_ = saveSessionGrant(zspDir, sessionID, updated)
+					}
+					matchedGrant = updated
+					consumedProof = proof
+					return nil
+				}
+				if errors.Is(consumeErr, ErrGrantExpired) {
+					if updated, ok := engine.GetGrant(g.GrantID); ok {
+						_ = saveSessionGrant(zspDir, sessionID, updated)
+					}
+				}
+				if firstErr == nil {
+					firstErr = consumeErr
+				}
+				continue
+			}
+			if errors.Is(checkErr, ErrGrantExpired) {
 				if updated, ok := engine.GetGrant(g.GrantID); ok {
+					updated.IsBurned = true
+					updated.BurnReason = "TTL Expired"
 					_ = saveSessionGrant(zspDir, sessionID, updated)
 				}
 			}
 			if firstErr == nil {
-				firstErr = consumeErr
-			}
-			continue
-		}
-		if errors.Is(checkErr, ErrGrantExpired) {
-			if updated, ok := engine.GetGrant(g.GrantID); ok {
-				updated.IsBurned = true
-				updated.BurnReason = "TTL Expired"
-				_ = saveSessionGrant(zspDir, sessionID, updated)
+				firstErr = checkErr
 			}
 		}
-		if firstErr == nil {
-			firstErr = checkErr
-		}
+		return nil
+	})
+	if lockErr != nil {
+		return svid, nil, nil, lockErr
 	}
-
+	if matchedGrant != nil {
+		if consumedProof != nil {
+			appendZSPProof(zspDir, consumedProof)
+		}
+		return svid, matchedGrant, consumedProof, nil
+	}
 	if firstErr == nil {
 		firstErr = ErrZeroStandingPrivilegeViolation
+	}
+	if errors.Is(firstErr, ErrZeroStandingPrivilegeViolation) && strings.Contains(firstErr.Error(), svid.Subject) {
+		return svid, nil, nil, firstErr
 	}
 	return svid, nil, nil, fmt.Errorf("%w (principal %s)", firstErr, svid.Subject)
 }
@@ -804,23 +988,29 @@ func RevokeSessionZSPGrants(zspDir, sessionID, grantID string) (int, error) {
 	if zspDir == "" {
 		zspDir = ResolveZSPDir()
 	}
-	grants, err := loadSessionGrants(zspDir, sessionID, nil)
-	if err != nil {
-		return 0, err
-	}
 	revoked := 0
-	for _, g := range grants {
-		if grantID != "" && g.GrantID != grantID {
-			continue
+	err := withZSPStoreLock(zspDir, "grants-"+sessionID, func() error {
+		grants, loadErr := loadSessionGrants(zspDir, sessionID, nil)
+		if loadErr != nil {
+			return loadErr
 		}
-		if !g.IsBurned {
-			g.IsBurned = true
-			g.RemainingUses = 0
-			g.BurnReason = "Revoked by operator"
-			if saveErr := saveSessionGrant(zspDir, sessionID, g); saveErr == nil {
-				revoked++
+		for _, g := range grants {
+			if grantID != "" && g.GrantID != grantID {
+				continue
+			}
+			if !g.IsBurned {
+				g.IsBurned = true
+				g.RemainingUses = 0
+				g.BurnReason = "Revoked by operator"
+				if saveErr := saveSessionGrant(zspDir, sessionID, g); saveErr == nil {
+					revoked++
+				}
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
 	return revoked, nil
 }

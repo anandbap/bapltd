@@ -598,14 +598,19 @@ func handleRequestTaskGrant(args map[string]interface{}) CallToolResult {
 	actionsStr, _ := args["actions"].(string)
 	resourcesStr, _ := args["resources"].(string)
 	maxUses := 1
+	hasMaxUses := false
 	if mu, ok := args["max_uses"].(float64); ok && mu > 0 {
 		maxUses = int(mu)
+		hasMaxUses = true
 	}
 	var actions, resources []string
 	for _, a := range strings.Split(actionsStr, ",") {
 		if t := strings.TrimSpace(a); t != "" {
 			actions = append(actions, t)
 		}
+	}
+	if !hasMaxUses && len(actions) > 1 {
+		maxUses = len(actions)
 	}
 	for _, r := range strings.Split(resourcesStr, ",") {
 		if t := strings.TrimSpace(r); t != "" {

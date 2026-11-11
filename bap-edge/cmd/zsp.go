@@ -13,6 +13,69 @@ import (
 	"bap-edge/internal/state"
 )
 
+func collectAncestorPIDs(ppid int, processes []agentProcess) []int {
+	seen := make(map[int]struct{})
+	var pids []int
+	add := func(pid int) {
+		if pid <= 0 {
+			return
+		}
+		if _, ok := seen[pid]; ok {
+			return
+		}
+		seen[pid] = struct{}{}
+		pids = append(pids, pid)
+	}
+
+	byPID := make(map[int]agentProcess, len(processes))
+	for _, p := range processes {
+		byPID[p.PID] = p
+	}
+	if observed, ok := observedCaller(ppid, processes); ok && observed.PID > 0 {
+		add(observed.PID)
+	}
+	curr := ppid
+	for depth := 0; depth < 12 && curr > 0; depth++ {
+		add(curr)
+		p, ok := byPID[curr]
+		if !ok || p.ParentPID <= 0 || p.ParentPID == curr {
+			break
+		}
+		curr = p.ParentPID
+	}
+	return pids
+}
+
+func resolveSessionIDFromPIDMarkers(pids ...int) string {
+	dirs := []string{state.SessionsDir(), filepath.Join(".bap", "sessions")}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		dirs = append(dirs,
+			filepath.Join(home, ".bapstate", "sessions"),
+			filepath.Join(home, ".bap", "sessions"),
+		)
+	}
+	for _, pid := range pids {
+		if pid <= 0 {
+			continue
+		}
+		fileName := fmt.Sprintf("pid-%d.json", pid)
+		for _, dir := range dirs {
+			if dir == "" {
+				continue
+			}
+			if data, err := os.ReadFile(filepath.Join(dir, fileName)); err == nil {
+				var info struct {
+					SessionID string `json:"session_id"`
+				}
+				if json.Unmarshal(data, &info) == nil && info.SessionID != "" {
+					return info.SessionID
+				}
+			}
+		}
+	}
+	return ""
+}
+
 func resolveDefaultZSPSessionID(explicit string) string {
 	if explicit != "" {
 		return explicit
@@ -24,14 +87,18 @@ func resolveDefaultZSPSessionID(explicit string) string {
 		return s
 	}
 	ppid := os.Getppid()
-	for _, dir := range []string{state.SessionsDir(), filepath.Join(".bap", "sessions")} {
-		if data, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("pid-%d.json", ppid))); err == nil {
-			var info struct {
-				SessionID string `json:"session_id"`
-			}
-			if json.Unmarshal(data, &info) == nil && info.SessionID != "" {
-				return info.SessionID
-			}
+	processes, err := listAgentProcesses()
+	var observed agentProcess
+	var hasObserved bool
+	if err == nil {
+		observed, hasObserved = observedCaller(ppid, processes)
+	}
+	if sid := resolveSessionIDFromPIDMarkers(collectAncestorPIDs(ppid, processes)...); sid != "" {
+		return sid
+	}
+	if hasObserved && observed.PID > 0 {
+		if sid := observedSessionID(observationHost(), observed); sid != "" {
+			return sid
 		}
 	}
 	for _, cand := range []string{".bap-session.json", "../.bap-session.json"} {
@@ -152,11 +219,29 @@ func RunZSP(args []string) error {
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
+		maxUsesSet := false
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "max-uses" {
+				maxUsesSet = true
+			}
+		})
 		sessionID := resolveDefaultZSPSessionID(*sessFlag)
 		actions := splitCSVFlags(*actionsFlag)
 		resources := splitCSVFlags(*resourcesFlag)
 		if len(actions) == 0 {
 			return fmt.Errorf("--actions is required (e.g. --actions git:status,git:log)")
+		}
+		for _, act := range actions {
+			if valErr := authz.ValidateZSPActionName(act); valErr != nil {
+				return valErr
+			}
+		}
+		maxUses := *maxUsesFlag
+		if !maxUsesSet && len(actions) > 1 {
+			maxUses = len(actions)
+		}
+		if maxUses <= 0 {
+			return fmt.Errorf("--max-uses must be at least 1")
 		}
 		grant, env, err := authz.SubmitTaskEnvelope(
 			authz.ResolveZSPDir(),
@@ -168,7 +253,7 @@ func RunZSP(args []string) error {
 			actions,
 			resources,
 			*authByFlag,
-			*maxUsesFlag,
+			maxUses,
 			*ttlFlag,
 		)
 		if err != nil {

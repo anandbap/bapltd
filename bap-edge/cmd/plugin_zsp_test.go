@@ -147,3 +147,69 @@ func TestSyncBinaryAndStandaloneHookDetection(t *testing.T) {
 		}
 	}
 }
+
+func TestRunZSPValidationDefaultMaxUsesAndAncestorPIDSession(t *testing.T) {
+	zspDir := t.TempDir()
+	t.Setenv("BAP_ZSP_DIR", zspDir)
+
+	// 1. Space-separated action must fail fast with canonical colon syntax hint.
+	err := RunZSP([]string{
+		"authorize",
+		"--session-id", "sess-bad-zsp",
+		"--mission", "CODE_INSPECTION",
+		"--goal", "inspect git",
+		"--actions", "git status,git log",
+		"--resources", "workspace://current",
+	})
+	if err == nil || !strings.Contains(err.Error(), "git:status") {
+		t.Fatalf("expected RunZSP authorize to reject \"git status\" and suggest \"git:status\", got: %v", err)
+	}
+
+	// 2. Omitting --max-uses with 3 canonical actions defaults MaxUses to 3 for parallel execution.
+	if err := RunZSP([]string{
+		"authorize",
+		"--session-id", "sess-multi-zsp",
+		"--mission", "CODE_INSPECTION",
+		"--goal", "inspect git status, log, branch",
+		"--actions", "git:status,git:log,git:branch",
+		"--resources", "workspace://current",
+	}); err != nil {
+		t.Fatalf("RunZSP authorize multi-action failed: %v", err)
+	}
+	rep, err := authz.ListSessionZSPStatus(zspDir, "sess-multi-zsp", "claude-code")
+	if err != nil {
+		t.Fatalf("ListSessionZSPStatus failed: %v", err)
+	}
+	if len(rep.ActiveGrants) != 1 || rep.ActiveGrants[0].MaxUses != 3 || rep.ActiveGrants[0].RemainingUses != 3 {
+		t.Fatalf("expected multi-action authorize without --max-uses to mint MaxUses=3, got: %+v", rep.ActiveGrants)
+	}
+
+	// 3. Ancestor PID walk resolves the agent session ID across subshell boundaries.
+	tmpWS := t.TempDir()
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tmpWS); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+
+	markerDir := filepath.Join(tmpWS, ".bap", "sessions")
+	if err := os.MkdirAll(markerDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(markerDir, "pid-9001.json"), []byte(`{"session_id":"sess-ancestor-9001"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	processes := []agentProcess{
+		{PID: 9001, ParentPID: 100},
+		{PID: 9002, ParentPID: 9001},
+		{PID: 9003, ParentPID: 9002},
+	}
+	pids := collectAncestorPIDs(9003, processes)
+	if got := resolveSessionIDFromPIDMarkers(pids...); got != "sess-ancestor-9001" {
+		t.Fatalf("expected ancestor PID marker to resolve \"sess-ancestor-9001\", got %q (pids=%v)", got, pids)
+	}
+}
