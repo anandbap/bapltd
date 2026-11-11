@@ -30,10 +30,14 @@ func TestIsCedarInvariantViolationCoversZSPAndRootEscape(t *testing.T) {
 	}
 }
 
-func TestInterceptorPreToolUseBlocksScenario1WithBuiltBroker(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("Windows binary verification test")
+func setupZSPHookTestEnv(t *testing.T) (repoRoot, bapOut, interOut string) {
+	t.Helper()
+	var err error
+	repoRoot, err = filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
 	}
+
 	tmpBin, err := os.MkdirTemp("", "bap-cchook-zsp-*")
 	if err != nil {
 		t.Fatalf("failed to create temp bin dir: %v", err)
@@ -46,25 +50,43 @@ func TestInterceptorPreToolUseBlocksScenario1WithBuiltBroker(t *testing.T) {
 			time.Sleep(150 * time.Millisecond)
 		}
 	})
-	bapedgeOut := filepath.Join(tmpBin, "bap-broker-test.exe")
-	buildCmd := exec.Command("go", "build", "-C", "../bap-edge", "-o", bapedgeOut, ".")
+
+	bapOut = filepath.Join(tmpBin, "bapedge.exe")
+	buildCmd := exec.Command("go", "build", "-C", filepath.Join(repoRoot, "bap-edge"), "-o", bapOut, ".")
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		t.Fatalf("failed to build bapedge.exe for test: %v\n%s", err, string(out))
 	}
 
-	zspDir := t.TempDir()
-	t.Setenv("BAP_ZSP_DIR", zspDir)
-	t.Setenv("BAP_ZSP", "enforce")
-	t.Setenv("BAP_NON_INTERACTIVE", "1")
-	t.Setenv("BAP_EDGE_BIN", bapedgeOut)
-	t.Setenv("PATH", tmpBin+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	// Build interceptor binary into tmpBin
-	interOut := filepath.Join(tmpBin, "interceptor.exe")
+	interOut = filepath.Join(tmpBin, "interceptor.exe")
 	buildInter := exec.Command("go", "build", "-o", interOut, ".")
 	if out, err := buildInter.CombinedOutput(); err != nil {
 		t.Fatalf("failed to build interceptor.exe for test: %v\n%s", err, string(out))
 	}
+
+	zspDir := t.TempDir()
+	stateDir := t.TempDir()
+	pepHome := t.TempDir()
+	t.Setenv("BAP_ZSP_DIR", zspDir)
+	t.Setenv("BAP_ZSP", "enforce")
+	t.Setenv("BAP_ZSP_ENABLED", "1")
+	t.Setenv("BAP_NON_INTERACTIVE", "1")
+	t.Setenv("BAP_EDGE_BIN", bapOut)
+	t.Setenv("LTD_STATE_DIR", stateDir)
+	t.Setenv("BAP_PEP_HOME", pepHome)
+	t.Setenv("LTD_ENFORCE_MODE", "enforce")
+	t.Setenv("BAP_MODE", "enforce")
+	t.Setenv("LTD_SOURCE", "claude-code")
+	t.Setenv("BAP_SESSION_ID", "")
+	t.Setenv("CLAUDE_SESSION_ID", "")
+	t.Setenv("PATH", tmpBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return repoRoot, bapOut, interOut
+}
+
+func TestInterceptorPreToolUseBlocksScenario1WithBuiltBroker(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows binary verification test")
+	}
+	_, _, interOut := setupZSPHookTestEnv(t)
 
 	// 1. Test PowerShell whoami without any TaskGrant -> MUST DENY with ZeroStandingPrivilegeViolation
 	pWho, _ := json.Marshal(map[string]any{
@@ -126,33 +148,7 @@ func TestInterceptorPreToolUseScenario2ZSPAuthorizeAndGitStatus(t *testing.T) {
 		t.Skip("Windows binary verification test")
 	}
 
-	repoRoot, err := filepath.Abs("..")
-	if err != nil {
-		t.Fatal(err)
-	}
-	binDir := t.TempDir()
-	stateDir := t.TempDir()
-	pepHome := t.TempDir()
-
-	bapOut := filepath.Join(binDir, "bapedge.exe")
-	buildBap := exec.Command("go", "build", "-C", filepath.Join(repoRoot, "bap-edge"), "-o", bapOut, ".")
-	if out, err := buildBap.CombinedOutput(); err != nil {
-		t.Fatalf("build bapedge failed: %v\n%s", err, string(out))
-	}
-
-	interOut := filepath.Join(binDir, "interceptor.exe")
-	buildInter := exec.Command("go", "build", "-o", interOut, ".")
-	if out, err := buildInter.CombinedOutput(); err != nil {
-		t.Fatalf("build interceptor failed: %v\n%s", err, string(out))
-	}
-
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("LTD_STATE_DIR", stateDir)
-	t.Setenv("BAP_PEP_HOME", pepHome)
-	t.Setenv("BAP_ZSP_ENABLED", "1")
-	t.Setenv("LTD_ENFORCE_MODE", "enforce")
-	t.Setenv("BAP_MODE", "enforce")
-	t.Setenv("LTD_SOURCE", "claude-code")
+	repoRoot, bapOut, interOut := setupZSPHookTestEnv(t)
 
 	runHook := func(toolName, sessionID, command string) string {
 		t.Helper()
