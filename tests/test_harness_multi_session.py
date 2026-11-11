@@ -24,6 +24,7 @@ SCRIPTS_DIR = os.path.join(ROOT_DIR, "scripts")
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
 
+import bap_harness
 from bap_harness import (
     cmd_init,
     cmd_start_session,
@@ -31,8 +32,6 @@ from bap_harness import (
     cmd_stop_session,
     cmd_cleanup_all,
     classify_prompt_intent,
-    SESSIONS_DIR,
-    PROMPTS_DIR,
     ensure_dirs,
 )
 
@@ -45,14 +44,26 @@ class DummyArgs:
 
 class TestHarnessMultiSessionIsolation(unittest.TestCase):
     def setUp(self):
-        ensure_dirs()
         self.test_ws = tempfile.mkdtemp(prefix="bap_ws_test_")
+        self._orig_state_dir = bap_harness.BAPSTATE_DIR
+        self._orig_sessions_dir = bap_harness.SESSIONS_DIR
+        self._orig_prompts_dir = bap_harness.PROMPTS_DIR
+        bap_harness.BAPSTATE_DIR = os.path.join(self.test_ws, ".bapstate")
+        bap_harness.SESSIONS_DIR = os.path.join(bap_harness.BAPSTATE_DIR, "sessions")
+        bap_harness.PROMPTS_DIR = os.path.join(bap_harness.BAPSTATE_DIR, "prompts")
+        self.sessions_dir = bap_harness.SESSIONS_DIR
+        ensure_dirs()
 
     def tearDown(self):
-        # Cleanup test workspace
-        shutil.rmtree(self.test_ws, ignore_errors=True)
-        # Purge any test sessions created
-        cmd_cleanup_all(DummyArgs(server="http://localhost:8080"))
+        try:
+            # Purge any test sessions created within the isolated state dir
+            cmd_cleanup_all(DummyArgs(server="http://localhost:8080"))
+        finally:
+            bap_harness.BAPSTATE_DIR = self._orig_state_dir
+            bap_harness.SESSIONS_DIR = self._orig_sessions_dir
+            bap_harness.PROMPTS_DIR = self._orig_prompts_dir
+            # Cleanup test workspace
+            shutil.rmtree(self.test_ws, ignore_errors=True)
 
     def test_01_init_configures_all_three_ides(self):
         """Verify init command sets up Claude Code, Copilot, and Antigravity."""
@@ -120,8 +131,8 @@ class TestHarnessMultiSessionIsolation(unittest.TestCase):
         self.assertEqual(marker_beta["client_pid"], 44002)
 
         # Verify both isolated markers exist simultaneously
-        pid_marker_alpha = os.path.join(SESSIONS_DIR, "pid-44001.json")
-        pid_marker_beta = os.path.join(SESSIONS_DIR, "pid-44002.json")
+        pid_marker_alpha = os.path.join(self.sessions_dir, "pid-44001.json")
+        pid_marker_beta = os.path.join(self.sessions_dir, "pid-44002.json")
         self.assertTrue(os.path.isfile(pid_marker_alpha), "Alpha PID marker must exist")
         self.assertTrue(os.path.isfile(pid_marker_beta), "Beta PID marker must exist")
 
@@ -165,11 +176,11 @@ class TestHarnessMultiSessionIsolation(unittest.TestCase):
         ))
 
         # Verify Session 1 marker is gone
-        pid_marker_1 = os.path.join(SESSIONS_DIR, "pid-55001.json")
+        pid_marker_1 = os.path.join(self.sessions_dir, "pid-55001.json")
         self.assertFalse(os.path.isfile(pid_marker_1), "Session 1 marker must be removed")
 
         # Verify Session 2 marker is STILL ACTIVE!
-        pid_marker_2 = os.path.join(SESSIONS_DIR, "pid-55002.json")
+        pid_marker_2 = os.path.join(self.sessions_dir, "pid-55002.json")
         self.assertTrue(os.path.isfile(pid_marker_2), "Session 2 marker must remain completely intact")
 
         with open(pid_marker_2, "r", encoding="utf-8") as f:
