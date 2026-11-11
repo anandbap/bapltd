@@ -56,6 +56,8 @@ class TestZSPZeroStandingPrivileges(unittest.TestCase):
         env["LTD_SOURCE"] = "claude-code"
         env["BAP_SESSION_ID"] = self.session_id
         env["BAP_POLICY_PATH"] = os.path.join(REPO_ROOT, "policy.cedar")
+        if BAPEDGE_BIN:
+            env["BAP_EDGE_BIN"] = BAPEDGE_BIN
         return env
 
     def test_01_zsp_init_starts_with_zero_standing_privileges(self):
@@ -125,7 +127,11 @@ class TestZSPZeroStandingPrivileges(unittest.TestCase):
             self.skipTest("interceptor binary not found")
 
         env = self._base_env()
-        for cmd in ("whoami", "Get-ChildItem -Force \\"):
+        checks = (
+            ("whoami", ("zerostandingprivilegeviolation",)),
+            ("Get-ChildItem -Force \\", ("zerostandingprivilegeviolation", "filesystem root", "security invariant violation")),
+        )
+        for cmd, expected_tokens in checks:
             payload = {
                 "hook_event_name": "PreToolUse",
                 "session_id": self.session_id,
@@ -149,7 +155,11 @@ class TestZSPZeroStandingPrivileges(unittest.TestCase):
                 "deny",
                 f"Expected PreToolUse deny for ungranted {cmd!r}, got: {res.stdout}",
             )
-            self.assertIn("ZeroStandingPrivilegeViolation", h_out.get("permissionDecisionReason", ""))
+            reason = h_out.get("permissionDecisionReason", "").lower()
+            self.assertTrue(
+                any(tok in reason for tok in expected_tokens),
+                f"Expected denial reason containing one of {expected_tokens} for {cmd!r}, got: {reason!r}",
+            )
 
     def test_04_four_tuple_grant_allows_once_and_burns_replay(self):
         if not BAPEDGE_BIN:

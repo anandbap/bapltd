@@ -133,10 +133,10 @@ class TestE2EFullMissionLifecycle(unittest.TestCase):
 
         if not healthy:
             if cls._prev_zsp is None:
-            os.environ.pop("BAP_ZSP", None)
-        else:
-            os.environ["BAP_ZSP"] = cls._prev_zsp
-        if cls.cp_proc:
+                os.environ.pop("BAP_ZSP", None)
+            else:
+                os.environ["BAP_ZSP"] = cls._prev_zsp
+            if cls.cp_proc:
                 cls.cp_proc.terminate()
             raise RuntimeError(f"Control plane failed to start on port {CP_PORT}")
 

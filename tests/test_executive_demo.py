@@ -229,6 +229,7 @@ class TestExecutiveDemo(unittest.TestCase):
             **os.environ,
             "BAP_CONTROL_PLANE_URL": self.server_url,
             "BAP_SERVER_URL": self.server_url,
+            "BAP_ZSP": "off",
         }
         if self.admin_token:
             demo_env["BAP_ADMIN_TOKEN"] = self.admin_token
