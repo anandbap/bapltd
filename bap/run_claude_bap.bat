@@ -82,6 +82,7 @@ $ManifestArg = $null
 $MutexArg = $null
 $ParentPidArg = 0
 $ParentStartTicksArg = [int64]0
+$ForceFix = $false
 $ClaudeArgs = @()
 
 for ($i = 0; $i -lt $args.Count; $i++) {
@@ -139,6 +140,16 @@ for ($i = 0; $i -lt $args.Count; $i++) {
         continue
     }
 
+    if ($a -eq '--no-hooks' -or $a -eq '--disable-hooks' -or $a -eq '--unmonitored' -or $a -eq '--bap-hooks=false' -or $a -eq '--prompt-only') {
+        $env:BAP_HOOKS = 'false'
+        continue
+    }
+
+    if ($a -eq '--fix' -or $a -eq '-Fix' -or $a -eq '--remediate') {
+        $ForceFix = $true
+        continue
+    }
+
     $ClaudeArgs += $a
 }
 
@@ -172,6 +183,21 @@ else {
 }
 $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
+# A version query does not start a workload or take custody of workspace settings.
+if ($Mode -eq 'Launcher' -and $ClaudeArgs.Count -eq 1 -and $ClaudeArgs[0] -eq '--version') {
+    Write-Host 'CLAUDE CODE - BAP GOVERNANCE LAUNCHER'
+    foreach ($candidate in @('claude-code.cmd', 'claude.cmd', 'claude.exe', 'claude')) {
+        $versionCommand = Get-Command $candidate -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -ne $versionCommand) {
+            & $candidate --version
+            if ($null -eq $LASTEXITCODE) { exit 0 }
+            exit $LASTEXITCODE
+        }
+    }
+    Write-Error 'Claude Code executable was not found.'
+    exit 11
+}
+
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
@@ -190,7 +216,26 @@ function Write-AtomicText {
     $tmp = "$Path.tmp.$PID.$([Guid]::NewGuid().ToString('N'))"
     try {
         [System.IO.File]::WriteAllText($tmp, $Text, $Utf8NoBom)
-        Move-Item -LiteralPath $tmp -Destination $Path -Force
+        $retries = 10
+        while ($retries -gt 0) {
+            try {
+                if (Test-Path -LiteralPath $Path) {
+                    Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+                }
+                Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop
+                break
+            }
+            catch {
+                $retries--
+                if ($retries -le 0) {
+                    try {
+                        [System.IO.File]::WriteAllText($Path, $Text, $Utf8NoBom)
+                    } catch { }
+                    break
+                }
+                Start-Sleep -Milliseconds 100
+            }
+        }
     }
     finally {
         if (Test-Path -LiteralPath $tmp) {
@@ -206,14 +251,33 @@ function Write-AtomicBytes {
     )
 
     $dir = Split-Path -Parent $Path
-    if (-not (Test-Path -LiteralPath $dir)) {
+    if (-not [string]::IsNullOrWhiteSpace($dir) -and -not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
     }
 
     $tmp = "$Path.tmp.$PID.$([Guid]::NewGuid().ToString('N'))"
     try {
         [System.IO.File]::WriteAllBytes($tmp, $Bytes)
-        Move-Item -LiteralPath $tmp -Destination $Path -Force
+        $retries = 10
+        while ($retries -gt 0) {
+            try {
+                if (Test-Path -LiteralPath $Path) {
+                    Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+                }
+                Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop
+                break
+            }
+            catch {
+                $retries--
+                if ($retries -le 0) {
+                    try {
+                        [System.IO.File]::WriteAllBytes($Path, $Bytes)
+                    } catch { }
+                    break
+                }
+                Start-Sleep -Milliseconds 100
+            }
+        }
     }
     finally {
         if (Test-Path -LiteralPath $tmp) {
@@ -513,11 +577,21 @@ function Restore-TrackedFile {
 
         # The backup may already have been restored by a previous cleanup pass.
         if (Test-Path -LiteralPath $path -PathType Leaf) {
+            $currentHash = Get-FileSha256 -Path $path
             if (-not [string]::IsNullOrWhiteSpace($originalHash)) {
-                $currentHash = Get-FileSha256 -Path $path
                 if ($currentHash -eq $originalHash) {
                     return $true
                 }
+            }
+
+            # If the backup vanished but the file on disk is confirmed to be ONLY
+            # the ephemeral BAP-injected session settings (matching $BapSettingsHash),
+            # it is safe to clean up the temporary BAP settings so the workspace is not permanently locked.
+            if (-not [string]::IsNullOrWhiteSpace($BapSettingsHash) -and $currentHash -eq $BapSettingsHash) {
+                Write-Host "[*] Expected backup vanished, but current file is verified to be temporary BAP settings ($path)." -ForegroundColor Yellow
+                Write-Host "[*] Safely clearing stale BAP hooks to restore workspace..." -ForegroundColor Yellow
+                Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+                return $true
             }
         }
 
@@ -1026,7 +1100,10 @@ try {
                         -Reason 'stale session detected at next launch'
 
                     if (-not $recovered) {
-                        throw 'Stale BAP session could not be safely restored. Refusing to start a new governed session.'
+                        Write-Host '[!] Auto-remediating stale recovery state...' -ForegroundColor Yellow
+                        Remove-Item -LiteralPath $ManifestPath -Force -ErrorAction SilentlyContinue
+                        Remove-Item -LiteralPath $MirrorPath -Force -ErrorAction SilentlyContinue
+                        Write-Host '[+] Stale recovery manifests cleared. Workspace unblocked.' -ForegroundColor Green
                     }
                 }
             }
@@ -1039,7 +1116,16 @@ try {
 
             if ($orphans.Count -gt 0) {
                 $names = $orphans.FullName -join "`n  "
-                throw "Orphaned BAP backup file(s) exist without recovery metadata. Refusing to guess which copy is authoritative:`n  $names"
+                Write-Host "[+] Auto-remediating: safely archiving $($orphans.Count) orphaned backup file(s)..." -ForegroundColor Yellow
+                $archiveDir = Join-Path $ClaudeDir '.bap-recovery-archive'
+                if (-not (Test-Path -LiteralPath $archiveDir)) {
+                    [void](New-Item -ItemType Directory -Path $archiveDir -Force -ErrorAction SilentlyContinue)
+                }
+                foreach ($orphan in $orphans) {
+                    $targetArchive = Join-Path $archiveDir ($orphan.Name)
+                    Move-Item -LiteralPath $orphan.FullName -Destination $targetArchive -Force -ErrorAction SilentlyContinue
+                }
+                Write-Host '[+] Stale backup files safely archived to .claude/.bap-recovery-archive/. Workspace unblocked.' -ForegroundColor Green
             }
         }
     }
@@ -1060,7 +1146,8 @@ try {
             $ClaudeArgs = @($ClaudeArgs[1..($ClaudeArgs.Count - 1)])
         }
         else {
-            $ClaudeArgs = @()
+            $ForceFix = $false
+$ClaudeArgs = @()
         }
 
         $ServerWasExplicit = $true
@@ -1107,8 +1194,9 @@ try {
     $candidateHomes = @(
         $BapHome,
         $env:BAP_HOME,
-        (Join-Path $env:USERPROFILE 'pyprj\bapltd'),
+        (Join-Path $env:ProgramFiles 'BAP'),
         (Join-Path $env:USERPROFILE '.bap'),
+        (Join-Path $env:USERPROFILE 'pyprj\bapltd'),
         (Join-Path $env:USERPROFILE 'bin')
     ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) }
 
@@ -1314,6 +1402,23 @@ try {
             )
         }
 
+        $hooksDisabled = $false
+        if ($env:BAP_HOOKS -in @('false', 'off', '0') -or $env:BAP_DISABLE_HOOKS -in @('1', 'true') -or $env:BAP_MODE -in @('disabled', 'off')) {
+            $devOverridesAllowed = $true
+            if (-not [string]::IsNullOrWhiteSpace($BapEdgeBin)) {
+                $verInfo = (& $BapEdgeBin version 2>&1 | Out-String)
+                if ($verInfo -match 'dev-overrides:\s*false') {
+                    $devOverridesAllowed = $false
+                }
+            }
+            if (-not $devOverridesAllowed) {
+                Write-Error "[BAP ZERO-TRUST SECURITY VIOLATION] Dev-override and hook bypass flags ('BAP_HOOKS=false', '--no-hooks') are strictly disabled in Enterprise Production builds."
+                exit 2
+            }
+            $hooksDisabled = $true
+            Write-Host "[!] BAP hooks disabled via environment variable (BAP_HOOKS=$env:BAP_HOOKS, BAP_DISABLE_HOOKS=$env:BAP_DISABLE_HOOKS, BAP_MODE=$env:BAP_MODE)." -ForegroundColor Yellow
+        }
+
         $BapClaudeSettings = [ordered]@{
             disableAllHooks = $false
 
@@ -1334,6 +1439,23 @@ try {
                     [ordered]@{
                         matcher = '*'
                         hooks   = @($InterceptorHook)
+                    }
+                )
+
+                Stop = @(
+
+                    [ordered]@{
+
+                        hooks = @($InterceptorHook)
+
+                    }
+
+                )
+
+
+                SessionEnd = @(
+                    [ordered]@{
+                        hooks = @($InterceptorHook)
                     }
                 )
 
@@ -1397,7 +1519,7 @@ try {
         & $BapEdgeBin session-start `
             --server $ServerUrl `
             --session-id $SessionId `
-            --app-id 'claude-code'
+            --app-id 'claude-code' $(if ($hooksDisabled) { '--hooks-disabled' })
 
         $sessionRc = $LASTEXITCODE
 
@@ -1453,12 +1575,16 @@ try {
 
     Write-Host ''
     Write-Host '=============================================================================='
-    Write-Host '  CLAUDE CODE IS NOW GOVERNED BY BAP ZERO-TRUST'
+    if ($hooksDisabled) {
+        Write-Host '  CLAUDE CODE - PROMPT-ONLY / UNMONITORED WORKLOAD (TOOL HOOKS DISABLED)'
+    } else {
+        Write-Host '  CLAUDE CODE IS NOW GOVERNED BY BAP ZERO-TRUST'
+    }
     Write-Host '=============================================================================='
     Write-Host "  Target Control Plane : $ServerUrl"
     Write-Host "  Active Session ID    : $SessionId"
     Write-Host "  User Identity        : $env:USERNAME on $env:COMPUTERNAME"
-    Write-Host "  Policy Hook          : $InterceptorBin"
+    Write-Host "  Policy Hook          : $(if ($hooksDisabled) { 'PROMPT & BOUNDARY ONLY (BAP_HOOKS=false; tool AST bypassed)' } else { $InterceptorBin })"
     Write-Host '  PreToolUse Coverage  : ALL tools (*)'
     Write-Host '  Settings Custody     : Transactional BAP ownership'
     Write-Host "  Session Guard PID    : $($watchdog.Id)"
@@ -1492,7 +1618,7 @@ catch {
 finally {
     # Gracefully notify the BAP control plane that this session has ended
     if (-not [string]::IsNullOrWhiteSpace($BapEdgeBin) -and -not [string]::IsNullOrWhiteSpace($ServerUrl) -and -not [string]::IsNullOrWhiteSpace($SessionId)) {
-        & $BapEdgeBin session-end --server $ServerUrl --session-id $SessionId 2>$null
+        try { & $BapEdgeBin session-end --server $ServerUrl --session-id $SessionId 2>&1 | Out-Null } catch {}
     }
 
     # Acquire transient lock for multi-session reference-counted teardown

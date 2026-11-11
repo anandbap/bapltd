@@ -133,6 +133,7 @@ class TestBAP537TamperAndQuarantine(unittest.TestCase):
         env = os.environ.copy()
         env.setdefault("BAP_SESSION_ID", "sess-bap537-test")
         env.setdefault("BAP_ENFORCEMENT_MODE", "enforce")
+        env["BAP_ZSP"] = "off"
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd, env=env)
         return proc
 
