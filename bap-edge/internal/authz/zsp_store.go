@@ -93,6 +93,16 @@ func HasUnquotedControlOperator(cmd string) bool {
 	return inSingle || inDouble
 }
 
+func isBAPControlExecutable(token string) bool {
+	execBase := strings.ToLower(filepath.Base(strings.ReplaceAll(strings.Trim(token, `"'`), `\`, "/")))
+	switch execBase {
+	case "bapedge", "bapedge.exe", "bap", "bap.exe", "ltd-agent", "ltd-agent.exe":
+		return true
+	default:
+		return false
+	}
+}
+
 // StripLeadingPowerShellCallOperator removes a leading PowerShell `&` call
 // operator only when it invokes a BAP executable (e.g. `& "C:\Program Files\BAP\bapedge.exe" ...`),
 // preserving any remaining shell text so downstream chaining checks still inspect it.
@@ -109,13 +119,10 @@ func StripLeadingPowerShellCallOperator(fullCommand string) (string, bool) {
 	if len(tokens) == 0 {
 		return trimmed, false
 	}
-	execBase := strings.ToLower(filepath.Base(strings.ReplaceAll(strings.Trim(tokens[0], `"'`), `\`, "/")))
-	switch execBase {
-	case "bapedge", "bapedge.exe", "bap", "bap.exe", "ltd-agent", "ltd-agent.exe":
+	if isBAPControlExecutable(tokens[0]) {
 		return rest, true
-	default:
-		return trimmed, false
 	}
+	return trimmed, false
 }
 
 // IsZSPControlCommand returns true if fullCommand is a single atomic BAP ZSP/status/why
@@ -135,10 +142,7 @@ func IsZSPControlCommand(fullCommand string) bool {
 	if len(tokens) < 2 {
 		return false
 	}
-	execBase := strings.ToLower(filepath.Base(strings.Trim(tokens[0], "\"'")))
-	switch execBase {
-	case "bapedge", "bapedge.exe", "bap", "bap.exe", "ltd-agent", "ltd-agent.exe":
-	default:
+	if !isBAPControlExecutable(tokens[0]) {
 		return false
 	}
 	sub := strings.ToLower(strings.Trim(tokens[1], "\"'"))
