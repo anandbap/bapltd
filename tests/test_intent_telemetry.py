@@ -11,6 +11,7 @@ Verifies that:
 import hashlib
 import json
 import os
+import socket
 import ssl
 import subprocess
 import sys
@@ -26,7 +27,15 @@ ssl_ctx.check_hostname = False
 ssl_ctx.verify_mode = ssl.CERT_NONE
 
 
+def _get_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
 def get_control_plane_url() -> str:
+    if os.getenv("BAP_TEST_REMOTE_CP") != "1":
+        return f"http://127.0.0.1:{_get_free_port()}"
     try:
         from bap_sdk import resolve_endpoints
         ep = resolve_endpoints()
@@ -36,6 +45,8 @@ def get_control_plane_url() -> str:
 
 
 def read_admin_token() -> str:
+    if os.getenv("BAP_TEST_REMOTE_CP") != "1":
+        return "intent-telemetry-test-token"
     token_file = os.path.join(WORKSPACE_ROOT, ".bap-admin-token")
     if os.path.isfile(token_file):
         try:
@@ -54,13 +65,14 @@ class TestIntentTelemetry(unittest.TestCase):
         cls.server_url = get_control_plane_url()
         cls.admin_token = read_admin_token()
         healthy = False
-        try:
-            req = urllib.request.Request(f"{cls.server_url}/health", method="GET")
-            with urllib.request.urlopen(req, context=ssl_ctx, timeout=2) as resp:
-                if resp.status == 200:
-                    healthy = True
-        except Exception:
-            pass
+        if os.getenv("BAP_TEST_REMOTE_CP") == "1":
+            try:
+                req = urllib.request.Request(f"{cls.server_url}/health", method="GET")
+                with urllib.request.urlopen(req, context=ssl_ctx, timeout=2) as resp:
+                    if resp.status == 200:
+                        healthy = True
+            except Exception:
+                pass
 
         if not healthy:
             cp_candidates = [
@@ -70,15 +82,17 @@ class TestIntentTelemetry(unittest.TestCase):
             ]
             cp_bin = next((p for p in cp_candidates if os.path.exists(p)), None)
             if cp_bin:
-                cls.server_url = "http://127.0.0.1:18445"
+                port = _get_free_port()
+                cls.server_url = f"http://127.0.0.1:{port}"
                 cls.admin_token = "intent-telemetry-test-token"
                 cls._spawned_server = subprocess.Popen(
                     [
                         cp_bin,
-                        "-port", "18445",
+                        "-port", str(port),
                         "-admin-token", cls.admin_token,
                         "-allow-remote-admin",
                         "-demo-mode",
+                        "-db", "memory",
                     ],
                     cwd=WORKSPACE_ROOT,
                     stdout=subprocess.DEVNULL,
