@@ -301,11 +301,13 @@ func TestWorkspaceContainment(t *testing.T) {
 		t.Fatalf("Failed to load real policy.cedar: %v", err)
 	}
 
-	tempWorkspace, err := os.MkdirTemp("", "bap-workspace-test-*")
-	if err != nil {
+	// Nest the temporary workspace two levels deep so "../.." resolves to an
+	// above-workspace parent directory rather than "/" on Linux (/tmp/<dir>).
+	tempBase := t.TempDir()
+	tempWorkspace := filepath.Join(tempBase, "org", "repo")
+	if err := os.MkdirAll(tempWorkspace, 0755); err != nil {
 		t.Fatalf("Failed to create temp workspace: %v", err)
 	}
-	defer os.RemoveAll(tempWorkspace)
 
 	// Create child project directories inside workspace (e.g. Maven child modules)
 	childDir := filepath.Join(tempWorkspace, "child-module")
