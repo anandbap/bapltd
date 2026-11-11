@@ -1046,7 +1046,7 @@ func hasUnquotedControlOperators(cmd string) bool {
 }
 
 func unwrapBrokerCommand(command, expectedSessionID string) (string, bool, error) {
-	fields := strings.Fields(command)
+	fields := splitShellWords(strings.TrimSpace(command))
 	if len(fields) == 0 {
 		return command, false, nil
 	}

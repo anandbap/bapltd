@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -24,10 +25,11 @@ import (
 // DeduplicationCache prevents duplicate evaluation or duplicate audit logs
 // when both native plugin (Layer 1A) and standalone hook (Layer 1B) coexist.
 type DeduplicationRecord struct {
-	Timestamp time.Time          `json:"timestamp"`
-	Decision  string             `json:"decision"`
-	Reason    string             `json:"reason"`
-	Receipt   *types.ExecutionReceipt `json:"receipt,omitempty"`
+	Timestamp  time.Time               `json:"timestamp"`
+	Decision   string                  `json:"decision"`
+	Reason     string                  `json:"reason"`
+	Suggestion string                  `json:"suggestion,omitempty"`
+	Receipt    *types.ExecutionReceipt `json:"receipt,omitempty"`
 }
 
 var (
@@ -435,7 +437,7 @@ func runPluginAdapter(args []string) error {
 	cmdHash := computeCommandHash(command+"|"+toolName, targetFile)
 	if cached, ok := checkDedup(sessionID, cmdHash); ok {
 		// Output cached decision directly
-		emitPluginDecision(client, event, cached.Decision, cached.Reason, cached.Receipt)
+		emitPluginDecisionWithSuggestion(client, event, cached.Decision, cached.Reason, cached.Suggestion, cached.Receipt)
 		return nil
 	}
 
@@ -448,10 +450,10 @@ func runPluginAdapter(args []string) error {
 	}
 
 	// Record to dedup cache
-	recordDedup(sessionID, cmdHash, decision, ecResp.Reason, ecResp.Receipt)
+	recordDedupWithSuggestion(sessionID, cmdHash, decision, ecResp.Reason, ecResp.Suggestion, ecResp.Receipt)
 
 	// 8. Emit Vendor-Specific Response
-	emitPluginDecision(client, event, decision, ecResp.Reason, ecResp.Receipt)
+	emitPluginDecisionWithSuggestion(client, event, decision, ecResp.Reason, ecResp.Suggestion, ecResp.Receipt)
 	return nil
 }
 
@@ -1081,15 +1083,20 @@ func checkDedup(sessionID, cmdHash string) (DeduplicationRecord, bool) {
 }
 
 func recordDedup(sessionID, cmdHash, decision, reason string, receipt *types.ExecutionReceipt) {
+	recordDedupWithSuggestion(sessionID, cmdHash, decision, reason, "", receipt)
+}
+
+func recordDedupWithSuggestion(sessionID, cmdHash, decision, reason, suggestion string, receipt *types.ExecutionReceipt) {
 	dedupMutex.Lock()
 	defer dedupMutex.Unlock()
 
 	key := sessionID + ":" + cmdHash
 	dedupCache[key] = DeduplicationRecord{
-		Timestamp: time.Now().UTC(),
-		Decision:  decision,
-		Reason:    reason,
-		Receipt:   receipt,
+		Timestamp:  time.Now().UTC(),
+		Decision:   decision,
+		Reason:     reason,
+		Suggestion: suggestion,
+		Receipt:    receipt,
 	}
 }
 
@@ -1676,9 +1683,130 @@ func evaluateWithBapedge(sessionID, client, command, filePath string) types.Exec
 	return evaluateWithBapedgeTool(sessionID, client, "", command, filePath)
 }
 
+func unwrapPluginBrokerCommand(command, expectedSessionID string) (string, error) {
+	words := splitShellWords(strings.TrimSpace(command))
+	if len(words) == 0 {
+		return command, nil
+	}
+	executable := strings.Trim(words[0], `"'`)
+	executable = filepath.Base(strings.ReplaceAll(executable, `\`, "/"))
+	switch strings.ToLower(executable) {
+	case "bapedge", "bapedge.exe", "ltd-agent", "ltd-agent.exe":
+	default:
+		return command, nil
+	}
+
+	if len(words) >= 2 && words[1] == "exec" && !strings.Contains(command, "--cmd-b64") {
+		idx := strings.Index(command, "exec")
+		rawInner := strings.TrimSpace(command[idx+4:])
+		rawInner = strings.Trim(rawInner, `"'`)
+		if rawInner != "" {
+			return rawInner, nil
+		}
+	}
+
+	// Atomic control subcommands are handled downstream by IsZSPControlCommand.
+	if len(words) >= 2 && !strings.Contains(command, "--cmd-b64") {
+		sub := strings.ToLower(strings.Trim(words[1], `"'`))
+		switch sub {
+		case "zsp", "status", "why", "version":
+			return command, nil
+		}
+	}
+
+	if authz.HasUnquotedControlOperator(command) {
+		return "", fmt.Errorf("untrusted BAPEdge invocation: chained command operators are not permitted")
+	}
+
+	var sourceVal, sessionVal, b64Val string
+	hasExec := false
+	for i := 1; i < len(words); i++ {
+		arg := strings.Trim(words[i], `"'`)
+		if arg == "exec" {
+			hasExec = true
+		} else if arg == "--source" && i+1 < len(words) {
+			sourceVal = strings.Trim(words[i+1], `"'`)
+			i++
+		} else if arg == "--session-id" && i+1 < len(words) {
+			sessionVal = strings.Trim(words[i+1], `"'`)
+			i++
+		} else if arg == "--cmd-b64" && i+1 < len(words) {
+			b64Val = strings.Trim(words[i+1], `"'`)
+			i++
+		} else if (arg == "--shell" || arg == "--caller-binary" || arg == "--caller-hash") && i+1 < len(words) {
+			i++
+		} else {
+			return "", fmt.Errorf("untrusted BAPEdge invocation: unexpected argument %q", arg)
+		}
+	}
+	if !hasExec || sourceVal == "" || sessionVal == "" || b64Val == "" {
+		return "", fmt.Errorf("untrusted BAPEdge invocation: expected valid bapedge exec wrapper")
+	}
+	if expectedSessionID != "" && sessionVal != expectedSessionID {
+		return "", fmt.Errorf("untrusted BAPEdge invocation: session binding mismatch")
+	}
+	payload, err := base64.StdEncoding.DecodeString(b64Val)
+	if err != nil {
+		return "", fmt.Errorf("untrusted BAPEdge invocation: invalid command payload")
+	}
+	decoded := strings.TrimSpace(string(payload))
+	if decoded == "" {
+		return "", fmt.Errorf("untrusted BAPEdge invocation: empty command payload")
+	}
+	return decoded, nil
+}
+
+func isProtectedPluginAsset(normPath string) bool {
+	if normPath == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"policy.cedar",
+		".claude/settings.json",
+		".claude/hooks",
+		".bap-session.json",
+		".bap-revoked",
+		"bap-config.json",
+		"bapedge.exe",
+		"interceptor.exe",
+		"cchook-interceptor",
+		"bapcontrolplane",
+		"bapgateway",
+		"/.bap/",
+		"/.bapstate/",
+	} {
+		if strings.Contains(normPath, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isMutatingPluginTool(toolName string) bool {
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "edit", "write", "multi_edit", "multiedit", "notebookedit", "replace_file_content", "write_to_file":
+		return true
+	default:
+		return false
+	}
+}
+
 func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath string) types.ExecResponse {
 	wsRoot := authz.GetWorkspaceRoot()
 	normClient := normalizeClientAppID(client)
+
+	if command != "" {
+		unwrapped, unwrapErr := unwrapPluginBrokerCommand(command, sessionID)
+		if unwrapErr != nil {
+			return types.ExecResponse{
+				Allowed:    false,
+				ExitCode:   1,
+				Reason:     "Security Invariant Violation: " + unwrapErr.Error(),
+				Suggestion: "Invoke BAPEdge control commands (such as bapedge zsp authorize) standalone without chaining operators.",
+			}
+		}
+		command = unwrapped
+	}
 
 	// Secret Protection
 	normPath := strings.ToLower(filepath.ToSlash(filePath))
@@ -1713,12 +1841,21 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 	}
 
 	// Anti-Tampering Check
-	if strings.Contains(normCmd, "bapedge") || strings.Contains(normCmd, "policy.cedar") || strings.Contains(normPath, "policy.cedar") {
+	isCmdTamper := false
+	tamperReason := ""
+	if command != "" {
+		isCmdTamper, tamperReason = isTamperingAttempt(command)
+	}
+	isPathTamper := (toolName == "" || isMutatingPluginTool(toolName)) && isProtectedPluginAsset(normPath)
+	if isCmdTamper || isPathTamper {
 		if active, _ := devOverrideActive(); !active {
+			if tamperReason == "" {
+				tamperReason = "Security Invariant Violation: Direct mutation or tampering with BAP configuration, policies, hooks, or binaries is prohibited"
+			}
 			return types.ExecResponse{
 				Allowed:    false,
 				ExitCode:   1,
-				Reason:     "Security Invariant Violation: Direct mutation or tampering with BAP configuration, policies, hooks, or binaries is prohibited",
+				Reason:     tamperReason,
 				Suggestion: "Use 'bapedge trust' or request human operator authorization.",
 			}
 		}
@@ -1829,6 +1966,22 @@ func emitPluginSuccess(client, event string) {
 }
 
 func emitPluginDecision(client, event, decision, reason string, receipt *types.ExecutionReceipt) {
+	emitPluginDecisionWithSuggestion(client, event, decision, reason, "", receipt)
+}
+
+func emitPluginDecisionWithSuggestion(client, event, decision, reason, suggestion string, receipt *types.ExecutionReceipt) {
+	isInvariant := strings.Contains(reason, "Security Invariant Violation") ||
+		strings.Contains(reason, "sensitive credential") ||
+		strings.Contains(reason, "tampering")
+	denyContext := "Action blocked by enterprise zero-trust policy. CEASE attempts to access this resource."
+	if !isInvariant {
+		if suggestion != "" {
+			denyContext = fmt.Sprintf("BAP Zero-Trust Policy Decision: %s. SUGGESTION: %s", reason, suggestion)
+		} else {
+			denyContext = fmt.Sprintf("BAP Zero-Trust Policy Decision: %s", reason)
+		}
+	}
+
 	norm := normalizeClientAppID(client)
 	switch norm {
 	case "claude-code":
@@ -1846,12 +1999,12 @@ func emitPluginDecision(client, event, decision, reason string, receipt *types.E
 		} else {
 			out := map[string]any{
 				"status":   "deny",
-				"continue": false,
+				"continue": !isInvariant,
 				"hookSpecificOutput": map[string]any{
 					"hookEventName":            event,
 					"permissionDecision":       "deny",
 					"permissionDecisionReason": reason,
-					"additionalContext":        "Action blocked by enterprise zero-trust policy. CEASE attempts to access this resource.",
+					"additionalContext":        denyContext,
 				},
 			}
 			data, _ := json.Marshal(out)
@@ -1870,13 +2023,15 @@ func emitPluginDecision(client, event, decision, reason string, receipt *types.E
 			fmt.Println(string(data))
 		} else {
 			fmt.Fprintf(os.Stderr, "[CODEX BLOCKED BY POLICY] %s\n", reason)
-			fmt.Fprintln(os.Stderr, "[CRITICAL SECURITY INVARIANT] Access to this resource is permanently prohibited by enterprise zero-trust policy.")
+			if isInvariant {
+				fmt.Fprintln(os.Stderr, "[CRITICAL SECURITY INVARIANT] Access to this resource is permanently prohibited by enterprise zero-trust policy.")
+			}
 			out := map[string]any{
 				"hookSpecificOutput": map[string]any{
 					"hookEventName":            event,
 					"permissionDecision":       "deny",
 					"permissionDecisionReason": reason,
-					"additionalContext":        "Action blocked by enterprise zero-trust policy. CEASE attempts to access this resource.",
+					"additionalContext":        denyContext,
 				},
 			}
 			data, _ := json.Marshal(out)

@@ -69,7 +69,9 @@ func IsZSPEnforced() bool {
 	return true
 }
 
-func hasUnquotedZSPControlOperator(cmd string) bool {
+// HasUnquotedControlOperator returns true when cmd contains shell chaining/redirection
+// operators outside single or double quotes, subshell markers, newlines, or unclosed quotes.
+func HasUnquotedControlOperator(cmd string) bool {
 	if strings.ContainsAny(cmd, "\r\n`") || strings.Contains(cmd, "$(") {
 		return true
 	}
@@ -97,7 +99,7 @@ func hasUnquotedZSPControlOperator(cmd string) bool {
 // to submit a signed 4-tuple TaskAuthorizationEnvelope or inspect their status.
 func IsZSPControlCommand(fullCommand string) bool {
 	trimmed := strings.TrimSpace(fullCommand)
-	if trimmed == "" || hasUnquotedZSPControlOperator(trimmed) {
+	if trimmed == "" || HasUnquotedControlOperator(trimmed) {
 		return false
 	}
 	pipe, err := ParseAST(trimmed)
