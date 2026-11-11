@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -21,10 +22,11 @@ func TestEngineeringTestCommandsDeliveredImmediatelyAndAfterOffline(t *testing.T
 			if err := Log(&entry, path); err != nil {
 				t.Fatal(err)
 			}
-			reject := true
-			received := 0
+			var reject atomic.Bool
+			reject.Store(true)
+			var received atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				received++
+				received.Add(1)
 				var events []map[string]any
 				if err := json.NewDecoder(r.Body).Decode(&events); err != nil {
 					t.Error(err)
@@ -32,7 +34,7 @@ func TestEngineeringTestCommandsDeliveredImmediatelyAndAfterOffline(t *testing.T
 				if len(events) != 1 || events[0]["full_command"] != command || events[0]["event_id"] != entry.EventID {
 					t.Errorf("testing evidence changed: %v", events)
 				}
-				if reject {
+				if reject.Load() {
 					w.WriteHeader(503)
 					return
 				}
@@ -45,7 +47,7 @@ func TestEngineeringTestCommandsDeliveredImmediatelyAndAfterOffline(t *testing.T
 			if entries, _ := ReadEntries(path); len(entries) != 1 {
 				t.Fatal("offline test evidence discarded")
 			}
-			reject = false
+			reject.Store(false)
 			if count, err := FlushOfflineAudit(server.URL, path); err != nil || count != 1 {
 				t.Fatalf("replay: %d %v", count, err)
 			}
@@ -55,8 +57,8 @@ func TestEngineeringTestCommandsDeliveredImmediatelyAndAfterOffline(t *testing.T
 			if ok, _, err := Transmit(entry, server.URL, path); !ok || err != nil {
 				t.Fatalf("live testing suppressed: %v %v", ok, err)
 			}
-			if received != 3 {
-				t.Fatalf("not every delivery attempted: %d", received)
+			if got := received.Load(); got != 3 {
+				t.Fatalf("not every delivery attempted: %d", got)
 			}
 		})
 	}
@@ -66,9 +68,9 @@ func TestEnrollmentPreventsTestEnvironmentFromSuppressingDelivery(t *testing.T) 
 	t.Setenv("BAP_TEST_MODE", "1")
 	root := t.TempDir()
 	t.Setenv("BAP_CREDENTIALS", filepath.Join(root, "identity-fixture.json"))
-	requests := 0
+	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
+		requests.Add(1)
 		w.Write([]byte(`{"chain_valid":true,"status":"acknowledged","ingested":1,"durable":true}`))
 	}))
 	defer server.Close()
@@ -90,8 +92,8 @@ func TestEnrollmentPreventsTestEnvironmentFromSuppressingDelivery(t *testing.T) 
 	if count, err := FlushOfflineAudit(server.URL, path); count != 1 || err != nil {
 		t.Fatal(count, err)
 	}
-	if requests != 2 {
-		t.Fatal("missing enrolled reports", requests)
+	if got := requests.Load(); got != 2 {
+		t.Fatal("missing enrolled reports", got)
 	}
 }
 

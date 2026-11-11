@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -64,16 +65,20 @@ func TestDiscoveryOfflineRetryAndNonDurableReplay(t *testing.T) {
 	if err := discoverymeta.Queue(root, r); err != nil {
 		t.Fatal(err)
 	}
+	var mu sync.Mutex
 	mode := "offline"
 	deliveries := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		mu.Lock()
 		deliveries++
+		curMode := mode
+		mu.Unlock()
 		var report discoverymeta.Report
 		json.NewDecoder(req.Body).Decode(&report)
 		if report.RunID != r.RunID {
 			t.Error("retry changed run ID")
 		}
-		switch mode {
+		switch curMode {
 		case "offline":
 			w.WriteHeader(503)
 		case "bad-ack":
@@ -84,7 +89,9 @@ func TestDiscoveryOfflineRetryAndNonDurableReplay(t *testing.T) {
 	}))
 	defer server.Close()
 	for _, value := range []string{"offline", "bad-ack"} {
+		mu.Lock()
 		mode = value
+		mu.Unlock()
 		if flushDiscovery(context.Background(), root, server.URL) == nil {
 			t.Fatal("unacknowledged report consumed")
 		}
@@ -92,7 +99,9 @@ func TestDiscoveryOfflineRetryAndNonDurableReplay(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	mu.Lock()
 	mode = "ok"
+	mu.Unlock()
 	if err := flushDiscovery(context.Background(), root, server.URL); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +114,10 @@ func TestDiscoveryOfflineRetryAndNonDurableReplay(t *testing.T) {
 	if err := flushDiscovery(context.Background(), root, server.URL); err != nil {
 		t.Fatal(err)
 	}
-	if deliveries != 4 {
-		t.Fatal(deliveries)
+	mu.Lock()
+	gotDeliveries := deliveries
+	mu.Unlock()
+	if gotDeliveries != 4 {
+		t.Fatal(gotDeliveries)
 	}
 }

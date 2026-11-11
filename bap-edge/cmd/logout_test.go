@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -21,13 +22,18 @@ func TestRunLogout_LoggedOutAlready(t *testing.T) {
 }
 
 func TestRunLogout_Success(t *testing.T) {
+	var mu sync.Mutex
 	deregisterCalled := false
 	var receivedPayload map[string]string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/agents/deregister" {
+			var payload map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			mu.Lock()
 			deregisterCalled = true
-			json.NewDecoder(r.Body).Decode(&receivedPayload)
+			receivedPayload = payload
+			mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]interface{}{
@@ -64,11 +70,15 @@ func TestRunLogout_Success(t *testing.T) {
 		t.Fatalf("RunLogout failed: %v", err)
 	}
 
-	if !deregisterCalled {
+	mu.Lock()
+	called := deregisterCalled
+	agentID := receivedPayload["agent_id"]
+	mu.Unlock()
+	if !called {
 		t.Errorf("Expected /api/v1/agents/deregister to be called on control plane")
 	}
-	if receivedPayload["agent_id"] != "test-agent-logout" {
-		t.Errorf("Expected agent_id 'test-agent-logout', got %q", receivedPayload["agent_id"])
+	if agentID != "test-agent-logout" {
+		t.Errorf("Expected agent_id 'test-agent-logout', got %q", agentID)
 	}
 
 	// Verify local file is removed

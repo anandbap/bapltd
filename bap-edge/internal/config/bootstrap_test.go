@@ -58,7 +58,6 @@ func TestBootstrap_ExplicitEndpoint(t *testing.T) {
 	defer func() { httptransport.MockTransport = nil }()
 
 	res, err := BootstrapControlPlane(mockURL)
-	t.Logf("DEBUG res: %+v, err: %v", res, err)
 	if err != nil {
 		t.Fatalf("expected successful bootstrap against explicit test server, got: %v", err)
 	}

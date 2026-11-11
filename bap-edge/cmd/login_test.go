@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -42,9 +43,9 @@ func TestRunLogin_EndToEnd(t *testing.T) {
 		})
 	})
 
-	pollCount := 0
+	var pollCount atomic.Int32
 	mux.HandleFunc("/api/v1/auth/oidc/device-token", func(w http.ResponseWriter, r *http.Request) {
-		pollCount++
+		pollCount.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		// Authorize immediately
 		json.NewEncoder(w).Encode(map[string]interface{}{

@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 )
 
@@ -26,9 +27,9 @@ func TestFlushPromptSpoolReplaysAndRemoves(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	hits := 0
+	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits++
+		hits.Add(1)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -38,8 +39,8 @@ func TestFlushPromptSpoolReplaysAndRemoves(t *testing.T) {
 
 	flushPromptSpool(srv.URL, "sess-a")
 
-	if hits != 1 {
-		t.Fatalf("expected exactly one replay, got %d", hits)
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("expected exactly one replay, got %d", got)
 	}
 	if _, err := os.Stat(mine); !os.IsNotExist(err) {
 		t.Fatal("delivered spool entry should be removed")

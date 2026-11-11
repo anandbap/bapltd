@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -16,10 +17,14 @@ func TestRejectedAuditRemainsQueuedUntilVerifiedAcknowledgement(t *testing.T) {
 	if err := Log(&entry, logPath); err != nil {
 		t.Fatal(err)
 	}
+	var mu sync.Mutex
 	status, ack := http.StatusForbidden, `{"chain_valid":true,"status":"acknowledged","ingested":1}`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(status)
-		_, _ = w.Write([]byte(ack))
+		mu.Lock()
+		curStatus, curAck := status, ack
+		mu.Unlock()
+		w.WriteHeader(curStatus)
+		_, _ = w.Write([]byte(curAck))
 	}))
 	defer server.Close()
 	for _, failure := range []struct {
@@ -29,7 +34,9 @@ func TestRejectedAuditRemainsQueuedUntilVerifiedAcknowledgement(t *testing.T) {
 		{http.StatusForbidden, ack},
 		{http.StatusOK, `{"chain_valid":false,"status":"acknowledged","ingested":1}`},
 	} {
+		mu.Lock()
 		status, ack = failure.code, failure.body
+		mu.Unlock()
 		if n, err := FlushOfflineAudit(server.URL, logPath); err == nil || n != 0 {
 			t.Fatalf("rejection reported success: %d %v", n, err)
 		}
@@ -38,7 +45,9 @@ func TestRejectedAuditRemainsQueuedUntilVerifiedAcknowledgement(t *testing.T) {
 			t.Fatalf("lost unacknowledged event: %v %v", entries, err)
 		}
 	}
+	mu.Lock()
 	status, ack = http.StatusOK, `{"chain_valid":true,"status":"acknowledged","ingested":0}`
+	mu.Unlock()
 	if n, err := FlushOfflineAudit(server.URL, logPath); err != nil || n != 1 {
 		t.Fatalf("retry: %d %v", n, err)
 	}
