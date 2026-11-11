@@ -38,6 +38,11 @@ func ResolveCanonicalPath(targetPath, workspaceRoot string) string {
 	// 2. Make absolute based on workspaceRoot or CWD
 	var absPath string
 	normTrimmed := strings.ReplaceAll(trimmed, "\\", "/")
+	if isWindowsDrivePath(trimmed) && filepath.VolumeName(trimmed) == "" {
+		// On non-Windows hosts, preserve explicit Windows drive paths (e.g. "C:\")
+		// instead of joining them onto the POSIX working directory.
+		return normTrimmed
+	}
 	if filepath.IsAbs(trimmed) || (len(trimmed) >= 3 && trimmed[1] == ':' && (trimmed[2] == '\\' || trimmed[2] == '/')) {
 		absPath = filepath.Clean(filepath.FromSlash(normTrimmed))
 	} else if strings.HasPrefix(normTrimmed, "/") {
@@ -113,6 +118,10 @@ func IsPathOutsideWorkspaceCanonical(workspaceRoot, targetPath string) bool {
 	// which is strictly outside any project workspace boundary.
 	normTarget := strings.ReplaceAll(targetPath, "\\", "/")
 	if normTarget == "/" || normTarget == "/*" || normTarget == "/." {
+		return true
+	}
+
+	if isWindowsDrivePath(targetPath) && filepath.VolumeName(targetPath) == "" && !isWindowsDrivePath(workspaceRoot) {
 		return true
 	}
 

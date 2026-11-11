@@ -44,6 +44,10 @@ func GetWorkspaceRoot() string {
 	return "."
 }
 
+func isWindowsDrivePath(p string) bool {
+	return len(p) >= 2 && ((p[0] >= 'a' && p[0] <= 'z') || (p[0] >= 'A' && p[0] <= 'Z')) && p[1] == ':'
+}
+
 // IsPathOutsideWorkspace checks whether targetPath (relative or absolute) resolves
 // outside workspaceRoot.
 // Permitted (Inside): child submodules, subdirectories, files within workspaceRoot.
@@ -58,6 +62,12 @@ func IsPathOutsideWorkspace(workspaceRoot, targetPath string) bool {
 	// which is strictly outside any project workspace boundary.
 	normTarget := strings.ReplaceAll(targetPath, "\\", "/")
 	if normTarget == "/" || normTarget == "/*" || normTarget == "/." {
+		return true
+	}
+
+	// Explicit Windows drive paths (e.g. "C:\", "D:/foo") on non-Windows hosts
+	// are strictly outside a POSIX workspace boundary.
+	if isWindowsDrivePath(targetPath) && filepath.VolumeName(targetPath) == "" && !isWindowsDrivePath(cleanRoot) {
 		return true
 	}
 

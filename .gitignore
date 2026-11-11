@@ -61,6 +61,7 @@ bin/
 *.dll
 *.so
 *.dylib
+*.test
 *.tar.gz
 *.zip
 *.old
