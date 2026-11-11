@@ -457,3 +457,48 @@ func FindEscapingTargets(workspaceRoot, cmdArgs string) []string {
 	}
 	return targets
 }
+
+// IsFilesystemRootTarget returns true if target refers directly to a filesystem or drive root
+// (e.g. "/", "\", "/*", "\*", "C:\", "C:/").
+func IsFilesystemRootTarget(target string) bool {
+	trimmed := strings.TrimSpace(strings.Trim(target, "\"'`"))
+	if trimmed == "" {
+		return false
+	}
+	norm := strings.ReplaceAll(trimmed, "\\", "/")
+	if norm == "/" || norm == "/*" || norm == "/." || norm == "//" {
+		return true
+	}
+	// Drive root: "C:/", "C:", "C:/*"
+	if len(norm) >= 2 && norm[1] == ':' && ((norm[0] >= 'a' && norm[0] <= 'z') || (norm[0] >= 'A' && norm[0] <= 'Z')) {
+		rest := strings.TrimPrefix(norm[2:], "/")
+		if rest == "" || rest == "*" || rest == "." {
+			return true
+		}
+	}
+	return false
+}
+
+// HasFilesystemRootEscape checks whether any non-flag token in cmdTargets is an explicit
+// filesystem or drive root path outside workspaceRoot.
+func HasFilesystemRootEscape(workspaceRoot, fullCommand string) bool {
+	if fullCommand == "" {
+		return false
+	}
+	cleanRoot := filepath.Clean(workspaceRoot)
+	for _, tok := range tokenizeCommand(fullCommand) {
+		if isCommandFlag(tok) {
+			continue
+		}
+		val := strings.Trim(tok, "\"'`")
+		if val == "" || IsStandardDevicePath(val) {
+			continue
+		}
+		if IsFilesystemRootTarget(val) {
+			if cleanRoot == "" || IsPathOutsideWorkspaceCanonical(cleanRoot, val) {
+				return true
+			}
+		}
+	}
+	return false
+}

@@ -2323,6 +2323,10 @@ func handleSessionStartHook(payload HookPayload) {
 	if ltdBin == "" {
 		ltdBin = findBinary("bapedge")
 	}
+	if ltdBin != "" {
+		zspInitCmd := exec.Command(ltdBin, "zsp", "init", "--session-id", sessionID, "--client", appID)
+		_ = zspInitCmd.Run()
+	}
 	if ltdBin != "" && !launcherOwnsWatcher {
 		wCmd := exec.Command(ltdBin, "watch", fmt.Sprintf("--pid=%d", watchPIDFor(targetPID, caller)), fmt.Sprintf("--server=%s", serverURL), fmt.Sprintf("--session-id=%s", sessionID), fmt.Sprintf("--app-id=%s", appID), "--detach")
 		_ = wCmd.Start()
@@ -2802,6 +2806,12 @@ func isCedarInvariantViolation(reason string) bool {
 	return strings.Contains(r, "policy") ||
 		strings.Contains(r, "escapes") ||
 		strings.Contains(r, "outside workspace") ||
+		strings.Contains(r, "filesystem root") ||
+		strings.Contains(r, "zero standing") ||
+		strings.Contains(r, "zerostanding") ||
+		strings.Contains(r, "task grant") ||
+		strings.Contains(r, "taskgrant") ||
+		strings.Contains(r, "exceeds granted") ||
 		strings.Contains(r, "secret") ||
 		strings.Contains(r, "credential") ||
 		strings.Contains(r, ".env") ||
@@ -2859,6 +2869,70 @@ func isStrictToolEnforcementMandated() bool {
 
 	// Default: Tier 2 is ALWAYS OFF by default! Tier 1 Standard applies.
 	return false
+}
+
+func isZSPEnforcedClientSide() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_ZSP")))
+	if v == "0" || v == "false" || v == "off" || v == "disabled" {
+		return false
+	}
+	return !isHooksDisabled()
+}
+
+func evaluateNativeToolWithBapedge(sessionID, callerSource, toolName, targetPath string) (bool, string, string) {
+	if !isZSPEnforcedClientSide() {
+		return true, "", ""
+	}
+	binName := "bapedge"
+	fallbackName := "ltd-agent"
+	if runtime.GOOS == "windows" {
+		binName = "bapedge.exe"
+		fallbackName = "ltd-agent.exe"
+	}
+	ltdBin := findBinary(binName)
+	if _, err := os.Stat(ltdBin); err != nil {
+		ltdBin = findBinary(fallbackName)
+	}
+	if ltdBin == "" {
+		return false, "ZeroStandingPrivilegeViolation: bapedge broker binary unavailable to verify TaskGrant", "bapedge binary not found"
+	}
+	if callerSource == "" {
+		callerSource = "claude-code"
+	}
+	args := []string{"check", "--source", callerSource, "--session-id", sessionID, "--json", "--tool", toolName, "--consume"}
+	if targetPath != "" {
+		args = append(args, "--target", targetPath)
+	}
+	cmd := exec.Command(ltdBin, args...)
+	cmd.Env = append(os.Environ(), "BAP_SESSION_ID="+sessionID, "LTD_SOURCE="+callerSource)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	_ = cmd.Run()
+
+	var execResp ExecResponse
+	if err := json.Unmarshal(stdout.Bytes(), &execResp); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = strings.TrimSpace(stdout.String())
+		}
+		if msg == "" {
+			msg = "ZeroStandingPrivilegeViolation: unable to verify native tool TaskGrant"
+		}
+		return false, msg, msg
+	}
+	if execResp.Allowed {
+		return true, "", ""
+	}
+	reason := execResp.Reason
+	if reason == "" {
+		reason = "ZeroStandingPrivilegeViolation: native tool denied by BAP ZSP policy"
+	}
+	ctx := reason
+	if execResp.Suggestion != "" {
+		ctx = fmt.Sprintf("%s. SUGGESTION: %s", reason, execResp.Suggestion)
+	}
+	return false, reason, ctx
 }
 
 func main() {
@@ -3089,9 +3163,13 @@ func main() {
 			return
 		}
 
-		// Read-only inspection tools (Read, View) are permitted for cross-project dependencies and documentation
+		// Enforce Zero Standing Privileges on file inspection/mutation tools
 		toolLower := strings.ToLower(payload.ToolName)
 		if isSafeFileTool(toolLower) {
+			if ok, denyReason, ctxMsg := evaluateNativeToolWithBapedge(sessionID, activeCallerAppID, payload.ToolName, targetFile); !ok {
+				outputDecision("deny", denyReason, ctxMsg)
+				return
+			}
 			outputDecision("allow", "", "File inspection permitted")
 			return
 		}
@@ -3102,13 +3180,22 @@ func main() {
 	if command == "" {
 		toolLower := strings.ToLower(payload.ToolName)
 		if isSafeFileTool(toolLower) {
+			if ok, denyReason, ctxMsg := evaluateNativeToolWithBapedge(sessionID, activeCallerAppID, payload.ToolName, targetFile); !ok {
+				outputDecision("deny", denyReason, ctxMsg)
+				return
+			}
 			outputDecision("allow", "", "File operation permitted")
 			return
 		}
 
-		// Allow subagents, code search, and directory exploration tools
-		// (e.g. search_code_subagent, Agent, Task, Glob, Grep, LS, ListDirectory, find_by_name)
+		// Subagents & directory/search tools still require ZSP verification when targeting resources
 		if isSafeSubagentOrInspectionTool(toolLower) {
+			if !strings.HasPrefix(toolLower, "bap_") && toolLower != "agent" && toolLower != "task" && toolLower != "subagent" && !strings.Contains(toolLower, "subagent") {
+				if ok, denyReason, ctxMsg := evaluateNativeToolWithBapedge(sessionID, activeCallerAppID, payload.ToolName, targetFile); !ok {
+					outputDecision("deny", denyReason, ctxMsg)
+					return
+				}
+			}
 			outputDecision("allow", "", fmt.Sprintf("Inspection or subagent tool %q permitted by zero-trust policy", payload.ToolName))
 			return
 		}
@@ -3430,8 +3517,10 @@ func main() {
 			reason = "Command execution denied by bapedge Cedar security policy"
 		}
 
-		// If denial was triggered by escaping workspace, prompt interactive terminal HITL if in interactive session
-		if checkCommandWorkspaceEscape(workspaceRoot, command) || strings.Contains(strings.ToLower(reason), "escapes_workspace") || strings.Contains(strings.ToLower(reason), "outside workspace") || strings.Contains(strings.ToLower(reason), "policy2") {
+		// If denial was triggered by escaping workspace (excluding ZSP / filesystem root blocks), prompt interactive HITL
+		lowerReason := strings.ToLower(reason)
+		isZSPOrRootDeny := strings.Contains(lowerReason, "zerostandingprivilege") || strings.Contains(lowerReason, "zero standing") || strings.Contains(lowerReason, "filesystem root")
+		if !isZSPOrRootDeny && (checkCommandWorkspaceEscape(workspaceRoot, command) || strings.Contains(lowerReason, "escapes_workspace") || strings.Contains(lowerReason, "outside workspace") || strings.Contains(lowerReason, "policy2")) {
 			target := extractCommandTarget(command)
 			if target == "" {
 				target = command
@@ -3473,6 +3562,11 @@ func main() {
 
 // findBinary locates the ltd-agent or bapedge binary across standard search paths.
 func findBinary(name string) string {
+	if override := strings.TrimSpace(os.Getenv("BAP_EDGE_BIN")); override != "" {
+		if _, err := os.Stat(override); err == nil {
+			return override
+		}
+	}
 	// 1. Check current working directory
 	if _, err := os.Stat(name); err == nil {
 		if abs, err := filepath.Abs(name); err == nil {

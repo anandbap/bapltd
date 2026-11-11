@@ -244,6 +244,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error in stepup: %v\n", err)
 			os.Exit(1)
 		}
+	case "zsp":
+		if err := cmd.RunZSP(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error in zsp: %v\n", err)
+			os.Exit(1)
+		}
 	case "delegate", "subagent":
 		if err := cmd.RunDelegate(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error in delegation: %v\n", err)

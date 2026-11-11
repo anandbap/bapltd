@@ -184,6 +184,18 @@ func TestCommandChainingFallback(t *testing.T) {
 	}
 }
 
+func TestCleanCommandStringPreservesTrailingRootSlash(t *testing.T) {
+	if got := CleanCommandString(`Get-ChildItem -Force \`); got != `Get-ChildItem -Force \` {
+		t.Fatalf("CleanCommandString stripped trailing root slash: got %q", got)
+	}
+	if got := CleanCommandString(`ls /`); got != `ls /` {
+		t.Fatalf("CleanCommandString altered posix root slash: got %q", got)
+	}
+	if got := CleanCommandString(`\ echo hi`); got != `echo hi` {
+		t.Fatalf("expected leading escaped space to trim cleanly, got %q", got)
+	}
+}
+
 
 
 

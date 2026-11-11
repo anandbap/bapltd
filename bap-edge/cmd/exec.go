@@ -57,6 +57,8 @@ type execContext struct {
 	processTree     []string
 	callerBinary    string
 	callerHash      string
+	zspPrincipal    string
+	zspGrantID      string
 }
 
 type sessionRiskState struct {
@@ -647,6 +649,9 @@ func generateExecutionReceipt(ec *execContext, result string, exitCode int) *typ
 
 	uID, _, spiffeID := resolveLocalIdentity()
 	identity := spiffeID
+	if ec.zspPrincipal != "" {
+		identity = ec.zspPrincipal
+	}
 	if identity == "" || identity == "NA" || !strings.HasPrefix(identity, "spiffe://") {
 		src := ec.source
 		if src == "" {
@@ -694,6 +699,9 @@ func generateExecutionReceipt(ec *execContext, result string, exitCode int) *typ
 	rootAgentID := os.Getenv("BAP_ROOT_AGENT_ID")
 	parentGrantID := os.Getenv("BAP_PARENT_GRANT_ID")
 	grantID := os.Getenv("BAP_GRANT_ID")
+	if ec.zspGrantID != "" {
+		grantID = ec.zspGrantID
+	}
 
 	return &types.ExecutionReceipt{
 		ReceiptID:      receiptID,
@@ -847,6 +855,20 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 	exitWithResponse(resp, code, ec.forceJSON, ec.forceRaw, isAgentEnvironment(ec.source))
 }
 
+func isZSPRequiredForExec(ec *execContext) bool {
+	if ec == nil {
+		return false
+	}
+	if strings.EqualFold(ec.reportingLayer, "hook") {
+		return true
+	}
+	if isAgentSource(ec.source) {
+		return true
+	}
+	norm := strings.ToLower(strings.TrimSpace(ec.source))
+	return norm != "" && norm != "cli"
+}
+
 // isCedarInvariantViolation determines if an authorization denial was caused by an inviolable
 // security invariant (secrets, tampering, workspace escape mutation, raw exfiltration)
 // vs a standard Cedar default-deny (unlisted tool in Policy 1).
@@ -858,6 +880,12 @@ func isCedarInvariantViolation(reason string) bool {
 	return strings.Contains(r, "policy") ||
 		strings.Contains(r, "escapes") ||
 		strings.Contains(r, "outside workspace") ||
+		strings.Contains(r, "filesystem root") ||
+		strings.Contains(r, "zero standing") ||
+		strings.Contains(r, "zerostanding") ||
+		strings.Contains(r, "task grant") ||
+		strings.Contains(r, "taskgrant") ||
+		strings.Contains(r, "exceeds granted") ||
 		strings.Contains(r, "secret") ||
 		strings.Contains(r, "credential") ||
 		strings.Contains(r, ".env") ||
@@ -906,6 +934,9 @@ func RunExec(args []string) {
 	stepUpFlag := fs.String("stepup-decision", "", "Human Step-Up approval decision ('approve', 'session', or 'deny')")
 	callerBinaryFlag := fs.String("caller-binary", os.Getenv("BAP_CALLER_BINARY"), "Path to calling agent binary")
 	callerHashFlag := fs.String("caller-hash", os.Getenv("BAP_CALLER_HASH"), "Cryptographic SHA256 hash of calling agent binary")
+	toolNameFlag := fs.String("tool", "", "Native agent tool name for non-shell check (e.g. Read, Write, Edit, Glob, Grep, LS)")
+	targetFlag := fs.String("target", "", "Target file or directory path for --tool check")
+	consumeFlag := fs.Bool("consume", false, "Consume one TaskGrant use during decision-only check (for native tools)")
 
 	defaultShell := os.Getenv("BAP_SHELL")
 	if defaultShell == "" {
@@ -1070,6 +1101,58 @@ func RunExec(args []string) {
 		}
 		fullCommand = string(decoded)
 	} else {
+		if len(cmdArgs) == 0 && *toolNameFlag != "" {
+			wsRoot := authz.GetWorkspaceRoot()
+			ec.fullCommand = fmt.Sprintf("tool:%s %s", *toolNameFlag, *targetFlag)
+			ec.executable = strings.ToLower(*toolNameFlag)
+			ec.cmdArguments = *targetFlag
+			action, res, escapes := authz.ResolveZSPActionAndResource("", "", "", *toolNameFlag, *targetFlag, wsRoot)
+
+			if *targetFlag != "" && (authz.IsFilesystemRootTarget(*targetFlag) || authz.IsFilesystemRootTarget(authz.ResolveCanonicalPath(*targetFlag, wsRoot))) {
+				resp := types.ExecResponse{
+					Allowed:    false,
+					Reason:     fmt.Sprintf("Security Invariant Violation: Target path %q targets filesystem root outside workspace boundary", *targetFlag),
+					Suggestion: "File and directory inspection must remain inside the authorized workspace.",
+					Mode:       ec.enforcementMode,
+				}
+				ec.exit(resp, 1)
+				return
+			}
+
+			if isZSPRequiredForExec(ec) && authz.IsZSPEnforced() {
+				svid, grant, _, zspErr := authz.VerifyOrConsumeSessionZSP(
+					authz.ResolveZSPDir(), ec.sessionID, ec.source, action, res, ec.fullCommand, wsRoot, escapes, *consumeFlag, nil,
+				)
+				if svid != nil {
+					ec.zspPrincipal = svid.Subject
+				}
+				if zspErr != nil {
+					if strings.EqualFold(ec.enforcementMode, "audit") || strings.EqualFold(ec.enforcementMode, "shadow") {
+						ec.shadowDenied = true
+						ec.shadowReason = zspErr.Error()
+					} else {
+						resp := types.ExecResponse{
+							Allowed:    false,
+							Reason:     fmt.Sprintf("ZeroStandingPrivilegeViolation: %v", zspErr),
+							Suggestion: fmt.Sprintf("Submit a signed 4-Tuple Task Authorization Envelope first via 'bapedge zsp authorize --session-id %q --mission TASK_EXECUTION --goal %q --actions %q --resources workspace://current'.", ec.sessionID, ec.fullCommand, action),
+							Mode:       ec.enforcementMode,
+						}
+						ec.exit(resp, 1)
+						return
+					}
+				} else if grant != nil {
+					ec.zspGrantID = grant.GrantID
+				}
+			}
+
+			resp := types.ExecResponse{
+				Allowed:      true,
+				DecisionOnly: true,
+				Mode:         ec.enforcementMode,
+			}
+			ec.exit(resp, 0)
+			return
+		}
 		if len(cmdArgs) == 0 {
 			resp := types.ExecResponse{
 				Allowed: false,
@@ -1254,6 +1337,49 @@ func RunExec(args []string) {
 	if !allowed && !authz.IsStrictTierMandated() {
 		if !isCedarInvariantViolation(reason) {
 			allowed = true
+		}
+	}
+
+	// Zero Standing Privileges (ZSP) enforcement for AI agent sessions (BAP-915, BAP-916, BAP-917, BAP-918):
+	// Agents start with ZERO standing permissions and must hold an active signed TaskGrant covering the action & resource,
+	// except when invoking atomic ZSP control commands (e.g. 'bapedge zsp authorize' / 'bapedge status').
+	if allowed && isZSPRequiredForExec(ec) && authz.IsZSPEnforced() && !authz.IsZSPControlCommand(fullCommand) {
+		zspAction, zspRes, zspEscapes := authz.ResolveZSPActionAndResource(fullCommand, executable, cmdArguments, "", "", workspaceRoot)
+		svid, grant, _, zspErr := authz.VerifyOrConsumeSessionZSP(
+			authz.ResolveZSPDir(),
+			ec.sessionID,
+			ec.source,
+			zspAction,
+			zspRes,
+			fullCommand,
+			workspaceRoot,
+			zspEscapes,
+			!ec.decisionOnly,
+			[]string{fmt.Sprintf("parent:%d", ec.parentPID), fmt.Sprintf("broker:%d", os.Getpid())},
+		)
+		if svid != nil {
+			ec.zspPrincipal = svid.Subject
+		}
+		if zspErr != nil {
+			allowed = false
+			reason = fmt.Sprintf("ZeroStandingPrivilegeViolation: %v", zspErr)
+			if strings.EqualFold(ec.enforcementMode, "audit") || strings.EqualFold(ec.enforcementMode, "shadow") {
+				ec.shadowDenied = true
+				ec.shadowReason = reason
+				allowed = true
+			} else {
+				resp := types.ExecResponse{
+					Allowed:        false,
+					Reason:         reason,
+					Suggestion:     fmt.Sprintf("Agent principal %s has ZERO standing privileges. Submit a signed 4-Tuple Task Authorization Envelope first via: bapedge zsp authorize --session-id %q --mission TASK_EXECUTION --goal %q --actions %q --resources workspace://current", ec.zspPrincipal, ec.sessionID, fullCommand, zspAction),
+					Mode:           ec.enforcementMode,
+					StepUpDecision: "denied",
+				}
+				ec.exit(resp, 1)
+				return
+			}
+		} else if grant != nil {
+			ec.zspGrantID = grant.GrantID
 		}
 	}
 

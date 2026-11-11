@@ -21,9 +21,10 @@ const InjectedOBOToken = "mock_secret_token_123"
 // so commands like 'java -Dapp="Foo Bar" -version' or "git status" parse cleanly.
 func CleanCommandString(s string) string {
 	s = strings.TrimSpace(s)
-	// Strip shell escaping artifacts (e.g. \"cmd, \ cmd, ^cmd)
-	s = strings.TrimLeft(s, "\\^ \t")
-	s = strings.TrimRight(s, "\\^ \t")
+	// Strip leading shell escaping artifacts only when present (never strip trailing literal root path "\")
+	if strings.HasPrefix(s, `\"`) || strings.HasPrefix(s, `\'`) || strings.HasPrefix(s, `\ `) || strings.HasPrefix(s, `^\`) || strings.HasPrefix(s, `^ `) {
+		s = strings.TrimLeft(s, "\\^ \t")
+	}
 	s = strings.TrimSpace(s)
 
 	// Strip outer single quotes if user wrapped the whole command in single quotes

@@ -164,7 +164,7 @@ func (e *ZSPEngine) ConsumeTaskGrant(
 	// Verify action is granted
 	actionPermitted := false
 	for _, allowed := range grant.AllowedActions {
-		if strings.EqualFold(allowed, attemptedAction) || allowed == "*" || strings.HasPrefix(attemptedAction, allowed) {
+		if actionMatchesGrant(allowed, attemptedAction) {
 			actionPermitted = true
 			break
 		}
@@ -176,7 +176,7 @@ func (e *ZSPEngine) ConsumeTaskGrant(
 	// Verify resource boundary is granted
 	resourcePermitted := false
 	for _, allowedRes := range grant.AllowedResources {
-		if strings.EqualFold(allowedRes, targetResource) || allowedRes == "workspace://current" || strings.HasPrefix(targetResource, allowedRes) {
+		if resourceMatchesGrant(allowedRes, targetResource) {
 			resourcePermitted = true
 			break
 		}
@@ -217,6 +217,133 @@ func (e *ZSPEngine) ConsumeTaskGrant(
 	e.lineageReceipts = append(e.lineageReceipts, proof)
 
 	return &proof, nil
+}
+
+// LoadGrant verifies a persisted TaskGrant's PEP HMAC signature and registers it in memory.
+func (e *ZSPEngine) LoadGrant(g *types.TaskGrant) error {
+	if g == nil || g.GrantID == "" {
+		return ErrZeroStandingPrivilegeViolation
+	}
+	expected := e.signGrant(g)
+	if !hmac.Equal([]byte(expected), []byte(g.AuthoritySignature)) {
+		return fmt.Errorf("%w: forged or tampered task grant %s", ErrZeroStandingPrivilegeViolation, g.GrantID)
+	}
+	e.mu.Lock()
+	copy := *g
+	e.grants[g.GrantID] = &copy
+	e.mu.Unlock()
+	return nil
+}
+
+// CheckTaskGrant verifies an active grant matches action and resource without decrementing uses.
+func (e *ZSPEngine) CheckTaskGrant(grantID, attemptedAction, targetResource string) (*types.TaskGrant, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if grantID == "" {
+		return nil, ErrZeroStandingPrivilegeViolation
+	}
+	grant, exists := e.grants[grantID]
+	if !exists {
+		return nil, fmt.Errorf("%w: unrecognized grant ID %s", ErrZeroStandingPrivilegeViolation, grantID)
+	}
+	now := time.Now().UTC()
+	if now.After(grant.ExpiresAt) {
+		return nil, ErrGrantExpired
+	}
+	if grant.IsBurned || grant.RemainingUses <= 0 {
+		return nil, ErrGrantBurned
+	}
+	actionPermitted := false
+	for _, allowed := range grant.AllowedActions {
+		if actionMatchesGrant(allowed, attemptedAction) {
+			actionPermitted = true
+			break
+		}
+	}
+	if !actionPermitted {
+		return nil, fmt.Errorf("%w: action %s not in granted scopes %v", ErrActionNotGranted, attemptedAction, grant.AllowedActions)
+	}
+	resourcePermitted := false
+	for _, allowedRes := range grant.AllowedResources {
+		if resourceMatchesGrant(allowedRes, targetResource) {
+			resourcePermitted = true
+			break
+		}
+	}
+	if !resourcePermitted {
+		return nil, fmt.Errorf("%w: resource %s not in granted boundaries %v", ErrResourceNotGranted, targetResource, grant.AllowedResources)
+	}
+	copy := *grant
+	return &copy, nil
+}
+
+// MarkGrantBurned revokes or burns an active grant in memory.
+func (e *ZSPEngine) MarkGrantBurned(grantID, reason string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	g, ok := e.grants[grantID]
+	if !ok {
+		return ErrZeroStandingPrivilegeViolation
+	}
+	g.IsBurned = true
+	g.RemainingUses = 0
+	g.BurnReason = reason
+	return nil
+}
+
+func actionMatchesGrant(allowed, attempted string) bool {
+	a := strings.ToLower(strings.TrimSpace(allowed))
+	t := strings.ToLower(strings.TrimSpace(attempted))
+	if a == "" || t == "" {
+		return false
+	}
+	if a == "*" || a == t {
+		return true
+	}
+	if strings.HasSuffix(a, ":*") && strings.HasPrefix(t, strings.TrimSuffix(a, "*")) {
+		return true
+	}
+	if strings.HasPrefix(t, a+":") || strings.HasPrefix(t, a) {
+		return true
+	}
+	if a == "repo:read" || a == "fs:read" || a == "git:inspect:read" || a == "git:read" {
+		if t == "git:status" || t == "git:log" || t == "git:diff" || t == "git:show" || t == "git:branch" ||
+			t == "git:inspect:read" ||
+			strings.HasPrefix(t, "git:status") || strings.HasPrefix(t, "git:log") || strings.HasPrefix(t, "git:diff") {
+			return true
+		}
+		if a == "repo:read" || a == "fs:read" {
+			if strings.HasPrefix(t, "fs:file:read") || strings.HasPrefix(t, "fs:dir:read") {
+				return true
+			}
+		}
+	}
+	if a == "repo:write" || a == "fs:write" {
+		if strings.HasPrefix(t, "fs:file:write") || strings.HasPrefix(t, "fs:file:edit") {
+			return true
+		}
+	}
+	return false
+}
+
+func resourceMatchesGrant(allowedRes, targetResource string) bool {
+	a := strings.ToLower(strings.TrimSpace(allowedRes))
+	t := strings.ToLower(strings.TrimSpace(targetResource))
+	if a == "" || t == "" {
+		return false
+	}
+	if a == t {
+		return true
+	}
+	if a == "workspace://current" || a == "workspace://." {
+		if t == "workspace://current" || t == "workspace://." || t == "repo:local" ||
+			strings.HasPrefix(t, "workspace://") || strings.HasPrefix(t, "repo:") {
+			return true
+		}
+		return false
+	}
+	return strings.HasPrefix(t, a)
 }
 
 // GetGrant looks up an existing task grant.

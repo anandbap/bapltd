@@ -259,6 +259,34 @@ func handleRequest(w *bufio.Writer, req JSONRPCRequest, authorizer *authz.Author
 					},
 				},
 			},
+			{
+				Name: "bap_request_task_grant",
+				Description: "Submits a cryptographically signed 4-Tuple Task Authorization Envelope (Who, AuthorizedBy, Intent, PermissionAsk) " +
+					"to mint a least-privilege ephemeral JIT TaskGrant under Zero Standing Privileges.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]interface{}{
+						"session_id": map[string]string{"type": "string", "description": "Active agent session ID"},
+						"mission":    map[string]string{"type": "string", "description": "Primary mission (e.g. CODE_INSPECTION, BUG_FIX)"},
+						"goal":       map[string]string{"type": "string", "description": "Declared goal of this task"},
+						"actions":    map[string]string{"type": "string", "description": "Comma-separated canonical actions requested"},
+						"resources":  map[string]string{"type": "string", "description": "Comma-separated canonical resources (defaults to workspace://current)"},
+						"max_uses":   map[string]string{"type": "integer", "description": "Max execution uses before burn (default 1)"},
+					},
+					Required: []string{"mission", "goal", "actions"},
+				},
+			},
+			{
+				Name: "bap_zsp_status",
+				Description: "Inspects the agent's cryptographic SPIFFE SVID principal, human owner binding, " +
+					"zero-standing-privilege posture, and active JIT TaskGrants.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]interface{}{
+						"session_id": map[string]string{"type": "string", "description": "Optional session ID"},
+					},
+				},
+			},
 		}
 		sendResult(w, req.ID, map[string]interface{}{"tools": tools})
 
@@ -320,6 +348,14 @@ func handleRequest(w *bufio.Writer, req JSONRPCRequest, authorizer *authz.Author
 
 		case "bap_list_dir":
 			res := handleListDir(params.Arguments)
+			sendResult(w, req.ID, res)
+
+		case "bap_request_task_grant":
+			res := handleRequestTaskGrant(params.Arguments)
+			sendResult(w, req.ID, res)
+
+		case "bap_zsp_status":
+			res := handleZSPStatus(params.Arguments)
 			sendResult(w, req.ID, res)
 
 		default:
@@ -538,6 +574,77 @@ func getStatus(cfg ServerConfig) CallToolResult {
 			Type: "text",
 			Text: string(raw),
 		}},
+		IsError: false,
+	}
+}
+
+func resolveMCPSessionID(args map[string]interface{}) string {
+	if s, ok := args["session_id"].(string); ok && strings.TrimSpace(s) != "" {
+		return strings.TrimSpace(s)
+	}
+	if s := strings.TrimSpace(os.Getenv("BAP_SESSION_ID")); s != "" {
+		return s
+	}
+	if s := strings.TrimSpace(os.Getenv("LTD_SESSION_ID")); s != "" {
+		return s
+	}
+	return fmt.Sprintf("sess-mcp-%d", os.Getpid())
+}
+
+func handleRequestTaskGrant(args map[string]interface{}) CallToolResult {
+	sessionID := resolveMCPSessionID(args)
+	mission, _ := args["mission"].(string)
+	goal, _ := args["goal"].(string)
+	actionsStr, _ := args["actions"].(string)
+	resourcesStr, _ := args["resources"].(string)
+	maxUses := 1
+	if mu, ok := args["max_uses"].(float64); ok && mu > 0 {
+		maxUses = int(mu)
+	}
+	var actions, resources []string
+	for _, a := range strings.Split(actionsStr, ",") {
+		if t := strings.TrimSpace(a); t != "" {
+			actions = append(actions, t)
+		}
+	}
+	for _, r := range strings.Split(resourcesStr, ",") {
+		if t := strings.TrimSpace(r); t != "" {
+			resources = append(resources, t)
+		}
+	}
+	grant, env, err := authz.SubmitTaskEnvelope(
+		authz.ResolveZSPDir(), sessionID, "mcp-agent", mission, goal, goal,
+		actions, resources, "", maxUses, 300*time.Second,
+	)
+	if err != nil {
+		return CallToolResult{
+			Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("TaskEnvelope denied: %v", err)}},
+			IsError: true,
+		}
+	}
+	raw, _ := json.MarshalIndent(map[string]any{
+		"allowed":     true,
+		"envelope_id": env.EnvelopeID,
+		"grant":       grant,
+	}, "", "  ")
+	return CallToolResult{
+		Content: []ContentBlock{{Type: "text", Text: string(raw)}},
+		IsError: false,
+	}
+}
+
+func handleZSPStatus(args map[string]interface{}) CallToolResult {
+	sessionID := resolveMCPSessionID(args)
+	rep, err := authz.ListSessionZSPStatus(authz.ResolveZSPDir(), sessionID, "mcp-agent")
+	if err != nil {
+		return CallToolResult{
+			Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("ZSP status error: %v", err)}},
+			IsError: true,
+		}
+	}
+	raw, _ := json.MarshalIndent(rep, "", "  ")
+	return CallToolResult{
+		Content: []ContentBlock{{Type: "text", Text: string(raw)}},
 		IsError: false,
 	}
 }

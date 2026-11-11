@@ -397,8 +397,15 @@ func (a *Authorizer) evaluateAtomicNode(executable, fullCommand, args, workspace
 	}
 
 	effectiveEscapesWorkspace := escapesWorkspace
+	if escapesWorkspace && (HasFilesystemRootEscape(workspaceRoot, fullCommand) || IsFilesystemRootTarget(canonicalTarget) || IsFilesystemRootTarget(decomp.TargetEntity)) {
+		if authorized, _ := IsTargetAuthorized(workspaceRoot, a.sessionID, canonicalTarget, decomp.ActionType); !authorized {
+			return false, fmt.Sprintf("Security Invariant Violation: Filesystem root path escapes workspace boundary in command %q", fullCommand), nil
+		}
+	}
 	if escapesWorkspace && (decomp.ActionType == "read" || decomp.ActionType == "inspect" || decomp.ActionType == "info") {
-		effectiveEscapesWorkspace = false
+		if !HasFilesystemRootEscape(workspaceRoot, fullCommand) && !IsFilesystemRootTarget(canonicalTarget) {
+			effectiveEscapesWorkspace = false
+		}
 	}
 	checkTarget := canonicalTarget
 	if checkTarget == "" {

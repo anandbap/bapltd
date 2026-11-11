@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"bap-edge/internal/authz"
+	"bap-edge/internal/sandbox"
 	"bap-edge/internal/state"
 	"bap-edge/pkg/types"
 )
@@ -371,7 +372,12 @@ func runPluginAdapter(args []string) error {
 
 	// 2. Parse into generic map
 	var rawPayload map[string]any
-	_ = json.Unmarshal(inputBytes, &rawPayload)
+	if err := json.Unmarshal(inputBytes, &rawPayload); err != nil {
+		if strings.EqualFold(strings.TrimSpace(event), "pretooluse") || strings.EqualFold(strings.TrimSpace(event), "pretoolexecution") {
+			emitPluginDecision(client, event, "deny", "Invalid PreToolUse hook payload JSON: "+err.Error(), nil)
+			return fmt.Errorf("invalid hook payload JSON: %w", err)
+		}
+	}
 	if rawPayload == nil {
 		rawPayload = make(map[string]any)
 	}
@@ -391,6 +397,7 @@ func runPluginAdapter(args []string) error {
 			emitPluginDecision(client, event, "deny", err.Error(), nil)
 			return err
 		}
+		_, _, _, _, _ = authz.EnsureSessionPrincipal(authz.ResolveZSPDir(), sessionID, normalizeClientAppID(client))
 		emitPluginSuccess(client, event)
 		return nil
 	}
@@ -422,17 +429,18 @@ func runPluginAdapter(args []string) error {
 
 	// 5. Extract command or file path
 	command, targetFile := extractCommandAndFile(rawPayload)
+	toolName, _ := rawPayload["tool_name"].(string)
 
 	// 6. Check Deduplication against recent standalone hook execution
-	cmdHash := computeCommandHash(command, targetFile)
+	cmdHash := computeCommandHash(command+"|"+toolName, targetFile)
 	if cached, ok := checkDedup(sessionID, cmdHash); ok {
 		// Output cached decision directly
 		emitPluginDecision(client, event, cached.Decision, cached.Reason, cached.Receipt)
 		return nil
 	}
 
-	// 7. Evaluate against Cedar policy invariants using bapedge check
-	ecResp := evaluateWithBapedge(sessionID, client, command, targetFile)
+	// 7. Evaluate against Cedar policy invariants & ZSP TaskGrants
+	ecResp := evaluateWithBapedgeTool(sessionID, client, toolName, command, targetFile)
 
 	decision := "allow"
 	if !ecResp.Allowed {
@@ -1665,16 +1673,42 @@ func resolvePluginSessionID(client string, payload map[string]any) string {
 }
 
 func evaluateWithBapedge(sessionID, client, command, filePath string) types.ExecResponse {
+	return evaluateWithBapedgeTool(sessionID, client, "", command, filePath)
+}
+
+func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath string) types.ExecResponse {
+	wsRoot := authz.GetWorkspaceRoot()
+	normClient := normalizeClientAppID(client)
+
 	// Secret Protection
 	normPath := strings.ToLower(filepath.ToSlash(filePath))
 	normCmd := strings.ToLower(filepath.ToSlash(command))
 	if strings.Contains(normPath, ".env") || strings.Contains(normPath, ".ssh") || strings.Contains(normPath, ".aws") ||
-		strings.Contains(normCmd, ".env") || strings.Contains(normCmd, ".ssh") || strings.Contains(normCmd, ".aws") {
+		strings.Contains(normCmd, ".env") || strings.Contains(normCmd, ".ssh") || strings.Contains(normCmd, ".aws") ||
+		strings.Contains(normPath, "id_rsa") || strings.Contains(normCmd, "id_rsa") {
 		return types.ExecResponse{
 			Allowed:    false,
 			ExitCode:   1,
 			Reason:     "Security Invariant Violation: Access to sensitive credential stores (.env, .ssh, .aws) is strictly forbidden by enterprise zero-trust policy",
 			Suggestion: "Direct file inspection or exfiltration of credential stores is blocked.",
+		}
+	}
+
+	// Allow atomic ZSP control commands (e.g. 'bapedge zsp authorize', 'bapedge status')
+	if command != "" && authz.IsZSPControlCommand(command) {
+		return types.ExecResponse{
+			Allowed:  true,
+			ExitCode: 0,
+			Receipt: &types.ExecutionReceipt{
+				ReceiptID:      fmt.Sprintf("rcpt-%d", time.Now().UnixNano()),
+				Identity:       fmt.Sprintf("spiffe://bap.local/agent/%s", normClient),
+				Delegation:     fmt.Sprintf("user:workstation->agent:%s", normClient),
+				PolicyVersion:  "sha256:enterprise-active",
+				SandboxProfile: "zsp-control-channel",
+				SessionID:      sessionID,
+				Timestamp:      time.Now().UTC(),
+				Result:         "ALLOWED_ZSP_CONTROL",
+			},
 		}
 	}
 
@@ -1690,14 +1724,69 @@ func evaluateWithBapedge(sessionID, client, command, filePath string) types.Exec
 		}
 	}
 
-	// Benign shell commands or read-only tools are allowed
+	// Filesystem Root Escape Check (e.g., Get-ChildItem -Force \, ls /, dir C:\)
+	if (command != "" && authz.HasFilesystemRootEscape(wsRoot, command)) ||
+		(filePath != "" && (authz.IsFilesystemRootTarget(filePath) || authz.IsFilesystemRootTarget(authz.ResolveCanonicalPath(filePath, wsRoot)))) {
+		return types.ExecResponse{
+			Allowed:    false,
+			ExitCode:   1,
+			Reason:     "Security Invariant Violation: Target path escapes workspace boundary to filesystem/drive root",
+			Suggestion: "Operations targeting root directories outside the workspace are prohibited.",
+		}
+	}
+
+	principalIdentity := fmt.Sprintf("spiffe://bap.local/agent/%s", normClient)
+	grantID := ""
+
+	// Zero Standing Privileges Enforcement for real agent sessions
+	if sessionID != "synthetic-probe-session" && authz.IsZSPEnforced() {
+		if command == "" && filePath == "" && toolName == "" {
+			return types.ExecResponse{
+				Allowed:    false,
+				ExitCode:   1,
+				Reason:     "ZeroStandingPrivilegeViolation: PreToolUse payload missing tool/command context (fail-closed)",
+				Suggestion: "Provide a valid PreToolUse tool invocation with an active TaskGrant.",
+			}
+		}
+		execName, execArgs := sandbox.ParseCommand(command)
+		zspAction, zspRes, zspEscapes := authz.ResolveZSPActionAndResource(command, execName, execArgs, toolName, filePath, wsRoot)
+
+		// Avoid double-burning a single-use grant if standalone .claude/settings.json hook
+		// is also configured to wrap shell execution through `bapedge exec`.
+		consumeHere := true
+		if command != "" {
+			if _, err := os.Stat(filepath.Join(wsRoot, ".claude", "settings.json")); err == nil {
+				consumeHere = false
+			}
+		}
+
+		svid, grant, _, zspErr := authz.VerifyOrConsumeSessionZSP(
+			authz.ResolveZSPDir(), sessionID, normClient, zspAction, zspRes, command, wsRoot, zspEscapes, consumeHere, nil,
+		)
+		if svid != nil {
+			principalIdentity = svid.Subject
+		}
+		if zspErr != nil {
+			return types.ExecResponse{
+				Allowed:    false,
+				ExitCode:   1,
+				Reason:     fmt.Sprintf("ZeroStandingPrivilegeViolation: %v", zspErr),
+				Suggestion: fmt.Sprintf("Agent principal %s has ZERO standing privileges. Submit a signed 4-Tuple Task Authorization Envelope first via: bapedge zsp authorize --session-id %q --mission TASK_EXECUTION --goal %q --actions %q --resources workspace://current", principalIdentity, sessionID, command, zspAction),
+			}
+		}
+		if grant != nil {
+			grantID = grant.GrantID
+		}
+	}
+
 	return types.ExecResponse{
 		Allowed:  true,
 		ExitCode: 0,
 		Receipt: &types.ExecutionReceipt{
 			ReceiptID:      fmt.Sprintf("rcpt-%d", time.Now().UnixNano()),
-			Identity:       fmt.Sprintf("spiffe://bap.local/agent/%s", client),
-			Delegation:     fmt.Sprintf("user:workstation->agent:%s", client),
+			Identity:       principalIdentity,
+			Delegation:     fmt.Sprintf("user:workstation->agent:%s", normClient),
+			GrantID:        grantID,
 			PolicyVersion:  "sha256:enterprise-active",
 			SandboxProfile: "windows-restricted-token",
 			SessionID:      sessionID,
