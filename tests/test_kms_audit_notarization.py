@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
 import time
@@ -25,13 +26,17 @@ CONTROL_PLANE_BIN = os.path.join(WORKSPACE_ROOT, "dist", "windows-amd64", "bapco
 
 TEST_SECRET = "kms-notary-test-signing-key-32b-ok!"
 TEST_ADMIN_TOKEN = "kms-notary-admin-token-12345"
-CP_PORT = 19195
-CP_URL = f"http://127.0.0.1:{CP_PORT}"
+
+
+def _get_free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 def http_req(url, method="GET", data=None, headers=None):
     hdrs = dict(headers or {})
-    if method == "POST" and url == CP_URL + "/api/v1/audit/ingest":
+    if method == "POST" and url.endswith("/api/v1/audit/ingest"):
         hdrs.setdefault("X-BAP-Admin-Token", TEST_ADMIN_TOKEN)
     body_bytes = None
     if data is not None:
@@ -67,12 +72,18 @@ def http_req(url, method="GET", data=None, headers=None):
 class TestKMSAuditNotarization(unittest.TestCase):
     proc = None
     tmpdir = None
+    log_handle = None
+    cp_port = None
+    cp_url = None
 
     @classmethod
     def setUpClass(cls):
         cls.tmpdir = tempfile.mkdtemp(prefix="bap_kms_test_")
         cls.policy_file = os.path.join(cls.tmpdir, "policy.cedar")
         cls.schema_file = os.path.join(cls.tmpdir, "schema.json")
+        cls.log_path = os.path.join(cls.tmpdir, "controlplane.log")
+        cls.cp_port = _get_free_port()
+        cls.cp_url = f"http://127.0.0.1:{cls.cp_port}"
 
         initial_policy = """
 permit (
@@ -91,27 +102,31 @@ when {
 
         cmd = [
             CONTROL_PLANE_BIN,
-            "-port", str(CP_PORT),
+            "-port", str(cls.cp_port),
             "-secret", TEST_SECRET,
             "-admin-token", TEST_ADMIN_TOKEN,
             "-allow-remote-admin",
             "-policy", cls.policy_file,
             "-schema", cls.schema_file,
+            "-db", "memory",
             "-demo-mode",
         ]
 
+        cls.log_handle = open(cls.log_path, "w+", encoding="utf-8")
         cls.proc = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=cls.log_handle,
+            stderr=subprocess.STDOUT,
             cwd=cls.tmpdir,
         )
 
         started = False
-        for _ in range(30):
+        for _ in range(40):
+            if cls.proc.poll() is not None:
+                break
             time.sleep(0.15)
             try:
-                st, data, _ = http_req(f"{CP_URL}/health")
+                st, data, _ = http_req(f"{cls.cp_url}/health")
                 if st == 200:
                     started = True
                     break
@@ -119,10 +134,16 @@ when {
                 pass
 
         if not started:
+            logs = ""
+            try:
+                cls.log_handle.flush()
+                cls.log_handle.seek(0)
+                logs = cls.log_handle.read()
+            except Exception:
+                pass
             if cls.proc.poll() is not None:
-                out, err = cls.proc.communicate()
-                raise RuntimeError(f"Control plane died on start: {out.decode()} / {err.decode()}")
-            raise RuntimeError("Control plane failed to start within timeout")
+                raise RuntimeError(f"Control plane exited prematurely (rc={cls.proc.returncode}): {logs}")
+            raise RuntimeError(f"Control plane failed to start within timeout on {cls.cp_url}: {logs}")
 
     @classmethod
     def tearDownClass(cls):
@@ -132,12 +153,17 @@ when {
                 cls.proc.wait(timeout=3)
             except Exception:
                 cls.proc.kill()
+        if cls.log_handle:
+            try:
+                cls.log_handle.close()
+            except Exception:
+                pass
         if cls.tmpdir and os.path.exists(cls.tmpdir):
             shutil.rmtree(cls.tmpdir, ignore_errors=True)
 
     def test_01_notarize_audit_chain_requires_admin(self):
         """BAP-1301: Notarization endpoint requires administrator authentication."""
-        st, data, _ = http_req(f"{CP_URL}/api/v1/audit/notarize", method="POST", data={})
+        st, data, _ = http_req(f"{self.cp_url}/api/v1/audit/notarize", method="POST", data={})
         self.assertEqual(st, 401)
 
     def test_02_notarize_audit_chain_produces_receipt(self):
@@ -153,11 +179,11 @@ when {
             "previous_hash": "genesis-bapltd-control-plane",
             "event_hash": "",
         }]
-        http_req(f"{CP_URL}/api/v1/audit/ingest", method="POST", data=ev)
+        http_req(f"{self.cp_url}/api/v1/audit/ingest", method="POST", data=ev)
 
         # 2. Trigger notarization checkpoint
         st, receipt, _ = http_req(
-            f"{CP_URL}/api/v1/audit/notarize",
+            f"{self.cp_url}/api/v1/audit/notarize",
             method="POST",
             data={"provider": "aws"},
             headers={"X-BAP-Admin-Token": TEST_ADMIN_TOKEN},
@@ -171,14 +197,14 @@ when {
         self.assertTrue(receipt.get("chain_length", 0) >= 1)
 
         # 3. Query receipts list
-        st2, list_resp, _ = http_req(f"{CP_URL}/api/v1/audit/notarizations")
+        st2, list_resp, _ = http_req(f"{self.cp_url}/api/v1/audit/notarizations")
         self.assertEqual(st2, 200)
         self.assertTrue(list_resp.get("count", 0) >= 1)
 
     def test_03_worm_archive_export_and_manifest(self):
         """BAP-1302: Exporting WORM archive creates immutable compliance manifest."""
         st, manifest, _ = http_req(
-            f"{CP_URL}/api/v1/audit/worm/export",
+            f"{self.cp_url}/api/v1/audit/worm/export",
             method="POST",
             data={
                 "bucket": "s3://bap-compliance-vault",
@@ -196,7 +222,7 @@ when {
         self.assertTrue(len(manifest.get("sha256_checksum", "")) == 64)
 
         # Query manifests list
-        st2, archives_resp, _ = http_req(f"{CP_URL}/api/v1/audit/worm/manifests")
+        st2, archives_resp, _ = http_req(f"{self.cp_url}/api/v1/audit/worm/manifests")
         self.assertEqual(st2, 200)
         self.assertTrue(archives_resp.get("count", 0) >= 1)
 

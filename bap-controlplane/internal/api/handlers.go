@@ -4539,17 +4539,32 @@ func (s *Server) isAdminViewer(r *http.Request) bool {
 		subtle.ConstantTimeCompare([]byte(token), []byte(s.adminToken)) == 1
 }
 
+// drainSmallRequestBody consumes modest incoming POST/PUT payloads before returning an early
+// rejection on Connection: close sockets so Windows loopback connections do not emit a TCP RST
+// while the client is still transmitting or reading the HTTP error status line.
+func drainSmallRequestBody(r *http.Request) {
+	if r == nil || r.Body == nil {
+		return
+	}
+	if r.ContentLength > 0 && r.ContentLength <= 64<<10 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, 64<<10))
+	}
+}
+
 func (s *Server) requireAdminAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.adminToken == "" {
+			drainSmallRequestBody(r)
 			writeError(w, http.StatusServiceUnavailable, "Administrative authentication is not configured")
 			return
 		}
 		if !s.allowRemoteAdmin && !isLoopbackAddress(r.RemoteAddr) {
+			drainSmallRequestBody(r)
 			writeError(w, http.StatusForbidden, "Remote administration is disabled")
 			return
 		}
 		if !s.isAdminCaller(r) {
+			drainSmallRequestBody(r)
 			s.logSecurityAlert(r, "UNAUTHORIZED_ADMIN", "Administrative credential missing or invalid")
 			if adminCredential(r) == "" {
 				w.Header().Set("WWW-Authenticate", `Bearer realm="bap-controlplane-admin"`)

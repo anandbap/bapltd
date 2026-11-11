@@ -292,3 +292,31 @@ func TestEnrollmentCodeCreationRequiresAdmin(t *testing.T) {
 		t.Fatal("anonymous enrollment-code creation allowed")
 	}
 }
+
+func TestAdminAuthDrainsSmallRequestBodyAcrossConnectionClose(t *testing.T) {
+	s := setupTestServer()
+	s.SetAdminSecurity("test-admin", true)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			DisableKeepAlives: true,
+		},
+	}
+	for i := 0; i < 50; i++ {
+		req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/audit/notarize", strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatalf("NewRequest failed: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("iteration %d: POST without admin credential failed with transport error: %v", i, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("iteration %d: expected 401 Unauthorized, got %d", i, resp.StatusCode)
+		}
+	}
+}
