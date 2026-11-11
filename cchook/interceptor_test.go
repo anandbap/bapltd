@@ -21,9 +21,28 @@ func TestUnwrapBrokerCommandRejectsAgentLookalikes(t *testing.T) {
 		`bapedge exec --source claude-code --session-id another-session --cmd-b64 ` + payload,
 		`bapedge exec --source claude-code --session-id sess-1 --cmd-b64 ` + payload + ` && echo bypass`,
 		`bapedge --cmd-b64 ` + payload,
+		`bapedge zsp authorize --session-id sess-1 --mission CODE_INSPECTION --goal "Inspect git branch" --actions "git:inspect:read" --resources workspace://current && git status`,
+		`bapedge zsp status; whoami`,
+		`bapedge zsp status | cat`,
+		`bapedge zsp authorize --goal "unclosed && whoami`,
 	} {
 		if _, wrapped, err := unwrapBrokerCommand(command, "sess-1"); !wrapped || err == nil {
 			t.Fatalf("expected wrapped lookalike to be rejected: %q (wrapped=%v err=%v)", command, wrapped, err)
+		}
+	}
+}
+
+func TestUnwrapBrokerCommandAllowsStandaloneZSPControlCommands(t *testing.T) {
+	for _, command := range []string{
+		`bapedge zsp status`,
+		`bapedge.exe zsp authorize --session-id sess-1 --mission CODE_INSPECTION --goal "Inspect git branch & recent commits" --actions "git:inspect:read" --resources workspace://current`,
+		`.\bapedge.exe zsp authorize --session-id sess-1 --mission CODE_INSPECTION --goal 'Branch; log & diff' --actions git:inspect:read --resources workspace://current`,
+		`bapedge status`,
+		`bapedge why git status`,
+	} {
+		decoded, wrapped, err := unwrapBrokerCommand(command, "sess-1")
+		if err != nil || wrapped || decoded != command {
+			t.Fatalf("expected standalone control command to unwrap cleanly: %q (decoded=%q wrapped=%v err=%v)", command, decoded, wrapped, err)
 		}
 	}
 }

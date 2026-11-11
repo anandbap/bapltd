@@ -109,3 +109,30 @@ func TestAuthorizerBlocksFilesystemRootListing(t *testing.T) {
 		}
 	}
 }
+
+func TestIsZSPControlCommandQuotedOperatorsAndChaining(t *testing.T) {
+	allowed := []string{
+		`bapedge zsp status`,
+		`bapedge zsp authorize --session-id s1 --mission CODE_INSPECTION --goal "Inspect git branch & recent commits" --actions "git:inspect:read" --resources workspace://current`,
+		`bapedge zsp authorize --session-id s1 --mission CODE_INSPECTION --goal 'Branch; log & diff' --actions git:inspect:read --resources workspace://current`,
+	}
+	for _, cmd := range allowed {
+		if !IsZSPControlCommand(cmd) {
+			t.Errorf("IsZSPControlCommand(%q) = false, want true", cmd)
+		}
+	}
+
+	blocked := []string{
+		`bapedge zsp authorize --session-id s1 && git status`,
+		`bapedge zsp status; whoami`,
+		`bapedge zsp status | cat`,
+		`bapedge zsp status > out.txt`,
+		`bapedge zsp authorize --goal "unclosed && whoami`,
+		`bapedge zsp authorize --goal "$(whoami)"`,
+	}
+	for _, cmd := range blocked {
+		if IsZSPControlCommand(cmd) {
+			t.Errorf("IsZSPControlCommand(%q) = true, want false", cmd)
+		}
+	}
+}

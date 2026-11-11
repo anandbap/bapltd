@@ -995,6 +995,37 @@ type ExecResponse struct {
 // unwrapBrokerCommand recognizes only the exact command shape emitted by this
 // hook. Agent-authored lookalikes are never trusted: the embedded command is
 // decoded, bound to the current session, and sent through Cedar again.
+func isZSPControlSubcommand(sub string) bool {
+	switch strings.ToLower(strings.Trim(sub, `"'`)) {
+	case "zsp", "status", "why", "version":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasUnquotedControlOperators(cmd string) bool {
+	if strings.ContainsAny(cmd, "\r\n`") || strings.Contains(cmd, "$(") {
+		return true
+	}
+	inSingle := false
+	inDouble := false
+	for i := 0; i < len(cmd); i++ {
+		ch := cmd[i]
+		if ch == '\'' && !inDouble {
+			inSingle = !inSingle
+		} else if ch == '"' && !inSingle {
+			inDouble = !inDouble
+		} else if !inSingle && !inDouble {
+			switch ch {
+			case ';', '|', '&', '>', '<':
+				return true
+			}
+		}
+	}
+	return inSingle || inDouble
+}
+
 func unwrapBrokerCommand(command, expectedSessionID string) (string, bool, error) {
 	fields := strings.Fields(command)
 	if len(fields) == 0 {
@@ -1016,7 +1047,15 @@ func unwrapBrokerCommand(command, expectedSessionID string) (string, bool, error
 			return rawInner, false, nil
 		}
 	}
-	if strings.ContainsAny(command, ";&|") {
+	// Atomic BAP control-plane commands (e.g. bapedge zsp authorize/status/init/revoke, bapedge status/why/version)
+	// must be runnable directly by zero-standing-privilege agents without chaining operators.
+	if len(fields) >= 2 && isZSPControlSubcommand(fields[1]) && !strings.Contains(command, "--cmd-b64") {
+		if hasUnquotedControlOperators(command) {
+			return "", true, fmt.Errorf("untrusted BAPEdge invocation: chained command operators are not permitted (run 'bapedge %s ...' as a standalone command without '&&', ';', or '|')", strings.ToLower(strings.Trim(fields[1], `"'`)))
+		}
+		return command, false, nil
+	}
+	if hasUnquotedControlOperators(command) {
 		return "", true, fmt.Errorf("untrusted BAPEdge invocation: chained command operators are not permitted")
 	}
 	var sourceVal, sessionVal, b64Val string
@@ -3271,7 +3310,7 @@ func main() {
 
 	decodedCommand, brokerWrapped, unwrapErr := unwrapBrokerCommand(command, sessionID)
 	if unwrapErr != nil {
-		outputDecision("deny", unwrapErr.Error(), "Direct or malformed BAPEdge invocation is not trusted.")
+		outputDecision("deny", unwrapErr.Error(), "Invoke BAPEdge control commands (such as bapedge zsp authorize) as standalone commands first without chaining operators (&&, ;, |), then run your governed command.")
 		return
 	}
 	command = decodedCommand

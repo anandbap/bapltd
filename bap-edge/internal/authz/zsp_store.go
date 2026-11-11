@@ -69,17 +69,39 @@ func IsZSPEnforced() bool {
 	return true
 }
 
+func hasUnquotedZSPControlOperator(cmd string) bool {
+	if strings.ContainsAny(cmd, "\r\n`") || strings.Contains(cmd, "$(") {
+		return true
+	}
+	inSingle := false
+	inDouble := false
+	for i := 0; i < len(cmd); i++ {
+		ch := cmd[i]
+		if ch == '\'' && !inDouble {
+			inSingle = !inSingle
+		} else if ch == '"' && !inSingle {
+			inDouble = !inDouble
+		} else if !inSingle && !inDouble {
+			switch ch {
+			case ';', '|', '&', '>', '<':
+				return true
+			}
+		}
+	}
+	return inSingle || inDouble
+}
+
 // IsZSPControlCommand returns true if fullCommand is a single atomic BAP ZSP/status/why
 // control-channel invocation without shell chaining or redirections.
 // Agents start with 0 standing privileges and must be able to invoke the ZSP PEP directly
 // to submit a signed 4-tuple TaskAuthorizationEnvelope or inspect their status.
 func IsZSPControlCommand(fullCommand string) bool {
 	trimmed := strings.TrimSpace(fullCommand)
-	if trimmed == "" || strings.ContainsAny(trimmed, "\r\n|;&><`") || strings.Contains(trimmed, "$(") {
+	if trimmed == "" || hasUnquotedZSPControlOperator(trimmed) {
 		return false
 	}
 	pipe, err := ParseAST(trimmed)
-	if err != nil || pipe == nil || len(pipe.Nodes) != 1 || len(pipe.Nodes[0].SubCommands) > 0 {
+	if err != nil || pipe == nil || len(pipe.Nodes) != 1 || len(pipe.Nodes[0].SubCommands) > 0 || len(pipe.Nodes[0].Redirections) > 0 {
 		return false
 	}
 	tokens := tokenizeCommand(trimmed)
