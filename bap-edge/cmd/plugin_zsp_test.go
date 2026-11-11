@@ -1,10 +1,13 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -92,5 +95,55 @@ func TestPluginAllowsBrokerWrappedZSPAndCommandsButBlocksTampering(t *testing.T)
 	}
 	if !parsed.Continue || !strings.Contains(parsed.HookSpecificOutput.AdditionalContext, "git:status,git:log") {
 		t.Fatalf("expected continue=true and ZSP suggestion in additionalContext, got: %s", string(outBytes))
+	}
+
+	// 7. Leading PowerShell call operator `& "C:\Program Files\BAP\bapedge.exe"` must also unwrap cleanly.
+	psZSP := `& "C:\Program Files\BAP\bapedge.exe" zsp authorize --session-id "` + sessID + `" --mission CODE_INSPECTION --goal "git status" --actions "git:status" --resources workspace://current`
+	if resp := evaluateWithBapedgeTool(sessID, "claude-code", "PowerShell", psZSP, ""); !resp.Allowed {
+		t.Fatalf("expected PowerShell call-operator ZSP command to be allowed, got reason=%q", resp.Reason)
+	}
+	psWrappedGit := `& "C:\Program Files\BAP\bapedge.exe" exec --shell powershell --source claude-code --session-id ` + sessID + ` --cmd-b64 ` + b64Git
+	if resp := evaluateWithBapedgeTool(sessID, "claude-code", "PowerShell", psWrappedGit, ""); !resp.Allowed {
+		t.Fatalf("expected PowerShell call-operator broker-wrapped git command to be allowed, got reason=%q", resp.Reason)
+	}
+}
+
+func TestSyncBinaryAndStandaloneHookDetection(t *testing.T) {
+	tmp := t.TempDir()
+	fresh := filepath.Join(tmp, "bapedge.exe")
+	stale := filepath.Join(tmp, "plugins", "claude", "scripts", "bap-hook-adapter.exe")
+	if err := os.MkdirAll(filepath.Dir(stale), 0755); err != nil {
+		t.Fatal(err)
+	}
+	wantBytes := []byte("MZ-NEW-BAPEDGE-BYTES")
+	if err := os.WriteFile(fresh, wantBytes, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale, []byte("MZ-OLD-STALE-BYTES"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncBinaryIfChanged(fresh, stale); err != nil {
+		t.Fatalf("syncBinaryIfChanged failed: %v", err)
+	}
+	got, err := os.ReadFile(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, wantBytes) {
+		t.Fatalf("expected stale adapter binary to be overwritten with fresh bytes, got %q", string(got))
+	}
+
+	if runtime.GOOS == "windows" {
+		ws := filepath.Join(tmp, "ws")
+		if hasStandaloneClaudeBAPHook(ws) {
+			// Skip assertion if real host ~/.claude/settings.json configures BAP hook
+			_ = ws
+		}
+		claudeDir := filepath.Join(ws, ".claude")
+		_ = os.MkdirAll(claudeDir, 0755)
+		_ = os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(`{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"interceptor.exe"}]}]}}`), 0644)
+		if !hasStandaloneClaudeBAPHook(ws) {
+			t.Fatal("expected hasStandaloneClaudeBAPHook to detect workspace .claude/settings.json interceptor hook")
+		}
 	}
 }

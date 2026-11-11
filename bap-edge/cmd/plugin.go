@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -1143,31 +1144,84 @@ func findPluginSource(agent, repoRoot string) string {
 	return ""
 }
 
+func resolveSourceBapedgeBinary(destDir string) string {
+	if exePath, err := os.Executable(); err == nil && exePath != "" {
+		base := strings.ToLower(filepath.Base(exePath))
+		if base == "bapedge.exe" || base == "bapedge" {
+			return exePath
+		}
+		sibling := filepath.Join(filepath.Dir(exePath), "bapedge.exe")
+		if runtime.GOOS != "windows" {
+			sibling = filepath.Join(filepath.Dir(exePath), "bapedge")
+		}
+		if _, err := os.Stat(sibling); err == nil {
+			return sibling
+		}
+	}
+	if runtime.GOOS == "windows" {
+		if lp, err := exec.LookPath("bapedge.exe"); err == nil && lp != "" {
+			return lp
+		}
+	}
+	for _, c := range []string{
+		filepath.Join(destDir, "..", "..", "bapedge.exe"),
+		filepath.Join(destDir, "..", "..", "..", "bapedge.exe"),
+		filepath.Join(destDir, "..", "..", "cchook", "interceptor.exe"),
+	} {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+	return ""
+}
+
+func syncBinaryIfChanged(src, dst string) error {
+	if src == "" || dst == "" {
+		return nil
+	}
+	if absSrc, err1 := filepath.Abs(src); err1 == nil {
+		if absDst, err2 := filepath.Abs(dst); err2 == nil && strings.EqualFold(absSrc, absDst) {
+			return nil
+		}
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	if existing, err := os.ReadFile(dst); err == nil && bytes.Equal(existing, data) {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(dst, data, 0755); err == nil {
+		return nil
+	}
+	// On Windows, a running binary may hold an exclusive lock; rotate to .old before replacing.
+	oldPath := dst + ".old"
+	_ = os.Remove(oldPath)
+	if err := os.Rename(dst, oldPath); err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0755)
+}
+
+func syncPluginAdapterBinary(destDir string) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	scriptsDir := filepath.Join(destDir, "scripts")
+	_ = os.MkdirAll(scriptsDir, 0755)
+	adapterExe := filepath.Join(scriptsDir, "bap-hook-adapter.exe")
+	if src := resolveSourceBapedgeBinary(destDir); src != "" {
+		_ = syncBinaryIfChanged(src, adapterExe)
+	}
+}
+
 func ensureDefaultAdapterScripts(destDir string) {
 	scriptsDir := filepath.Join(destDir, "scripts")
 	_ = os.MkdirAll(scriptsDir, 0755)
-
-	adapterExe := filepath.Join(scriptsDir, "bap-hook-adapter.exe")
-	if runtime.GOOS == "windows" {
-		if _, err := os.Stat(adapterExe); os.IsNotExist(err) {
-			exePath, err := os.Executable()
-			if err == nil && strings.HasSuffix(strings.ToLower(exePath), "bapedge.exe") {
-				_ = copyFile(exePath, adapterExe)
-			} else {
-				candidates := []string{
-					filepath.Join(destDir, "..", "..", "bapedge.exe"),
-					filepath.Join(destDir, "..", "..", "..", "bapedge.exe"),
-					filepath.Join(destDir, "..", "..", "cchook", "interceptor.exe"),
-				}
-				for _, c := range candidates {
-					if _, err := os.Stat(c); err == nil {
-						_ = copyFile(c, adapterExe)
-						break
-					}
-				}
-			}
-		}
-	}
+	syncPluginAdapterBinary(destDir)
 
 	adapterCmd := filepath.Join(scriptsDir, "bap-hook-adapter.cmd")
 	if _, err := os.Stat(adapterCmd); os.IsNotExist(err) {
@@ -1235,6 +1289,7 @@ func installClaudePlugin(repoRoot, workspace string) error {
 	destDir := filepath.Join(workspace, "plugins", "claude")
 	if srcDir := findPluginSource("claude", repoRoot); srcDir != "" && srcDir != destDir {
 		_ = copyDirRecursive(srcDir, destDir)
+		syncPluginAdapterBinary(destDir)
 		replicatePluginGlobally("claude", destDir)
 		return nil
 	}
@@ -1297,6 +1352,7 @@ func installCopilotPlugin(repoRoot, workspace string) error {
 	destDir := filepath.Join(workspace, "plugins", "copilot")
 	if srcDir := findPluginSource("copilot", repoRoot); srcDir != "" && srcDir != destDir {
 		_ = copyDirRecursive(srcDir, destDir)
+		syncPluginAdapterBinary(destDir)
 		replicatePluginGlobally("copilot", destDir)
 		return nil
 	}
@@ -1351,6 +1407,7 @@ func installAntigravityPlugin(repoRoot, workspace string) error {
 	destDir := filepath.Join(workspace, "plugins", "antigravity")
 	if srcDir := findPluginSource("antigravity", repoRoot); srcDir != "" && srcDir != destDir {
 		_ = copyDirRecursive(srcDir, destDir)
+		syncPluginAdapterBinary(destDir)
 		replicatePluginGlobally("antigravity", destDir)
 		return nil
 	}
@@ -1377,6 +1434,7 @@ func installOpenCodePlugin(repoRoot, workspace string) error {
 	destDir := filepath.Join(workspace, "plugins", "opencode")
 	if srcDir := findPluginSource("opencode", repoRoot); srcDir != "" && srcDir != destDir {
 		_ = copyDirRecursive(srcDir, destDir)
+		syncPluginAdapterBinary(destDir)
 		replicatePluginGlobally("opencode", destDir)
 		return nil
 	}
@@ -1404,7 +1462,12 @@ func installCodexPlugin(repoRoot, workspace string) error {
 	srcDir := filepath.Join(repoRoot, "plugins", "codex")
 
 	if _, err := os.Stat(srcDir); err == nil {
-		return copyDirRecursive(srcDir, destDir)
+		if err := copyDirRecursive(srcDir, destDir); err != nil {
+			return err
+		}
+		syncPluginAdapterBinary(destDir)
+		replicatePluginGlobally("codex", destDir)
+		return nil
 	}
 
 	_ = os.MkdirAll(filepath.Join(destDir, "scripts"), 0755)
@@ -1592,6 +1655,8 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
 `
 		_ = os.WriteFile(rulesPath, []byte(rulesContent), 0644)
 	}
+	syncPluginAdapterBinary(destDir)
+	replicatePluginGlobally("codex", destDir)
 
 	return nil
 }
@@ -1608,6 +1673,9 @@ func copyDirRecursive(src, dst string) error {
 		target := filepath.Join(dst, rel)
 		if info.IsDir() {
 			return os.MkdirAll(target, 0755)
+		}
+		if strings.EqualFold(filepath.Ext(path), ".exe") {
+			return syncBinaryIfChanged(path, target)
 		}
 		data, rerr := os.ReadFile(path)
 		if rerr != nil {
@@ -1684,7 +1752,8 @@ func evaluateWithBapedge(sessionID, client, command, filePath string) types.Exec
 }
 
 func unwrapPluginBrokerCommand(command, expectedSessionID string) (string, error) {
-	words := splitShellWords(strings.TrimSpace(command))
+	stripped, _ := authz.StripLeadingPowerShellCallOperator(command)
+	words := splitShellWords(strings.TrimSpace(stripped))
 	if len(words) == 0 {
 		return command, nil
 	}
@@ -1696,9 +1765,9 @@ func unwrapPluginBrokerCommand(command, expectedSessionID string) (string, error
 		return command, nil
 	}
 
-	if len(words) >= 2 && words[1] == "exec" && !strings.Contains(command, "--cmd-b64") {
-		idx := strings.Index(command, "exec")
-		rawInner := strings.TrimSpace(command[idx+4:])
+	if len(words) >= 2 && words[1] == "exec" && !strings.Contains(stripped, "--cmd-b64") {
+		idx := strings.Index(stripped, "exec")
+		rawInner := strings.TrimSpace(stripped[idx+4:])
 		rawInner = strings.Trim(rawInner, `"'`)
 		if rawInner != "" {
 			return rawInner, nil
@@ -1706,15 +1775,15 @@ func unwrapPluginBrokerCommand(command, expectedSessionID string) (string, error
 	}
 
 	// Atomic control subcommands are handled downstream by IsZSPControlCommand.
-	if len(words) >= 2 && !strings.Contains(command, "--cmd-b64") {
+	if len(words) >= 2 && !strings.Contains(stripped, "--cmd-b64") {
 		sub := strings.ToLower(strings.Trim(words[1], `"'`))
 		switch sub {
 		case "zsp", "status", "why", "version":
-			return command, nil
+			return stripped, nil
 		}
 	}
 
-	if authz.HasUnquotedControlOperator(command) {
+	if authz.HasUnquotedControlOperator(stripped) {
 		return "", fmt.Errorf("untrusted BAPEdge invocation: chained command operators are not permitted")
 	}
 
@@ -1789,6 +1858,31 @@ func isMutatingPluginTool(toolName string) bool {
 	default:
 		return false
 	}
+}
+
+func settingsFileHasBAPHook(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	lower := strings.ToLower(string(data))
+	return strings.Contains(lower, "interceptor") || strings.Contains(lower, "cchook") || strings.Contains(lower, "bapedge")
+}
+
+func hasStandaloneClaudeBAPHook(wsRoot string) bool {
+	candidates := []string{
+		filepath.Join(wsRoot, ".claude", "settings.json"),
+		filepath.Join(wsRoot, ".claude", "managed-settings.json"),
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		candidates = append(candidates, filepath.Join(home, ".claude", "settings.json"))
+	}
+	for _, p := range candidates {
+		if settingsFileHasBAPHook(p) {
+			return true
+		}
+	}
+	return false
 }
 
 func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath string) types.ExecResponse {
@@ -1888,13 +1982,11 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 		execName, execArgs := sandbox.ParseCommand(command)
 		zspChecks := authz.ResolveZSPCommandChecks(command, execName, execArgs, toolName, filePath, wsRoot)
 
-		// Avoid double-burning a single-use grant if standalone .claude/settings.json hook
+		// Avoid double-burning a single-use grant if standalone settings.json hook
 		// is also configured to wrap shell execution through `bapedge exec`.
 		consumeHere := true
-		if command != "" {
-			if _, err := os.Stat(filepath.Join(wsRoot, ".claude", "settings.json")); err == nil {
-				consumeHere = false
-			}
+		if command != "" && hasStandaloneClaudeBAPHook(wsRoot) {
+			consumeHere = false
 		}
 
 		svid, grant, _, zspErr := authz.VerifyOrConsumeSessionZSPChecks(

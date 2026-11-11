@@ -1045,8 +1045,29 @@ func hasUnquotedControlOperators(cmd string) bool {
 	return inSingle || inDouble
 }
 
+func stripLeadingPowerShellCallOp(command string) string {
+	trimmed := strings.TrimSpace(command)
+	if len(trimmed) < 2 || trimmed[0] != '&' || (trimmed[1] != ' ' && trimmed[1] != '\t') {
+		return trimmed
+	}
+	rest := strings.TrimSpace(trimmed[1:])
+	fields := splitShellWords(rest)
+	if len(fields) == 0 {
+		return trimmed
+	}
+	executable := strings.Trim(fields[0], `"'`)
+	executable = filepath.Base(strings.ReplaceAll(executable, `\`, "/"))
+	switch strings.ToLower(executable) {
+	case "bapedge", "bapedge.exe", "ltd-agent", "ltd-agent.exe":
+		return rest
+	default:
+		return trimmed
+	}
+}
+
 func unwrapBrokerCommand(command, expectedSessionID string) (string, bool, error) {
-	fields := splitShellWords(strings.TrimSpace(command))
+	command = stripLeadingPowerShellCallOp(command)
+	fields := splitShellWords(command)
 	if len(fields) == 0 {
 		return command, false, nil
 	}

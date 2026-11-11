@@ -93,12 +93,37 @@ func HasUnquotedControlOperator(cmd string) bool {
 	return inSingle || inDouble
 }
 
+// StripLeadingPowerShellCallOperator removes a leading PowerShell `&` call
+// operator only when it invokes a BAP executable (e.g. `& "C:\Program Files\BAP\bapedge.exe" ...`),
+// preserving any remaining shell text so downstream chaining checks still inspect it.
+func StripLeadingPowerShellCallOperator(fullCommand string) (string, bool) {
+	trimmed := strings.TrimSpace(fullCommand)
+	if len(trimmed) < 2 || trimmed[0] != '&' || (trimmed[1] != ' ' && trimmed[1] != '\t') {
+		return trimmed, false
+	}
+	rest := strings.TrimSpace(trimmed[1:])
+	if rest == "" {
+		return trimmed, false
+	}
+	tokens := tokenizeCommand(rest)
+	if len(tokens) == 0 {
+		return trimmed, false
+	}
+	execBase := strings.ToLower(filepath.Base(strings.ReplaceAll(strings.Trim(tokens[0], `"'`), `\`, "/")))
+	switch execBase {
+	case "bapedge", "bapedge.exe", "bap", "bap.exe", "ltd-agent", "ltd-agent.exe":
+		return rest, true
+	default:
+		return trimmed, false
+	}
+}
+
 // IsZSPControlCommand returns true if fullCommand is a single atomic BAP ZSP/status/why
 // control-channel invocation without shell chaining or redirections.
 // Agents start with 0 standing privileges and must be able to invoke the ZSP PEP directly
 // to submit a signed 4-tuple TaskAuthorizationEnvelope or inspect their status.
 func IsZSPControlCommand(fullCommand string) bool {
-	trimmed := strings.TrimSpace(fullCommand)
+	trimmed, _ := StripLeadingPowerShellCallOperator(fullCommand)
 	if trimmed == "" || HasUnquotedControlOperator(trimmed) {
 		return false
 	}

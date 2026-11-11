@@ -13,6 +13,18 @@ func TestUnwrapBrokerCommandRequiresExactSessionBoundWrapper(t *testing.T) {
 	if err != nil || !wrapped || decoded != "echo governed" {
 		t.Fatalf("decoded=%q wrapped=%v err=%v", decoded, wrapped, err)
 	}
+
+	psWrapped := `& "C:\Program Files\BAP\bapedge.exe" exec --shell powershell --source claude-code --session-id sess-1 --cmd-b64 ` + payload
+	decoded, wrapped, err = unwrapBrokerCommand(psWrapped, "sess-1")
+	if err != nil || !wrapped || decoded != "echo governed" {
+		t.Fatalf("PowerShell call-op unwrap failed: decoded=%q wrapped=%v err=%v", decoded, wrapped, err)
+	}
+
+	psZSP := `& "C:\Program Files\BAP\bapedge.exe" zsp authorize --session-id sess-1 --mission TASK_EXECUTION --goal "git status" --actions "git:status" --resources workspace://current`
+	decoded, wrapped, err = unwrapBrokerCommand(psZSP, "sess-1")
+	if err != nil || wrapped || !strings.HasPrefix(decoded, `"C:\Program Files\BAP\bapedge.exe" zsp`) {
+		t.Fatalf("PowerShell call-op ZSP failed: decoded=%q wrapped=%v err=%v", decoded, wrapped, err)
+	}
 }
 
 func TestUnwrapBrokerCommandRejectsAgentLookalikes(t *testing.T) {

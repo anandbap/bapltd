@@ -1183,6 +1183,43 @@ fi
 exec "$BAPEDGE_BIN" plugin adapter "$@"
 """
 
+    def resolve_bapedge_adapter_source() -> str:
+        candidates = [
+            os.path.join(target_dir, "bapedge.exe"),
+            get_source_binary("bapedge"),
+            os.path.join(os.getcwd(), "bapedge.exe"),
+            shutil.which("bapedge.exe"),
+            shutil.which("bapedge"),
+        ]
+        for cand in candidates:
+            if cand and os.path.isfile(cand) and is_real_binary(cand):
+                return cand
+        return ""
+
+    bapedge_adapter_src = resolve_bapedge_adapter_source() if sys.platform == "win32" else ""
+
+    def sync_plugin_adapter_binary(scripts_dir: str):
+        if sys.platform != "win32" or not bapedge_adapter_src:
+            return
+        os.makedirs(scripts_dir, exist_ok=True)
+        exe_path = os.path.join(scripts_dir, "bap-hook-adapter.exe")
+        try:
+            with open(bapedge_adapter_src, "rb") as f_src:
+                src_bytes = f_src.read()
+        except Exception:
+            return
+        if os.path.isfile(exe_path):
+            try:
+                with open(exe_path, "rb") as f_dst:
+                    if f_dst.read() == src_bytes:
+                        return
+            except Exception:
+                pass
+        try:
+            safe_copy_binary(bapedge_adapter_src, exe_path)
+        except Exception:
+            pass
+
     def synthesize_plugin(agent_id: str, dst: str):
         os.makedirs(dst, exist_ok=True)
         scripts_dir = os.path.join(dst, "scripts")
@@ -1202,22 +1239,7 @@ exec "$BAPEDGE_BIN" plugin adapter "$@"
                 except Exception:
                     pass
 
-        if sys.platform == "win32":
-            exe_path = os.path.join(scripts_dir, "bap-hook-adapter.exe")
-            if not os.path.isfile(exe_path):
-                bapedge_candidates = [
-                    os.path.join(bin_dir, "bapedge.exe"),
-                    os.path.join(os.getcwd(), "bapedge.exe"),
-                    shutil.which("bapedge.exe"),
-                    shutil.which("bapedge"),
-                ]
-                for cand in bapedge_candidates:
-                    if cand and os.path.isfile(cand):
-                        try:
-                            shutil.copy2(cand, exe_path)
-                            break
-                        except Exception:
-                            pass
+        sync_plugin_adapter_binary(scripts_dir)
 
         if agent_id == "claude":
             cp_dir = os.path.join(dst, ".claude-plugin")
@@ -1329,6 +1351,8 @@ exec "$BAPEDGE_BIN" plugin adapter "$@"
                     installed_ok = True
                 except Exception:
                     pass
+            else:
+                sync_plugin_adapter_binary(os.path.join(agent_dst, "scripts"))
 
             if installed_ok and dst_root == clean_destinations[0]:
                 installed.append(label)
@@ -1342,10 +1366,23 @@ exec "$BAPEDGE_BIN" plugin adapter "$@"
             claude_src = os.path.join(clean_destinations[0], "claude")
             if os.path.isdir(claude_src) and os.path.normpath(claude_src).lower() != os.path.normpath(claude_global_plugin).lower():
                 shutil.copytree(claude_src, claude_global_plugin, dirs_exist_ok=True)
+                sync_plugin_adapter_binary(os.path.join(claude_global_plugin, "scripts"))
             else:
                 synthesize_plugin("claude", claude_global_plugin)
         except Exception:
             pass
+
+        # Refresh any cached/stale bap-hook-adapter.exe copies across user plugin roots on Windows
+        if sys.platform == "win32" and bapedge_adapter_src:
+            for root_dir in (
+                os.path.join(home, ".claude", "plugins"),
+                os.path.join(home, ".bap", "plugins"),
+                os.path.join(home, "bin", "plugins"),
+            ):
+                if os.path.isdir(root_dir):
+                    for walk_root, _, files in os.walk(root_dir):
+                        if "bap-hook-adapter.exe" in files:
+                            sync_plugin_adapter_binary(walk_root)
 
     return installed
 

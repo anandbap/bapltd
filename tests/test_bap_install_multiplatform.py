@@ -377,5 +377,33 @@ class TestBAPInstallMultiPlatform(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(test_bin_debug, "check_stale_copies.bat")))
         self.assertTrue(os.path.isfile(os.path.join(test_bin_debug, "verify_sts_obo_exchange.py")))
 
+    def test_install_native_agent_plugins_refreshes_stale_hook_adapter_exe(self):
+        """Verify upgrading overwrites stale bap-hook-adapter.exe across workspace, global, and Claude plugin cache dirs."""
+        mock_home = os.path.join(self.temp_dir, "home")
+        os.makedirs(mock_home, exist_ok=True)
+        new_edge = os.path.join(self.install_dir, "bapedge.exe")
+        new_bytes = b"MZ" + b"NEW_BAPEDGE_1_12_26" + b"\x00" * 64
+        with open(new_edge, "wb") as f:
+            f.write(new_bytes)
+
+        stale_bytes = b"MZ" + b"OLD_STALE_ADAPTER" + b"\x00" * 64
+        stale_paths = [
+            os.path.join(self.workspace_dir, "plugins", "claude", "scripts", "bap-hook-adapter.exe"),
+            os.path.join(mock_home, ".claude", "plugins", "claude", "scripts", "bap-hook-adapter.exe"),
+            os.path.join(mock_home, ".claude", "plugins", "cache", "bap", "scripts", "bap-hook-adapter.exe"),
+        ]
+        for sp in stale_paths:
+            os.makedirs(os.path.dirname(sp), exist_ok=True)
+            with open(sp, "wb") as f:
+                f.write(stale_bytes)
+
+        with patch("sys.platform", "win32"), \
+             patch("os.path.expanduser", side_effect=lambda p: mock_home + p[1:] if p.startswith("~") else p):
+            bap_install.install_native_agent_plugins(self.workspace_dir, self.install_dir)
+
+        for sp in stale_paths:
+            with open(sp, "rb") as f:
+                self.assertEqual(f.read(), new_bytes, f"Stale bap-hook-adapter.exe was not refreshed at {sp}")
+
 if __name__ == "__main__":
     unittest.main()

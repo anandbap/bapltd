@@ -116,6 +116,7 @@ func TestIsZSPControlCommandQuotedOperatorsAndChaining(t *testing.T) {
 		`bapedge zsp status`,
 		`bapedge zsp authorize --session-id s1 --mission CODE_INSPECTION --goal "Inspect git branch & recent commits" --actions "git:inspect:read" --resources workspace://current`,
 		`bapedge zsp authorize --session-id s1 --mission CODE_INSPECTION --goal 'Branch; log & diff' --actions git:inspect:read --resources workspace://current`,
+		`& "C:\Program Files\BAP\bapedge.exe" zsp authorize --session-id s1 --mission CODE_INSPECTION --goal "Inspect git" --actions "git:status" --resources workspace://current`,
 	}
 	for _, cmd := range allowed {
 		if !IsZSPControlCommand(cmd) {
