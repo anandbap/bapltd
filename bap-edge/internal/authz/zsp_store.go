@@ -546,13 +546,21 @@ func SubmitTaskEnvelopeWithDelegation(
 		Timestamp:      time.Now().UTC(),
 	}
 
+	pol, polErr := LoadPermissionPolicy(zspDir, pepSecret)
+	if polErr != nil {
+		return nil, env, polErr
+	}
 	engine := NewZSPEngine(minter, pepSecret)
+	engine.SetPermissionPolicy(pol)
 	grant, err := engine.AuthorizeTaskEnvelope(env, maxUses, ttl)
 	if err != nil {
 		return nil, env, err
 	}
 
 	if err := withZSPStoreLock(zspDir, "grants-"+sessionID, func() error {
+		if n := countSessionGrants(zspDir, sessionID); n >= pol.Ceiling.MaxMintsPerSession {
+			return fmt.Errorf("%w: %d grants already minted for session (cap %d)", ErrMintCapExceeded, n, pol.Ceiling.MaxMintsPerSession)
+		}
 		return saveSessionGrant(zspDir, sessionID, grant)
 	}); err != nil {
 		return nil, env, err
@@ -695,7 +703,7 @@ func ResolveZSPCommandChecks(fullCommand, executable, args, toolName, targetPath
 		return []ZSPActionCheck{{Action: act, CanonicalResource: res, EscapesWorkspace: esc}}
 	}
 	if strings.TrimSpace(fullCommand) != "" {
-		if pipe, err := ParseAST(fullCommand); err == nil && pipe != nil {
+		if pipe, err := ParseAST(SanitizeCommandForAnalysis(fullCommand)); err == nil && pipe != nil {
 			atomicNodes := collectAtomicZSPNodes(pipe.Nodes)
 			if len(atomicNodes) > 0 {
 				var checks []ZSPActionCheck

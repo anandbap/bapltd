@@ -75,7 +75,9 @@ func (t *caTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		return nil, t.err
 	}
 	hostname := r.URL.Hostname()
-	isLocal := hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1" || os.Getenv("BAP_INSECURE_SKIP_VERIFY") == "1"
+	// BAP-930: TLS verification is skipped for loopback only. The former BAP_INSECURE_SKIP_VERIFY
+	// environment override (any host) was removable by anything able to prefix a command, so it is gone.
+	isLocal := hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1"
 	if isLocal && (r.URL.Scheme == "https") {
 		localTransport := t.transport.Clone()
 		localTransport.TLSClientConfig = &tls.Config{

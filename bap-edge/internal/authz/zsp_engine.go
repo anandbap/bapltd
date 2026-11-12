@@ -68,14 +68,13 @@ type ZSPEngine struct {
 	minter         *identity.WorkstationIdentityMinter
 	grants         map[string]*types.TaskGrant
 	pepSecret      []byte
+	policy         *PermissionPolicy
 	lineageReceipts []types.AuditLineageProof
 }
 
 // NewZSPEngine creates a Zero Standing Privilege authorization engine.
 func NewZSPEngine(minter *identity.WorkstationIdentityMinter, pepSecret string) *ZSPEngine {
-	if pepSecret == "" {
-		pepSecret = "bap-pep-local-authority-grant-signing-secret"
-	}
+	// No default secret: an empty pepSecret makes the engine fail closed (see signingSecretConfigured).
 	return &ZSPEngine{
 		minter:         minter,
 		grants:         make(map[string]*types.TaskGrant),
@@ -88,6 +87,13 @@ func NewZSPEngine(minter *identity.WorkstationIdentityMinter, pepSecret string) 
 func (e *ZSPEngine) AuthorizeTaskEnvelope(env *types.TaskAuthorizationEnvelope, maxUses int, ttl time.Duration) (*types.TaskGrant, error) {
 	if env == nil {
 		return nil, ErrInvalidEnvelope
+	}
+	if !e.signingSecretConfigured() {
+		return nil, ErrSigningSecretMissing
+	}
+	pol, polErr := e.effectivePolicy()
+	if polErr != nil {
+		return nil, polErr
 	}
 
 	// 1. Verify Agent SVID identity bound to human owner (BAP-915)
@@ -116,29 +122,23 @@ func (e *ZSPEngine) AuthorizeTaskEnvelope(env *types.TaskAuthorizationEnvelope, 
 		}
 	}
 
-	// 4. Apply Monotonic Scope Attenuation (BAP-902 & BAP-917)
-	var allowedActions []string
-	narrowed := false
-	for _, act := range env.PermissionAsk.Actions {
-		actLower := strings.ToLower(act)
-		if strings.Contains(actLower, "admin:*") || strings.Contains(actLower, "repo:*") {
-			// Attenuate wildcards
-			allowedActions = append(allowedActions, "repo:read", "repo:push")
-			narrowed = true
-		} else {
-			allowedActions = append(allowedActions, act)
-		}
+	// 4. Apply Monotonic Scope Attenuation (BAP-902 & BAP-917), driven by the permission policy (BAP-925).
+	// Wildcards are expanded only via policy-defined narrowings (never to a mutating action) and
+	// are rejected otherwise; root-style resource wildcards collapse to the current workspace.
+	allowedActions, actNarrowed, wErr := pol.NarrowWildcards(env.PermissionAsk.Actions)
+	if wErr != nil {
+		return nil, wErr
 	}
+	allowedResources, resNarrowed := pol.NarrowResources(env.PermissionAsk.Resources)
+	narrowed := actNarrowed || resNarrowed
 
-	var allowedResources []string
-	for _, res := range env.PermissionAsk.Resources {
-		resLower := strings.ToLower(res)
-		if resLower == "/*" || resLower == "repo://*" {
-			allowedResources = append(allowedResources, "workspace://current")
-			narrowed = true
-		} else {
-			allowedResources = append(allowedResources, res)
-		}
+	// 4b. Evaluate every (action, resource) pair against the policy tiers.
+	ev := pol.Evaluate(allowedActions, allowedResources)
+	if len(ev.Denied) > 0 {
+		return nil, fmt.Errorf("%w: %s", ErrActionDenied, FormatPairs(ev.Denied))
+	}
+	if len(ev.NeedsApproval) > 0 && !isOutOfBandApproved(env) {
+		return nil, fmt.Errorf("%w: %s", ErrHighRiskApprovalRequired, FormatPairs(ev.NeedsApproval))
 	}
 
 	narrowingReason := ""
@@ -152,6 +152,14 @@ func (e *ZSPEngine) AuthorizeTaskEnvelope(env *types.TaskAuthorizationEnvelope, 
 	}
 	if ttl <= 0 {
 		ttl = 300 * time.Second // Ephemeral 5-minute bounded TTL
+	}
+	if cu, ct, clamped := pol.ClampCeiling(maxUses, ttl); clamped {
+		maxUses, ttl = cu, ct
+		narrowed = true
+		if narrowingReason == "" {
+			narrowingReason = fmt.Sprintf("Monotonic scope attenuation: uses/TTL clamped to session ceiling (max uses %d, max TTL %ds)",
+				pol.Ceiling.MaxUsesPerGrant, pol.Ceiling.MaxTTLSeconds)
+		}
 	}
 
 	b := make([]byte, 6)
@@ -201,6 +209,9 @@ func (e *ZSPEngine) ConsumeTaskGrant(
 
 	if grantID == "" {
 		return nil, ErrZeroStandingPrivilegeViolation
+	}
+	if len(e.pepSecret) == 0 {
+		return nil, ErrSigningSecretMissing
 	}
 
 	grant, exists := e.grants[grantID]

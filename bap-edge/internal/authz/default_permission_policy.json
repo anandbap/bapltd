@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "default_tier": "approve",
+  "boundary_prefixes": ["workspace://current", "workspace://.", "repo:local"],
+  "resource_wildcards": ["/*", "repo://*", "workspace://*"],
+  "wildcard_narrowing": {
+    "repo:*": ["repo:read"]
+  },
+  "ceiling": {
+    "max_uses_per_grant": 1000,
+    "max_ttl_seconds": 3600,
+    "max_mints_per_session": 100
+  },
+  "rules": [
+    {
+      "id": "deny-credential-access",
+      "tier": "deny",
+      "scope": "any",
+      "match": [
+        "credential:*",
+        "secrets:*",
+        "aws:secretsmanager:*",
+        "github:cli:secret",
+        "github:cli:auth",
+        "github:cli:ssh-key"
+      ],
+      "reason": "credential access is never grantable to an agent (credential:access archetype)"
+    },
+    {
+      "id": "approve-destructive-and-admin",
+      "tier": "approve",
+      "scope": "any",
+      "match": ["git:push", "git:push:*", "*:delete", "*:drop", "*:admin"],
+      "reason": "destructive, publishing or administrative effect requires human approval"
+    },
+    {
+      "id": "approve-interpreters-and-unknown-exec",
+      "tier": "approve",
+      "scope": "any",
+      "match": [
+        "cli:*:exec",
+        "dev:python:exec",
+        "dev:go:run",
+        "dev:node:*",
+        "dev:package:install",
+        "dev:package:run",
+        "dev:package:exec",
+        "exec:opaque",
+        "exec:unknown"
+      ],
+      "reason": "interpreters and unclassified binaries can do anything; human approval or a sandbox profile is required"
+    },
+    {
+      "id": "approve-network-egress",
+      "tier": "approve",
+      "scope": "any",
+      "match": ["http:*", "net:*", "network:egress"],
+      "reason": "network egress requires approval unless the destination is allow-listed by an explicit rule"
+    },
+    {
+      "id": "allow-workspace-inspect",
+      "tier": "allow",
+      "match": [
+        "inspect:read",
+        "git:status",
+        "git:log",
+        "git:branch",
+        "git:diff",
+        "git:show",
+        "git:inspect:read",
+        "git:read",
+        "fs:read",
+        "fs:list",
+        "fs:search",
+        "fs:file:read",
+        "fs:dir:read",
+        "repo:read",
+        "repo:status"
+      ],
+      "reason": "non-mutating inspection inside the workspace (inspect:read archetype)"
+    },
+    {
+      "id": "allow-workspace-mutate",
+      "tier": "allow",
+      "match": [
+        "workspace:mutate",
+        "fs:write",
+        "fs:file:write",
+        "fs:file:edit",
+        "repo:write",
+        "git:commit:write",
+        "git:branch:write"
+      ],
+      "reason": "project-scoped modification inside the workspace (workspace:mutate archetype)"
+    },
+    {
+      "id": "allow-build-and-test",
+      "tier": "allow",
+      "match": [
+        "dev:go:test",
+        "dev:go:build",
+        "dev:go:vet",
+        "dev:go:fmt",
+        "dev:go:mod",
+        "dev:cargo:check",
+        "dev:cargo:test",
+        "dev:cargo:build",
+        "dev:mvn:test",
+        "dev:gradle:test",
+        "dev:test:exec",
+        "dev:package:test"
+      ],
+      "reason": "compilation and test runs inside the workspace"
+    }
+  ]
+}

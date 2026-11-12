@@ -3940,6 +3940,9 @@ func checkCommandWorkspaceEscape(workspaceRoot, fullCommand string) bool {
 	cleanRoot := filepath.Clean(workspaceRoot)
 	currentDir := cleanRoot
 
+	// Heredoc bodies fed to data consumers (git commit -F - <<EOF) are text, not paths (BAP-932).
+	fullCommand = sanitizeCommandForEscapeAnalysis(fullCommand)
+
 	cmdUnified := fullCommand
 	for _, sep := range []string{"&&", "||", ";", "|", "&"} {
 		cmdUnified = strings.ReplaceAll(cmdUnified, sep, "\n")
@@ -3981,7 +3984,22 @@ func checkCommandWorkspaceEscape(workspaceRoot, fullCommand string) bool {
 			continue
 		}
 
+		skipMessageValue := false
 		for i, tok := range tokens {
+			// git commit/tag message text is data, not a path (BAP-932). Every other git argument is still checked.
+			if skipMessageValue {
+				skipMessageValue = false
+				continue
+			}
+			if i > 0 && isGitExecutableTokenHook(tokens[0]) {
+				if isGitMessageValueFlagHook(tok) {
+					skipMessageValue = true
+					continue
+				}
+				if strings.HasPrefix(tok, "--message=") {
+					continue
+				}
+			}
 			if i == 0 {
 				if !strings.HasPrefix(tok, "..") {
 					continue

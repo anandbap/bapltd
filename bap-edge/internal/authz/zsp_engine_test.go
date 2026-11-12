@@ -269,8 +269,9 @@ func TestAuthorizeTaskEnvelopeMarksNarrowingApplied(t *testing.T) {
 	if len(grant.RequestedActions) != 1 || grant.RequestedActions[0] != "repo:*" {
 		t.Fatalf("expected RequestedActions=[repo:*], got %v", grant.RequestedActions)
 	}
-	if len(grant.AllowedActions) != 2 || grant.AllowedActions[0] != "repo:read" || grant.AllowedActions[1] != "repo:push" {
-		t.Fatalf("expected attenuated AllowedActions=[repo:read repo:push], got %v", grant.AllowedActions)
+	// BAP-925: wildcard narrowing is read-only; a broad ask must never yield a push.
+	if len(grant.AllowedActions) != 1 || grant.AllowedActions[0] != "repo:read" {
+		t.Fatalf("expected attenuated AllowedActions=[repo:read], got %v", grant.AllowedActions)
 	}
 	if grant.NarrowingReason == "" {
 		t.Fatalf("expected non-empty NarrowingReason")

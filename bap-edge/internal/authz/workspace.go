@@ -106,6 +106,9 @@ func CheckCommandWorkspaceEscape(workspaceRoot, fullCommand string) bool {
 	cleanRoot := filepath.Clean(workspaceRoot)
 	currentDir := cleanRoot
 
+	// Heredoc bodies fed to data consumers (git commit -F - <<EOF) are text, not paths (BAP-932).
+	fullCommand = SanitizeCommandForAnalysis(fullCommand)
+
 	// Split compound commands by chaining operators: &&, ||, ;, |
 	// Replace operators with a uniform delimiter
 	cmdUnified := fullCommand
@@ -160,7 +163,22 @@ func CheckCommandWorkspaceEscape(workspaceRoot, fullCommand string) bool {
 		}
 
 		// 2. Inspect arguments for paths referencing .. or absolute paths outside workspace
+		skipMessageValue := false
 		for i, tok := range tokens {
+			// git commit/tag message text is data, not a path (BAP-932). Every other git argument is still checked.
+			if skipMessageValue {
+				skipMessageValue = false
+				continue
+			}
+			if i > 0 && isGitExecutableToken(tokens[0]) {
+				if isGitMessageValueFlag(tok) {
+					skipMessageValue = true
+					continue
+				}
+				if strings.HasPrefix(tok, "--message=") {
+					continue
+				}
+			}
 			if i == 0 {
 				// Skip first token if it's the executable itself unless it starts with ..
 				if !strings.HasPrefix(tok, "..") {
@@ -499,7 +517,35 @@ func HasFilesystemRootEscape(workspaceRoot, fullCommand string) bool {
 		return false
 	}
 	cleanRoot := filepath.Clean(workspaceRoot)
+	// Heredoc bodies fed to data consumers and git message values are text, not paths (BAP-932).
+	fullCommand = SanitizeCommandForAnalysis(fullCommand)
+	curExec := ""
+	atSegmentStart := true
+	skipMessageValue := false
 	for _, tok := range tokenizeCommand(fullCommand) {
+		switch tok {
+		case "&&", "||", ";", "|", "&":
+			atSegmentStart = true
+			curExec = ""
+			skipMessageValue = false
+			continue
+		}
+		if atSegmentStart {
+			curExec = tok
+			atSegmentStart = false
+		} else if isGitExecutableToken(curExec) {
+			if skipMessageValue {
+				skipMessageValue = false
+				continue
+			}
+			if isGitMessageValueFlag(tok) {
+				skipMessageValue = true
+				continue
+			}
+			if strings.HasPrefix(tok, "--message=") {
+				continue
+			}
+		}
 		if isCommandFlag(tok) {
 			continue
 		}

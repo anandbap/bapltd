@@ -189,6 +189,7 @@ func (a *Authorizer) EvaluateWithWorkspace(executable, fullCommand, args, worksp
 		}
 	}
 
+	cmdToParse = SanitizeCommandForAnalysis(cmdToParse)
 	pipeline, err := ParseAST(cmdToParse)
 	if err != nil || pipeline == nil || len(pipeline.Nodes) == 0 {
 		return a.evaluateAtomicNode(executable, fullCommand, args, workspaceRoot, "", CheckCommandWorkspaceEscape(workspaceRoot, fullCommand))

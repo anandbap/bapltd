@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -256,6 +255,10 @@ func RunZSP(args []string) error {
 		}
 		delegationType := "human_interactive_prompt"
 		if *oobApproveFlag && !inBroker {
+			// BAP-926: the flag alone proves nothing. A human must answer a fresh one-time challenge on a real terminal.
+			if !humanApprovalChallenge(sessionID, actions, resources, *goalFlag) {
+				return fmt.Errorf("%w: interactive human approval challenge failed or no terminal is attached", authz.ErrHighRiskApprovalRequired)
+			}
 			delegationType = "human_interactive_oob"
 		}
 		grant, env, err := authz.SubmitTaskEnvelopeWithDelegation(
@@ -273,12 +276,8 @@ func RunZSP(args []string) error {
 			*ttlFlag,
 		)
 		if err != nil && errors.Is(err, authz.ErrHighRiskApprovalRequired) && !inBroker && isTerminal(os.Stdin) {
-			fmt.Fprintf(os.Stderr, "\n[BAP HITL ESCALATION] High-risk privilege action(s) %v requested for session %s.\n", authz.FindHighRiskEscalationActions(actions), sessionID)
-			fmt.Fprintf(os.Stderr, "Goal: %s | Resources: %v\n", *goalFlag, resources)
-			fmt.Fprintf(os.Stderr, "Authorize this high-risk escalation out-of-band? [y/N]: ")
-			reader := bufio.NewReader(os.Stdin)
-			ans, _ := reader.ReadString('\n')
-			if strings.EqualFold(strings.TrimSpace(ans), "y") || strings.EqualFold(strings.TrimSpace(ans), "yes") {
+			fmt.Fprintf(os.Stderr, "\n[BAP HITL ESCALATION] %v\n", err)
+			if humanApprovalChallenge(sessionID, actions, resources, *goalFlag) {
 				grant, env, err = authz.SubmitTaskEnvelopeWithDelegation(
 					authz.ResolveZSPDir(),
 					sessionID,
@@ -345,6 +344,25 @@ func RunZSP(args []string) error {
 		fmt.Printf("  Allowed Actions:   %v\n", grant.AllowedActions)
 		fmt.Printf("  Allowed Resources: %v\n", grant.AllowedResources)
 		fmt.Printf("  Max Uses / TTL:    %d uses | expires %s\n", grant.MaxUses, grant.ExpiresAt.Format(time.RFC3339))
+		return nil
+
+	case "policy-sign":
+		// BAP-925: install an administrator permission-policy override, HMAC-signed with the PEP secret.
+		if strings.TrimSpace(os.Getenv("BAP_IN_BROKER")) != "" || isAgentEnvironment(os.Getenv("LTD_SOURCE")) {
+			return fmt.Errorf("%w: policy-sign is a human-operator action and cannot run inside an agent session", authz.ErrHighRiskApprovalRequired)
+		}
+		fs := flag.NewFlagSet("zsp policy-sign", flag.ContinueOnError)
+		fileFlag := fs.String("file", "", "Permission policy JSON to validate, sign and install")
+		if err := fs.Parse(rest); err != nil {
+			return err
+		}
+		if strings.TrimSpace(*fileFlag) == "" {
+			return fmt.Errorf("--file is required")
+		}
+		if err := authz.InstallSignedPermissionPolicy(authz.ResolveZSPDir(), *fileFlag); err != nil {
+			return err
+		}
+		fmt.Printf("[BAP ZERO-TRUST] Permission policy validated, signed and installed in %s\n", authz.ResolveZSPDir())
 		return nil
 
 	case "check":
