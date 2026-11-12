@@ -299,3 +299,71 @@ func TestInterceptorPreToolUseScenario2CompoundGitStatusAndLog(t *testing.T) {
 		t.Fatalf("expected deny when compound command adds ungranted git push, got: %s", outEscalate)
 	}
 }
+
+func TestPreToolUseRewrittenZSPAuthorizeBindsSameSessionPrincipal(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows binary verification test")
+	}
+
+	repoRoot, bapOut, interOut := setupZSPHookTestEnv(t)
+	sessID := "sess-cchook-rewritten-zsp-" + time.Now().Format("150405.000")
+
+	// Clear ambient session overrides so the child relies strictly on PreToolUse -> bapedge exec propagation.
+	t.Setenv("BAP_SESSION_ID", "")
+	t.Setenv("LTD_SESSION_ID", "")
+	t.Setenv("PATH", filepath.Dir(bapOut)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	runPreTool := func(command string) string {
+		t.Helper()
+		payload, _ := json.Marshal(map[string]any{
+			"hook_event_name": "PreToolUse",
+			"tool_name":       "PowerShell",
+			"app_id":          "claude-code",
+			"session_id":      sessID,
+			"cwd":             repoRoot,
+			"tool_input":      map[string]any{"command": command},
+		})
+		cmd := exec.Command(interOut)
+		cmd.Dir = repoRoot
+		cmd.Stdin = bytes.NewReader(payload)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("interceptor failed on %q: %v\n%s", command, err, string(out))
+		}
+		return string(out)
+	}
+
+	// 1. Run zsp authorize WITHOUT --session-id through PreToolUse; hook rewrites it to `bapedge exec --session-id <sessID> ...`.
+	outAuth := runPreTool(`bapedge zsp authorize --mission TASK_EXECUTION --goal "Inspect git status" --actions "git:status" --resources workspace://current`)
+	var hookResp struct {
+		HookSpecificOutput struct {
+			PermissionDecision string `json:"permissionDecision"`
+			UpdatedInput       *struct {
+				Command string `json:"command"`
+			} `json:"updatedInput"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(outAuth), &hookResp); err != nil {
+		t.Fatalf("failed to parse hook response: %v\n%s", err, outAuth)
+	}
+	if hookResp.HookSpecificOutput.PermissionDecision != "allow" || hookResp.HookSpecificOutput.UpdatedInput == nil || hookResp.HookSpecificOutput.UpdatedInput.Command == "" {
+		t.Fatalf("expected rewritten allow command for zsp authorize, got: %s", outAuth)
+	}
+
+	// 2. Execute the exact rewritten `bapedge exec ...` command (without BAP_SESSION_ID in caller env).
+	fields := strings.Fields(hookResp.HookSpecificOutput.UpdatedInput.Command)
+	if len(fields) < 2 {
+		t.Fatalf("unexpected rewritten command: %q", hookResp.HookSpecificOutput.UpdatedInput.Command)
+	}
+	execCmd := exec.Command(bapOut, fields[1:]...)
+	execCmd.Dir = repoRoot
+	if execOut, err := execCmd.CombinedOutput(); err != nil {
+		t.Fatalf("rewritten bapedge exec failed: %v\n%s", err, string(execOut))
+	}
+
+	// 3. Subsequent `git status` under the same sessID MUST now be allowed (proving principal parity).
+	outGit := runPreTool("git status")
+	if !strings.Contains(outGit, `"permissionDecision": "allow"`) && !strings.Contains(outGit, `"permissionDecision":"allow"`) {
+		t.Fatalf("expected allow for git status after rewritten zsp authorize, got: %s", outGit)
+	}
+}

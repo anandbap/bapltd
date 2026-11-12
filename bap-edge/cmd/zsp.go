@@ -147,7 +147,7 @@ func RunZSP(args []string) error {
 			return err
 		}
 		sessionID := resolveDefaultZSPSessionID(*sessFlag)
-		svid, _, _, _, err := authz.EnsureSessionPrincipal(authz.ResolveZSPDir(), sessionID, *clientFlag)
+		svid, _, _, _, err := authz.EnsureSessionPrincipal(authz.ResolveZSPDir(), sessionID, normalizeZSPClientType(*clientFlag))
 		if err != nil {
 			return err
 		}
@@ -175,7 +175,7 @@ func RunZSP(args []string) error {
 			return err
 		}
 		sessionID := resolveDefaultZSPSessionID(*sessFlag)
-		rep, err := authz.ListSessionZSPStatus(authz.ResolveZSPDir(), sessionID, *clientFlag)
+		rep, err := authz.ListSessionZSPStatus(authz.ResolveZSPDir(), sessionID, normalizeZSPClientType(*clientFlag))
 		if err != nil {
 			return err
 		}
@@ -227,6 +227,7 @@ func RunZSP(args []string) error {
 			}
 		})
 		sessionID := resolveDefaultZSPSessionID(*sessFlag)
+		clientType := normalizeZSPClientType(*clientFlag)
 		actions := splitCSVFlags(*actionsFlag)
 		resources := splitCSVFlags(*resourcesFlag)
 		if len(actions) == 0 {
@@ -247,7 +248,7 @@ func RunZSP(args []string) error {
 		grant, env, err := authz.SubmitTaskEnvelope(
 			authz.ResolveZSPDir(),
 			sessionID,
-			*clientFlag,
+			clientType,
 			*missionFlag,
 			*goalFlag,
 			*promptFlag,
@@ -299,7 +300,7 @@ func RunZSP(args []string) error {
 		}
 		sessionID := resolveDefaultZSPSessionID(*sessFlag)
 		svid, grant, proof, err := authz.VerifyOrConsumeSessionZSP(
-			authz.ResolveZSPDir(), sessionID, *clientFlag, *actionFlag, *resFlag, *cmdFlag,
+			authz.ResolveZSPDir(), sessionID, normalizeZSPClientType(*clientFlag), *actionFlag, *resFlag, *cmdFlag,
 			authz.GetWorkspaceRoot(), false, *consumeFlag, nil,
 		)
 		out := map[string]any{
@@ -334,6 +335,17 @@ func RunZSP(args []string) error {
 		printZSPUsage()
 		return fmt.Errorf("unknown zsp subcommand: %s", sub)
 	}
+}
+
+func normalizeZSPClientType(client string) string {
+	trimmed := strings.TrimSpace(client)
+	if isClaudeSource(trimmed) {
+		return "claude-code"
+	}
+	if trimmed == "" {
+		return "claude-code"
+	}
+	return trimmed
 }
 
 func minInt(a, b int) int {

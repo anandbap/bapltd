@@ -87,7 +87,7 @@ class TestBAPInstallMultiPlatform(unittest.TestCase):
             ws = os.path.join(self.temp_dir, f"ws_{sys_plat}")
             os.makedirs(ws, exist_ok=True)
             with patch("sys.platform", sys_plat):
-                agents = bap_install.configure_agent_hooks(ws, self.install_dir)
+                agents = bap_install.configure_agent_hooks(ws, self.install_dir, portable=True)
                 self.assertGreater(len(agents), 0)
 
                 # Check VS Code Copilot settings
@@ -255,21 +255,22 @@ class TestBAPInstallMultiPlatform(unittest.TestCase):
         """Verify uninstall function cleanly removes hooks and restored settings."""
         ws = os.path.join(self.temp_dir, "ws_uninstall")
         os.makedirs(ws, exist_ok=True)
-        bap_install.configure_agent_hooks(ws, self.install_dir)
-        
-        # Verify installed
-        claude_settings = os.path.join(ws, ".claude", "settings.json")
-        self.assertTrue(os.path.isfile(claude_settings))
-        with open(claude_settings, "r") as f:
-            self.assertIn("hooks", json.load(f))
-            
-        # Run uninstall
         mock_home = os.path.join(self.temp_dir, "uninstall_home")
         os.makedirs(mock_home, exist_ok=True)
-        with patch.object(bap_install, "stop_running_bap_processes"), \
-             patch("scripts.bap_startup.configure_startup"), \
-             patch("os.path.expanduser", side_effect=lambda p: mock_home + p[1:] if p.startswith("~") else p):
-            bap_install.uninstall(self.install_dir, ws)
+
+        with patch("os.path.expanduser", side_effect=lambda p: mock_home + p[1:] if p.startswith("~") else p):
+            bap_install.configure_agent_hooks(ws, self.install_dir)
+
+            # Verify installed
+            claude_settings = os.path.join(ws, ".claude", "settings.json")
+            self.assertTrue(os.path.isfile(claude_settings))
+            with open(claude_settings, "r") as f:
+                self.assertIn("hooks", json.load(f))
+
+            # Run uninstall
+            with patch.object(bap_install, "stop_running_bap_processes"), \
+                 patch("scripts.bap_startup.configure_startup"):
+                bap_install.uninstall(self.install_dir, ws)
         
         # Verify reverted
         with open(claude_settings, "r") as f:
@@ -476,6 +477,122 @@ class TestBAPInstallMultiPlatform(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(ws, "bap-gateway.pid")))
         self.assertFalse(os.path.exists(os.path.join(ws, "bap-config.json")))
         self.assertTrue(os.path.isfile(os.path.join(ws, ".env")))
+
+    def test_portable_requires_dir(self):
+        """Verify --portable/--isolated refuses to run without an explicit --dir target."""
+        with patch("sys.argv", ["bap_install", "--portable", "--offline", "--non-interactive"]):
+            with self.assertRaises(SystemExit) as ctx:
+                bap_install.main()
+            self.assertEqual(ctx.exception.code, 1)
+
+    def test_portable_mode_is_self_contained_and_skips_home_and_path(self):
+        """Verify --portable --dir <path> stores state in <dir>/.bapstate and leaves ~ and workspace clean."""
+        mock_home = os.path.join(self.temp_dir, "portable_home")
+        real_user_bin = os.path.join(mock_home, "bin")
+        real_user_bap = os.path.join(mock_home, ".bap")
+        real_user_bapstate = os.path.join(real_user_bin, ".bapstate")
+        os.makedirs(real_user_bapstate, exist_ok=True)
+        os.makedirs(real_user_bap, exist_ok=True)
+        sentinel_bin = os.path.join(real_user_bin, "bap-config.json")
+        sentinel_home = os.path.join(real_user_bap, "bap-config.json")
+        with open(sentinel_bin, "w", encoding="utf-8") as f:
+            f.write("KEEP_HOST_BIN")
+        with open(sentinel_home, "w", encoding="utf-8") as f:
+            f.write("KEEP_HOST_BAP")
+
+        portable_dir = os.path.join(self.temp_dir, "portable_bundle")
+        clean_ws = os.path.join(self.temp_dir, "portable_ws")
+        os.makedirs(clean_ws, exist_ok=True)
+
+        argv = [
+            "bap_install",
+            "--portable",
+            "--dir", portable_dir,
+            "--workspace", clean_ws,
+            "--offline",
+            "--non-interactive",
+            "--no-rebuild",
+        ]
+        env_patch = {
+            "HOME": mock_home,
+            "USERPROFILE": mock_home,
+            "BAP_STATE_DIR": "",
+            "BAP_ZSP_DIR": "",
+        }
+        with patch("sys.argv", argv), \
+             patch.dict(os.environ, env_patch, clear=False), \
+             patch("os.path.expanduser", side_effect=lambda p: mock_home + p[1:] if p.startswith("~") else p), \
+             patch.object(bap_install, "inspect_release_sources", return_value=(None, {"status": "test_unmanifested", "source_qualified": False})), \
+             patch.object(bap_install, "update_user_path") as mock_path, \
+             patch.object(bap_install, "deploy_powershell_profile") as mock_ps, \
+             patch.object(bap_install, "clean_stale_secondary_installations") as mock_clean_stale:
+            os.environ.pop("BAP_STATE_DIR", None)
+            os.environ.pop("BAP_ZSP_DIR", None)
+            bap_install.main()
+
+        mock_path.assert_not_called()
+        mock_ps.assert_not_called()
+        # Note: install_core_binaries calls clean_stale_secondary_installations(..., portable=True)
+        mock_clean_stale.assert_called_once_with(os.path.abspath(portable_dir), portable=True)
+
+        # Self-contained state & artifacts exist inside portable_dir
+        self.assertTrue(os.path.isfile(os.path.join(portable_dir, "bap-config.json")))
+        self.assertTrue(os.path.isfile(os.path.join(portable_dir, ".bapstate", "config.json")))
+        self.assertTrue(os.path.isfile(os.path.join(portable_dir, ".bapstate", "release-provenance.json")))
+        self.assertTrue(os.path.isdir(os.path.join(portable_dir, "plugins", "claude")))
+
+        # Host home dirs & clean workspace untouched
+        self.assertFalse(os.path.exists(os.path.join(mock_home, ".claude")))
+        self.assertFalse(os.path.exists(os.path.join(mock_home, ".codex")))
+        for clutter in (".bap", ".bapstate", ".claude", ".codex", ".cursor", ".vscode", "GEMINI.md", "bap-config.json", "plugins"):
+            self.assertFalse(os.path.exists(os.path.join(clean_ws, clutter)), f"Unexpected workspace clutter in portable mode: {clutter}")
+        with open(sentinel_bin, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), "KEEP_HOST_BIN")
+        with open(sentinel_home, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), "KEEP_HOST_BAP")
+
+    def test_portable_uninstall_is_strictly_scoped_to_dir(self):
+        """Verify --uninstall --portable --dir <path> removes <dir> cleanly without touching ~ or CWD."""
+        mock_home = os.path.join(self.temp_dir, "pu_home")
+        user_bin_sentinel = os.path.join(mock_home, "bin", "bap-config.json")
+        dot_bap_sentinel = os.path.join(mock_home, ".bap", "bap-config.json")
+        os.makedirs(os.path.dirname(user_bin_sentinel), exist_ok=True)
+        os.makedirs(os.path.dirname(dot_bap_sentinel), exist_ok=True)
+        with open(user_bin_sentinel, "w", encoding="utf-8") as f:
+            f.write("KEEP")
+        with open(dot_bap_sentinel, "w", encoding="utf-8") as f:
+            f.write("KEEP")
+
+        portable_dir = os.path.join(self.temp_dir, "pu_bundle")
+        os.makedirs(os.path.join(portable_dir, ".bapstate"), exist_ok=True)
+        os.makedirs(os.path.join(portable_dir, "plugins", "claude"), exist_ok=True)
+        with open(os.path.join(portable_dir, "bap-config.json"), "w", encoding="utf-8") as f:
+            f.write("{}")
+        with open(os.path.join(portable_dir, ".bapstate", "config.json"), "w", encoding="utf-8") as f:
+            f.write("{}")
+
+        # Uninstalling from CWD containing workspace clutter must not delete unrelated workspace files when --workspace is omitted.
+        unrelated_cwd = os.path.join(self.temp_dir, "unrelated_cwd")
+        os.makedirs(os.path.join(unrelated_cwd, ".bap"), exist_ok=True)
+        cwd_marker = os.path.join(unrelated_cwd, ".bap", "keep.txt")
+        with open(cwd_marker, "w", encoding="utf-8") as f:
+            f.write("KEEP")
+
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(unrelated_cwd)
+            with patch("sys.argv", ["bap_install", "--uninstall", "--portable", "--dir", portable_dir]), \
+                 patch("os.path.expanduser", side_effect=lambda p: mock_home + p[1:] if p.startswith("~") else p):
+                with self.assertRaises(SystemExit) as ctx:
+                    bap_install.main()
+                self.assertEqual(ctx.exception.code, 0)
+        finally:
+            os.chdir(old_cwd)
+
+        self.assertFalse(os.path.exists(portable_dir))
+        self.assertTrue(os.path.isfile(user_bin_sentinel))
+        self.assertTrue(os.path.isfile(dot_bap_sentinel))
+        self.assertTrue(os.path.isfile(cwd_marker))
 
 if __name__ == "__main__":
     unittest.main()

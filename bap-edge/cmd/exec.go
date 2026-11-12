@@ -1458,6 +1458,15 @@ func RunExec(args []string) {
 	}
 
 	// 6. Execute sandboxed command with process supervision & ancestry tracking (BAP-534)
+	// Propagate the resolved broker session ID and source into the sandboxed child
+	// environment so nested BAP commands (e.g. `bapedge zsp authorize` rewritten by
+	// PreToolUse hooks) bind to the exact same session principal as the hook check.
+	if ec.sessionID != "" {
+		_ = os.Setenv("BAP_SESSION_ID", ec.sessionID)
+	}
+	if ec.source != "" {
+		_ = os.Setenv("LTD_SOURCE", ec.source)
+	}
 	execRes := sandbox.RunSandboxedCommandWithShell(fullCommand, ec.shell)
 	ec.parentPID = execRes.ParentPID
 	ec.processPID = execRes.ProcessPID

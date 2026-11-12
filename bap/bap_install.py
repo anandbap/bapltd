@@ -194,12 +194,14 @@ def is_real_binary(path: str) -> bool:
         return False
 
 
-def clean_stale_secondary_installations(target_dir: str):
+def clean_stale_secondary_installations(target_dir: str, portable: bool = False):
     """
     Ensures single-source-of-truth: cleans stale BAP binaries from other candidate
     paths so no conflicting older versions of bapedge or BAP components exist on PATH.
     Preserves Python entry point console scripts (e.g. bap and bapedge installed by pip).
     """
+    if portable:
+        return
     # If running inside unit tests, avoid purging host directories unless explicitly allowed in mock test
     if ("unittest" in sys.modules and os.environ.get("BAP_ALLOW_TEST_PURGE") != "1") or os.environ.get("BAP_TEST_ENV") == "1":
         return
@@ -244,15 +246,17 @@ def clean_stale_secondary_installations(target_dir: str):
         print(f"  {TermColor.GREEN}[+] Purged {cleaned_count} stale BAP component(s) from secondary paths to prevent version conflicts{TermColor.RESET}")
 
 
-def get_bapstate_dir() -> str:
-    """Returns canonical .bapstate directory: BAP_STATE_DIR override or ~/bin/.bapstate."""
+def get_bapstate_dir(target_dir: str = None, portable: bool = False) -> str:
+    """Returns canonical .bapstate directory: <target_dir>/.bapstate in portable mode, BAP_STATE_DIR override, or ~/bin/.bapstate."""
+    if portable and target_dir:
+        return os.path.join(os.path.abspath(target_dir), ".bapstate")
     env_dir = os.environ.get("BAP_STATE_DIR", "").strip()
     if env_dir:
         return env_dir
     return os.path.join(os.path.expanduser("~"), "bin", ".bapstate")
 
 
-def stop_running_bap_processes(target_dir: str = None):
+def stop_running_bap_processes(target_dir: str = None, portable: bool = False):
     """
     Gracefully stops the selected user's daemon/supervisor/gateway through their CLIs
     so Windows file locks are released before binary replacement or uninstallation.
@@ -266,6 +270,8 @@ def stop_running_bap_processes(target_dir: str = None):
                 candidate = os.path.join(target_dir, name)
                 if os.path.isfile(candidate):
                     return candidate
+        if portable:
+            return None
         for name in tool_names:
             found = shutil.which(name)
             if found:
@@ -570,13 +576,13 @@ def inspect_release_sources(require_qualified=False):
     return manifest, bap_release.verify_manifest(manifest, paths, platform_id, require_qualified)
 
 
-def install_core_binaries(target_dir: str):
+def install_core_binaries(target_dir: str, portable: bool = False):
     """Copies BAP executables and configuration assets into the user-mode directory."""
     global _LAST_LOCKED_BINARIES
     _LAST_LOCKED_BINARIES = []
     os.makedirs(target_dir, exist_ok=True)
-    stop_running_bap_processes(target_dir)
-    clean_stale_secondary_installations(target_dir)
+    stop_running_bap_processes(target_dir, portable=portable)
+    clean_stale_secondary_installations(target_dir, portable=portable)
     plat_id = get_platform_id()
     pkg_dir = os.path.dirname(os.path.abspath(__file__))
     print(f"\n[*] Deploying BAP Binaries to {target_dir} (Platform: {plat_id})...")
@@ -990,12 +996,18 @@ def configure_codex_hooks(codex_dir: str, cchook_bin: str, is_global: bool = Fal
     print(f"  {TermColor.GREEN}[+] Codex ({scope}):{TermColor.RESET} Configured native hooks in {hooks_path}")
 
 
-def configure_agent_hooks(workspace_root: str, target_dir: str, workspace_hooks: bool = True):
+def configure_agent_hooks(workspace_root: str, target_dir: str, workspace_hooks: bool = True, portable: bool = False):
     """Autodetects installed agents and configures hooks, MCP configs, and rules.
     When workspace_hooks is False (default for 'bap install'), configures global user hooks/plugins
     without polluting the workspace directory with .claude/, .codex/, .cursor/, .vscode/, GEMINI.md, etc.
+    When portable is True, restricts hooks/plugins to target_dir (plus workspace_root only if workspace_hooks=True)
+    and skips writing global user-home hooks, plugins, and PowerShell profiles.
     """
-    scope_desc = workspace_root if workspace_hooks else "Global User Profile (clean workspace mode)"
+    scope_desc = (
+        f"Portable/Isolated ({target_dir})"
+        if portable and not workspace_hooks
+        else (workspace_root if workspace_hooks else "Global User Profile (clean workspace mode)")
+    )
     print(f"\n[*] Autodetecting and Configuring Developer Agent Hooks ({scope_desc})...")
 
     bapedge_bin = os.path.join(target_dir, "bapedge.exe" if sys.platform == "win32" else "bapedge")
@@ -1012,7 +1024,7 @@ def configure_agent_hooks(workspace_root: str, target_dir: str, workspace_hooks:
     norm_target = os.path.normpath(target_dir).lower()
     default_dir = os.path.normpath(resolve_default_install_dir()).lower()
     roaming_dir = os.path.normpath(resolve_default_install_dir(roaming=True)).lower()
-    configure_global = (not workspace_hooks) or (norm_workspace == norm_home) or (norm_target in (default_dir, roaming_dir))
+    configure_global = (not portable) and ((not workspace_hooks) or (norm_workspace == norm_home) or (norm_target in (default_dir, roaming_dir)))
 
     # 1. Claude Code - Workspace (opt-in) & Global (~/.claude)
     ws_claude_dir = os.path.join(workspace_root, ".claude")
@@ -1159,21 +1171,21 @@ All terminal and tool commands must be routed through the BAP broker:
         detected_agents.append("Python Agent SDK (Available)")
 
     # 7. Native Agent Plugins (BAP-806 Layer 1A)
-    plugin_agents = install_native_agent_plugins(workspace_root, target_dir, include_workspace=workspace_hooks)
+    plugin_agents = install_native_agent_plugins(workspace_root, target_dir, include_workspace=workspace_hooks, portable=portable)
     detected_agents.extend(plugin_agents)
 
     # 8. PowerShell Profile Auto-Binding (Codex, Claude Code, Antigravity, Copilot)
-    if sys.platform == "win32":
+    if sys.platform == "win32" and not portable:
         deploy_powershell_profile(target_dir)
         detected_agents.append("PowerShell Auto-Binding Profile (~/.bap/bap-profile.ps1)")
 
     # 9. Print Transparent Defense-in-Depth Layer Report
-    print_defense_layers_report(workspace_root, target_dir)
+    print_defense_layers_report(workspace_root, target_dir, portable=portable)
 
     return detected_agents
 
 
-def install_native_agent_plugins(workspace_root: str, target_dir: str, include_workspace: bool = True) -> list:
+def install_native_agent_plugins(workspace_root: str, target_dir: str, include_workspace: bool = True, portable: bool = False) -> list:
     """Installs native agent plugins for Claude Code, GitHub Copilot, Antigravity, OpenCode, and Codex (BAP-806 Layer 1A)."""
     pkg_dir = os.path.dirname(os.path.abspath(__file__))
     home = os.path.expanduser("~")
@@ -1183,24 +1195,26 @@ def install_native_agent_plugins(workspace_root: str, target_dir: str, include_w
         os.path.join(REPO_ROOT, "plugins"),
         os.path.join(pkg_dir, "plugins"),
         os.path.join(target_dir, "plugins"),
-        os.path.join(home, ".bap", "plugins"),
-        os.path.join(home, "bin", "plugins"),
     ]
+    if not portable:
+        candidate_sources.extend([
+            os.path.join(home, ".bap", "plugins"),
+            os.path.join(home, "bin", "plugins"),
+        ])
     plugins_src = None
     for cand in candidate_sources:
         if cand and os.path.isdir(cand) and any(os.path.isdir(os.path.join(cand, sub)) for sub in ("claude", "copilot", "antigravity", "codex", "opencode")):
             plugins_src = os.path.normpath(cand)
             break
 
-    # Deploy to target bin and ~/.bap/plugins globally; only write workspace_root/plugins when requested or pre-existing
+    # Deploy to target bin (and ~/.bap/plugins globally unless portable); only write workspace_root/plugins when requested or pre-existing
     destinations = []
     ws_plugins = os.path.normpath(os.path.join(workspace_root, "plugins"))
-    if include_workspace or os.path.isdir(ws_plugins):
+    if include_workspace or (not portable and os.path.isdir(ws_plugins)):
         destinations.append(ws_plugins)
-    destinations.extend([
-        os.path.normpath(os.path.join(target_dir, "plugins")),
-        os.path.normpath(os.path.join(home, ".bap", "plugins")),
-    ])
+    destinations.append(os.path.normpath(os.path.join(target_dir, "plugins")))
+    if not portable:
+        destinations.append(os.path.normpath(os.path.join(home, ".bap", "plugins")))
     # Remove duplicate destination paths
     seen_dest = set()
     clean_destinations = []
@@ -1430,8 +1444,8 @@ exec "$BAPEDGE_BIN" plugin adapter "$@"
                 installed.append(label)
                 print(f"  {TermColor.GREEN}[+] Native Plugin:{TermColor.RESET} Installed {agent_id} plugin at {agent_dst}")
 
-    # For Claude Code, also install to ~/.claude/plugins/claude if global directory is available
-    if home:
+    # For Claude Code, also install to ~/.claude/plugins/claude if global directory is available (unless portable)
+    if home and not portable:
         claude_global_plugin = os.path.join(home, ".claude", "plugins", "claude")
         try:
             os.makedirs(claude_global_plugin, exist_ok=True)
@@ -1459,7 +1473,7 @@ exec "$BAPEDGE_BIN" plugin adapter "$@"
     return installed
 
 
-def print_defense_layers_report(workspace_root: str, target_dir: str):
+def print_defense_layers_report(workspace_root: str, target_dir: str, portable: bool = False):
     """Prints a transparent, comprehensive report showing all active Defense-in-Depth layers
     and explaining how BAP controls AI agents when rules are violated."""
     bapedge_bin = os.path.join(target_dir, "bapedge.exe" if sys.platform == "win32" else "bapedge")
@@ -1470,9 +1484,12 @@ def print_defense_layers_report(workspace_root: str, target_dir: str):
     search_dirs = [
         os.path.join(workspace_root, "plugins"),
         os.path.join(target_dir, "plugins"),
-        os.path.join(home, ".bap", "plugins"),
-        os.path.join(home, "bin", "plugins"),
     ]
+    if not portable:
+        search_dirs.extend([
+            os.path.join(home, ".bap", "plugins"),
+            os.path.join(home, "bin", "plugins"),
+        ])
 
     def has_plugin(agent: str, manifest_subpath: str) -> bool:
         for sd in search_dirs:
@@ -1480,8 +1497,9 @@ def print_defense_layers_report(workspace_root: str, target_dir: str):
                 return True
         return False
 
-    claude_plugin = has_plugin("claude", os.path.join(".claude-plugin", "plugin.json")) or \
-                    os.path.isfile(os.path.join(home, ".claude", "plugins", "claude", ".claude-plugin", "plugin.json"))
+    claude_plugin = has_plugin("claude", os.path.join(".claude-plugin", "plugin.json")) or (
+        (not portable) and os.path.isfile(os.path.join(home, ".claude", "plugins", "claude", ".claude-plugin", "plugin.json"))
+    )
     copilot_plugin = has_plugin("copilot", "plugin.json")
     antigravity_plugin = has_plugin("antigravity", "plugin.json")
     opencode_plugin = has_plugin("opencode", "plugin.json")
@@ -1489,8 +1507,9 @@ def print_defense_layers_report(workspace_root: str, target_dir: str):
     has_layer1a = claude_plugin or copilot_plugin or antigravity_plugin or opencode_plugin or codex_plugin
 
     claude_settings = os.path.isfile(os.path.join(workspace_root, ".claude", "settings.json")) or \
-                      os.path.isfile(os.path.join(workspace_root, ".claude", "managed-settings.json")) or \
-                      os.path.isfile(os.path.join(home, ".claude", "settings.json"))
+                      os.path.isfile(os.path.join(workspace_root, ".claude", "managed-settings.json")) or (
+                          (not portable) and os.path.isfile(os.path.join(home, ".claude", "settings.json"))
+                      )
     has_layer1b = claude_settings or os.path.isfile(os.path.join(workspace_root, "GEMINI.md"))
 
     has_layer2 = os.path.isfile(bapedge_bin)
@@ -1641,13 +1660,18 @@ def verify_controlplane_handshake(server_url: str) -> bool:
     return False
 
 
-def run_pin_scan(target_dir: str, workspace_root: str):
+def run_pin_scan(target_dir: str, workspace_root: str, portable: bool = False):
     """Executes initial AIR content pinning to baseline all prompts and policies."""
     bapedge_bin = os.path.join(target_dir, "bapedge.exe" if sys.platform == "win32" else "bapedge")
     if os.path.isfile(bapedge_bin):
         print("\n[*] Initializing Cryptographic Content Pinning (AIR Model)...")
         try:
-            res = subprocess.run([bapedge_bin, "pin", "scan", "--dir", workspace_root], capture_output=True, text=True, timeout=10)
+            env = os.environ.copy()
+            if portable:
+                state_dir = get_bapstate_dir(target_dir=target_dir, portable=True)
+                env["BAP_STATE_DIR"] = state_dir
+                env["BAP_ZSP_DIR"] = os.path.join(state_dir, "zsp")
+            res = subprocess.run([bapedge_bin, "pin", "scan", "--dir", workspace_root], env=env, capture_output=True, text=True, timeout=10)
             if res.returncode == 0:
                 print(f"  {TermColor.GREEN}[+] Workspace skills, prompts, and manifests successfully pinned!{TermColor.RESET}")
             else:
@@ -1724,25 +1748,30 @@ def revert_claude_code(claude_dir: str):
             pass
 
 
-def uninstall(target_dir: str, workspace_root: str):
-    """Remove the owned installation, startup entry and agent configuration."""
-    # Remove only this installation's owned per-user startup entry.
-    try:
-        from .bap_startup import configure_startup
-    except ImportError:
+def uninstall(target_dir: str, workspace_root: str = None, portable: bool = False):
+    """Remove the owned installation, startup entry and agent configuration.
+    When portable is True, restricts removal strictly to target_dir (<dir>/.bapstate,
+    <dir>/plugins, and binaries in target_dir), leaving ~/bin, ~/.bap, global agent hooks,
+    User PATH, and logon startup untouched.
+    """
+    if not portable:
+        # Remove only this installation's owned per-user startup entry.
         try:
-            from scripts.bap_startup import configure_startup
+            from .bap_startup import configure_startup
         except ImportError:
-            from bap_startup import configure_startup
-    configure_startup(target_dir, enabled=False)
+            try:
+                from scripts.bap_startup import configure_startup
+            except ImportError:
+                from bap_startup import configure_startup
+        configure_startup(target_dir, enabled=False)
     print("=" * 80)
     print(f"     {TermColor.YELLOW}{TermColor.BOLD}BAP ZERO-TRUST AGENT GOVERNANCE -- UNINSTALLATION{TermColor.RESET}")
     print("=" * 80)
     print(f"[*] Target Directory to Clean : {target_dir}")
-    print(f"[*] Target Workspace to Clean : {workspace_root}")
+    print(f"[*] Target Workspace to Clean : {workspace_root if workspace_root else '(none - portable scope)'}")
 
     # Stop any running daemons or agents locking executable files
-    stop_running_bap_processes(target_dir)
+    stop_running_bap_processes(target_dir, portable=portable)
 
     home = os.path.expanduser("~")
     bap_files = [
@@ -1755,6 +1784,7 @@ def uninstall(target_dir: str, workspace_root: str):
         "bapcontrolplane.exe", "bapcontrolplane",
         "bap_launcher_engine.ps1",
         "policy.cedar", "schema.json", "bap-config.json",
+        "bap-release.json",
         "policy-state.json", "ltd-audit.jsonl", ".bap-pin.json",
         "copilot-wrap.bat", "copilot-wrap.ps1", "copilot-wrap.sh",
         "codex.cmd", "claude.cmd", "agy.cmd", "copilot.cmd", "bap-profile.ps1",
@@ -1774,9 +1804,9 @@ def uninstall(target_dir: str, workspace_root: str):
         for _ext in [".bat", ".ps1", ".sh", ""]:
             bap_files.append(_base + _ext)
 
-    unique_dirs = get_all_bap_candidate_dirs(target_dir)
+    unique_dirs = [os.path.normpath(target_dir)] if portable else get_all_bap_candidate_dirs(target_dir)
 
-    # 1. Clean BAP files from candidate directories without wiping entire user folders
+    # 1. Clean BAP files from candidate directories (or only target_dir in portable mode) without wiping user folders
     for d in unique_dirs:
         if not os.path.isdir(d):
             continue
@@ -1793,6 +1823,13 @@ def uninstall(target_dir: str, workspace_root: str):
                     removed_count += 1
                 except Exception as e:
                     print(f"  {TermColor.YELLOW}[!] Could not remove {fp}: {e}{TermColor.RESET}")
+        if portable:
+            for sub_dir_name in (".bapstate", "plugins"):
+                sub_path = os.path.join(d, sub_dir_name)
+                if os.path.isdir(sub_path):
+                    shutil.rmtree(sub_path, ignore_errors=True)
+                    if not os.path.exists(sub_path):
+                        removed_count += 1
         if removed_count > 0:
             print(f"  {TermColor.GREEN}[+] Removed {removed_count} BAP binaries/assets from {d}{TermColor.RESET}")
         
@@ -1807,8 +1844,8 @@ def uninstall(target_dir: str, workspace_root: str):
         except Exception:
             pass
 
-    # 2. Revert User PATH
-    if sys.platform == "win32":
+    # 2. Revert User PATH (skipped in portable mode)
+    if not portable and sys.platform == "win32":
         try:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment", 0, winreg.KEY_READ | winreg.KEY_WRITE)
             try:
@@ -1838,7 +1875,7 @@ def uninstall(target_dir: str, workspace_root: str):
             winreg.CloseKey(key)
         except Exception as e:
             print(f"  {TermColor.YELLOW}[!] Notice: Registry PATH reversion: {e}{TermColor.RESET}")
-    else:
+    elif not portable:
         clean_targets = [d for d in unique_dirs]
         for p_name in [".bashrc", ".zshrc", ".profile", ".zprofile"]:
             prof = os.path.join(home, p_name)
@@ -1854,103 +1891,109 @@ def uninstall(target_dir: str, workspace_root: str):
                 except Exception:
                     pass
 
-    # 3. Clean Claude Code Hooks (Workspace)
-    ws_claude_dir = os.path.join(workspace_root, ".claude")
-    if os.path.isdir(ws_claude_dir):
+    # 3. Clean Claude Code Hooks (Workspace, and Global unless portable)
+    ws_claude_dir = os.path.join(workspace_root, ".claude") if workspace_root else ""
+    if ws_claude_dir and os.path.isdir(ws_claude_dir):
         revert_claude_code(ws_claude_dir)
 
-    norm_workspace = os.path.normpath(workspace_root).lower()
-    norm_home = os.path.normpath(home).lower()
-    norm_target = os.path.normpath(target_dir).lower()
-    default_dir = os.path.normpath(resolve_default_install_dir()).lower()
-    roaming_dir = os.path.normpath(resolve_default_install_dir(roaming=True)).lower()
+    if not portable:
+        norm_workspace = os.path.normpath(workspace_root).lower() if workspace_root else ""
+        norm_home = os.path.normpath(home).lower()
+        norm_target = os.path.normpath(target_dir).lower()
+        default_dir = os.path.normpath(resolve_default_install_dir()).lower()
+        roaming_dir = os.path.normpath(resolve_default_install_dir(roaming=True)).lower()
 
-    # Clean Global Claude Code hooks if target_dir is default user bin or workspace is home
-    if norm_workspace == norm_home or norm_target in (default_dir, roaming_dir):
-        global_claude_dir = os.path.join(home, ".claude")
-        if os.path.normpath(global_claude_dir).lower() != os.path.normpath(ws_claude_dir).lower() and os.path.isdir(global_claude_dir):
-            revert_claude_code(global_claude_dir)
+        # Clean Global Claude Code hooks if target_dir is default user bin or workspace is home
+        if norm_workspace == norm_home or norm_target in (default_dir, roaming_dir):
+            global_claude_dir = os.path.join(home, ".claude")
+            if os.path.normpath(global_claude_dir).lower() != os.path.normpath(ws_claude_dir).lower() and os.path.isdir(global_claude_dir):
+                revert_claude_code(global_claude_dir)
 
-    # 4. Clean Antigravity (GEMINI.md)
-    gemini_md = os.path.join(workspace_root, "GEMINI.md")
-    if os.path.isfile(gemini_md):
-        try:
-            with open(gemini_md, "r", encoding="utf-8") as f:
-                content = f.read()
-            if "BAP Zero-Trust Policy" in content:
-                backup_files = [os.path.join(workspace_root, f) for f in os.listdir(workspace_root) if f.startswith("GEMINI.md.bap-backup")]
-                if backup_files:
-                    backup_files.sort(key=os.path.getmtime, reverse=True)
-                    shutil.copy2(backup_files[0], gemini_md)
-                    print(f"  {TermColor.GREEN}[+] Restored GEMINI.md from backup {os.path.basename(backup_files[0])}{TermColor.RESET}")
+    if workspace_root:
+        # 4. Clean Antigravity (GEMINI.md)
+        gemini_md = os.path.join(workspace_root, "GEMINI.md")
+        if os.path.isfile(gemini_md):
+            try:
+                with open(gemini_md, "r", encoding="utf-8") as f:
+                    content = f.read()
+                if "BAP Zero-Trust Policy" in content:
+                    backup_files = [os.path.join(workspace_root, f) for f in os.listdir(workspace_root) if f.startswith("GEMINI.md.bap-backup")]
+                    if backup_files:
+                        backup_files.sort(key=os.path.getmtime, reverse=True)
+                        shutil.copy2(backup_files[0], gemini_md)
+                        print(f"  {TermColor.GREEN}[+] Restored GEMINI.md from backup {os.path.basename(backup_files[0])}{TermColor.RESET}")
+                    else:
+                        os.remove(gemini_md)
+                        print(f"  {TermColor.GREEN}[+] Removed BAP GEMINI.md from {gemini_md}{TermColor.RESET}")
+            except Exception:
+                pass
+
+        # 5. Clean Cursor (.cursorrules + .cursor/mcp.json)
+        cursorrules = os.path.join(workspace_root, ".cursorrules")
+        if os.path.isfile(cursorrules):
+            try:
+                with open(cursorrules, "r", encoding="utf-8") as f:
+                    content = f.read()
+                if "BAP Zero-Trust Policy" in content:
+                    os.remove(cursorrules)
+                    print(f"  {TermColor.GREEN}[+] Removed {cursorrules}{TermColor.RESET}")
+            except Exception:
+                pass
+        cursor_mcp = os.path.join(workspace_root, ".cursor", "mcp.json")
+        if os.path.isfile(cursor_mcp):
+            try:
+                os.remove(cursor_mcp)
+                print(f"  {TermColor.GREEN}[+] Removed {cursor_mcp}{TermColor.RESET}")
+            except Exception:
+                pass
+
+        # 6. Clean VS Code Copilot (.vscode/settings.json + .vscode/mcp.json)
+        vscode_settings = os.path.join(workspace_root, ".vscode", "settings.json")
+        if os.path.isfile(vscode_settings):
+            try:
+                with open(vscode_settings, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                data.pop("terminal.integrated.profiles.windows", None)
+                data.pop("terminal.integrated.defaultProfile.windows", None)
+                data.pop("terminal.integrated.profiles.osx", None)
+                data.pop("terminal.integrated.defaultProfile.osx", None)
+                data.pop("terminal.integrated.profiles.linux", None)
+                data.pop("terminal.integrated.defaultProfile.linux", None)
+                if data:
+                    with open(vscode_settings, "w", encoding="utf-8") as f:
+                        json.dump(data, f, indent=2)
                 else:
-                    os.remove(gemini_md)
-                    print(f"  {TermColor.GREEN}[+] Removed BAP GEMINI.md from {gemini_md}{TermColor.RESET}")
-        except Exception:
-            pass
+                    os.remove(vscode_settings)
+                print(f"  {TermColor.GREEN}[+] Reverted VS Code Copilot terminal profiles{TermColor.RESET}")
+            except Exception:
+                pass
+        vscode_mcp = os.path.join(workspace_root, ".vscode", "mcp.json")
+        if os.path.isfile(vscode_mcp):
+            try:
+                os.remove(vscode_mcp)
+                print(f"  {TermColor.GREEN}[+] Removed {vscode_mcp}{TermColor.RESET}")
+            except Exception:
+                pass
 
-    # 5. Clean Cursor (.cursorrules + .cursor/mcp.json)
-    cursorrules = os.path.join(workspace_root, ".cursorrules")
-    if os.path.isfile(cursorrules):
-        try:
-            with open(cursorrules, "r", encoding="utf-8") as f:
-                content = f.read()
-            if "BAP Zero-Trust Policy" in content:
-                os.remove(cursorrules)
-                print(f"  {TermColor.GREEN}[+] Removed {cursorrules}{TermColor.RESET}")
-        except Exception:
-            pass
-    cursor_mcp = os.path.join(workspace_root, ".cursor", "mcp.json")
-    if os.path.isfile(cursor_mcp):
-        try:
-            os.remove(cursor_mcp)
-            print(f"  {TermColor.GREEN}[+] Removed {cursor_mcp}{TermColor.RESET}")
-        except Exception:
-            pass
-
-    # 6. Clean VS Code Copilot (.vscode/settings.json + .vscode/mcp.json)
-    vscode_settings = os.path.join(workspace_root, ".vscode", "settings.json")
-    if os.path.isfile(vscode_settings):
-        try:
-            with open(vscode_settings, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            data.pop("terminal.integrated.profiles.windows", None)
-            data.pop("terminal.integrated.defaultProfile.windows", None)
-            data.pop("terminal.integrated.profiles.osx", None)
-            data.pop("terminal.integrated.defaultProfile.osx", None)
-            data.pop("terminal.integrated.profiles.linux", None)
-            data.pop("terminal.integrated.defaultProfile.linux", None)
-            if data:
-                with open(vscode_settings, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2)
-            else:
-                os.remove(vscode_settings)
-            print(f"  {TermColor.GREEN}[+] Reverted VS Code Copilot terminal profiles{TermColor.RESET}")
-        except Exception:
-            pass
-    vscode_mcp = os.path.join(workspace_root, ".vscode", "mcp.json")
-    if os.path.isfile(vscode_mcp):
-        try:
-            os.remove(vscode_mcp)
-            print(f"  {TermColor.GREEN}[+] Removed {vscode_mcp}{TermColor.RESET}")
-        except Exception:
-            pass
-
-    # 7. Clean Global User Configs & Stale Session Credentials
-    state_dir = get_bapstate_dir()
-    for global_state in [
-        os.path.join(os.path.expanduser("~"), "bap-config.json"),
-        os.path.expanduser("~/.bap/config.json"),
-        os.path.expanduser("~/.bap/bap-config.json"),
+    # 7. Clean State Configs & Stale Session Credentials (strictly target_dir in portable mode)
+    state_dir = get_bapstate_dir(target_dir=target_dir, portable=portable)
+    state_cleanup_files = [
         os.path.join(state_dir, "config.json"),
         os.path.join(state_dir, "bap-config.json"),
         os.path.join(state_dir, "credentials.json"),
-        os.path.expanduser("~/.bapstate/config.json"),
-        os.path.expanduser("~/.bapstate/bap-config.json"),
-        os.path.expanduser("~/.bapstate/credentials.json"),
-        os.path.expanduser("~/.ltd/config.json"),
-        os.path.expanduser("~/.ltd/credentials.json"),
-    ]:
+    ]
+    if not portable:
+        state_cleanup_files.extend([
+            os.path.join(os.path.expanduser("~"), "bap-config.json"),
+            os.path.expanduser("~/.bap/config.json"),
+            os.path.expanduser("~/.bap/bap-config.json"),
+            os.path.expanduser("~/.bapstate/config.json"),
+            os.path.expanduser("~/.bapstate/bap-config.json"),
+            os.path.expanduser("~/.bapstate/credentials.json"),
+            os.path.expanduser("~/.ltd/config.json"),
+            os.path.expanduser("~/.ltd/credentials.json"),
+        ])
+    for global_state in state_cleanup_files:
         if os.path.isfile(global_state):
             try:
                 os.remove(global_state)
@@ -1958,7 +2001,8 @@ def uninstall(target_dir: str, workspace_root: str):
                 pass
 
     # 8. Remove BAP clutter left in workspace (safe no-op for user code & .env)
-    clean_workspace_clutter(workspace_root)
+    if workspace_root:
+        clean_workspace_clutter(workspace_root)
 
     print("\n" + "=" * 80)
     print(f"  {TermColor.GREEN}[SUCCESS] BAP Uninstallation Complete.{TermColor.RESET}")
@@ -2172,7 +2216,7 @@ def rebuild_stale_repo_binaries_if_needed():
             print(f"  {TermColor.YELLOW}[!] Auto-rebuild warning for {mod_dir}: {exc}{TermColor.RESET}")
 
 
-def configure_bap_config(target_dir: str, workspace_root: str, server_url: str, is_offline: bool = False, write_workspace: bool = False):
+def configure_bap_config(target_dir: str, workspace_root: str, server_url: str, is_offline: bool = False, write_workspace: bool = False, portable: bool = False):
     """Writes the active bap-config.json with the chosen server URL to installation target and user state dirs."""
     effective_url = "http://localhost:8080" if is_offline else server_url.strip().rstrip("/")
     is_render = "onrender.com" in effective_url
@@ -2195,15 +2239,18 @@ def configure_bap_config(target_dir: str, workspace_root: str, server_url: str, 
     }
     
     cfg_json = json.dumps(cfg_data, indent=2) + "\n"
-    state_dir = get_bapstate_dir()
+    state_dir = get_bapstate_dir(target_dir=target_dir, portable=portable)
 
     destinations = [
         os.path.join(target_dir, "bap-config.json"),
         os.path.join(state_dir, "config.json"),
         os.path.join(state_dir, "bap-config.json"),
-        os.path.expanduser("~/.bap/config.json"),
-        os.path.expanduser("~/.bap/bap-config.json"),
     ]
+    if not portable:
+        destinations.extend([
+            os.path.expanduser("~/.bap/config.json"),
+            os.path.expanduser("~/.bap/bap-config.json"),
+        ])
     if write_workspace:
         destinations.extend([
             os.path.join(workspace_root, "bap-config.json"),
@@ -2218,22 +2265,23 @@ def configure_bap_config(target_dir: str, workspace_root: str, server_url: str, 
         except Exception:
             pass
 
-    # Synchronize via bapedge config set --global if bapedge binary is available
-    bapedge_names = ["bapedge.exe", "bapedge"]
-    bapedge_bin = None
-    for name in bapedge_names:
-        candidate = os.path.join(target_dir, name)
-        if os.path.isfile(candidate):
-            bapedge_bin = candidate
-            break
-    if not bapedge_bin:
-        bapedge_bin = shutil.which("bapedge")
+    # Synchronize via bapedge config set --global if bapedge binary is available (skipped in portable mode to avoid touching ~/bin)
+    if not portable:
+        bapedge_names = ["bapedge.exe", "bapedge"]
+        bapedge_bin = None
+        for name in bapedge_names:
+            candidate = os.path.join(target_dir, name)
+            if os.path.isfile(candidate):
+                bapedge_bin = candidate
+                break
+        if not bapedge_bin:
+            bapedge_bin = shutil.which("bapedge")
 
-    if bapedge_bin:
-        try:
-            subprocess.run([bapedge_bin, "config", "set", "--server", effective_url, "--global"], capture_output=True, timeout=5)
-        except Exception:
-            pass
+        if bapedge_bin:
+            try:
+                subprocess.run([bapedge_bin, "config", "set", "--server", effective_url, "--global"], capture_output=True, timeout=5)
+            except Exception:
+                pass
 
     # Discovery uses explicit installed workspace roots, independently of agent
     # hook approval and the daemon's startup directory. This file holds no tokens.
@@ -2255,7 +2303,8 @@ def configure_bap_config(target_dir: str, workspace_root: str, server_url: str, 
         print(f"  [!] Discovery workspace registration failed: {type(error).__name__}")
 
     # Purge stale credentials if they were bound to a different server URL (e.g. old localhost:8443)
-    for cred_dir in [state_dir, os.path.expanduser("~/.bapstate"), os.path.expanduser("~/.ltd")]:
+    cred_dirs = [state_dir] if portable else [state_dir, os.path.expanduser("~/.bapstate"), os.path.expanduser("~/.ltd")]
+    for cred_dir in cred_dirs:
         cred_file = os.path.join(cred_dir, "credentials.json")
         if os.path.isfile(cred_file):
             try:
@@ -2275,6 +2324,7 @@ def main():
     )
     parser.add_argument("--dir", default=None, help="Target installation directory (default: ~/bin or %USERPROFILE%\\bin)")
     parser.add_argument("--roaming", action="store_true", help="Install to Windows Roaming AppData (%APPDATA%\\BAP\\bin) instead of user bin (%USERPROFILE%\\bin)")
+    parser.add_argument("--portable", "--isolated", dest="portable", action="store_true", help="Self-contained install inside --dir: stores state in <dir>/.bapstate and skips modifying ~/bin, ~/.bap, global agent hooks, User PATH, or logon startup")
     parser.add_argument("--workspace", default=os.getcwd(), help="Target workspace root")
     parser.add_argument("--workspace-hooks", action="store_true", help="Opt-in: write project-local .claude/.codex/.cursor/.vscode/GEMINI.md/plugins into --workspace (disabled by default to keep repos clean)")
     parser.add_argument("--clean-workspace", action="store_true", help="Clean leftover BAP workspace clutter (.bap/, .bapstate/, bap-gateway.pid, bap-config.json, etc.)")
@@ -2290,10 +2340,19 @@ def main():
     parser.add_argument("--debug", action="store_true", help="Install diagnostic, profiling, and debugging scripts (bap review, watch_session, verify_sts, check_stale_copies, etc.)")
     args = parser.parse_args()
 
-    target_dir = args.dir if args.dir else resolve_default_install_dir(roaming=args.roaming)
+    if args.portable and not args.dir:
+        print(f"{TermColor.RED}[!] --portable/--isolated requires --dir <path> so all binaries, plugins, and .bapstate remain self-contained in one directory.{TermColor.RESET}")
+        sys.exit(1)
 
+    target_dir = os.path.abspath(args.dir) if args.dir else resolve_default_install_dir(roaming=args.roaming)
+    if args.portable:
+        args.no_path = True
+        args.no_startup = True
+
+    explicit_workspace = any(arg == "--workspace" or arg.startswith("--workspace=") for arg in sys.argv)
     if args.uninstall:
-        uninstall(target_dir, args.workspace)
+        uninstall_ws = args.workspace if (not args.portable or explicit_workspace) else None
+        uninstall(target_dir, uninstall_ws, portable=args.portable)
         sys.exit(0)
 
     if args.clean_workspace:
@@ -2328,13 +2387,23 @@ def main():
             selected_server = DEFAULT_REMOTE_SERVER
 
     plat_id = get_platform_id()
+    state_dir = get_bapstate_dir(target_dir=target_dir, portable=args.portable)
+    if args.portable:
+        os.environ["BAP_STATE_DIR"] = state_dir
+        os.environ["BAP_ZSP_DIR"] = os.path.join(state_dir, "zsp")
+
+    install_mode_desc = (
+        "PORTABLE / ISOLATED (Self-Contained in --dir)"
+        if args.portable
+        else ("SYSTEM SERVICE (Administrator)" if args.system else "USER MODE (Zero Privilege / No Root)")
+    )
     print("=" * 80)
     print(f"     {TermColor.CYAN}{TermColor.BOLD}BAP ZERO-TRUST ENTERPRISE AGENT GOVERNANCE -- UNIVERSAL INSTALLER{TermColor.RESET}")
     print("=" * 80)
     print(f"[*] Detected Platform:    {plat_id} ({platform.system()} {platform.machine()})")
-    print(f"[*] Target Install Mode:  {'SYSTEM SERVICE (Administrator)' if args.system else 'USER MODE (Zero Privilege / No Root)'}")
+    print(f"[*] Target Install Mode:  {install_mode_desc}")
     print(f"[*] Target Directory:     {target_dir}")
-    print(f"[*] State Directory:      {get_bapstate_dir()}")
+    print(f"[*] State Directory:      {state_dir}")
     print(f"[*] Target Workspace:     {args.workspace} (workspace-hooks={'enabled' if args.workspace_hooks else 'clean/global'})")
     print(f"[*] Control Plane URL:    {'OFFLINE (Local Store)' if is_offline else selected_server}")
     print("=" * 80)
@@ -2358,7 +2427,7 @@ def main():
     # Validate before stopping or replacing the existing installation.
     release_manifest, release_report = inspect_release_sources(args.require_release_manifest)
     print(f"[*] Release provenance: {release_report['status']} (publisher signature not checked)")
-    deployed_count = install_core_binaries(target_dir)
+    deployed_count = install_core_binaries(target_dir, portable=args.portable)
     binary_lock_failed = len(_LAST_LOCKED_BINARIES) > 0
 
     debug_deployed = 0
@@ -2377,63 +2446,67 @@ def main():
         installed_paths = bap_release.component_paths(target_dir, os.path.dirname(os.path.abspath(__file__)), target_dir, get_platform_id())
         # A locked/stale file must not turn into an apparently successful upgrade.
         release_report = bap_release.verify_manifest(installed_manifest, installed_paths, get_platform_id(), args.require_release_manifest)
-    release_state = get_bapstate_dir()
+    release_state = get_bapstate_dir(target_dir=target_dir, portable=args.portable)
     os.makedirs(release_state, exist_ok=True)
     with open(os.path.join(release_state, "release-provenance.json"), "w", encoding="utf-8") as stream:
         json.dump(release_report, stream, indent=2)
 
     # 2.5 Configure Central Control Plane Endpoints & write bap-config.json
-    configure_bap_config(target_dir, args.workspace, selected_server, is_offline, write_workspace=args.workspace_hooks)
+    configure_bap_config(target_dir, args.workspace, selected_server, is_offline, write_workspace=args.workspace_hooks, portable=args.portable)
 
     # 3. Update User PATH
     if not args.no_path:
         update_user_path(target_dir)
 
     # 4. Configure Agent Hooks (global by default; workspace files opt-in via --workspace-hooks)
-    agents = configure_agent_hooks(args.workspace, target_dir, workspace_hooks=args.workspace_hooks)
+    agents = configure_agent_hooks(args.workspace, target_dir, workspace_hooks=args.workspace_hooks, portable=args.portable)
 
     # 5. Handshake with Control Plane
     if not is_offline:
         verify_controlplane_handshake(selected_server)
 
     # 6. Cryptographic Pinning Scan
-    run_pin_scan(target_dir, args.workspace)
+    run_pin_scan(target_dir, args.workspace, portable=args.portable)
 
     # Register automatic reporting after user logon, not a machine-wide service.
-    try:
-        from .bap_startup import configure_startup
-    except ImportError:
+    reporting_startup_failed = False
+    if args.portable:
+        print("  [*] Portable/Isolated Mode: Skipped per-user logon startup and background daemon registration.")
+    else:
         try:
-            from scripts.bap_startup import configure_startup
+            from .bap_startup import configure_startup
         except ImportError:
-            from bap_startup import configure_startup
-    startup = configure_startup(target_dir, enabled=not args.no_startup)
-    print(f"  [*] Per-user logon startup: {startup['status']}")
-    reporting_startup_failed = startup["status"] == "registration_failed"
+            try:
+                from scripts.bap_startup import configure_startup
+            except ImportError:
+                from bap_startup import configure_startup
+        startup = configure_startup(target_dir, enabled=not args.no_startup)
+        print(f"  [*] Per-user logon startup: {startup['status']}")
+        reporting_startup_failed = startup["status"] == "registration_failed"
 
-    # 6.5 Launch and verify daemon and its independent crash supervisor.
-    bapedge_bin = os.path.join(target_dir, "bapedge.exe" if sys.platform == "win32" else "bapedge")
-    if os.path.isfile(bapedge_bin):
-        try:
-            cflags = 0x08000000 | 0x00000200 if sys.platform == "win32" else 0
-            started = subprocess.run(
-                [bapedge_bin, "daemon", "start", "-server", selected_server],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL,
-                creationflags=cflags,
-                start_new_session=True if sys.platform != "win32" else False,
-                timeout=10
-            )
-            if started.returncode != 0:
-                raise RuntimeError("daemon readiness failed")
-            supervised = subprocess.run([bapedge_bin, "daemon", "supervise"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, creationflags=cflags)
-            if supervised.returncode != 0:
-                raise RuntimeError("supervisor readiness failed")
-            print(f"  {TermColor.GREEN}[+] Background daemon and crash supervisor passed readiness checks.{TermColor.RESET}")
-        except (OSError, subprocess.SubprocessError, RuntimeError) as error:
-            reporting_startup_failed = True
-            print(f"  [!] Reporting startup incomplete: {type(error).__name__}. Inspect 'bapedge daemon status --json'.")
+        # 6.5 Launch and verify daemon and its independent crash supervisor.
+        bapedge_bin = os.path.join(target_dir, "bapedge.exe" if sys.platform == "win32" else "bapedge")
+        if os.path.isfile(bapedge_bin):
+            try:
+                cflags = 0x08000000 | 0x00000200 if sys.platform == "win32" else 0
+                started = subprocess.run(
+                    [bapedge_bin, "daemon", "start", "-server", selected_server],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    creationflags=cflags,
+                    start_new_session=True if sys.platform != "win32" else False,
+                    timeout=10
+                )
+                if started.returncode != 0:
+                    raise RuntimeError("daemon readiness failed")
+                supervised = subprocess.run([bapedge_bin, "daemon", "supervise"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, creationflags=cflags)
+                if supervised.returncode != 0:
+                    raise RuntimeError("supervisor readiness failed")
+                print(f"  {TermColor.GREEN}[+] Background daemon and crash supervisor passed readiness checks.{TermColor.RESET}")
+            except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+                reporting_startup_failed = True
+                print(f"  [!] Reporting startup incomplete: {type(error).__name__}. Inspect 'bapedge daemon status --json'.")
 
     # 7. Print Completion & Verification Banner
     print("\n" + "=" * 80)

@@ -46,6 +46,8 @@ var allowedEnvNames = map[string]bool{
 	"BAP_MODE":       true,
 	"BAP_AGENT_SANDBOX": true,
 	"BAP_IN_BROKER":  true,
+	"BAP_ZSP_DIR":    true,
+	"BAP_STATE_DIR":  true,
 	"LTD_SOURCE":     true,
 	"LTD_SESSION_ID": true,
 }

@@ -24,6 +24,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 WORKSPACE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, WORKSPACE_ROOT)
@@ -31,27 +32,45 @@ sys.path.insert(0, WORKSPACE_ROOT)
 from scripts import bap_install
 from scripts import bap_doctor
 
-BAPEDGE_BIN = os.path.join(WORKSPACE_ROOT, "dist", "windows-amd64", "bapedge.exe")
-if not os.path.isfile(BAPEDGE_BIN):
-    BAPEDGE_BIN = os.path.join(WORKSPACE_ROOT, "bapedge.exe")
-
-USER_BIN = os.path.join(os.path.expanduser("~"), "bin")
-if os.path.isfile(os.path.join(USER_BIN, "bapedge.exe")):
-    BAPEDGE_BIN = os.path.join(USER_BIN, "bapedge.exe")
+DEFAULT_DIST_BAPEDGE = os.path.join(WORKSPACE_ROOT, "dist", "windows-amd64", "bapedge.exe")
+if not os.path.isfile(DEFAULT_DIST_BAPEDGE):
+    DEFAULT_DIST_BAPEDGE = os.path.join(WORKSPACE_ROOT, "bapedge.exe")
 
 
 class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temp_dir = tempfile.mkdtemp(prefix="bap_e2e_identities_")
-        cls.mock_bin = os.path.join(cls.temp_dir, "bin")
+        cls.mock_home = os.path.join(cls.temp_dir, "home")
+        cls.mock_bin = os.path.join(cls.mock_home, "bin")
+        cls.mock_state = os.path.join(cls.mock_bin, ".bapstate")
         cls.mock_ws = os.path.join(cls.temp_dir, "workspace")
-        os.makedirs(cls.mock_bin, exist_ok=True)
-        os.makedirs(cls.mock_ws, exist_ok=True)
+        cls.mock_appdata = os.path.join(cls.mock_home, "AppData", "Roaming")
+        cls.mock_localappdata = os.path.join(cls.mock_home, "AppData", "Local")
+        for d in (cls.mock_bin, cls.mock_state, cls.mock_ws, cls.mock_appdata, cls.mock_localappdata):
+            os.makedirs(d, exist_ok=True)
 
-        # Deploy real core binaries and configurations to mock_bin
+        # Isolate HOME/USERPROFILE and BAP state to the temp fixture while testing the canonical ~/bin layout.
+        cls._env_patch = patch.dict(
+            os.environ,
+            {
+                "HOME": cls.mock_home,
+                "USERPROFILE": cls.mock_home,
+                "APPDATA": cls.mock_appdata,
+                "LOCALAPPDATA": cls.mock_localappdata,
+                "BAP_STATE_DIR": cls.mock_state,
+                "BAP_ZSP_DIR": os.path.join(cls.mock_state, "zsp"),
+            },
+            clear=False,
+        )
+        cls._env_patch.start()
+
+        # Deploy real core binaries and configurations to isolated mock_bin
         bap_install.install_core_binaries(cls.mock_bin)
         bap_install.configure_agent_hooks(cls.mock_ws, cls.mock_bin)
+
+        installed_edge = os.path.join(cls.mock_bin, "bapedge.exe" if sys.platform == "win32" else "bapedge")
+        cls.bapedge_bin = installed_edge if os.path.isfile(installed_edge) else DEFAULT_DIST_BAPEDGE
 
         # Create lightweight mock stub executables for CI environments where third-party agent CLIs are not preinstalled
         if sys.platform == "win32":
@@ -83,7 +102,11 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        bap_install.uninstall(cls.mock_bin, cls.mock_ws)
+        try:
+            with patch("scripts.bap_startup.configure_startup"):
+                bap_install.uninstall(cls.mock_bin, cls.mock_ws, portable=True)
+        finally:
+            cls._env_patch.stop()
         # Terminate any controlplane process spawned by launchers during tests
         if sys.platform == "win32":
             subprocess.run(["taskkill", "/F", "/IM", "bapcontrolplane.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -91,10 +114,21 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
             subprocess.run(["pkill", "-9", "-f", "bapcontrolplane"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         shutil.rmtree(cls.temp_dir, ignore_errors=True)
 
+    def _isolated_env(self):
+        env = os.environ.copy()
+        env["HOME"] = self.mock_home
+        env["USERPROFILE"] = self.mock_home
+        env["APPDATA"] = self.mock_appdata
+        env["LOCALAPPDATA"] = self.mock_localappdata
+        env["BAP_STATE_DIR"] = self.mock_state
+        env["BAP_ZSP_DIR"] = os.path.join(self.mock_state, "zsp")
+        env["PATH"] = self.mock_bin + os.pathsep + env.get("PATH", "")
+        return env
+
     def test_01_all_five_agent_identities_and_receipt_attestation(self):
         """Verify that all 5 agent identities resolve to their canonical SPIFFE SVIDs and delegation chains."""
-        if not os.path.isfile(BAPEDGE_BIN):
-            self.skipTest(f"bapedge binary not found at {BAPEDGE_BIN}")
+        if not os.path.isfile(self.bapedge_bin):
+            self.skipTest(f"bapedge binary not found at {self.bapedge_bin}")
 
         agents = [
             ("claude", "spiffe://bap.local/agent/claude"),
@@ -106,14 +140,14 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
 
         for agent_name, expected_spiffe in agents:
             sess_id = f"sess-{agent_name}-e2e-test"
-            env = os.environ.copy()
+            env = self._isolated_env()
             env["LTD_SOURCE"] = agent_name
             env["BAP_SPIFFE_ID"] = expected_spiffe
             env["BAP_SESSION_ID"] = sess_id
             env["BAP_ZSP"] = "off"
 
             res = subprocess.run(
-                [BAPEDGE_BIN, "exec", "--raw", "-json", "-source", agent_name, "git --version"],
+                [self.bapedge_bin, "exec", "--raw", "-json", "-source", agent_name, "git --version"],
                 env=env,
                 cwd=self.mock_ws,
                 stdout=subprocess.PIPE,
@@ -139,8 +173,8 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
 
     def test_02_identity_anti_tampering_invariants(self):
         """Verify that bapedge blocks any agent identity trying to mutate protected assets."""
-        if not os.path.isfile(BAPEDGE_BIN):
-            self.skipTest(f"bapedge binary not found at {BAPEDGE_BIN}")
+        if not os.path.isfile(self.bapedge_bin):
+            self.skipTest(f"bapedge binary not found at {self.bapedge_bin}")
 
         agents = ["claude", "antigravity", "copilot", "cursor", "gemini"]
         tampering_commands = [
@@ -153,12 +187,12 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
 
         for agent in agents:
             for bad_cmd in tampering_commands:
-                env = os.environ.copy()
+                env = self._isolated_env()
                 env["LTD_SOURCE"] = agent
                 env["BAP_SESSION_ID"] = f"sess-tamper-{agent}"
 
                 res = subprocess.run(
-                    [BAPEDGE_BIN, "exec", "-json", bad_cmd],
+                    [self.bapedge_bin, "exec", "-json", bad_cmd],
                     env=env,
                     cwd=self.mock_ws,
                     stdout=subprocess.PIPE,
@@ -178,8 +212,8 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
 
     def test_03_concurrent_multi_agent_session_isolation(self):
         """Verify session isolation: revoking one agent session does not impair concurrent sessions of other agents."""
-        if not os.path.isfile(BAPEDGE_BIN):
-            self.skipTest(f"bapedge binary not found at {BAPEDGE_BIN}")
+        if not os.path.isfile(self.bapedge_bin):
+            self.skipTest(f"bapedge binary not found at {self.bapedge_bin}")
 
         sess_claude = "sess-claude-isolated-001"
         sess_antigravity = "sess-antigravity-isolated-002"
@@ -196,12 +230,12 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
 
         try:
             # 1. Claude session should be rejected due to revocation
-            env_claude = os.environ.copy()
+            env_claude = self._isolated_env()
             env_claude["LTD_SOURCE"] = "claude"
             env_claude["BAP_SESSION_ID"] = sess_claude
 
             res_c = subprocess.run(
-                [BAPEDGE_BIN, "exec", "--raw", "git --version"],
+                [self.bapedge_bin, "exec", "--raw", "git --version"],
                 env=env_claude,
                 cwd=self.mock_ws,
                 stdout=subprocess.PIPE,
@@ -213,13 +247,13 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
             self.assertTrue("revoked" in (res_c.stdout + res_c.stderr).lower())
 
             # 2. Antigravity session should continue to be authorized
-            env_ag = os.environ.copy()
+            env_ag = self._isolated_env()
             env_ag["LTD_SOURCE"] = "antigravity"
             env_ag["BAP_SESSION_ID"] = sess_antigravity
             env_ag["BAP_ZSP"] = "off"
 
             res_ag = subprocess.run(
-                [BAPEDGE_BIN, "exec", "--raw", "git --version"],
+                [self.bapedge_bin, "exec", "--raw", "git --version"],
                 env=env_ag,
                 cwd=self.mock_ws,
                 stdout=subprocess.PIPE,
@@ -238,8 +272,7 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
         if sys.platform != "win32":
             self.skipTest("Windows shell launchers tested on win32")
 
-        env = os.environ.copy()
-        env["PATH"] = self.mock_bin + os.pathsep + env.get("PATH", "")
+        env = self._isolated_env()
 
         # 1. Test CMD execution of run_antigravity_cli_bap.bat --version
         bat_launcher = os.path.join(self.mock_bin, "run_antigravity_cli_bap.bat")
@@ -295,8 +328,7 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
         if not os.path.isfile(doctor_py):
             self.skipTest("bap_doctor.py not found")
 
-        env = os.environ.copy()
-        env["PATH"] = self.mock_bin + os.pathsep + env.get("PATH", "")
+        env = self._isolated_env()
 
         # Run doctor from isolated workspace
         res = subprocess.run(
