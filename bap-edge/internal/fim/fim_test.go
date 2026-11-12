@@ -103,3 +103,27 @@ func TestVerifyIntegrity_QuarantineDetection(t *testing.T) {
 		t.Errorf("Expected IsQuarantined to be false after clearing")
 	}
 }
+
+func TestVerifyIntegrity_UserBinBapstatePolicy(t *testing.T) {
+	tmpHome := t.TempDir()
+	tmpWs := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
+	t.Setenv("BAP_STATE_DIR", "")
+
+	binPolicyDir := filepath.Join(tmpHome, "bin", ".bapstate", "policy")
+	if err := os.MkdirAll(binPolicyDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binPolicyDir, "policy.cedar"), []byte("permit(principal, action, resource);"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := VerifyIntegrity(tmpWs)
+	if err != nil {
+		t.Fatalf("Expected VerifyIntegrity to accept ~/bin/.bapstate/policy/policy.cedar, got: %v", err)
+	}
+	if !rep.Valid {
+		t.Errorf("Expected report.Valid to be true")
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"bap-edge/internal/authz"
+	"bap-edge/internal/state"
 )
 
 // InjectedOBOToken is the corporate on-behalf-of token injected into the sandboxed process.
@@ -352,7 +353,7 @@ func RunSandboxedCommandWithShell(cmdStr, shell string) ExecResult {
 	)
 
 	// If mirrors settings.xml or pip.ini exist, point to them
-	for _, mDir := range []string{".bapstate/mirrors", "../.bapstate/mirrors"} {
+	for _, mDir := range []string{filepath.Join(state.Dir(), "mirrors"), ".bapstate/mirrors", "../.bapstate/mirrors"} {
 		if absM, err := filepath.Abs(mDir); err == nil {
 			mSettings := filepath.Join(absM, "settings.xml")
 			if _, err := os.Stat(mSettings); err == nil {

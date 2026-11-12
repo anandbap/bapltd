@@ -1,6 +1,7 @@
 package pinning
 
 import (
+	"bap-edge/internal/state"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -58,12 +59,10 @@ func NewManifest() *PinManifest {
 
 // DefaultManifestPath returns the default global path for pinning state.
 func DefaultManifestPath() string {
-	stateDir := os.Getenv("BAP_STATE_DIR")
-	if stateDir == "" {
-		home, _ := os.UserHomeDir()
-		stateDir = filepath.Join(home, ".bapstate")
+	if stateDir := os.Getenv("BAP_STATE_DIR"); stateDir != "" {
+		return filepath.Join(stateDir, "pins.json")
 	}
-	return filepath.Join(stateDir, "pins.json")
+	return filepath.Join(state.Dir(), "pins.json")
 }
 
 // LocalManifestPath returns the workspace-level path for project pins.

@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"bap-edge/internal/state"
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
@@ -98,7 +99,7 @@ func ReportActivity(controlPlaneURL string, event *CanonicalActivityEvent) error
 }
 
 func persistLocalActivity(event *CanonicalActivityEvent) error {
-	bapStateDir := ".bapstate"
+	bapStateDir := state.Dir()
 	if err := os.MkdirAll(bapStateDir, 0755); err != nil {
 		return err
 	}

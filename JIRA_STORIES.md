@@ -5255,11 +5255,12 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - `bapgateway` writes PID and audit state solely under `<userhome>/bin/.bapstate` (`BAP_STATE_DIR` override), never bare `./bap-gateway.pid`.
   - `cchook/interceptor` stores PID markers, session markers, and prompts under `hookStateDir()`, and launchers store recovery/shims/mirrors under `<userhome>/bin/.bapstate` and remove newly-created empty workspace directories on teardown.
 - **Implementation Evidence**:
-  - Go Core & Hooks: `bap-edge/internal/state/state.go`, `bap-edge/internal/state/state_test.go`, `bap-edge/internal/authz/zsp_store.go`, `bap-edge/cmd/plugin.go`, `bap-edge/cmd/agent_launcher.go`, `bap-edge/cmd/zsp.go`, `bap-edge/cmd/logout.go`, `bap-edge/cmd/dev_override.go`, `bap-edge/cmd/config.go`, `bap-gateway/main.go`, `cchook/evidence_spool.go`, `cchook/identity_transport.go`, `cchook/interceptor.go`, `cchook/selfheal_test.go`.
-  - Launchers & Python CLI/SDK: `scripts/bap_launcher_engine.ps1`, `run_claude_bap.ps1`, `bap/bap_install.py`, `scripts/bap_install.py`, `bap/cli.py`, `bap/bap_doctor.py`, `bap/bap_harness.py`, `python-agent/bap_sdk.py`, `python-agent/bap_sdk/client.py`.
-  - Unit Tests:
-    - `go test -C bap-edge ./internal/state ./internal/authz ./cmd` (PASS)
+  - Go Core & Hooks: `bap-edge/internal/state/state.go`, `bap-edge/internal/state/state_test.go`, `bap-edge/internal/authz/zsp_store.go`, `bap-edge/internal/authz/workspace.go`, `bap-edge/internal/fim/fim.go`, `bap-edge/internal/fim/fim_test.go`, `bap-edge/internal/adapters/activity.go`, `bap-edge/internal/antibypass/antibypass.go`, `bap-edge/internal/pinning/pinning.go`, `bap-edge/internal/sandbox/sandbox.go`, `bap-edge/cmd/plugin.go`, `bap-edge/cmd/agent_launcher.go`, `bap-edge/cmd/zsp.go`, `bap-edge/cmd/logout.go`, `bap-edge/cmd/dev_override.go`, `bap-edge/cmd/config.go`, `bap-gateway/main.go`, `cchook/evidence_spool.go`, `cchook/identity_transport.go`, `cchook/interceptor.go`, `cchook/selfheal_test.go`.
+  - Launchers & Python CLI/SDK: `scripts/bap_launcher_engine.ps1`, `run_claude_bap.ps1`, `bap/bap_install.py`, `scripts/bap_install.py`, `bap/cli.py`, `bap/bap_doctor.py`, `bap/bap_harness.py`, `python-agent/bap_sdk.py`, `python-agent/bap_sdk/client.py`, `tests/test_e2e_fortified_identities_and_launchers.py`.
+  - Unit & E2E Tests:
+    - `go test -C bap-edge -count=1 ./internal/fim ./internal/adapters ./internal/antibypass ./internal/pinning ./internal/authz ./internal/sandbox ./internal/state ./cmd` (PASS)
     - `go test -C cchook .` (PASS)
     - `go test -C bap-gateway .` (PASS)
+    - `python -m unittest tests/test_e2e_fortified_identities_and_launchers.py -v` under clean CI env (`AllowDevOverrides="false"`, isolated `HOME`/`USERPROFILE`, `CI=true`, `GITHUB_ACTIONS=true`) (5 tests OK)
     - `python -m unittest tests/test_bap_install_multiplatform.py -v` (18 tests OK)
     - `python -m unittest tests/test_harness_multi_session.py -v` (4 tests OK)

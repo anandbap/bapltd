@@ -1,6 +1,7 @@
 package antibypass
 
 import (
+	"bap-edge/internal/state"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -120,7 +121,7 @@ func (e *AntiBypassEngine) CheckCommand(sessionID, command string, envVars map[s
 }
 
 func (e *AntiBypassEngine) recordViolation(viol *AntiBypassViolation) error {
-	dir := ".bapstate"
+	dir := state.Dir()
 	_ = os.MkdirAll(dir, 0755)
 	logFile := filepath.Join(dir, "bypass_violations.jsonl")
 

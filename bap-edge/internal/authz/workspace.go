@@ -1,6 +1,7 @@
 package authz
 
 import (
+	"bap-edge/internal/state"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -256,6 +257,7 @@ func IsStrictTierMandated() bool {
 		"policy-state.json",
 		"../policy-state.json",
 		filepath.Join("bap-edge", "policy-state.json"),
+		filepath.Join(state.PolicyDir(), "policy-state.json"),
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		candidates = append(candidates, filepath.Join(home, ".bapstate", "policy", "policy-state.json"))

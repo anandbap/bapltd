@@ -1,6 +1,7 @@
 package fim
 
 import (
+	"bap-edge/internal/state"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +40,7 @@ func VerifyIntegrity(workspaceRoot string) (*IntegrityReport, error) {
 	quarantinePaths := []string{
 		filepath.Join(workspaceRoot, ".bap", "quarantined"),
 		filepath.Join(workspaceRoot, ".bapstate", "quarantined"),
+		filepath.Join(state.Dir(), "quarantined"),
 	}
 	home, _ := os.UserHomeDir()
 	if home != "" {
@@ -100,19 +102,23 @@ func VerifyIntegrity(workspaceRoot string) (*IntegrityReport, error) {
 	policyCandidates := []string{
 		filepath.Join(workspaceRoot, "policy.cedar"),
 		filepath.Join(workspaceRoot, ".bap", "policy.cedar"),
+		filepath.Join(state.PolicyDir(), "policy.cedar"),
+	}
+	if exe, err := os.Executable(); err == nil {
+		policyCandidates = append(policyCandidates, filepath.Join(filepath.Dir(exe), "policy.cedar"))
+	}
+	if home != "" {
+		policyCandidates = append(policyCandidates,
+			filepath.Join(home, "bin", "policy.cedar"),
+			filepath.Join(home, ".local", "bin", "policy.cedar"),
+			filepath.Join(home, ".bapstate", "policy", "policy.cedar"),
+		)
 	}
 	foundPolicy := false
 	for _, pc := range policyCandidates {
 		if fi, err := os.Stat(pc); err == nil && fi.Size() > 0 {
 			foundPolicy = true
 			break
-		}
-	}
-	// Also check global policy cache
-	if !foundPolicy && home != "" {
-		globalPolicy := filepath.Join(home, ".bapstate", "policy", "policy.cedar")
-		if fi, err := os.Stat(globalPolicy); err == nil && fi.Size() > 0 {
-			foundPolicy = true
 		}
 	}
 

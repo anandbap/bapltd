@@ -122,7 +122,7 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
                 timeout=10,
             )
 
-            self.assertEqual(res.returncode, 0, f"bapedge exec failed for agent {agent_name}: {res.stderr}")
+            self.assertEqual(res.returncode, 0, f"bapedge exec failed for agent {agent_name}: stderr={res.stderr} stdout={res.stdout}")
             try:
                 data = json.loads(res.stdout)
             except Exception as e:
