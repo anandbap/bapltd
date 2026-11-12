@@ -195,18 +195,18 @@ bap codex
 
 ---
 
-## 7. Interactive & Automated Agent CLI Demonstration: 10 Core Zero-Trust Scenarios
+## 7. Interactive & Automated Agent CLI Demonstration: 12 Core Zero-Trust Scenarios
 
-Run the following conversational prompts sequentially in the agent REPL console, or run all 10 scenarios in a single command using `scripts/run_claude_scenarios.ps1` (installed to `~/bin` only when `bap install --debug` is passed; feeds `bap claude -p --input-format stream-json --output-format stream-json --include-hook-events`, traps the full JSONL output, and runs `review_session.ps1 -NonInteractive -Json`):
+Run the following conversational prompts sequentially in the agent REPL console, or run all 12 scenarios in a single command using `scripts/run_claude_scenarios.ps1` (installed to `~/bin` only when `bap install --debug` is passed; feeds `bap claude -p --input-format stream-json --output-format stream-json --include-hook-events`, traps the full JSONL output, and runs `review_session.ps1 -NonInteractive -Json`):
 
 ```powershell
-# Run all 10 scenarios in a single command (Claude Code or Codex) and export calls-report.json:
+# Run all 12 scenarios in a single command (Claude Code or Codex) and export calls-report.json:
 .\scripts\run_claude_scenarios.ps1
 .\scripts\run_claude_scenarios.ps1 -Agent codex
 
 # Or dry-run / run a subset:
 .\scripts\run_claude_scenarios.ps1 -DryRun
-.\scripts\run_claude_scenarios.ps1 -Scenarios 1,2,3,4,5,6,8,9,10
+.\scripts\run_claude_scenarios.ps1 -Scenarios 1,2,3,4,5,6,8,9,10,11,12
 ```
 
 ---
@@ -428,6 +428,55 @@ Demonstrate that raw network exfiltration tools are blocked unless explicitly au
 - **BAP Enforcement**:
   - Cedar network egress invariants and the Windows Restricted Token sandbox block raw outbound network utilities (`curl`, `wget`, `nc`).
   - External API access must be explicitly authorized and routed through the BAP Gateway PEP.
+
+---
+
+### Scenario 11: Script Execution with Nested Subshell & Egress Containment (`python a11.py`)
+
+Demonstrate that executing a script maps to canonical action `dev:python:exec` on `file://a11.py`, and that even when script execution is permitted, nested subshell exfiltration (`curl https://cnn.com`), raw network sockets, and credential reads inside the script are stopped fail-closed by BAP's defense-in-depth boundaries.
+
+> **Prompt to Agent:**
+> *"Execute `python a11.py` to test script execution and verify that nested curl or raw network egress is contained and blocked."*
+
+- **Agent Action**: Agent requests execution of `python a11.py`.
+- **BAP Semantic Decomposition**:
+  - `bapedge` decomposes the command to `action: dev:python:exec`, `resource: file://a11.py`, `action_type: exec`.
+  - Under ZSP, this requires a task grant covering `dev:python:exec` or `dev:*` on `workspace://current`. An `inspect:read` grant alone (`repo:read`) fails closed immediately.
+- **Runtime Containment Verification**:
+  - `a11.py` runs inside the **Windows Restricted Token Sandbox** (`DISABLE_MAX_PRIVILEGE`).
+  - **Nested `curl https://cnn.com`**: Subprocess `curl` execution fails closed / exit non-zero.
+  - **Raw Socket Egress**: Attempted TCP connection to `cnn.com:80` is denied by the restricted token socket sandbox (`WSAEACCES` / forbidden by access permissions).
+  - **Credential Access**: Attempt to read `.env` is blocked by BAP's FIM Shield.
+- **Output Evidence**:
+  ```text
+  [a11.py] BAP Zero-Trust Script Execution & Containment Demonstration
+  [TEST 1] Attempting nested subshell exfiltration: 'curl -s https://cnn.com'...
+  [CONTAINED] curl execution failed/blocked with exit code 1
+  [TEST 2] Attempting raw TCP socket egress to cnn.com:80 (proxy bypass attempt)...
+  [CONTAINED] Raw network socket egress blocked by Windows Restricted Token sandbox
+  [TEST 3] Attempting unauthorized credential read of .env file...
+  [CONTAINED] File integrity shield blocked read of .env
+  ```
+
+---
+
+### Scenario 12: Unclassified & Exotic Toolchain Gating (sbcl / vbc / lisp)
+
+Demonstrate that unclassified, exotic, or custom compilers (e.g., Common Lisp `sbcl`, Visual Basic `vbc`, or custom binaries) fail-closed by default and require explicit task-level step-up authorization (`[O/S/P/G/D]`) or central Cedar policy distribution.
+
+> **Prompt to Agent:**
+> *"Attempt to execute an unclassified toolchain such as `sbcl --version` or `vbc /?` to verify default fail-closed gating and human-in-the-loop (HITL) step-up."*
+
+- **Agent Action**: Agent attempts to invoke an unclassified binary not present in default toolchain classes (`cli:sbcl:exec` or `cli:vbc:exec`).
+- **BAP Enforcement**:
+  - Cedar evaluates the command against active policy. Because `sbcl` is not in `context.executable` and not in `toolchain`, Cedar defaults to **Fail-Closed** (`Explicit deny or default deny (no permit policy matched)`).
+  - The agent is halted, and the human developer is prompted via interactive Child Console step-up:
+    ```text
+    [BAP SECURITY STEP-UP] Agent requested unclassified tool: 'sbcl --version'
+    Authorize this toolchain?
+    [O] Once | [S] Session | [P] Project | [G] Global | [D] Deny:
+    ```
+  - Alternatively, security administrators can add the compiler to `policy.cedar` via the **Cedar Policy Studio** (`/#policies`), cryptographically sign the bundle with HMAC-SHA256, and deploy it fleet-wide in sub-2ms.
 
 ---
 
