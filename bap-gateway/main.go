@@ -112,18 +112,24 @@ Examples:
   bapgateway enable
 `
 
-func pidPath() string {
-	if fi, err := os.Stat(".bapstate"); err == nil && fi.IsDir() {
-		return filepath.Join(".bapstate", "bap-gateway.pid")
+func gatewayStateDir() string {
+	if env := strings.TrimSpace(os.Getenv("BAP_STATE_DIR")); env != "" {
+		_ = os.MkdirAll(env, 0700)
+		return env
 	}
-	home, err := os.UserHomeDir()
-	if err == nil {
-		homeBapstate := filepath.Join(home, ".bapstate")
-		if fi, err := os.Stat(homeBapstate); err == nil && fi.IsDir() {
-			return filepath.Join(homeBapstate, "bap-gateway.pid")
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		binBapstate := filepath.Join(home, "bin", ".bapstate")
+		if mkErr := os.MkdirAll(binBapstate, 0700); mkErr == nil {
+			return binBapstate
 		}
 	}
-	return "bap-gateway.pid"
+	tmpBapstate := filepath.Join(os.TempDir(), "bapstate")
+	_ = os.MkdirAll(tmpBapstate, 0700)
+	return tmpBapstate
+}
+
+func pidPath() string {
+	return filepath.Join(gatewayStateDir(), "bap-gateway.pid")
 }
 
 func readPID(p string) (int, error) {
@@ -214,7 +220,6 @@ func runStart(args []string) {
 		}
 		pPath := pidPath()
 		_ = os.WriteFile(pPath, []byte(strconv.Itoa(cmd.Process.Pid)), 0644)
-		_ = os.WriteFile("bap-gateway.pid", []byte(strconv.Itoa(cmd.Process.Pid)), 0644)
 		time.Sleep(300 * time.Millisecond)
 		fmt.Printf("✅ BAP Gateway PEP launched in background (PID: %d on port %d)\n", cmd.Process.Pid, *port)
 		fmt.Println("   Run 'bapgateway status' to inspect health and endpoints.")
@@ -270,10 +275,8 @@ func runStart(args []string) {
 
 	pPath := pidPath()
 	_ = os.WriteFile(pPath, []byte(strconv.Itoa(os.Getpid())), 0644)
-	_ = os.WriteFile("bap-gateway.pid", []byte(strconv.Itoa(os.Getpid())), 0644)
 	defer func() {
 		_ = os.Remove(pPath)
-		_ = os.Remove("bap-gateway.pid")
 	}()
 
 	sigCh := make(chan os.Signal, 1)
@@ -700,8 +703,9 @@ func emitGatewayAuditWithTenant(cfg GatewayConfig, sessionID, agentID, appID, pa
 			_ = sendPEPTelemetry(cfg.ControlPlane, data)
 		}
 
-		// 2. Append to local .bapstate/audit.jsonl or legacy ltd-audit.jsonl
-		for _, auditFile := range []string{".bapstate/audit.jsonl", "../.bapstate/audit.jsonl", "ltd-audit.jsonl", "../ltd-audit.jsonl"} {
+		// 2. Append to <gatewayStateDir>/audit.jsonl (never create ./.bapstate in workspace CWD)
+		stateAudit := filepath.Join(gatewayStateDir(), "audit.jsonl")
+		for _, auditFile := range []string{stateAudit, "ltd-audit.jsonl"} {
 			if f, err := os.OpenFile(auditFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
 				data, _ := json.Marshal(ev)
 				_, _ = f.Write(append(data, '\n'))

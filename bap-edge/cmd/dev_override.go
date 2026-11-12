@@ -38,6 +38,8 @@ func resolveEnvironment() string {
 	}
 	if home, _ := os.UserHomeDir(); home != "" {
 		cfgCandidates = append(cfgCandidates,
+			filepath.Join(home, "bin", ".bapstate", "config.json"),
+			filepath.Join(home, "bin", "bap-config.json"),
 			filepath.Join(home, ".bapstate", "config.json"),
 			filepath.Join(home, ".bap", "config.json"),
 			filepath.Join(home, ".bap", "bap-config.json"),

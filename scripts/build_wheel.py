@@ -58,12 +58,37 @@ def get_platform_id() -> str:
     else:
         return "linux-arm64" if is_arm else "linux-amd64"
 
+def _latest_go_source_mtime(dir_path: str) -> float:
+    latest = 0.0
+    for walk_root, _, files in os.walk(dir_path):
+        for fn in files:
+            if fn.endswith(".go") or fn in ("go.mod", "go.sum") or fn.endswith((".cedar", ".json", ".crt", ".pem")):
+                try:
+                    mt = os.path.getmtime(os.path.join(walk_root, fn))
+                    if mt > latest:
+                        latest = mt
+                except OSError:
+                    pass
+    return latest
+
+
 def ensure_binaries(platforms: list):
     """
-    Verifies that client binaries (bapedge and interceptor) exist for all requested platforms.
-    If missing, automatically cross-compiles them using Go (CGO_ENABLED=0).
+    Verifies that fresh client binaries (bapedge and interceptor) exist for all requested platforms.
+    Recompiles using Go (CGO_ENABLED=0) when missing OR older than Go source files.
     """
     go_cmd = shutil.which("go")
+    bapedge_src_mtime = _latest_go_source_mtime(os.path.join(REPO_ROOT, "bap-edge"))
+    cchook_src_mtime = _latest_go_source_mtime(os.path.join(REPO_ROOT, "cchook"))
+
+    git_commit = "dev"
+    try:
+        git_commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, text=True, stderr=subprocess.DEVNULL
+        ).strip() or "dev"
+    except Exception:
+        pass
+
     for plat in platforms:
         plat_cfg = PLATFORM_GO_MAP.get(plat)
         if not plat_cfg:
@@ -75,16 +100,30 @@ def ensure_binaries(platforms: list):
         bapedge_target = os.path.join(target_dir, f"bapedge{ext}")
         interceptor_target = os.path.join(target_dir, f"interceptor{ext}")
 
-        need_bapedge = not (
-            os.path.isfile(bapedge_target) or
-            os.path.isfile(os.path.join(REPO_ROOT, "dist", plat, f"bapedge{ext}")) or
-            (plat.startswith("windows") and os.path.isfile(os.path.join(REPO_ROOT, "bapedge.exe")))
-        )
-        need_interceptor = not (
-            os.path.isfile(interceptor_target) or
-            os.path.isfile(os.path.join(REPO_ROOT, "dist", plat, f"interceptor{ext}")) or
-            (plat.startswith("windows") and os.path.isfile(os.path.join(REPO_ROOT, "cchook", "interceptor.exe")))
-        )
+        bapedge_candidates = [
+            bapedge_target,
+            os.path.join(REPO_ROOT, "dist", plat, f"bapedge{ext}"),
+        ]
+        if plat == "windows-amd64":
+            bapedge_candidates.extend([
+                os.path.join(REPO_ROOT, "bap-edge", "bapedge.exe"),
+                os.path.join(REPO_ROOT, "bapedge.exe"),
+            ])
+        newest_bapedge = max((os.path.getmtime(c) for c in bapedge_candidates if os.path.isfile(c)), default=0.0)
+        need_bapedge = (newest_bapedge == 0.0) or (newest_bapedge < bapedge_src_mtime)
+
+        interceptor_candidates = [
+            interceptor_target,
+            os.path.join(target_dir, "cchook", f"interceptor{ext}"),
+            os.path.join(REPO_ROOT, "dist", plat, f"interceptor{ext}"),
+        ]
+        if plat == "windows-amd64":
+            interceptor_candidates.extend([
+                os.path.join(REPO_ROOT, "cchook", "interceptor.exe"),
+                os.path.join(REPO_ROOT, "interceptor.exe"),
+            ])
+        newest_interceptor = max((os.path.getmtime(c) for c in interceptor_candidates if os.path.isfile(c)), default=0.0)
+        need_interceptor = (newest_interceptor == 0.0) or (newest_interceptor < cchook_src_mtime)
 
         if (need_bapedge or need_interceptor) and go_cmd:
             env = os.environ.copy()
@@ -93,9 +132,9 @@ def ensure_binaries(platforms: list):
             env["GOARCH"] = plat_cfg["GOARCH"]
 
             if need_bapedge:
-                print(f"[*] Cross-compiling bapedge for {plat} (GOOS={env['GOOS']}, GOARCH={env['GOARCH']})...")
+                print(f"[*] Cross-compiling fresh bapedge for {plat} (GOOS={env['GOOS']}, GOARCH={env['GOARCH']})...")
                 res = subprocess.run(
-                    [go_cmd, "build", "-trimpath", "-ldflags", "-s -w", "-o", bapedge_target, "."],
+                    [go_cmd, "build", "-trimpath", "-ldflags", f"-s -w -X bap-edge/pkg/version.GitCommit={git_commit}", "-o", bapedge_target, "."],
                     cwd=os.path.join(REPO_ROOT, "bap-edge"),
                     env=env,
                     capture_output=True,
@@ -107,7 +146,7 @@ def ensure_binaries(platforms: list):
                     print(f"  [+] Built: {bapedge_target}")
 
             if need_interceptor:
-                print(f"[*] Cross-compiling interceptor for {plat} (GOOS={env['GOOS']}, GOARCH={env['GOARCH']})...")
+                print(f"[*] Cross-compiling fresh interceptor for {plat} (GOOS={env['GOOS']}, GOARCH={env['GOARCH']})...")
                 res = subprocess.run(
                     [go_cmd, "build", "-trimpath", "-ldflags", "-s -w", "-o", interceptor_target, "."],
                     cwd=os.path.join(REPO_ROOT, "cchook"),
@@ -118,10 +157,13 @@ def ensure_binaries(platforms: list):
                 if res.returncode != 0:
                     print(f"[!] Warning: failed to build interceptor for {plat}: {res.stderr}")
                 else:
+                    cchook_sub = os.path.join(target_dir, "cchook")
+                    os.makedirs(cchook_sub, exist_ok=True)
+                    shutil.copy2(interceptor_target, os.path.join(cchook_sub, f"interceptor{ext}"))
                     print(f"  [+] Built: {interceptor_target}")
 
 def stage_binaries(platforms: list):
-    """Stages precompiled Go client binaries and configs into bap/bin/<plat>/."""
+    """Stages newest precompiled Go client binaries and configs into bap/bin/<plat>/."""
     if os.path.isdir(BAP_BIN_DIR):
         shutil.rmtree(BAP_BIN_DIR)
     os.makedirs(BAP_BIN_DIR, exist_ok=True)
@@ -139,19 +181,29 @@ def stage_binaries(platforms: list):
         binaries = ["bapedge" + ext, "interceptor" + ext]
 
         for b in binaries:
-            src = os.path.join(plat_src, b)
-            if not os.path.isfile(src):
-                alt = os.path.join(REPO_ROOT, "dist", plat, b)
-                if os.path.isfile(alt):
-                    src = alt
-                elif b.startswith("interceptor"):
-                    alt2 = os.path.join(plat_src, "cchook-interceptor" + ext)
-                    if os.path.isfile(alt2):
-                        src = alt2
-                    elif plat.startswith("windows") and os.path.isfile(os.path.join(REPO_ROOT, "cchook", "interceptor.exe")):
-                        src = os.path.join(REPO_ROOT, "cchook", "interceptor.exe")
-                elif b.startswith("bapedge") and plat.startswith("windows") and os.path.isfile(os.path.join(REPO_ROOT, "bapedge.exe")):
-                    src = os.path.join(REPO_ROOT, "bapedge.exe")
+            cand_paths = [
+                os.path.join(plat_src, b),
+                os.path.join(REPO_ROOT, "dist", plat, b),
+            ]
+            if b.startswith("interceptor"):
+                cand_paths.extend([
+                    os.path.join(plat_src, "cchook", b),
+                    os.path.join(plat_src, "cchook-interceptor" + ext),
+                ])
+                if plat == "windows-amd64":
+                    cand_paths.extend([
+                        os.path.join(REPO_ROOT, "cchook", "interceptor.exe"),
+                        os.path.join(REPO_ROOT, "interceptor.exe"),
+                    ])
+            elif b.startswith("bapedge") and plat == "windows-amd64":
+                cand_paths.extend([
+                    os.path.join(REPO_ROOT, "bap-edge", "bapedge.exe"),
+                    os.path.join(REPO_ROOT, "bapedge.exe"),
+                ])
+
+            existing = [p for p in cand_paths if os.path.isfile(p)]
+            existing.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+            src = existing[0] if existing else cand_paths[0]
 
             if os.path.isfile(src):
                 dst = os.path.join(target_dir, b)
@@ -159,7 +211,7 @@ def stage_binaries(platforms: list):
                 if not plat.startswith("windows"):
                     os.chmod(dst, 0o755)
                 sz_mb = os.path.getsize(dst) / (1024 * 1024)
-                print(f"[+] Staged {plat}/{b} ({sz_mb:.2f} MB)")
+                print(f"[+] Staged {plat}/{b} ({sz_mb:.2f} MB) from {os.path.relpath(src, REPO_ROOT)}")
                 staged_count += 1
             else:
                 print(f"[!] Warning: Could not find {b} for {plat} at {src}")

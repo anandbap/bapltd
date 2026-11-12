@@ -43,6 +43,7 @@ func RunLogout(args []string) error {
 	}
 	if home, hErr := os.UserHomeDir(); hErr == nil && home != "" {
 		candidatePaths = append(candidatePaths,
+			filepath.Join(home, "bin", ".bapstate", "credentials.json"),
 			filepath.Join(home, ".bapstate", "credentials.json"),
 			filepath.Join(home, ".ltd", "credentials.json"),
 			filepath.Join(home, ".bap", "credentials.json"),

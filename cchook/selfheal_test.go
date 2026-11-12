@@ -63,6 +63,7 @@ func TestCleanupSessionMarkersRemovesSessionFiles(t *testing.T) {
 	_ = os.WriteFile(pMarker, []byte(`{"session_id":"`+sid+`"}`), 0600)
 
 	sessionJson := filepath.Join(".bap", "session.json")
+	_ = os.MkdirAll(filepath.Dir(sessionJson), 0700)
 	_ = os.WriteFile(sessionJson, []byte(`{"session_id":"`+sid+`"}`), 0600)
 
 	// Invoke cleanup

@@ -18,12 +18,16 @@ type hookCredential struct {
 var hookEnrollment = func() hookCredential {
 	path := os.Getenv("BAP_CREDENTIALS")
 	if path == "" {
-		dir := os.Getenv("BAP_STATE_DIR")
-		if dir == "" {
-			home, _ := os.UserHomeDir()
-			dir = filepath.Join(home, ".bapstate")
-		}
+		dir := hookStateDir()
 		path = filepath.Join(dir, "credentials.json")
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			if home, hErr := os.UserHomeDir(); hErr == nil && home != "" {
+				legacy := filepath.Join(home, ".bapstate", "credentials.json")
+				if _, lErr := os.Stat(legacy); lErr == nil {
+					path = legacy
+				}
+			}
+		}
 	}
 	var credential hookCredential
 	if data, err := os.ReadFile(path); err == nil {

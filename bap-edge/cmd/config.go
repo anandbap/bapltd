@@ -114,7 +114,7 @@ func RunConfig(args []string) error {
 		syncedLocations = append(syncedLocations, targetFile)
 
 		// Synchronize central installation locations
-		// 1. ~/.bapstate/config.json (authoritative state cache)
+		// 1. ~/bin/.bapstate/config.json (or BAP_STATE_DIR/config.json)
 		statePath := state.ConfigPath()
 		if statePath != "" && statePath != targetFile {
 			if *global || fileExists(statePath) {

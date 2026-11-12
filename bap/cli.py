@@ -344,6 +344,8 @@ def main():
         # Comprehensive credential cleanup across all candidate locations
         home = os.path.expanduser("~")
         candidates = [
+            os.path.join(os.environ.get("BAP_STATE_DIR", ""), "credentials.json") if os.environ.get("BAP_STATE_DIR") else "",
+            os.path.join(home, "bin", ".bapstate", "credentials.json"),
             os.path.join(home, ".bapstate", "credentials.json"),
             os.path.join(home, ".ltd", "credentials.json"),
             os.path.join(home, ".bap", "credentials.json"),
@@ -359,8 +361,13 @@ def main():
                 except Exception:
                     pass
         # Also clean session tokens
-        for sdir in [os.path.join(home, ".bapstate", "sessions"), os.path.join(home, ".ltd", "sessions")]:
-            if os.path.isdir(sdir):
+        for sdir in [
+            os.path.join(os.environ.get("BAP_STATE_DIR", ""), "sessions") if os.environ.get("BAP_STATE_DIR") else "",
+            os.path.join(home, "bin", ".bapstate", "sessions"),
+            os.path.join(home, ".bapstate", "sessions"),
+            os.path.join(home, ".ltd", "sessions"),
+        ]:
+            if sdir and os.path.isdir(sdir):
                 try:
                     shutil.rmtree(sdir, ignore_errors=True)
                 except Exception:

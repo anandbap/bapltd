@@ -5221,3 +5221,45 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
   - Types: `bap-edge/pkg/types/types.go` and `bap-controlplane/pkg/types/types.go` (`AuditLineageProof`).
   - Ledger Proof Generator: `bap-edge/internal/authz/zsp_engine.go` (`signProof`, `ConsumeTaskGrant`).
   - Unit Tests: `TestBAP918_CryptographicAuditLineageAndNonRepudiation` in `zsp_engine_test.go` (PASS).
+
+
+#### Story BAP-919: Eliminate Stale Binary Deployment During `bap install` and Packaging
+- **Type**: Bug | **Points**: 5 | **Priority**: P0 - Blocker | **Status**: `DONE`
+- **Root Cause**:
+  1. `bap/bap_install.py:get_source_binary()` returned the first existing candidate (`bap/bin/<plat>/`) without comparing modification times (`mtime`), causing older staged binaries to shadow freshly built executables in `bap-edge/`, `cchook/`, `bap-gateway/`, or `dist/`.
+  2. `scripts/build_wheel.py:ensure_binaries()` skipped compiling `bapedge` and `interceptor` whenever any existing binary was present on disk, even if Go sources were newer.
+  3. `update_binaries.ps1` omitted `bap/bin/windows-amd64` when absent, skipped `dist/windows-amd64/claude-client/cchook/interceptor.exe`, and did not refresh `plugins/*/scripts/bap-hook-adapter.exe`, while `build_binaries.bat` previously copied raw Go binaries over pip's `%APPDATA%\Python\Python3*\Scripts\bap.exe` / `bapedge.exe` entries on `PATH`.
+  4. `safe_copy_binary()` used a colliding `<dst>.old` rename fallback on Windows locks, and `install_core_binaries()` masked copy failures as `deployed += 1` with exit status 0.
+- **Acceptance Criteria**:
+  - `get_source_binary()` selects the newest real binary by `mtime` descending across candidates.
+  - Running `bap install` inside a Go source checkout auto-rebuilds stale Go modules (`rebuild_stale_repo_binaries_if_needed()`) unless `--no-rebuild` is passed.
+  - `safe_copy_binary()` stops `bapedge` daemon/supervisor and `bapgateway`, uses unique `<dst>.old.<pid>.<ms>` rename on Windows lock, verifies byte-for-byte SHA-256 identity, and fails loudly (exit code 1) if any binary remains locked/stale.
+  - `scripts/build_wheel.py`, `update_binaries.ps1`, and `build_binaries.bat` rebuild when Go sources are newer and synchronize `bap/bin/windows-amd64/`, `dist/windows-amd64/claude-client/cchook/`, and `plugins/*/scripts/bap-hook-adapter.exe` without overwriting pip console entry points.
+- **Implementation Evidence**:
+  - `bap/bap_install.py` & `scripts/bap_install.py`: `get_source_binary`, `safe_copy_binary`, `stop_running_bap_processes`, `rebuild_stale_repo_binaries_if_needed`, `install_core_binaries`.
+  - Packaging & Build Scripts: `scripts/build_wheel.py`, `update_binaries.ps1`, `build_binaries.bat`.
+  - Unit & Build Verification: `tests/test_bap_install_multiplatform.py` (`test_get_source_binary_prefers_newest_mtime`, `test_install_native_agent_plugins_refreshes_stale_hook_adapter_exe` — 18/18 OK); `.\update_binaries.ps1 -SkipUserInstall` built `v1.12.28` (`aff5b88`).
+
+
+#### Story BAP-920: Centralize `.bapstate` to `~/bin/.bapstate` and Eliminate Workspace Clutter
+- **Type**: Bug | **Points**: 8 | **Priority**: P0 - Blocker | **Status**: `DONE`
+- **Root Cause**:
+  1. `bap install` defaulted to writing workspace-local `.claude/`, `.codex/`, `.cursor/`, `.cursorrules`, `.vscode/`, `.antigravity/`, `GEMINI.md`, `bap-config.json`, `.bap/`, and `plugins/` into `args.workspace` (`os.getcwd()`).
+  2. `.bapstate/` defaulted to `~/.bapstate` or `./.bapstate` across `bap-edge/internal/state/state.go`, `bap-edge/internal/authz/zsp_store.go`, `bap-edge/cmd/plugin.go`, `cchook/evidence_spool.go`, `cchook/identity_transport.go`, `scripts/bap_launcher_engine.ps1`, and `python-agent/bap_sdk*` instead of `<userhome>/bin/.bapstate`.
+  3. `bap-gateway/main.go` unconditionally wrote bare `bap-gateway.pid` and checked `./.bapstate/audit.jsonl` in CWD.
+  4. `cchook/interceptor.go` wrote `.bap/sessions/`, `.bap/session.json`, and `.bap/prompts/` in CWD, and `run_claude_bap.ps1` placed `.bap-recovery.json` inside `.claude/`.
+  5. Verified `.env` is NOT created or mutated by any BAP binary/installer (`bap-edge/internal/discovery/report.go` explicitly excludes `.env`).
+- **Acceptance Criteria**:
+  - `.bapstate` defaults to `<userhome>/bin/.bapstate` (respecting `BAP_STATE_DIR` / `BAP_ZSP_DIR`) across Go binaries (`bap-edge`, `bap-gateway`, `cchook`), PowerShell launchers, and Python tools/SDK without creating `./.bapstate` inside project workspaces.
+  - `bap install` configures global `~/.claude`, `~/.codex`, `~/.bap/plugins`, `~/bin/plugins`, and `~/.claude/plugins/claude` cleanly by default without littering target repos (opt-in `--workspace-hooks`; `--clean-workspace` and `--uninstall` remove legacy BAP clutter while preserving `.env` and user files).
+  - `bapgateway` writes PID and audit state solely under `<userhome>/bin/.bapstate` (`BAP_STATE_DIR` override), never bare `./bap-gateway.pid`.
+  - `cchook/interceptor` stores PID markers, session markers, and prompts under `hookStateDir()`, and launchers store recovery/shims/mirrors under `<userhome>/bin/.bapstate` and remove newly-created empty workspace directories on teardown.
+- **Implementation Evidence**:
+  - Go Core & Hooks: `bap-edge/internal/state/state.go`, `bap-edge/internal/state/state_test.go`, `bap-edge/internal/authz/zsp_store.go`, `bap-edge/cmd/plugin.go`, `bap-edge/cmd/agent_launcher.go`, `bap-edge/cmd/zsp.go`, `bap-edge/cmd/logout.go`, `bap-edge/cmd/dev_override.go`, `bap-edge/cmd/config.go`, `bap-gateway/main.go`, `cchook/evidence_spool.go`, `cchook/identity_transport.go`, `cchook/interceptor.go`, `cchook/selfheal_test.go`.
+  - Launchers & Python CLI/SDK: `scripts/bap_launcher_engine.ps1`, `run_claude_bap.ps1`, `bap/bap_install.py`, `scripts/bap_install.py`, `bap/cli.py`, `bap/bap_doctor.py`, `bap/bap_harness.py`, `python-agent/bap_sdk.py`, `python-agent/bap_sdk/client.py`.
+  - Unit Tests:
+    - `go test -C bap-edge ./internal/state ./internal/authz ./cmd` (PASS)
+    - `go test -C cchook .` (PASS)
+    - `go test -C bap-gateway .` (PASS)
+    - `python -m unittest tests/test_bap_install_multiplatform.py -v` (18 tests OK)
+    - `python -m unittest tests/test_harness_multi_session.py -v` (4 tests OK)

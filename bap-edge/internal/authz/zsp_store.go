@@ -47,18 +47,19 @@ func sanitizeZSPKey(s string) string {
 	return clean
 }
 
-// ResolveZSPDir returns the workspace-local or user-home directory used for persistent ZSP state.
+// ResolveZSPDir returns the canonical directory used for persistent ZSP state.
+// Precedence: BAP_ZSP_DIR -> BAP_STATE_DIR/zsp -> ~/bin/.bapstate/zsp.
 func ResolveZSPDir() string {
 	if env := strings.TrimSpace(os.Getenv("BAP_ZSP_DIR")); env != "" {
 		return filepath.Clean(env)
 	}
-	if ws := GetWorkspaceRoot(); ws != "" && ws != "." {
-		return filepath.Join(ws, ".bapstate", "zsp")
+	if envState := strings.TrimSpace(os.Getenv("BAP_STATE_DIR")); envState != "" {
+		return filepath.Join(filepath.Clean(envState), "zsp")
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return filepath.Join(home, ".bapstate", "zsp")
+		return filepath.Join(home, "bin", ".bapstate", "zsp")
 	}
-	return filepath.Join(".bapstate", "zsp")
+	return filepath.Join(os.TempDir(), "bapstate", "zsp")
 }
 
 // IsZSPEnforced returns true unless ZSP has been explicitly disabled for isolated legacy testing.

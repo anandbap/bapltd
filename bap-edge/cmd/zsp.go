@@ -50,6 +50,7 @@ func resolveSessionIDFromPIDMarkers(pids ...int) string {
 	dirs := []string{state.SessionsDir(), filepath.Join(".bap", "sessions")}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		dirs = append(dirs,
+			filepath.Join(home, "bin", ".bapstate", "sessions"),
 			filepath.Join(home, ".bapstate", "sessions"),
 			filepath.Join(home, ".bap", "sessions"),
 		)

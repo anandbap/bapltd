@@ -385,25 +385,23 @@ def get_bapstate_dir() -> str:
     """
     Resolves the .bapstate directory following the precedence:
     1. BAP_STATE_DIR env var
-    2. ~/.bapstate in user home (if exists)
-    3. ./.bapstate in current working directory (if exists)
-    4. Defaults to ~/.bapstate (fallback to ./.bapstate)
+    2. ~/bin/.bapstate in user home (default canonical location)
+    3. Temp fallback (never auto-creates ./.bapstate inside arbitrary project workspaces)
     """
     env_dir = os.getenv("BAP_STATE_DIR")
     if env_dir:
         return env_dir
-    home_dir = os.path.expanduser("~/.bapstate")
-    if os.path.isdir(home_dir):
-        return home_dir
-    cwd_dir = os.path.abspath(".bapstate")
-    if os.path.isdir(cwd_dir):
-        return cwd_dir
+    bin_state_dir = os.path.join(os.path.expanduser("~"), "bin", ".bapstate")
+    if os.path.isdir(bin_state_dir):
+        return bin_state_dir
     try:
-        os.makedirs(home_dir, exist_ok=True)
-        return home_dir
+        os.makedirs(bin_state_dir, exist_ok=True)
+        return bin_state_dir
     except Exception:
-        os.makedirs(cwd_dir, exist_ok=True)
-        return cwd_dir
+        import tempfile
+        tmp_dir = os.path.join(tempfile.gettempdir(), "bapstate")
+        os.makedirs(tmp_dir, exist_ok=True)
+        return tmp_dir
 
 
 def get_bap_credentials_path() -> str:

@@ -46,14 +46,16 @@ func resolveLauncherScript(scriptNames []string) string {
 	exeDir := filepath.Dir(exePath)
 
 	candidateDirs := []string{
+		exeDir,
+		filepath.Join(exeDir, "launchers"),
+		filepath.Join(home, "bin"),
+		filepath.Join(home, "bin", "launchers"),
+		filepath.Join(home, ".bap", "launchers"),
+		filepath.Join(home, ".bap"),
 		cwd,
 		filepath.Join(cwd, "bap"),
 		filepath.Join(cwd, "bap", "launchers"),
 		filepath.Join(cwd, "scripts"),
-		exeDir,
-		filepath.Join(exeDir, "launchers"),
-		filepath.Join(home, ".bap", "launchers"),
-		filepath.Join(home, ".bap"),
 	}
 
 	if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
@@ -178,7 +180,22 @@ func RunClaude(args []string) error {
 	claudeArgs := downstreamArgs
 	if !hooksDisabled {
 		cwd, _ := os.Getwd()
-		pluginDir := filepath.Join(cwd, "plugins", "claude")
+		home, _ := os.UserHomeDir()
+		exePath, _ := os.Executable()
+		pluginCandidates := []string{
+			filepath.Join(cwd, "plugins", "claude"),
+			filepath.Join(filepath.Dir(exePath), "plugins", "claude"),
+			filepath.Join(home, "bin", "plugins", "claude"),
+			filepath.Join(home, ".bap", "plugins", "claude"),
+			filepath.Join(home, ".claude", "plugins", "claude"),
+		}
+		var pluginDir string
+		for _, cand := range pluginCandidates {
+			if info, err := os.Stat(cand); err == nil && info.IsDir() {
+				pluginDir = cand
+				break
+			}
+		}
 		hasPluginFlag := false
 		for _, a := range downstreamArgs {
 			if strings.HasPrefix(a, "--plugin-dir") {
@@ -186,10 +203,8 @@ func RunClaude(args []string) error {
 				break
 			}
 		}
-		if !hasPluginFlag {
-			if info, err := os.Stat(pluginDir); err == nil && info.IsDir() {
-				claudeArgs = append([]string{"--plugin-dir", pluginDir}, downstreamArgs...)
-			}
+		if !hasPluginFlag && pluginDir != "" {
+			claudeArgs = append([]string{"--plugin-dir", pluginDir}, downstreamArgs...)
 		}
 	}
 

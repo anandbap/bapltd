@@ -1013,10 +1013,7 @@ func readHealthStatus(client string) (hookActive, verified bool, lastObs *time.T
 
 func recordPluginCallback(client, event string, payload map[string]any) {
 	client = normalizeClientAppID(client)
-	targetDirs := []string{
-		filepath.Join(state.Dir(), "reporting-health"),
-		filepath.Join(".bapstate", "reporting-health"),
-	}
+	dir := filepath.Join(state.Dir(), "reporting-health")
 
 	now := time.Now().UTC()
 	fn := fmt.Sprintf("%s-plugin-%s-%d.json", client, strings.ToLower(event), now.UnixNano())
@@ -1029,18 +1026,13 @@ func recordPluginCallback(client, event string, payload map[string]any) {
 		"session_id":           resolvePluginSessionID(client, payload),
 	}
 	data, _ := json.Marshal(sig)
-	for _, dir := range targetDirs {
-		_ = os.MkdirAll(dir, 0700)
-		_ = os.WriteFile(filepath.Join(dir, fn), data, 0600)
-	}
+	_ = os.MkdirAll(dir, 0700)
+	_ = os.WriteFile(filepath.Join(dir, fn), data, 0600)
 }
 
 func recordEnforcementVerification(client, workspace string) {
 	client = normalizeClientAppID(client)
-	targetDirs := []string{
-		filepath.Join(state.Dir(), "reporting-health"),
-		filepath.Join(".bapstate", "reporting-health"),
-	}
+	dir := filepath.Join(state.Dir(), "reporting-health")
 
 	now := time.Now().UTC()
 	fn := fmt.Sprintf("%s-verified-%d.json", client, now.UnixNano())
@@ -1052,10 +1044,8 @@ func recordEnforcementVerification(client, workspace string) {
 		"enforcement_verified": true,
 	}
 	data, _ := json.Marshal(sig)
-	for _, dir := range targetDirs {
-		_ = os.MkdirAll(dir, 0700)
-		_ = os.WriteFile(filepath.Join(dir, fn), data, 0600)
-	}
+	_ = os.MkdirAll(dir, 0700)
+	_ = os.WriteFile(filepath.Join(dir, fn), data, 0600)
 }
 
 // -----------------------------------------------------------------------------

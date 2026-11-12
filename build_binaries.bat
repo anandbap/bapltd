@@ -175,34 +175,27 @@ copy /y "%ROOT_DIR%review_session.ps1" "%USERPROFILE%\.bap\launchers\review_sess
 
 for %%V in (Python312 Python313 Python311 Python310) do (
     if exist "%APPDATA%\Python\%%V\Scripts" (
-        if exist "%APPDATA%\Python\%%V\Scripts\bapedge.exe" move /y "%APPDATA%\Python\%%V\Scripts\bapedge.exe" "%APPDATA%\Python\%%V\Scripts\bapedge.old" >nul 2>&1
-        copy /y "%ROOT_DIR%bapedge.exe" "%APPDATA%\Python\%%V\Scripts\bapedge.exe" >nul 2>&1
-        del /f /q "%APPDATA%\Python\%%V\Scripts\bapedge.old" >nul 2>&1
-
-        if exist "%APPDATA%\Python\%%V\Scripts\bap.exe" move /y "%APPDATA%\Python\%%V\Scripts\bap.exe" "%APPDATA%\Python\%%V\Scripts\bap.old" >nul 2>&1
-        copy /y "%ROOT_DIR%bapedge.exe" "%APPDATA%\Python\%%V\Scripts\bap.exe" >nul 2>&1
-        del /f /q "%APPDATA%\Python\%%V\Scripts\bap.old" >nul 2>&1
-
-        if exist "%APPDATA%\Python\%%V\Scripts\bapmcp.exe" move /y "%APPDATA%\Python\%%V\Scripts\bapmcp.exe" "%APPDATA%\Python\%%V\Scripts\bapmcp.old" >nul 2>&1
-        copy /y "%ROOT_DIR%bapedge.exe" "%APPDATA%\Python\%%V\Scripts\bapmcp.exe" >nul 2>&1
-        del /f /q "%APPDATA%\Python\%%V\Scripts\bapmcp.old" >nul 2>&1
-
         copy /y "%ROOT_DIR%run_claude_bap.bat" "%APPDATA%\Python\%%V\Scripts\run_claude_bap.bat" >nul 2>&1
         copy /y "%ROOT_DIR%run_claude_bap.ps1" "%APPDATA%\Python\%%V\Scripts\run_claude_bap.ps1" >nul 2>&1
     )
 )
 
-if exist "%ROOT_DIR%bap\bin\windows-amd64" (
-    copy /y "%ROOT_DIR%bapedge.exe" "%ROOT_DIR%bap\bin\windows-amd64\bapedge.exe" >nul 2>&1
-    copy /y "%ROOT_DIR%bapedge.exe" "%ROOT_DIR%bap\bin\windows-amd64\bap.exe" >nul 2>&1
-    copy /y "%ROOT_DIR%bapedge.exe" "%ROOT_DIR%bap\bin\windows-amd64\bapmcp.exe" >nul 2>&1
-    copy /y "%ROOT_DIR%bapcontrolplane.exe" "%ROOT_DIR%bap\bin\windows-amd64\bapcontrolplane.exe" >nul 2>&1
-    copy /y "%ROOT_DIR%bapgateway.exe" "%ROOT_DIR%bap\bin\windows-amd64\bapgateway.exe" >nul 2>&1
-    copy /y "%ROOT_DIR%cchook\interceptor.exe" "%ROOT_DIR%bap\bin\windows-amd64\interceptor.exe" >nul 2>&1
-    copy /y "%ROOT_DIR%policy.cedar" "%ROOT_DIR%bap\bin\windows-amd64\policy.cedar" >nul 2>&1
-    copy /y "%ROOT_DIR%schema.json" "%ROOT_DIR%bap\bin\windows-amd64\schema.json" >nul 2>&1
-    copy /y "%ROOT_DIR%bap-config.json" "%ROOT_DIR%bap\bin\windows-amd64\bap-config.json" >nul 2>&1
+for %%A in (claude codex copilot antigravity opencode) do (
+    if exist "%ROOT_DIR%plugins\%%A\scripts" (
+        copy /y "%ROOT_DIR%bapedge.exe" "%ROOT_DIR%plugins\%%A\scripts\bap-hook-adapter.exe" >nul 2>&1
+    )
 )
+
+if not exist "%ROOT_DIR%bap\bin\windows-amd64" mkdir "%ROOT_DIR%bap\bin\windows-amd64" >nul 2>&1
+copy /y "%ROOT_DIR%bapedge.exe" "%ROOT_DIR%bap\bin\windows-amd64\bapedge.exe" >nul 2>&1
+copy /y "%ROOT_DIR%bapedge.exe" "%ROOT_DIR%bap\bin\windows-amd64\bapmcp.exe" >nul 2>&1
+copy /y "%ROOT_DIR%bapcontrolplane.exe" "%ROOT_DIR%bap\bin\windows-amd64\bapcontrolplane.exe" >nul 2>&1
+copy /y "%ROOT_DIR%bapgateway.exe" "%ROOT_DIR%bap\bin\windows-amd64\bapgateway.exe" >nul 2>&1
+copy /y "%ROOT_DIR%cchook\interceptor.exe" "%ROOT_DIR%bap\bin\windows-amd64\interceptor.exe" >nul 2>&1
+copy /y "%ROOT_DIR%cchook\interceptor.exe" "%ROOT_DIR%bap\bin\windows-amd64\cchook-interceptor.exe" >nul 2>&1
+copy /y "%ROOT_DIR%policy.cedar" "%ROOT_DIR%bap\bin\windows-amd64\policy.cedar" >nul 2>&1
+copy /y "%ROOT_DIR%schema.json" "%ROOT_DIR%bap\bin\windows-amd64\schema.json" >nul 2>&1
+copy /y "%ROOT_DIR%bap-config.json" "%ROOT_DIR%bap\bin\windows-amd64\bap-config.json" >nul 2>&1
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT_DIR%scripts\check_stale_copies.ps1" %AUTO_FIX%
 if %ERRORLEVEL% neq 0 (

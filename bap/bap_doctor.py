@@ -259,6 +259,8 @@ def run_doctor():
     enforcement_mode = "enforce"
     cfg_candidates = [
         os.path.join(user_bin, "bap-config.json"),
+        os.path.join(user_bin, ".bapstate", "config.json"),
+        os.path.join(user_bin, ".bapstate", "bap-config.json"),
         os.path.join(bapedge_dir, "bap-config.json") if bapedge_dir else None,
         os.path.expanduser("~/.bapstate/config.json"),
         os.path.expanduser("~/.bapstate/bap-config.json"),
@@ -308,6 +310,8 @@ def run_doctor():
     # Check Corporate Identity / OIDC Enrollment
     creds_candidates = [
         os.environ.get("BAP_CREDENTIALS"),
+        os.path.join(os.environ.get("BAP_STATE_DIR", ""), "credentials.json") if os.environ.get("BAP_STATE_DIR") else None,
+        os.path.join(user_bin, ".bapstate", "credentials.json"),
         os.path.expanduser("~/.bapstate/credentials.json"),
         os.path.join(os.getcwd(), ".bapstate", "credentials.json"),
         os.path.expanduser("~/.bap/credentials.json"),

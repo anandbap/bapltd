@@ -355,6 +355,15 @@ function Restore-BapSessionState {
             $mirror = Get-RecoveryMirrorPath -ManifestPath $ManifestPath
             Remove-Item -LiteralPath $ManifestPath -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $mirror -Force -ErrorAction SilentlyContinue
+            if ($record.PSObject.Properties.Name -contains 'workspace' -and -not [string]::IsNullOrWhiteSpace([string]$record.workspace)) {
+                $wsClean = [string]$record.workspace
+                foreach ($dName in @('.bapstate', '.bap', '.claude', '.codex', '.cursor')) {
+                    $dPath = Join-Path $wsClean $dName
+                    if ((Test-Path -LiteralPath $dPath -PathType Container) -and (@(Get-ChildItem -LiteralPath $dPath -Force -ErrorAction SilentlyContinue).Count -eq 0)) {
+                        Remove-Item -LiteralPath $dPath -Force -ErrorAction SilentlyContinue
+                    }
+                }
+            }
             Write-Host "[+] All developer configuration files cleanly restored." -ForegroundColor Green
         }
         return $allOk
@@ -553,6 +562,33 @@ function Run-WatchdogLoop {
 # -----------------------------------------------------------------------------
 # Layer 3: Tool Call & Terminal Interceptor Shims
 # -----------------------------------------------------------------------------
+function Get-BapStateDir {
+    if (-not [string]::IsNullOrWhiteSpace($env:BAP_STATE_DIR)) {
+        $d = $env:BAP_STATE_DIR.Trim()
+    } else {
+        $homeDir = [Environment]::GetFolderPath('UserProfile')
+        if ([string]::IsNullOrWhiteSpace($homeDir)) { $homeDir = $env:USERPROFILE }
+        if ([string]::IsNullOrWhiteSpace($homeDir)) { $homeDir = $HOME }
+        $d = Join-Path (Join-Path $homeDir 'bin') '.bapstate'
+    }
+    if (-not (Test-Path -LiteralPath $d)) {
+        New-Item -ItemType Directory -Path $d -Force | Out-Null
+    }
+    return $d
+}
+
+function Get-WorkspaceHashPrefix {
+    param([Parameter(Mandatory = $true)][string]$Workspace)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Workspace.ToLowerInvariant())
+        $hash = $sha.ComputeHash($bytes)
+        return ([BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant().Substring(0, 12)
+    } finally {
+        $sha.Dispose()
+    }
+}
+
 function Initialize-BapShims {
     param(
         [Parameter(Mandatory = $true)][string]$Workspace,
@@ -561,7 +597,7 @@ function Initialize-BapShims {
         [Parameter(Mandatory = $true)][string]$SessionId
     )
 
-    $shimDir = Join-Path $Workspace ".bapstate\shims-$SessionId"
+    $shimDir = Join-Path (Get-BapStateDir) "shims-$SessionId"
     if (-not (Test-Path -LiteralPath $shimDir)) {
         New-Item -ItemType Directory -Path $shimDir -Force | Out-Null
     }
@@ -609,7 +645,7 @@ function Initialize-CorporateMirrors {
         [Parameter(Mandatory = $true)][string]$SessionId
     )
 
-    $mirrorDir = Join-Path $Workspace ".bapstate\mirrors"
+    $mirrorDir = Join-Path (Get-BapStateDir) "mirrors"
     if (-not (Test-Path -LiteralPath $mirrorDir)) {
         New-Item -ItemType Directory -Path $mirrorDir -Force | Out-Null
     }
@@ -753,12 +789,17 @@ function Invoke-BapGovernedSession {
         $RepoRoot = Split-Path -Parent $ScriptDir
     }
 
-    $BapStateDir = Join-Path $Workspace '.bapstate'
+    $BapStateDir = Get-BapStateDir
     if (-not (Test-Path -LiteralPath $BapStateDir)) {
         New-Item -ItemType Directory -Path $BapStateDir -Force | Out-Null
     }
 
-    $ManifestPath = Join-Path $BapStateDir "recovery-$AgentId-$AgentMode.json"
+    $SessionsStateDir = Join-Path $BapStateDir 'sessions'
+    if (-not (Test-Path -LiteralPath $SessionsStateDir)) {
+        New-Item -ItemType Directory -Path $SessionsStateDir -Force | Out-Null
+    }
+    $wsHash = Get-WorkspaceHashPrefix -Workspace $Workspace
+    $ManifestPath = Join-Path $SessionsStateDir "recovery-$AgentId-$AgentMode-$wsHash.json"
     $MirrorPath = Get-RecoveryMirrorPath -ManifestPath $ManifestPath
     $MutexName = Get-WorkspaceMutexName -Workspace $Workspace -AgentPrefix "$AgentId-$AgentMode"
     $SessionId = "sess-$AgentId-$AgentMode-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"

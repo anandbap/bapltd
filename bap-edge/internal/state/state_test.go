@@ -51,4 +51,20 @@ func TestStateDirResolution(t *testing.T) {
 	if sessDir != expectedSessions {
 		t.Fatalf("expected sessions dir %s, got %s", expectedSessions, sessDir)
 	}
+
+	// Test 6: Default state dir resolves to <userhome>/bin/.bapstate (never workspace ./.bapstate)
+	fakeHome := t.TempDir()
+	t.Setenv("BAP_STATE_DIR", "")
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("USERPROFILE", fakeHome)
+	ResetForTesting()
+
+	defaultDir := Dir()
+	expectedDefault := filepath.Join(fakeHome, "bin", ".bapstate")
+	if defaultDir != expectedDefault {
+		t.Fatalf("expected default state dir %s, got %s", expectedDefault, defaultDir)
+	}
+	if _, err := os.Stat(expectedDefault); os.IsNotExist(err) {
+		t.Fatalf("expected default state dir %s to be created", expectedDefault)
+	}
 }

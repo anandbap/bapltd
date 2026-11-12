@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -22,9 +23,8 @@ func ResetForTesting() {
 
 // Dir returns the authoritative .bapstate directory following the discovery order:
 // 1. Explicit environment variable: BAP_STATE_DIR
-// 2. User home directory: ~/.bapstate (if it exists)
-// 3. Current working directory: ./.bapstate (if it exists)
-// 4. Default: User home ~/.bapstate (with fallback to ./.bapstate if home is unavailable or unwritable)
+// 2. User bin state directory: ~/bin/.bapstate (default canonical location)
+// 3. Temp fallback: <tmp>/bapstate (never auto-creates ./.bapstate inside project workspaces)
 func Dir() string {
 	dirOnce.Do(func() {
 		// 1. Explicit environment variable override
@@ -35,47 +35,21 @@ func Dir() string {
 		}
 
 		home, err := os.UserHomeDir()
-		var homeBapstate string
 		if err == nil && home != "" {
-			homeBapstate = filepath.Join(home, ".bapstate")
-		}
-
-		cwdBapstate := ".bapstate"
-
-		// 2. Check user home directory (~/.bapstate)
-		if homeBapstate != "" {
-			if fi, err := os.Stat(homeBapstate); err == nil && fi.IsDir() {
-				resolvedDir = homeBapstate
+			binBapstate := filepath.Join(home, "bin", ".bapstate")
+			if fi, sErr := os.Stat(binBapstate); sErr == nil && fi.IsDir() {
+				resolvedDir = binBapstate
+				return
+			}
+			if mkErr := os.MkdirAll(binBapstate, 0700); mkErr == nil {
+				resolvedDir = binBapstate
 				return
 			}
 		}
 
-		// 3. Check current working directory (./.bapstate)
-		if fi, err := os.Stat(cwdBapstate); err == nil && fi.IsDir() {
-			absCwd, err := filepath.Abs(cwdBapstate)
-			if err == nil {
-				resolvedDir = absCwd
-			} else {
-				resolvedDir = cwdBapstate
-			}
-			return
-		}
-
-		// 4. Default in order: create ~/.bapstate if possible, else fallback to ./.bapstate
-		if homeBapstate != "" {
-			if err := os.MkdirAll(homeBapstate, 0700); err == nil {
-				resolvedDir = homeBapstate
-				return
-			}
-		}
-
-		_ = os.MkdirAll(cwdBapstate, 0700)
-		absCwd, err := filepath.Abs(cwdBapstate)
-		if err == nil {
-			resolvedDir = absCwd
-		} else {
-			resolvedDir = cwdBapstate
-		}
+		tmpBapstate := filepath.Join(os.TempDir(), "bapstate")
+		_ = os.MkdirAll(tmpBapstate, 0700)
+		resolvedDir = tmpBapstate
 	})
 
 	// Ensure legacy migration happens once state dir is determined
@@ -131,6 +105,9 @@ func PurgeAllCredentials(explicitPath string) {
 
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		candidates = append(candidates,
+			filepath.Join(home, "bin", ".bapstate", "credentials.json"),
+			filepath.Join(home, "bin", ".bapstate", "session.json"),
+			filepath.Join(home, "bin", ".bapstate", "token.json"),
 			filepath.Join(home, ".bapstate", "credentials.json"),
 			filepath.Join(home, ".bapstate", "session.json"),
 			filepath.Join(home, ".bapstate", "token.json"),
@@ -255,13 +232,34 @@ func MigrateLegacy() {
 
 		home, _ := os.UserHomeDir()
 
-		// 1. Migrate credentials: ~/.ltd/credentials.json -> <StateDir>/credentials.json
+		// 1. Migrate credentials: ~/.bapstate/credentials.json or ~/.ltd/credentials.json -> <StateDir>/credentials.json
 		targetCreds := filepath.Join(stateDir, "credentials.json")
 		if _, err := os.Stat(targetCreds); os.IsNotExist(err) && home != "" {
-			legacyCreds := filepath.Join(home, ".ltd", "credentials.json")
-			if _, err := os.Stat(legacyCreds); err == nil {
-				if err := copyFile(legacyCreds, targetCreds); err == nil {
-					_ = os.Remove(legacyCreds)
+			for _, legacyCreds := range []string{
+				filepath.Join(home, ".bapstate", "credentials.json"),
+				filepath.Join(home, ".ltd", "credentials.json"),
+			} {
+				if legacyCreds == targetCreds {
+					continue
+				}
+				if _, err := os.Stat(legacyCreds); err == nil {
+					if err := copyFile(legacyCreds, targetCreds); err == nil {
+						if strings.HasSuffix(legacyCreds, filepath.Join(".ltd", "credentials.json")) {
+							_ = os.Remove(legacyCreds)
+						}
+						break
+					}
+				}
+			}
+		}
+
+		// 1b. Migrate config.json: ~/.bapstate/config.json -> <StateDir>/config.json
+		targetCfg := filepath.Join(stateDir, "config.json")
+		if _, err := os.Stat(targetCfg); os.IsNotExist(err) && home != "" {
+			legacyCfg := filepath.Join(home, ".bapstate", "config.json")
+			if legacyCfg != targetCfg {
+				if _, err := os.Stat(legacyCfg); err == nil {
+					_ = copyFile(legacyCfg, targetCfg)
 				}
 			}
 		}

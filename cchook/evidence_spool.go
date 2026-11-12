@@ -40,22 +40,20 @@ func prepareHookEvidence(payload HookPayload, sessionID, appID string) {
 }
 
 func hookStateDir() string {
-	if dir := os.Getenv("BAP_STATE_DIR"); dir != "" {
+	if dir := strings.TrimSpace(os.Getenv("BAP_STATE_DIR")); dir != "" {
 		return dir
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		hPath := filepath.Join(home, ".bapstate")
-		if fi, err := os.Stat(hPath); err == nil && fi.IsDir() {
-			return hPath
+		binPath := filepath.Join(home, "bin", ".bapstate")
+		if fi, err := os.Stat(binPath); err == nil && fi.IsDir() {
+			return binPath
 		}
+		if mkErr := os.MkdirAll(binPath, 0700); mkErr == nil {
+			return binPath
+		}
+		return binPath
 	}
-	if fi, err := os.Stat(".bapstate"); err == nil && fi.IsDir() {
-		return ".bapstate"
-	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return filepath.Join(home, ".bapstate")
-	}
-	return ".bapstate"
+	return filepath.Join(os.TempDir(), "bapstate")
 }
 
 func hookEvidenceDir() string {

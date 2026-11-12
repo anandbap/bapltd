@@ -264,7 +264,11 @@ class TestBAPInstallMultiPlatform(unittest.TestCase):
             self.assertIn("hooks", json.load(f))
             
         # Run uninstall
-        with patch.object(bap_install, "stop_running_bap_processes"), patch("scripts.bap_startup.configure_startup"):
+        mock_home = os.path.join(self.temp_dir, "uninstall_home")
+        os.makedirs(mock_home, exist_ok=True)
+        with patch.object(bap_install, "stop_running_bap_processes"), \
+             patch("scripts.bap_startup.configure_startup"), \
+             patch("os.path.expanduser", side_effect=lambda p: mock_home + p[1:] if p.startswith("~") else p):
             bap_install.uninstall(self.install_dir, ws)
         
         # Verify reverted
@@ -404,6 +408,74 @@ class TestBAPInstallMultiPlatform(unittest.TestCase):
         for sp in stale_paths:
             with open(sp, "rb") as f:
                 self.assertEqual(f.read(), new_bytes, f"Stale bap-hook-adapter.exe was not refreshed at {sp}")
+
+    def test_get_source_binary_prefers_newest_mtime(self):
+        """Verify get_source_binary picks the newest binary by mtime instead of returning stale staged copy."""
+        plat = bap_install.get_platform_id()
+        ext = ".exe" if sys.platform == "win32" else ""
+        staged = os.path.join(self.temp_dir, "bap", "bin", plat, f"bapedge{ext}")
+        fresh = os.path.join(self.temp_dir, "bap-edge", f"bapedge{ext}")
+        os.makedirs(os.path.dirname(staged), exist_ok=True)
+        os.makedirs(os.path.dirname(fresh), exist_ok=True)
+        with open(staged, "wb") as f:
+            f.write(b"MZ" + b"OLD_STAGED" + b"\x00" * 32)
+        with open(fresh, "wb") as f:
+            f.write(b"MZ" + b"NEW_BUILD" + b"\x00" * 32)
+        now = time.time() if "time" in globals() else __import__("time").time()
+        os.utime(staged, (now - 3600, now - 3600))
+        os.utime(fresh, (now, now))
+
+        with patch.object(bap_install, "REPO_ROOT", self.temp_dir):
+            chosen = bap_install.get_source_binary("bapedge")
+        self.assertEqual(os.path.normpath(chosen), os.path.normpath(fresh))
+
+    def test_clean_workspace_mode_avoids_workspace_clutter_and_uses_bin_bapstate(self):
+        """Verify global default mode uses ~/bin/.bapstate and leaves clean project workspaces untouched."""
+        mock_home = os.path.join(self.temp_dir, "clean_home")
+        clean_ws = os.path.join(self.temp_dir, "clean_project")
+        clean_bin = os.path.join(mock_home, "bin")
+        os.makedirs(clean_ws, exist_ok=True)
+        os.makedirs(clean_bin, exist_ok=True)
+
+        with patch("os.path.expanduser", side_effect=lambda p: mock_home + p[1:] if p.startswith("~") else p), \
+             patch.dict(os.environ, {"BAP_STATE_DIR": ""}, clear=False):
+            os.environ.pop("BAP_STATE_DIR", None)
+            self.assertEqual(
+                os.path.normpath(bap_install.get_bapstate_dir()),
+                os.path.normpath(os.path.join(mock_home, "bin", ".bapstate")),
+            )
+            bap_install.configure_bap_config(clean_bin, clean_ws, "http://localhost:8080", is_offline=True, write_workspace=False)
+            bap_install.configure_agent_hooks(clean_ws, clean_bin, workspace_hooks=False)
+
+        for clutter in (".bap", ".bapstate", ".claude", ".codex", ".cursor", ".cursorrules", ".vscode", ".antigravity", "GEMINI.md", "bap-config.json", "plugins"):
+            self.assertFalse(os.path.exists(os.path.join(clean_ws, clutter)), f"Unexpected workspace clutter created: {clutter}")
+
+        self.assertTrue(os.path.isfile(os.path.join(mock_home, "bin", ".bapstate", "config.json")))
+        self.assertTrue(os.path.isfile(os.path.join(mock_home, ".claude", "settings.json")))
+        self.assertTrue(os.path.isfile(os.path.join(mock_home, ".codex", "hooks.json")))
+        self.assertTrue(os.path.isdir(os.path.join(clean_bin, "plugins", "claude")))
+
+    def test_clean_workspace_clutter_removes_bap_files_and_preserves_env(self):
+        """Verify clean_workspace_clutter removes legacy BAP clutter without touching .env or user code."""
+        ws = os.path.join(self.temp_dir, "dirty_ws")
+        os.makedirs(os.path.join(ws, ".bap"), exist_ok=True)
+        os.makedirs(os.path.join(ws, ".bapstate"), exist_ok=True)
+        os.makedirs(os.path.join(ws, "plugins", "claude"), exist_ok=True)
+        with open(os.path.join(ws, "bap-gateway.pid"), "w") as f:
+            f.write("12345")
+        with open(os.path.join(ws, "bap-config.json"), "w") as f:
+            f.write('{"controlplane_url": "http://localhost:8080"}')
+        with open(os.path.join(ws, ".env"), "w") as f:
+            f.write("USER_SECRET=keep\n")
+
+        bap_install.clean_workspace_clutter(ws)
+
+        self.assertFalse(os.path.exists(os.path.join(ws, ".bap")))
+        self.assertFalse(os.path.exists(os.path.join(ws, ".bapstate")))
+        self.assertFalse(os.path.exists(os.path.join(ws, "plugins")))
+        self.assertFalse(os.path.exists(os.path.join(ws, "bap-gateway.pid")))
+        self.assertFalse(os.path.exists(os.path.join(ws, "bap-config.json")))
+        self.assertTrue(os.path.isfile(os.path.join(ws, ".env")))
 
 if __name__ == "__main__":
     unittest.main()

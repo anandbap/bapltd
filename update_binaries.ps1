@@ -1,6 +1,7 @@
 param(
     [string]$Version = "",
-    [string]$AllowDevOverrides = "true"
+    [string]$AllowDevOverrides = "true",
+    [switch]$SkipUserInstall
 )
 $ErrorActionPreference = "Stop"
 $rootDir = $PSScriptRoot
@@ -72,14 +73,13 @@ function Safe-Copy($src, $dst) {
     try {
         Copy-Item -Force $src $dst
     } catch {
-        # File might be locked by running process; try rename-and-replace
-        $oldFile = "$dst.old"
-        Remove-Item -Force $oldFile -ErrorAction SilentlyContinue
+        $oldFile = "$dst.old.$PID.$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
         try {
-            Move-Item -Force $dst $oldFile -ErrorAction SilentlyContinue
+            Move-Item -Force $dst $oldFile -ErrorAction Stop
             Copy-Item -Force $src $dst
+            Remove-Item -Force $oldFile -ErrorAction SilentlyContinue
         } catch {
-            Write-Warning "Could not overwrite $dst (process may be locked)"
+            Write-Warning "Could not overwrite locked binary $dst (stop running processes first): $($_.Exception.Message)"
         }
     }
 }
@@ -117,6 +117,7 @@ if (Test-Path "dist\windows-amd64") {
         Safe-Copy "bap-edge\bapedge.exe" "dist\windows-amd64\claude-client\bapedge.exe"
         if (Test-Path "cchook\interceptor.exe") {
             Safe-Copy "cchook\interceptor.exe" "dist\windows-amd64\claude-client\interceptor.exe"
+            Safe-Copy "cchook\interceptor.exe" "dist\windows-amd64\claude-client\cchook\interceptor.exe"
         }
     }
     if (Test-Path "cchook\interceptor.exe") {
@@ -125,9 +126,16 @@ if (Test-Path "dist\windows-amd64") {
     }
 }
 
+# 6b. Update plugin hook adapters inside workspace
+if (Test-Path "plugins") {
+    Get-ChildItem -Path "plugins" -Filter "bap-hook-adapter.exe" -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+        Safe-Copy "bap-edge\bapedge.exe" $_.FullName
+    }
+}
+
 # 7. Update user PATH bin directory (%USERPROFILE%\bin) if present
 $userBin = Join-Path $env:USERPROFILE "bin"
-if (Test-Path $userBin) {
+if (-not $SkipUserInstall -and (Test-Path $userBin)) {
     Safe-Copy "bap-edge\bapedge.exe" (Join-Path $userBin "bapedge.exe")
     Safe-Copy "bap-edge\bapedge.exe" (Join-Path $userBin "bap.exe")
     Safe-Copy "bap-edge\bapedge.exe" (Join-Path $userBin "bapmcp.exe")
@@ -136,26 +144,26 @@ if (Test-Path $userBin) {
     Safe-Copy "bap-gateway\bapgateway.exe" (Join-Path $userBin "bapgateway.exe")
     if (Test-Path "cchook\interceptor.exe") {
         Safe-Copy "cchook\interceptor.exe" (Join-Path $userBin "interceptor.exe")
+        Safe-Copy "cchook\interceptor.exe" (Join-Path $userBin "cchook-interceptor.exe")
     }
     Safe-Copy "policy.cedar" (Join-Path $userBin "policy.cedar")
     Safe-Copy "schema.json" (Join-Path $userBin "schema.json")
     Safe-Copy "bap-config.json" (Join-Path $userBin "bap-config.json")
 }
 
-# 8. Update Python wheel package staging directory if present
-if (Test-Path "bap\bin\windows-amd64") {
-    Safe-Copy "bap-edge\bapedge.exe" "bap\bin\windows-amd64\bapedge.exe"
-    Safe-Copy "bap-edge\bapedge.exe" "bap\bin\windows-amd64\bap.exe"
-    Safe-Copy "bap-edge\bapedge.exe" "bap\bin\windows-amd64\bapmcp.exe"
-    Safe-Copy "bap-controlplane\bapcontrolplane.exe" "bap\bin\windows-amd64\bapcontrolplane.exe"
-    Safe-Copy "bap-gateway\bapgateway.exe" "bap\bin\windows-amd64\bapgateway.exe"
-    if (Test-Path "cchook\interceptor.exe") {
-        Safe-Copy "cchook\interceptor.exe" "bap\bin\windows-amd64\interceptor.exe"
-    }
-    Safe-Copy "policy.cedar" "bap\bin\windows-amd64\policy.cedar"
-    Safe-Copy "schema.json" "bap\bin\windows-amd64\schema.json"
-    Safe-Copy "bap-config.json" "bap\bin\windows-amd64\bap-config.json"
+# 8. Always update Python wheel package staging directory so 'bap install' / wheels never use stale binaries
+New-Item -ItemType Directory -Path "bap\bin\windows-amd64" -Force | Out-Null
+Safe-Copy "bap-edge\bapedge.exe" "bap\bin\windows-amd64\bapedge.exe"
+Safe-Copy "bap-edge\bapedge.exe" "bap\bin\windows-amd64\bapmcp.exe"
+Safe-Copy "bap-controlplane\bapcontrolplane.exe" "bap\bin\windows-amd64\bapcontrolplane.exe"
+Safe-Copy "bap-gateway\bapgateway.exe" "bap\bin\windows-amd64\bapgateway.exe"
+if (Test-Path "cchook\interceptor.exe") {
+    Safe-Copy "cchook\interceptor.exe" "bap\bin\windows-amd64\interceptor.exe"
+    Safe-Copy "cchook\interceptor.exe" "bap\bin\windows-amd64\cchook-interceptor.exe"
 }
+Safe-Copy "policy.cedar" "bap\bin\windows-amd64\policy.cedar"
+Safe-Copy "schema.json" "bap\bin\windows-amd64\schema.json"
+Safe-Copy "bap-config.json" "bap\bin\windows-amd64\bap-config.json"
 
 # Purge any stale temporary backup files from root
 Get-ChildItem -Path $rootDir -Filter "*.old" -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue

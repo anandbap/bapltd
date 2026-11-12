@@ -731,7 +731,7 @@ func handleStopHook(payload HookPayload) {
 
 func promptPathForSession(sessionID string) string {
 	sum := sha256.Sum256([]byte(sessionID))
-	return filepath.Join(".bap", "prompts", fmt.Sprintf("%x.txt", sum[:]))
+	return filepath.Join(hookStateDir(), "prompts", fmt.Sprintf("%x.txt", sum[:]))
 }
 
 func writeSessionPrompt(sessionID, prompt string) {
@@ -1166,6 +1166,9 @@ func resolveServerURL() string {
 		cfgCandidates = append(cfgCandidates, filepath.Join(exeDir, "..", "bap-config.json"))
 	}
 	if home, err := os.UserHomeDir(); err == nil {
+		cfgCandidates = append(cfgCandidates, filepath.Join(home, "bin", ".bapstate", "credentials.json"))
+		cfgCandidates = append(cfgCandidates, filepath.Join(home, "bin", ".bapstate", "config.json"))
+		cfgCandidates = append(cfgCandidates, filepath.Join(home, "bin", "bap-config.json"))
 		cfgCandidates = append(cfgCandidates, filepath.Join(home, ".bap", "config.json"))
 		cfgCandidates = append(cfgCandidates, filepath.Join(home, ".bap", "bap-config.json"))
 		cfgCandidates = append(cfgCandidates, filepath.Join(home, ".bapstate", "credentials.json"))
@@ -1204,8 +1207,9 @@ func resolveEnforcementMode() string {
 	home, _ := os.UserHomeDir()
 	if home != "" {
 		cfgCandidates = append(cfgCandidates,
-			filepath.Join(home, ".bapstate", "config.json"),
+			filepath.Join(home, "bin", ".bapstate", "config.json"),
 			filepath.Join(home, "bin", "bap-config.json"),
+			filepath.Join(home, ".bapstate", "config.json"),
 			filepath.Join(home, ".bap", "config.json"),
 			filepath.Join(home, ".bap", "bap-config.json"),
 		)
@@ -1728,6 +1732,8 @@ func resolveEnvironment() string {
 	cfgCandidates := []string{filepath.Join(".bap", "bap-config.json"), filepath.Join(".bap", "config.json"), "bap-config.json", "../bap-config.json"}
 	if home, _ := os.UserHomeDir(); home != "" {
 		cfgCandidates = append(cfgCandidates,
+			filepath.Join(home, "bin", ".bapstate", "config.json"),
+			filepath.Join(home, "bin", "bap-config.json"),
 			filepath.Join(home, ".bapstate", "config.json"),
 			filepath.Join(home, ".bap", "config.json"),
 			filepath.Join(home, ".bap", "bap-config.json"))
@@ -1756,6 +1762,8 @@ func resolveConfiguredAdminToken() string {
 	}
 	if home, _ := os.UserHomeDir(); home != "" {
 		cfgCandidates = append(cfgCandidates,
+			filepath.Join(home, "bin", ".bapstate", "config.json"),
+			filepath.Join(home, "bin", "bap-config.json"),
 			filepath.Join(home, ".bapstate", "config.json"),
 			filepath.Join(home, ".bap", "config.json"),
 		)
@@ -1853,7 +1861,10 @@ func devOverrideActive() (bool, string) {
 		"dev-override.json",
 	}
 	if home, _ := os.UserHomeDir(); home != "" {
-		markerCandidates = append(markerCandidates, filepath.Join(home, ".bapstate", "dev-override.json"))
+		markerCandidates = append(markerCandidates,
+			filepath.Join(home, "bin", ".bapstate", "dev-override.json"),
+			filepath.Join(home, ".bapstate", "dev-override.json"),
+		)
 	}
 	for _, m := range markerCandidates {
 		if data, err := os.ReadFile(m); err == nil {
@@ -2134,7 +2145,7 @@ func isTamperingCommand(cmdStr string) (bool, string) {
 }
 
 func sessionMarkerPathForPID(pid int) string {
-	return filepath.Join(".bap", "sessions", fmt.Sprintf("pid-%d.json", pid))
+	return filepath.Join(hookStateDir(), "sessions", fmt.Sprintf("pid-%d.json", pid))
 }
 
 func writePIDMarkers(sessionID, serverURL, appID, callerPath, callerHash string, targetPID, rawPPID int) {
@@ -2154,14 +2165,11 @@ func writePIDMarkers(sessionID, serverURL, appID, callerPath, callerHash string,
 			"started_at":    time.Now().UTC(),
 		}
 		if data, err := json.MarshalIndent(marker, "", "  "); err == nil {
+			sDir := hookStateDir()
 			pMarker := sessionMarkerPathForPID(pid)
 			_ = os.MkdirAll(filepath.Dir(pMarker), 0700)
 			_ = os.WriteFile(pMarker, data, 0600)
-			if home, err := os.UserHomeDir(); err == nil && home != "" {
-				_ = os.MkdirAll(filepath.Join(home, ".bapstate", "sessions"), 0700)
-				_ = os.WriteFile(filepath.Join(home, ".bapstate", "sessions", fmt.Sprintf("pid-%d.json", pid)), data, 0600)
-			}
-			_ = os.WriteFile(filepath.Join(".bap", "session.json"), data, 0600)
+			_ = os.WriteFile(filepath.Join(sDir, "session.json"), data, 0600)
 			_ = os.Remove(".bap-session.json")
 		}
 	}
@@ -2204,6 +2212,7 @@ func resolveSessionID(payload HookPayload) string {
 		}
 		if home, err := os.UserHomeDir(); err == nil && home != "" {
 			for _, cand := range []string{
+				filepath.Join(home, "bin", ".bapstate", "sessions", fmt.Sprintf("pid-%d.json", p)),
 				filepath.Join(home, ".bapstate", "sessions", fmt.Sprintf("pid-%d.json", p)),
 				filepath.Join(home, ".bap", "sessions", fmt.Sprintf("pid-%d.json", p)),
 			} {
@@ -2459,9 +2468,12 @@ func handleSessionEndHook(payload HookPayload) {
 
 func cleanupSessionMarkers(sessionID string, pid int) {
 	ws := resolveWorkspaceRoot()
+	sDir := hookStateDir()
 	if sessionID != "" {
 		sum := sha256.Sum256([]byte(sessionID))
 		hashName := fmt.Sprintf("%x.json", sum[:])
+		_ = os.Remove(filepath.Join(sDir, "sessions", hashName))
+		_ = os.Remove(filepath.Join(sDir, "prompts", fmt.Sprintf("%x.txt", sum[:])))
 		_ = os.Remove(filepath.Join(".bap", "sessions", hashName))
 		_ = os.Remove(filepath.Join(ws, ".bap", "sessions", hashName))
 		_ = os.Remove(filepath.Join(".bapstate", "sessions", hashName))
@@ -2470,6 +2482,7 @@ func cleanupSessionMarkers(sessionID string, pid int) {
 		_ = os.Remove(filepath.Join(ws, ".bap", "prompts", fmt.Sprintf("%x.txt", sum[:])))
 		_ = os.Remove(promptPathForSession(sessionID))
 		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			_ = os.Remove(filepath.Join(home, "bin", ".bapstate", "sessions", hashName))
 			_ = os.Remove(filepath.Join(home, ".bapstate", "sessions", hashName))
 			_ = os.Remove(filepath.Join(home, ".bap", "watchers", sanitizeSessionFileID(sessionID)+".watcher"))
 		}
@@ -2477,14 +2490,17 @@ func cleanupSessionMarkers(sessionID string, pid int) {
 	}
 	if pid > 0 {
 		pidName := fmt.Sprintf("pid-%d.json", pid)
+		_ = os.Remove(sessionMarkerPathForPID(pid))
 		_ = os.Remove(filepath.Join(".bap", "sessions", pidName))
 		_ = os.Remove(filepath.Join(ws, ".bap", "sessions", pidName))
 		_ = os.Remove(filepath.Join(".bapstate", "sessions", pidName))
 		_ = os.Remove(filepath.Join(ws, ".bapstate", "sessions", pidName))
 		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			_ = os.Remove(filepath.Join(home, "bin", ".bapstate", "sessions", pidName))
 			_ = os.Remove(filepath.Join(home, ".bapstate", "sessions", pidName))
 		}
 	}
+	_ = os.Remove(filepath.Join(sDir, "session.json"))
 	_ = os.Remove(filepath.Join(".bap", "session.json"))
 	_ = os.Remove(filepath.Join(ws, ".bap", "session.json"))
 	_ = os.Remove(filepath.Join(".bapstate", "session.json"))
@@ -2492,6 +2508,15 @@ func cleanupSessionMarkers(sessionID string, pid int) {
 	_ = os.Remove(".bap-session.json")
 	_ = os.Remove(filepath.Join(ws, ".bap-session.json"))
 	_ = os.Remove("../.bap-session.json")
+	for _, emptyDir := range []string{
+		filepath.Join(".bap", "sessions"),
+		filepath.Join(".bap", "prompts"),
+		".bap",
+		filepath.Join(".bapstate", "sessions"),
+		".bapstate",
+	} {
+		_ = os.Remove(emptyDir)
+	}
 }
 
 func isSessionRevoked(serverURL, sessionID string) (bool, string) {
@@ -2932,6 +2957,7 @@ func isStrictToolEnforcementMandated() bool {
 		filepath.Join("bap-edge", "policy-state.json"),
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		candidates = append(candidates, filepath.Join(home, "bin", ".bapstate", "policy", "policy-state.json"))
 		candidates = append(candidates, filepath.Join(home, ".bapstate", "policy", "policy-state.json"))
 		candidates = append(candidates, filepath.Join(home, ".bap", "policy-state.json"))
 	}
