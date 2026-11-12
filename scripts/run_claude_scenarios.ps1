@@ -11,7 +11,9 @@
     to produce the allowed/blocked/narrowed calls report and ZSP scorecard.
 .EXAMPLE
     .\scripts\run_claude_scenarios.ps1
-    .\scripts\run_claude_scenarios.ps1 -Scenarios 1,2,3,4,5,6
+    .\scripts\run_claude_scenarios.ps1 -Scenarios 1,2,3,4,5
+    .\scripts\run_claude_scenarios.ps1 -Resume -Scenarios 6,7,8,9,10
+    .\scripts\run_claude_scenarios.ps1 -OutputFile ".\my-run.jsonl" -Resume -Scenarios 6
     .\scripts\run_claude_scenarios.ps1 -DryRun
 #>
 
@@ -24,6 +26,12 @@ param(
 
     [string]$OutDir = "",
 
+    [string]$OutputFile = "",
+
+    [switch]$Resume,
+
+    [string]$ResumeSession = "",
+
     [switch]$NoReview,
 
     [switch]$DryRun
@@ -32,11 +40,42 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$runsBase = Join-Path $repoRoot ".bapstate\scenario-runs"
+New-Item -ItemType Directory -Force -Path $runsBase | Out-Null
+$lastSessionMeta = Join-Path $runsBase "last-session.json"
+
+$claudeSessionId = $null
+$isResuming = $Resume.IsPresent -or (-not [string]::IsNullOrWhiteSpace($ResumeSession))
+
+if ($isResuming -and (Test-Path $lastSessionMeta)) {
+    try {
+        $meta = Get-Content $lastSessionMeta -Raw | ConvertFrom-Json
+        if ([string]::IsNullOrWhiteSpace($ResumeSession) -and $meta.claude_session_id) {
+            $ResumeSession = $meta.claude_session_id
+        }
+        if ([string]::IsNullOrWhiteSpace($OutDir) -and $meta.out_dir) {
+            $OutDir = $meta.out_dir
+        }
+        if ([string]::IsNullOrWhiteSpace($OutputFile) -and $meta.output_file) {
+            $OutputFile = $meta.output_file
+        }
+    } catch { }
+}
+
 if ([string]::IsNullOrWhiteSpace($OutDir)) {
     $stamp = (Get-Date).ToString("yyyyMMdd-HHmmss")
-    $OutDir = Join-Path $repoRoot ".bapstate\scenario-runs\$stamp"
+    $OutDir = Join-Path $runsBase $stamp
 }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+
+if ($isResuming) {
+    if ([string]::IsNullOrWhiteSpace($ResumeSession)) {
+        throw "Cannot resume: no previous session found in $lastSessionMeta and -ResumeSession was not provided."
+    }
+    $claudeSessionId = $ResumeSession
+} else {
+    $claudeSessionId = [guid]::NewGuid().ToString()
+}
 
 $scenarioDefs = [ordered]@{
     "1" = @{
@@ -100,7 +139,11 @@ if ($selected.Count -eq 0) {
 }
 
 $inputJsonl = Join-Path $OutDir "scenarios.jsonl"
-$streamJsonl = Join-Path $OutDir "$Agent-stream.jsonl"
+$streamJsonl = if ([string]::IsNullOrWhiteSpace($OutputFile)) { Join-Path $OutDir "$Agent-stream.jsonl" } else { $OutputFile }
+$streamParent = Split-Path -Parent $streamJsonl
+if ($streamParent -and -not (Test-Path $streamParent)) {
+    New-Item -ItemType Directory -Force -Path $streamParent | Out-Null
+}
 $callsJson = Join-Path $OutDir "calls-report.json"
 
 $lines = foreach ($sc in $selected) {
@@ -115,12 +158,21 @@ $lines = foreach ($sc in $selected) {
 }
 [System.IO.File]::WriteAllLines($inputJsonl, $lines, [System.Text.UTF8Encoding]::new($false))
 
+@{
+    agent             = $Agent
+    claude_session_id = $claudeSessionId
+    out_dir           = $OutDir
+    output_file       = $streamJsonl
+    updated_at        = (Get-Date).ToString("o")
+} | ConvertTo-Json | Set-Content -Path $lastSessionMeta -Encoding UTF8
+
 Write-Host "================================================================================" -ForegroundColor Cyan
 Write-Host "  BAP Zero-Trust Single-Command Scenario Runner ($Agent)" -ForegroundColor Cyan
 Write-Host "================================================================================" -ForegroundColor Cyan
 Write-Host "  Scenarios   : $($selected.Id -join ', ')"
+Write-Host "  Session ID  : $claudeSessionId $(if ($isResuming) { '(RESUMING)' } else { '(NEW)' })"
 Write-Host "  Input JSONL : $inputJsonl"
-Write-Host "  Output Log  : $streamJsonl"
+Write-Host "  Output File : $streamJsonl (append mode)"
 Write-Host "  Calls JSON  : $callsJson"
 Write-Host ""
 
@@ -128,11 +180,12 @@ if ($DryRun) {
     Write-Host "[DRY RUN] Generated $Agent input stream:" -ForegroundColor Yellow
     Get-Content $inputJsonl | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
     if ($Agent -eq "claude") {
+        $sessFlag = if ($isResuming) { "--resume $claudeSessionId" } else { "--session-id $claudeSessionId" }
         Write-Host "`n[DRY RUN] Command:" -ForegroundColor Yellow
-        Write-Host "  Get-Content `"$inputJsonl`" -Raw | bap claude -p --input-format stream-json --output-format stream-json --include-hook-events --replay-user-messages --verbose"
+        Write-Host "  Get-Content `"$inputJsonl`" -Raw | bap claude -p $sessFlag --input-format stream-json --output-format stream-json --include-hook-events --replay-user-messages --verbose 2>&1 | Tee-Object -FilePath `"$streamJsonl`" -Append"
     } else {
         Write-Host "`n[DRY RUN] Command:" -ForegroundColor Yellow
-        Write-Host "  bap codex exec --json <prompt>"
+        Write-Host "  bap codex exec --json <prompt> (appended to $streamJsonl)"
     }
     return
 }
@@ -143,19 +196,20 @@ if (-not $bapCmd) { $bapCmd = Get-Command bapedge -ErrorAction SilentlyContinue 
 if (-not $bapCmd) { throw "Neither 'bap' nor 'bapedge' was found on PATH." }
 
 if ($Agent -eq "claude") {
-    Write-Host "[*] Launching single-session `bap claude` stream-json run..." -ForegroundColor Green
+    Write-Host "[*] Launching single-session `bap claude` stream-json run (appending to $streamJsonl)..." -ForegroundColor Green
     $rawInput = Get-Content -Path $inputJsonl -Raw
-    $rawInput | & $bapCmd.Source claude -p `
+    $sessArgs = if ($isResuming) { @("--resume", $claudeSessionId) } else { @("--session-id", $claudeSessionId) }
+    $rawInput | & $bapCmd.Source claude -p @sessArgs `
         --input-format stream-json `
         --output-format stream-json `
         --include-hook-events `
         --replay-user-messages `
-        --verbose 2>&1 | Tee-Object -FilePath $streamJsonl
+        --verbose 2>&1 | Tee-Object -FilePath $streamJsonl -Append
     $exitCode = $LASTEXITCODE
     Write-Host "`n[*] `bap claude` exited with code $exitCode." -ForegroundColor Cyan
 } else {
-    Write-Host "[*] Launching `bap codex exec --json` sequential scenario run..." -ForegroundColor Green
-    $codexSid = $null
+    Write-Host "[*] Launching `bap codex exec --json` sequential scenario run (appending to $streamJsonl)..." -ForegroundColor Green
+    $codexSid = if ($isResuming) { $ResumeSession } else { $null }
     foreach ($sc in $selected) {
         Write-Host "  -> Scenario $($sc.Id): $($sc.Name)" -ForegroundColor Yellow
         if ($codexSid) {

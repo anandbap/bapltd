@@ -827,6 +827,8 @@ def install_debug_scripts(target_dir: str) -> int:
         "bap_doctor.py",
         "supervise_controlplane.ps1",
         "supervise_controlplane.sh",
+        # Single-command ZSP scenario test runner
+        "run_claude_scenarios.ps1",
     ]
 
     deployed_debug = 0
@@ -1793,6 +1795,7 @@ def uninstall(target_dir: str, workspace_root: str = None, portable: bool = Fals
         "verify_sts_obo_exchange.py", "verify_sts.bat", "verify_sts.sh",
         "check_stale_copies.ps1", "check_stale_copies.bat", "check_stale_copies.sh",
         "bap_doctor.ps1", "supervise_controlplane.ps1", "supervise_controlplane.sh",
+        "run_claude_scenarios.ps1",
     ]
     for _base in [
         "run_antigravity_cli_bap", "run_antigravity_ide_bap",

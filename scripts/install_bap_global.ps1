@@ -94,7 +94,8 @@ if ($Debug) {
         "check_stale_copies.bat",
         "check_stale_copies.sh",
         "bap_doctor.ps1",
-        "supervise_controlplane.ps1"
+        "supervise_controlplane.ps1",
+        "run_claude_scenarios.ps1"
     )
     foreach ($df in $debugFiles) {
         $src = Join-Path (Join-Path $repoRoot "scripts") $df
