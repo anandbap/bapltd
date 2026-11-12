@@ -171,6 +171,7 @@ func RunStatus(args []string) error {
 	jsonFlag := fs.Bool("json", false, "Output status in JSON format")
 	noSweepFlag := fs.Bool("no-sweep", false, "Disable automatic sweep and flush of pending spool")
 	fixFlag := fs.Bool("fix", false, "Force automatic self-healing, stale state purge, and recovery archive")
+	noFixFlag := fs.Bool("no-fix", false, "Disable automatic enrollment remediation when out of sync")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -262,6 +263,7 @@ func RunStatus(args []string) error {
 	enrolled := false
 	outOfSync := false
 	outOfSyncReason := ""
+	autoRemediationErr := ""
 	authModeLabel := "Unenrolled"
 
 	candidateCredPaths := []string{
@@ -408,27 +410,20 @@ func RunStatus(args []string) error {
 				}
 			}
 
-			// Option B: Self-Healing auto-re-enrollment via --fix
-			if *fixFlag && outOfSync {
-				if creds.AuthMode == "otc" || creds.AuthMode == "" {
-					fmt.Println("[*] 🛠️  Self-Healing: Re-enrolling workstation via development OTC...")
-					regArgs := []string{"--dev", "--server=" + targetCP}
-					if err := RunRegister(regArgs); err == nil {
-						fmt.Println("[+] 🛠️  Auto-healed workstation enrollment: Successfully re-registered via development OTC!")
-						// Reload updated credentials
-						if cData, cErr := os.ReadFile(DefaultCredentialsPath()); cErr == nil {
-							if json.Unmarshal(cData, &creds) == nil && creds.AgentID != "" {
-								enrolled = true
-								outOfSync = false
-								outOfSyncReason = ""
-								authModeLabel = "One-Time Code (OTC) [Re-enrolled via --fix]"
-							}
-						}
-					} else {
-						fmt.Printf("[-] ⚠️  Auto-re-enrollment failed: %v\n", err)
-					}
-				} else if creds.AuthMode == "oidc" {
-					fmt.Println("[!] ⚠️  Workstation was enrolled via OIDC. Please run 'bap login' to re-authenticate with your Identity Provider.")
+			// Auto-remediation when Control Plane restarted/redeployed (unless --no-fix is set).
+			if outOfSync && !*noFixFlag && (!*jsonFlag || *fixFlag) {
+				fmt.Println("[*] 🛠️  Enrollment out of sync with Central Control Plane — attempting auto-remediation...")
+				interactiveOK := isTerminal(os.Stdin)
+				newLabel, remErr := remediateOutOfSyncEnrollment(targetCP, &creds, interactiveOK)
+				if remErr == nil {
+					enrolled = true
+					outOfSync = false
+					outOfSyncReason = ""
+					authModeLabel = newLabel
+					fmt.Printf("[+] 🛠️  Auto-remediated workstation enrollment: %s\n", authModeLabel)
+				} else {
+					autoRemediationErr = remErr.Error()
+					fmt.Printf("[-] ⚠️  Auto-remediation did not complete: %s\n", autoRemediationErr)
 				}
 			}
 		}
@@ -1053,7 +1048,19 @@ func RunStatus(args []string) error {
 	} else if outOfSync {
 		fmt.Printf("  Enrollment:       OUT OF SYNC [⚠️  Central Control Plane has no record of this enrollment]\n")
 		fmt.Printf("  Sync Diagnostic:  %s\n", outOfSyncReason)
-		fmt.Printf("  Resolution:       Run 'bap register' or 'bap login' to re-enroll (or 'bap status --fix')\n")
+		if autoRemediationErr != "" {
+			fmt.Printf("  Auto-Remediation: FAILED (%s)\n", autoRemediationErr)
+		}
+		fmt.Printf("  Remediation Steps:\n")
+		if creds.AuthMode == "oidc" {
+			fmt.Printf("                    1. Run 'bap login --force' to re-authenticate with your IdP\n")
+			fmt.Printf("                    2. Or run 'bap register --dev --server %s' for dev OTC re-enrollment\n", serverURL)
+			fmt.Printf("                    3. Re-run 'bap status' to confirm sync\n")
+		} else {
+			fmt.Printf("                    1. Run 'bap register --dev --server %s' to re-enroll\n", serverURL)
+			fmt.Printf("                    2. Or run 'bap login --force' for OIDC authentication\n")
+			fmt.Printf("                    3. Re-run 'bap status' to confirm sync\n")
+		}
 		if creds.AgentID != "" {
 			fmt.Printf("  Prior Identity:   %s (App: %s)\n", creds.AgentID, creds.AppID)
 		}
@@ -1715,4 +1722,76 @@ func executeControlPlaneSweep(serverURL string) (*controlSweepResponse, error) {
 		return nil, err
 	}
 	return &res, nil
+}
+
+// remediateOutOfSyncEnrollment attempts automatic re-enrollment when the Control Plane
+// has restarted/redeployed or rejected a stale token:
+//   - For OIDC-enrolled workstations, tries silent token re-mint (--verify-now) using the
+//     prior identity, then falls back to interactive `bap login --force` on a TTY.
+//   - For OTC/default workstations, re-enrolls via `bap register --dev`.
+func remediateOutOfSyncEnrollment(targetCP string, creds *StoredCredentials, interactiveOK bool) (string, error) {
+	if creds == nil {
+		return "", fmt.Errorf("missing local credentials")
+	}
+
+	var lastErr error
+	if creds.AuthMode == "oidc" {
+		baseArgs := []string{"--force", "--no-daemon", "--server=" + targetCP}
+		if creds.IdPProvider != "" {
+			baseArgs = append(baseArgs, "--provider="+creds.IdPProvider)
+		}
+		if creds.Department != "" {
+			baseArgs = append(baseArgs, "--department="+creds.Department)
+		}
+		if len(creds.Groups) > 0 {
+			baseArgs = append(baseArgs, "--groups="+strings.Join(creds.Groups, ","))
+		}
+		if creds.UserEmail != "" {
+			silentArgs := append(append([]string{}, baseArgs...), "--verify-now", "--email="+creds.UserEmail)
+			if err := RunLogin(silentArgs); err == nil {
+				if reloadStoredCredentials(creds) {
+					return fmt.Sprintf("OIDC Federated (%s) [Auto-Remediated]", creds.IdPProvider), nil
+				}
+			} else {
+				lastErr = err
+			}
+		}
+		if interactiveOK {
+			if err := RunLogin(baseArgs); err == nil {
+				if reloadStoredCredentials(creds) {
+					return fmt.Sprintf("OIDC Federated (%s) [Auto-Remediated]", creds.IdPProvider), nil
+				}
+			} else {
+				lastErr = err
+			}
+		} else if lastErr == nil {
+			lastErr = fmt.Errorf("OIDC re-authentication requires an interactive terminal (run 'bap login --force')")
+		}
+		return "", lastErr
+	}
+
+	regArgs := []string{"--dev", "--server=" + targetCP}
+	if err := RunRegister(regArgs); err != nil {
+		return "", err
+	}
+	if !reloadStoredCredentials(creds) {
+		return "", fmt.Errorf("re-registration completed but reloaded credentials were empty")
+	}
+	return "One-Time Code (OTC) [Auto-Remediated]", nil
+}
+
+func reloadStoredCredentials(creds *StoredCredentials) bool {
+	for _, p := range []string{DefaultCredentialsPath(), state.CredentialsPath()} {
+		if p == "" {
+			continue
+		}
+		if data, err := os.ReadFile(p); err == nil && len(data) > 0 {
+			var updated StoredCredentials
+			if json.Unmarshal(data, &updated) == nil && updated.AgentID != "" {
+				*creds = updated
+				return true
+			}
+		}
+	}
+	return false
 }
