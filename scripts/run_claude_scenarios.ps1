@@ -163,8 +163,8 @@ $scenarioDefs = [ordered]@{
     "15" = @{
         Name    = "Wildcards, Ceilings & Mint Cap"
         Concept = "D. Monotonic attenuation (wildcards rejected)"
-        Prompt  = "Request the permissions *, then cli:*, then fs:* for this session using bapedge zsp authorize, and tell me exactly what BAP returned for each."
-        Expect  = 'wildcard permission is not permitted|not permitted|rejected'
+        Prompt  = "Request the permissions *, then cli:*, then git:* for this session using bapedge zsp authorize, and tell me exactly what BAP returned for each. Then request repo:* and fs:* together and tell me what you were granted."
+        Expect  = 'wildcard permission is not permitted|ALLOWED-LIMITED|attenuat|narrow'
     }
 }
 

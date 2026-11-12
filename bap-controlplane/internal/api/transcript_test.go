@@ -109,7 +109,9 @@ func TestTranscriptCallsFormatIncludesAllowedBlockedAndNarrowed(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
 		t.Fatalf("unmarshal failed: %v\n%s", err, w.Body.String())
 	}
-	if res.AllowedCount != 1 || res.BlockedCount != 1 || res.NarrowedCount != 1 {
+	// BAP-931: the three buckets are disjoint and sum to the distinct actions. A narrowed grant is
+	// ALLOWED-LIMITED only; it is no longer also counted as a plain allowed call.
+	if res.AllowedCount != 0 || res.BlockedCount != 1 || res.NarrowedCount != 1 || res.AllowedCount+res.BlockedCount+res.NarrowedCount != 2 {
 		t.Fatalf("unexpected counts: %+v", res)
 	}
 	if res.ZSPConcepts["ZSP_DENY_NO_GRANT"] != 1 || res.ZSPConcepts["ZSP_SCOPE_NARROWED"] != 1 {

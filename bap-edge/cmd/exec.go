@@ -1353,7 +1353,7 @@ func RunExec(args []string) {
 				resp := types.ExecResponse{
 					Allowed:        false,
 					Reason:         reason,
-					Suggestion:     authz.FormatZSPAgentSuggestion(ec.zspPrincipal, ec.sessionID, fullCommand, suggestedActions, len(zspChecks)),
+					Suggestion:     authz.ZSPDenialSuggestion(zspErr, ec.zspPrincipal, ec.sessionID, fullCommand, suggestedActions, zspChecks, workspaceRoot),
 					Mode:           ec.enforcementMode,
 					StepUpDecision: "denied",
 				}
@@ -1391,12 +1391,12 @@ func RunExec(args []string) {
 
 		if stepUpResult == "non_interactive_deny" {
 			if isCrossFolder && targetPath != "" {
-				suggestion = fmt.Sprintf("Cross-folder %s to %q outside workspace boundary requires user authorization. Authorize via 'bapedge trust %q --project' (or --session / --global), or set BAP_STEPUP_DECISION=project.", decomp.ActionType, targetPath, targetPath)
+				suggestion = authz.FormatOutOfWorkspaceSuggestion(targetPath, "fs:file:"+decomp.ActionType, authz.GetWorkspaceRoot())
 			} else {
 				suggestion = "Action requires Human Step-Up Approval (HITL). In non-interactive environments, authorize via BAP_STEPUP_DECISION=approve or request a BAP Gateway Grant."
 			}
 		} else if isCrossFolder && targetPath != "" {
-			suggestion = fmt.Sprintf("Cross-folder %s to %q outside workspace boundary was denied. To permit dependency operations outside the workspace, authorize via 'bapedge trust %q --project' (or --session / --global).", decomp.ActionType, targetPath, targetPath)
+			suggestion = authz.FormatOutOfWorkspaceSuggestion(targetPath, "fs:file:"+decomp.ActionType, authz.GetWorkspaceRoot())
 		} else if strings.Contains(reason, "escapes_workspace") || authz.CheckCommandWorkspaceEscape(authz.GetWorkspaceRoot(), fullCommand) {
 			suggestion = "Directory traversal outside the workspace is prohibited. Commands and file paths must remain within the workspace boundary. Child project access (e.g. Maven child modules) inside the workspace is permitted, or grant Step-Up approval via BAP HITL."
 		}

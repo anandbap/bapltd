@@ -116,7 +116,7 @@ func TestE2E_BroadRepoWildcardIsReadOnlyAndPushStaysBlocked(t *testing.T) {
 		t.Fatal("git push must stay blocked after a broad repo:* request")
 	}
 	// Report: "git:* / admin:*" style wildcards.
-	for _, w := range []string{"*", "cli:*", "fs:*", "git:*"} {
+	for _, w := range []string{"*", "cli:*", "git:*"} {
 		if err := authorize(sess, "--actions", w); err == nil {
 			t.Errorf("wildcard %q must be rejected", w)
 		}
@@ -232,6 +232,122 @@ func TestE2E_GitAddAndCommitWithHeredocMessageAreNotBlocked(t *testing.T) {
 	// Push stays protected, as intended.
 	if err := authorize(sess, "--actions", "git:push:write"); !errors.Is(err, authz.ErrHighRiskApprovalRequired) {
 		t.Fatalf("git push must still need human approval, got %v", err)
+	}
+}
+
+// BAP-933: a folder the human trusted with `bap trust` is readable by the agent under a normal grant,
+// through the real hook decision path for the Read tool.
+func TestE2E_TrustedFolderIsReadableByTheAgent(t *testing.T) {
+	e2eEnv(t)
+	sess := "sess-e2e-trust"
+	outside := t.TempDir()
+	report := filepath.Join(outside, "calls-report.json")
+	if err := os.WriteFile(report, []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BAP_GLOBAL_PERMISSIONS", filepath.Join(t.TempDir(), "global_permissions.json"))
+
+	if err := authorize(sess, "--actions", "fs:read", "--resources", "workspace://current", "--max-uses", "5"); err != nil {
+		t.Fatalf("read grant: %v", err)
+	}
+
+	// Before trusting: the boundary refusal the user hit.
+	resp := evaluateWithBapedgeTool(sess, "claude-code", "Read", "", report)
+	if resp.Allowed || !strings.Contains(resp.Reason, "not in granted boundaries") {
+		t.Fatalf("untrusted outside folder must be refused at the ZSP boundary, got allowed=%v reason=%q", resp.Allowed, resp.Reason)
+	}
+	// The refusal must be prescriptive: the developer runs `bap trust <folder>`; the agent is told to stop.
+	for _, want := range []string{"DEVELOPER ACTION REQUIRED", `bap trust "` + outside + `" --project`, "--session", "--global", "AGENT: do not run `bap trust`"} {
+		if !strings.Contains(resp.Suggestion, want) {
+			t.Errorf("suggestion missing %q:\n%s", want, resp.Suggestion)
+		}
+	}
+	if strings.Contains(resp.Suggestion, "zsp authorize") {
+		t.Errorf("an out-of-workspace refusal must not send the agent to `zsp authorize`:\n%s", resp.Suggestion)
+	}
+
+	// `bap trust <folder>` (default actions: write, delete). Reading is implied.
+	if err := authz.GrantPermission(authz.GetWorkspaceRoot(), sess, outside, "global", []string{"write", "delete"}); err != nil {
+		t.Fatal(err)
+	}
+	if resp := evaluateWithBapedgeTool(sess, "claude-code", "Read", "", report); !resp.Allowed {
+		t.Fatalf("trusted folder must be readable, got reason=%q suggestion=%q", resp.Reason, resp.Suggestion)
+	}
+
+	// Trust is not a blank cheque: credential files in the trusted folder stay unreadable.
+	secret := filepath.Join(outside, ".env")
+	_ = os.WriteFile(secret, []byte("K=V"), 0600)
+	if resp := evaluateWithBapedgeTool(sess, "claude-code", "Read", "", secret); resp.Allowed {
+		t.Fatal("a .env inside a trusted folder must still be blocked")
+	}
+}
+
+// BAP-934: the agent must not be able to widen its own boundary through the trust store.
+func TestE2E_AgentCannotSelfTrustOrTamperWithTheTrustStore(t *testing.T) {
+	e2eEnv(t)
+	sess := "sess-e2e-selftrust"
+	if err := authorize(sess, "--actions", "fs:read,fs:write", "--resources", "workspace://current", "--max-uses", "20"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. The command itself refuses to run inside an agent session.
+	t.Setenv("BAP_IN_BROKER", "1")
+	if err := RunTrust([]string{"--global", t.TempDir()}); !errors.Is(err, authz.ErrHighRiskApprovalRequired) {
+		t.Errorf("bapedge trust inside the broker must be refused, got %v", err)
+	}
+	if err := RunUntrust([]string{"--global", t.TempDir()}); !errors.Is(err, authz.ErrHighRiskApprovalRequired) {
+		t.Errorf("bapedge untrust inside the broker must be refused, got %v", err)
+	}
+	t.Setenv("BAP_IN_BROKER", "")
+
+	// 2. The hook refuses to run it, and refuses direct writes to the trust files, even with a write grant.
+	for _, c := range []string{
+		`bapedge trust "C:\Users" --global`,
+		`bapedge trust C:\Users\User\Downloads --project`,
+	} {
+		if resp := evaluateWithBapedgeTool(sess, "claude-code", "PowerShell", c, ""); resp.Allowed {
+			t.Errorf("agent must not be able to run %q", c)
+		}
+	}
+	for _, p := range []string{
+		filepath.Join(".bap", "project_permissions.json"),
+		filepath.Join(".bap", "approvals_default.json"),
+		filepath.Join(os.Getenv("USERPROFILE"), ".bap", "global_permissions.json"),
+	} {
+		for _, tool := range []string{"Write", "Edit"} {
+			if resp := evaluateWithBapedgeTool(sess, "claude-code", tool, "", p); resp.Allowed {
+				t.Errorf("%s of the trust store %s must be blocked even with a write grant", tool, p)
+			}
+		}
+	}
+}
+
+// A broad build-preparation ask is narrowed and visible as ALLOWED-LIMITED in the audit/report path.
+func TestE2E_BroadAskIsNarrowedAndAudited(t *testing.T) {
+	e2eEnv(t)
+	sess := "sess-e2e-limited"
+	if err := authorize(sess, "--actions", "repo:*,fs:*", "--resources", "repo:*", "--max-uses", "10"); err != nil {
+		t.Fatalf("broad read ask must be narrowed, got %v", err)
+	}
+	st, err := authz.ListSessionZSPStatus(authz.ResolveZSPDir(), sess, "claude-code")
+	if err != nil || len(st.ActiveGrants) != 1 {
+		t.Fatalf("expected one active grant, got %v %v", err, st)
+	}
+	g := st.ActiveGrants[0]
+	if !g.NarrowingApplied || g.NarrowingReason == "" || len(g.RequestedActions) != 2 {
+		t.Fatalf("grant must record narrowing (requested vs granted): %+v", g)
+	}
+
+	// Refusals are classified, not opaque.
+	for act, want := range map[string]string{
+		"cli:*":                  "ZSP_WILDCARD_REJECTED",
+		"aws:secretsmanager:read": "ZSP_HARD_DENY",
+		"cli:python:exec":        "HIGH_RISK_OOB_GATE",
+	} {
+		err := authorize(sess, "--actions", act)
+		if err == nil || zspDenialConcept(err) != want {
+			t.Errorf("%s: want concept %s, got err=%v concept=%q", act, want, err, zspDenialConcept(err))
+		}
 	}
 }
 

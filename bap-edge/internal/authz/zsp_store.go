@@ -670,6 +670,56 @@ func effectiveZSPResource(canonicalResource, workspaceRoot string, escapesWorksp
 	return effectiveResource
 }
 
+// trustActionForZSP maps a canonical ZSP action to the trust-store action it needs (read | write | delete).
+func trustActionForZSP(action string) string {
+	a := strings.ToLower(action)
+	switch {
+	case strings.Contains(a, "delete") || strings.Contains(a, "drop"):
+		return "delete"
+	case strings.Contains(a, "write") || strings.Contains(a, "edit") || strings.Contains(a, "mutate") || strings.Contains(a, "commit"):
+		return "write"
+	}
+	return "read"
+}
+
+// isProtectedCredentialPath is true for paths a trust entry must never open to an agent.
+func isProtectedCredentialPath(p string) bool {
+	norm := "/" + strings.ToLower(strings.Trim(filepath.ToSlash(p), "/"))
+	base := norm[strings.LastIndex(norm, "/")+1:]
+	if base == ".env" || strings.HasPrefix(base, ".env.") || base == "id_rsa" || base == "id_ed25519" || strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key") {
+		return true
+	}
+	return strings.Contains(norm, "/.ssh/") || strings.Contains(norm, "/.aws/") || strings.HasSuffix(norm, "/.ssh") || strings.HasSuffix(norm, "/.aws")
+}
+
+// resolveZSPCheckResource returns the resource a grant must cover for one check. A target outside the
+// workspace that the human explicitly trusted (`bap trust <path>`, session/project/global scope) for
+// the needed access counts as inside the boundary, so a trusted folder is readable and, per its trust
+// actions, writable, under a normal grant. Credential paths are never extended (BAP-933).
+func resolveZSPCheckResource(chk ZSPActionCheck, workspaceRoot, sessionID string) string {
+	res := effectiveZSPResource(chk.CanonicalResource, workspaceRoot, chk.EscapesWorkspace)
+	if !chk.EscapesWorkspace {
+		return res
+	}
+	var raw string
+	switch {
+	case strings.HasPrefix(res, "file://"):
+		raw = strings.TrimPrefix(res, "file://")
+	case strings.HasPrefix(res, "dir://"):
+		raw = strings.TrimPrefix(res, "dir://")
+	default:
+		return res
+	}
+	target := filepath.FromSlash(raw)
+	if target == "" || isProtectedCredentialPath(target) || IsFilesystemRootTarget(target) {
+		return res
+	}
+	if ok, _ := IsTargetAuthorized(workspaceRoot, sessionID, target, trustActionForZSP(chk.Action)); ok {
+		return "workspace://current"
+	}
+	return res
+}
+
 func isInWorkspaceNavBuiltin(execName string) bool {
 	switch strings.ToLower(strings.Trim(execName, "\"'")) {
 	case "cd", "chdir", "pushd", "popd", "set-location", "sl":
@@ -830,7 +880,7 @@ func VerifyOrConsumeSessionZSPChecks(
 		checkGrantCoversAll := func(g *types.TaskGrant) (*types.TaskGrant, error) {
 			var checked *types.TaskGrant
 			for _, chk := range checks {
-				res := effectiveZSPResource(chk.CanonicalResource, workspaceRoot, chk.EscapesWorkspace)
+				res := resolveZSPCheckResource(chk, workspaceRoot, sessionID)
 				cg, checkErr := engine.CheckTaskGrant(g.GrantID, chk.Action, res)
 				if checkErr != nil {
 					return nil, checkErr
@@ -847,7 +897,7 @@ func VerifyOrConsumeSessionZSPChecks(
 					matchedGrant = checked
 					return nil
 				}
-				primaryRes := effectiveZSPResource(checks[0].CanonicalResource, workspaceRoot, checks[0].EscapesWorkspace)
+				primaryRes := resolveZSPCheckResource(checks[0], workspaceRoot, sessionID)
 				proof, consumeErr := engine.ConsumeTaskGrant(g.GrantID, checks[0].Action, primaryRes, fullCommand, processAncestry)
 				if consumeErr == nil {
 					updated, _ := engine.GetGrant(g.GrantID)

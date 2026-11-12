@@ -203,6 +203,11 @@ func actionMatches(actions []string, requested string) bool {
 		if lower == "all" || lower == "*" || lower == requested {
 			return true
 		}
+		// A folder the human chose to trust for any mutation is also readable: reading is strictly
+		// less powerful than writing or deleting there (BAP-933).
+		if requested == "read" && (lower == "write" || lower == "delete" || lower == "modify") {
+			return true
+		}
 		if (requested == "write" || requested == "delete") && lower == "modify" {
 			return true
 		}
@@ -223,6 +228,9 @@ func GrantPermission(workspaceRoot, sessionID, targetPath, scope string, actions
 		if err != nil {
 			cleanPath = filepath.Clean(targetPath)
 		}
+	}
+	if err := ValidateTrustTarget(cleanPath); err != nil {
+		return err
 	}
 
 	if len(actions) == 0 {

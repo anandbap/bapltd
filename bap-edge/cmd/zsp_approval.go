@@ -4,10 +4,30 @@ import (
 	"bufio"
 	"crypto/rand"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+
+	"bap-edge/internal/authz"
 )
+
+// zspDenialConcept maps an authorize refusal to the ZSP concept recorded in the audit ledger.
+func zspDenialConcept(err error) string {
+	switch {
+	case errors.Is(err, authz.ErrHighRiskApprovalRequired):
+		return "HIGH_RISK_OOB_GATE"
+	case errors.Is(err, authz.ErrActionDenied):
+		return "ZSP_HARD_DENY"
+	case errors.Is(err, authz.ErrWildcardNotPermitted):
+		return "ZSP_WILDCARD_REJECTED"
+	case errors.Is(err, authz.ErrMintCapExceeded):
+		return "ZSP_MINT_CAP"
+	case errors.Is(err, authz.ErrPolicySignature), errors.Is(err, authz.ErrPermissionPolicyInvalid), errors.Is(err, authz.ErrSigningSecretMissing):
+		return "ZSP_POLICY_ERROR"
+	}
+	return ""
+}
 
 // approvalCodeAlphabet avoids look-alike characters so a human can retype the code reliably.
 const approvalCodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"

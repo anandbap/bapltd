@@ -80,10 +80,29 @@ func TestEscalation_WildcardNeverGrantsPush(t *testing.T) {
 }
 
 func TestEscalation_OtherWildcardsRejected(t *testing.T) {
-	for _, act := range []string{"*", "cli:*", "fs:*", "admin:*", "git:*"} {
+	for _, act := range []string{"*", "cli:*", "admin:*", "git:*", "net:*", "dev:*"} {
 		if err := mintAs(t, t.TempDir(), "sess-wild2", []string{act}, []string{escalationWorkspace}); err == nil {
 			t.Errorf("wildcard %q must be rejected, got nil", act)
 		}
+	}
+}
+
+// A broad but harmless ask is narrowed (ALLOWED-LIMITED), not refused: the demo and the cockpit rely on it.
+func TestEscalation_BroadReadAsksAreNarrowedNotRefused(t *testing.T) {
+	grant, _, err := SubmitTaskEnvelope(t.TempDir(), "sess-narrow", "claude-code", "TASK_EXECUTION",
+		"prepare to build", "prepare to build", []string{"repo:*", "fs:*"}, []string{"repo:*"}, "", 10, 300*time.Second)
+	if err != nil {
+		t.Fatalf("repo:* + fs:* on repo:* must be narrowed, got %v", err)
+	}
+	if !grant.NarrowingApplied {
+		t.Fatal("expected NarrowingApplied")
+	}
+	want := map[string]bool{"repo:read": true, "fs:read": true}
+	if len(grant.AllowedActions) != 2 || !want[grant.AllowedActions[0]] || !want[grant.AllowedActions[1]] {
+		t.Fatalf("expected [repo:read fs:read], got %v", grant.AllowedActions)
+	}
+	if len(grant.AllowedResources) != 1 || grant.AllowedResources[0] != escalationWorkspace {
+		t.Fatalf("expected resource narrowed to %s, got %v", escalationWorkspace, grant.AllowedResources)
 	}
 }
 

@@ -3514,11 +3514,8 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 		Captured         bool     `json:"captured"`
 	}
 	items := make([]item, 0)
-	allowedCalls := make([]item, 0)
-	blockedCalls := make([]item, 0)
-	narrowedGrants := make([]item, 0)
-	conceptsSeen := make(map[string]int)
-	for _, ev := range s.auditStore.ListBySession(sessionID) {
+	sessionEvents := s.auditStore.ListBySession(sessionID)
+	for _, ev := range sessionEvents {
 		it := item{
 			Timestamp:        ev.Timestamp,
 			Decision:         ev.Decision,
@@ -3553,34 +3550,38 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 					it.ZSPConcept = "HIGH_RISK_OOB_GATE"
 				}
 			}
-			if it.ZSPConcept != "" {
-				conceptsSeen[it.ZSPConcept]++
-			}
 			if it.NarrowingApplied || strings.Contains(decLow, "limit") || strings.Contains(decLow, "narrow") {
 				it.Decision = "ALLOWED-LIMITED"
-				narrowedGrants = append(narrowedGrants, it)
-			}
-			if strings.Contains(decLow, "deny") || strings.Contains(decLow, "block") {
-				blockedCalls = append(blockedCalls, it)
-			} else if decLow != "" {
-				allowedCalls = append(allowedCalls, it)
 			}
 		}
 		items = append(items, it)
 	}
+	// Counts are over DISTINCT logical actions, not raw events (BAP-931).
+	sum := summarizeSessionCalls(sessionEvents)
+	allowedCalls, blockedCalls, limitedCalls := sum.Partition()
+	callCounts := map[string]any{
+		"total_actions":         sum.TotalActions,
+		"raw_event_count":       sum.RawEvents,
+		"allowed_count":         sum.Allowed + sum.Failed,
+		"failed_count":          sum.Failed,
+		"blocked_count":         sum.Blocked,
+		"narrowed_count":        sum.AllowedLimited,
+		"allowed_limited_count": sum.AllowedLimited,
+		"unclassified_count":    sum.Unclassified,
+		"zsp_concepts":          sum.Concepts,
+	}
 	if strings.EqualFold(r.URL.Query().Get("format"), "calls") {
-		writeJSON(w, http.StatusOK, map[string]any{
+		out := map[string]any{
 			"session_id":            sessionID,
-			"allowed_count":         len(allowedCalls),
-			"blocked_count":         len(blockedCalls),
-			"narrowed_count":        len(narrowedGrants),
-			"allowed_limited_count": len(narrowedGrants),
-			"zsp_concepts":          conceptsSeen,
 			"allowed_calls":         allowedCalls,
 			"blocked_calls":         blockedCalls,
-			"narrowed_grants":       narrowedGrants,
-			"allowed_limited_calls": narrowedGrants,
-		})
+			"narrowed_grants":       limitedCalls,
+			"allowed_limited_calls": limitedCalls,
+		}
+		for k, v := range callCounts {
+			out[k] = v
+		}
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
 	// Unmasking requires a valid admin token supplied by the viewer (header, query or the
@@ -3593,17 +3594,17 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"session_id":            sessionID,
-		"count":                 len(items),
-		"items":                 items,
-		"allowed_count":         len(allowedCalls),
-		"blocked_count":         len(blockedCalls),
-		"narrowed_count":        len(narrowedGrants),
-		"allowed_limited_count": len(narrowedGrants),
-		"zsp_concepts":          conceptsSeen,
-		"unlocked":              isAdmin,
-	})
+	out := map[string]any{
+		"session_id": sessionID,
+		"count":      len(items),
+		"items":      items,
+		"calls":      sum.Calls,
+		"unlocked":   isAdmin,
+	}
+	for k, v := range callCounts {
+		out[k] = v
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {

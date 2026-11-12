@@ -295,8 +295,10 @@ func RunZSP(args []string) error {
 			}
 		}
 		if err != nil {
-			if errors.Is(err, authz.ErrHighRiskApprovalRequired) {
-				recordZSPAuditEvent(sessionID, clientType, actions, nil, false, "", "", "deny", err.Error(), "HIGH_RISK_OOB_GATE")
+			// Every refusal is an audit event with a specific concept and the real reason (BAP-931), so the
+			// calls report shows a denied authorize as a denial rather than an opaque "exit status 1".
+			if concept := zspDenialConcept(err); concept != "" {
+				recordZSPAuditEvent(sessionID, clientType, actions, nil, false, "", "", "deny", err.Error(), concept)
 			}
 			if *jsonFlag {
 				data, _ := json.MarshalIndent(map[string]any{

@@ -1826,7 +1826,15 @@ func isProtectedPluginAsset(normPath string) bool {
 	if normPath == "" {
 		return false
 	}
+	// A relative path such as ".bap/project_permissions.json" has no leading slash and used to slip past
+	// the "/.bap/" markers below, leaving the trust store writable by the agent (BAP-934).
+	if !strings.HasPrefix(normPath, "/") {
+		normPath = "/" + normPath
+	}
 	for _, marker := range []string{
+		"project_permissions.json",
+		"global_permissions.json",
+		"/.bap/approvals_",
 		"policy.cedar",
 		".claude/settings.json",
 		".claude/hooks",
@@ -1947,7 +1955,7 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 				Allowed:    false,
 				ExitCode:   1,
 				Reason:     tamperReason,
-				Suggestion: "Use 'bapedge trust' or request human operator authorization.",
+				Suggestion: "BAP configuration, policy and trust files are changed only by a human operator. AGENT: stop and ask the developer to make this change (for example `bap trust \"<folder>\"` in their own terminal); do not edit .bap/ files.",
 			}
 		}
 	}
@@ -2005,7 +2013,7 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 				Allowed:    false,
 				ExitCode:   1,
 				Reason:     fmt.Sprintf("ZeroStandingPrivilegeViolation: %v", zspErr),
-				Suggestion: authz.FormatZSPAgentSuggestion(principalIdentity, sessionID, goalTarget, suggestedActions, len(zspChecks)),
+				Suggestion: authz.ZSPDenialSuggestion(zspErr, principalIdentity, sessionID, goalTarget, suggestedActions, zspChecks, wsRoot),
 			}
 		}
 		if grant != nil {

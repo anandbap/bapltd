@@ -2,9 +2,10 @@
   "version": 1,
   "default_tier": "approve",
   "boundary_prefixes": ["workspace://current", "workspace://.", "repo:local"],
-  "resource_wildcards": ["/*", "repo://*", "workspace://*"],
+  "resource_wildcards": ["/*", "repo://*", "repo:*", "workspace://*"],
   "wildcard_narrowing": {
-    "repo:*": ["repo:read"]
+    "repo:*": ["repo:read"],
+    "fs:*": ["fs:read"]
   },
   "ceiling": {
     "max_uses_per_grant": 1000,

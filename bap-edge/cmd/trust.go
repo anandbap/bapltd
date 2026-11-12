@@ -11,6 +11,11 @@ import (
 
 // RunTrust handles 'bapedge trust <path> [--project | --global | --session]'.
 func RunTrust(args []string) error {
+	// BAP-934: trust is a human decision. An agent must never be able to widen its own boundary by
+	// running `bapedge trust` (the denial text it receives even names the command).
+	if strings.TrimSpace(os.Getenv("BAP_IN_BROKER")) != "" || isAgentEnvironment(os.Getenv("LTD_SOURCE")) {
+		return fmt.Errorf("%w: `bapedge trust` is a human-operator action and cannot run inside an agent session; run it in your own terminal", authz.ErrHighRiskApprovalRequired)
+	}
 	fs := flag.NewFlagSet("trust", flag.ContinueOnError)
 	projectFlag := fs.Bool("project", false, "Grant permission for current project workspace (default)")
 	globalFlag := fs.Bool("global", false, "Grant permission globally across all projects on this workstation")
@@ -79,6 +84,7 @@ func RunTrust(args []string) error {
 	fmt.Printf(" Target Path : %s\n", absPath)
 	fmt.Printf(" Scope       : %s\n", strings.ToUpper(scope))
 	fmt.Printf(" Actions     : %s\n", strings.Join(actionsList, ", "))
+	fmt.Println(" Read access : implied (the agent can read here under a normal ZSP grant; credential files are never exposed)")
 	fmt.Printf(" Workspace   : %s\n", workspaceRoot)
 	if scope == "project" {
 		fmt.Printf(" Config File : %s\n", authz.GetProjectPermissionsPath(workspaceRoot))
@@ -91,6 +97,9 @@ func RunTrust(args []string) error {
 
 // RunUntrust handles 'bapedge untrust <path> [--project | --global | --session]'.
 func RunUntrust(args []string) error {
+	if strings.TrimSpace(os.Getenv("BAP_IN_BROKER")) != "" || isAgentEnvironment(os.Getenv("LTD_SOURCE")) {
+		return fmt.Errorf("%w: `bapedge untrust` is a human-operator action and cannot run inside an agent session", authz.ErrHighRiskApprovalRequired)
+	}
 	fs := flag.NewFlagSet("untrust", flag.ContinueOnError)
 	projectFlag := fs.Bool("project", false, "Revoke permission from current project workspace (default)")
 	globalFlag := fs.Bool("global", false, "Revoke permission globally")

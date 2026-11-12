@@ -1112,14 +1112,14 @@
     head.hidden = false;
     box.innerHTML = '<li class="convo-note">Loading the full session...</li>';
     getJSON('/api/v1/sessions/transcript?session_id=' + encodeURIComponent(sessionId)).then(function (r) {
-      var items = r.items || [], nPrompt = 0, total = items.filter(function (i) { return i.kind === 'prompt'; }).length;
+      var items = (function () { if (!r.calls) { return r.items || []; } var base = (r.items || []).filter(function (i) { return i.kind !== 'action'; }); var calls = r.calls.map(function (c) { return { kind: 'action', timestamp: c.timestamp, action: c.action, decision: c.decision, reason: c.reason, narrowing_applied: c.narrowing_applied, narrowing_reason: c.narrowing_reason, requested_actions: c.requested_actions, allowed_actions: c.allowed_actions, zsp_concept: c.zsp_concept, grant_id: c.grant_id, outcome: c.outcome, layers: c.layers, event_count: c.event_count, exit_code: c.exit_code }; }); return base.concat(calls).sort(function (a, b) { return String(a.timestamp).localeCompare(String(b.timestamp)); }); })(), nPrompt = 0, total = items.filter(function (i) { return i.kind === 'prompt'; }).length;
       if (!items.length) { box.innerHTML = '<li class="convo-note">No prompts or replies have been recorded for this session yet.</li>'; return; }
       head.textContent = 'Everything in this session (' + total + ' prompt' + (total === 1 ? '' : 's') + ', ' + items.length + ' records)';
       box.innerHTML = items.map(function (i) {
         var labelHtml, cls = i.kind, text = i.text || '', isAction = i.kind === 'action';
         var isShadow = isAction && (/shadow_deny|audit_permitted/i.test(i.decision || '') || /audit mode/i.test(i.reason || '') || i.shadow === true);
-        var isDeny = isAction && !isShadow && /deny|block/i.test(i.decision || '');
-        var isNarrowed = isAction && !isDeny && !isShadow && i.narrowing_applied === true;
+        var isDeny = isAction && !isShadow && (/deny|block/i.test(i.decision || '') || i.outcome === 'blocked');
+        var isNarrowed = isAction && !isDeny && !isShadow && (i.narrowing_applied === true || i.outcome === 'allowed_limited' || /limited/i.test(i.decision || ''));
         if (i.kind === 'prompt') {
           nPrompt++;
           labelHtml = '<span>' + esc('Prompt ' + nPrompt + ' of ' + total) + '</span>';
@@ -1139,14 +1139,14 @@
           text = i.action || '';
         } else {
           cls += isDeny ? ' deny' : ' allow';
-          var badge = isDeny ? '<span class="chip no" style="margin:0 8px 0 0;font-size:10.5px;padding:2px 8px;letter-spacing:.05em">BLOCKED</span>' : '<span class="chip ok" style="margin:0 8px 0 0;font-size:10.5px;padding:2px 8px;letter-spacing:.05em">ALLOWED</span>';
+          var badge = isDeny ? '<span class="chip no" style="margin:0 8px 0 0;font-size:10.5px;padding:2px 8px;letter-spacing:.05em">BLOCKED</span>' : (i.outcome === 'failed' ? '<span class="chip wr" title="Allowed by policy, but the command exited with an error" style="margin:0 8px 0 0;font-size:10.5px;padding:2px 8px;letter-spacing:.05em;background:#fef7e0;color:#b06000;border:1px solid #f9ab00">ALLOWED &middot; EXIT ' + esc(String(i.exit_code || 1)) + '</span>' : '<span class="chip ok" style="margin:0 8px 0 0;font-size:10.5px;padding:2px 8px;letter-spacing:.05em">ALLOWED</span>');
           var actionColor = isDeny ? 'var(--bad)' : 'var(--ok)';
           labelHtml = '<span style="display:inline-flex;align-items:center">' + badge + '<span style="color:' + actionColor + ';font-weight:600">Agent action</span></span>';
           text = i.action || '';
         }
         var meta = '';
         if (isAction) {
-          var conceptTag = i.zsp_concept ? ' <span class="chip" style="font-size:10px;padding:1px 6px;margin-left:6px;background:rgba(15,23,42,0.06);color:var(--ink-2)">' + esc(i.zsp_concept) + '</span>' : '';
+          var conceptTag = (i.zsp_concept ? ' <span class="chip" style="font-size:10px;padding:1px 6px;margin-left:6px;background:rgba(15,23,42,0.06);color:var(--ink-2)">' + esc(i.zsp_concept) + '</span>' : '') + (i.event_count > 1 ? ' <span class="chip" title="The same action is logged by the tool hook, the shell wrapper and the broker; they are shown once" style="font-size:10px;padding:1px 6px;margin-left:6px;background:rgba(15,23,42,0.04);color:var(--ink-2)">' + esc(String(i.event_count)) + ' log events merged</span>' : '');
           if (isShadow) {
             var reasonText = i.reason ? ' &mdash; ' + esc(i.reason) : '';
             meta = '<div class="tm" style="font-size:12.5px;margin-top:8px;padding-top:6px;border-top:1px solid rgba(245,158,11,0.3);color:#b06000;font-weight:600"><b>EXECUTED IN AUDIT (WOULD BE BLOCKED BY POLICY)</b>' + reasonText + conceptTag + '</div>';
@@ -1169,8 +1169,14 @@
       var callsUrl = '/api/v1/sessions/transcript?session_id=' + encodeURIComponent(sessionId) + '&format=calls';
       var conceptKeys = Object.keys(r.zsp_concepts || {});
       var zspBar = '<li class="convo-note" style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;background:rgba(15,23,42,0.03);padding:8px 10px;border-radius:8px">' +
-        '<span><b>Calls:</b> ' + (r.allowed_count || 0) + ' allowed &middot; ' + (r.blocked_count || 0) + ' blocked &middot; <span style="color:#c2410c;font-weight:800">' + (r.allowed_limited_count || r.narrowed_count || 0) + ' allowed-limited</span>' +
-        (conceptKeys.length ? ' &middot; <b>ZSP:</b> ' + conceptKeys.map(esc).join(', ') : '') + '</span>' +
+        '<span><b>' + (r.total_actions != null ? r.total_actions : (r.allowed_count || 0) + (r.blocked_count || 0) + (r.allowed_limited_count || 0)) + ' distinct actions:</b> ' +
+        '<span class="chip ok" style="font-size:10.5px;padding:2px 8px;margin:0 4px">' + ((r.allowed_count || 0) - (r.failed_count || 0)) + ' ALLOWED</span>' +
+        '<span class="chip limited" style="font-size:10.5px;padding:2px 8px;margin:0 4px;font-weight:800">' + (r.allowed_limited_count || 0) + ' ALLOWED-LIMITED</span>' +
+        '<span class="chip no" style="font-size:10.5px;padding:2px 8px;margin:0 4px">' + (r.blocked_count || 0) + ' BLOCKED</span>' +
+        ((r.failed_count || 0) ? '<span class="chip wr" title="Allowed by policy but the command exited with an error" style="font-size:10.5px;padding:2px 8px;margin:0 4px;background:#fef7e0;color:#b06000;border:1px solid #f9ab00">' + r.failed_count + ' ALLOWED &middot; EXITED WITH ERROR</span>' : '') +
+        ((r.unclassified_count || 0) ? '<span class="chip" style="font-size:10.5px;padding:2px 8px;margin:0 4px">' + r.unclassified_count + ' UNCLASSIFIED</span>' : '') +
+        (r.raw_event_count > r.total_actions ? ' <span style="color:var(--ink-2);font-size:11px">(' + r.raw_event_count + ' raw log events: each action is logged by several layers)</span>' : '') +
+        (conceptKeys.length ? '<br><b>ZSP:</b> ' + conceptKeys.map(function (k) { return esc(k) + ' &times;' + esc(String(r.zsp_concepts[k])); }).join(', ') : '') + '</span>' +
         '<a class="convo-unlock-link" href="' + callsUrl + '" download="session-' + esc(sessionId) + '-calls.json" style="text-decoration:none;font-size:11.5px;padding:3px 9px">Download Calls JSON</a></li>';
       box.insertAdjacentHTML('afterbegin', zspBar);
       // Admin view needs both a token entered here and the server confirming it.
