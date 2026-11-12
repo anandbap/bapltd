@@ -12,6 +12,32 @@ import (
 	"bap-edge/internal/authz"
 )
 
+// humanOnlyBAPCommand reports whether command invokes a BAP command that only a human operator may run:
+// trust, untrust, dev-override, and zsp policy-sign. This is the explicit agent gate (BAP-934); the
+// commands themselves only check BAP_IN_BROKER so a developer is never locked out.
+func humanOnlyBAPCommand(command string) (string, bool) {
+	toks := strings.Fields(strings.ToLower(strings.ReplaceAll(command, "\"", " ")))
+	isBAP := func(t string) bool {
+		t = strings.ReplaceAll(t, "\\", "/")
+		base := t[strings.LastIndex(t, "/")+1:]
+		return base == "bap" || base == "bapedge" || base == "bap.exe" || base == "bapedge.exe"
+	}
+	for i := 0; i+1 < len(toks); i++ {
+		if !isBAP(toks[i]) {
+			continue
+		}
+		switch toks[i+1] {
+		case "trust", "untrust", "dev-override":
+			return toks[i+1], true
+		case "zsp":
+			if i+2 < len(toks) && toks[i+2] == "policy-sign" {
+				return "zsp policy-sign", true
+			}
+		}
+	}
+	return "", false
+}
+
 // zspDenialConcept maps an authorize refusal to the ZSP concept recorded in the audit ledger.
 func zspDenialConcept(err error) string {
 	switch {

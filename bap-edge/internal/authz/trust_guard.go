@@ -19,7 +19,9 @@ var systemTrustPrefixes = []string{
 // ValidateTrustTarget returns an error when path is too broad or too sensitive to ever be trusted.
 func ValidateTrustTarget(p string) error {
 	clean := filepath.Clean(p)
-	slash := strings.ToLower(filepath.ToSlash(clean))
+	// Normalize Windows separators explicitly: filepath.ToSlash is a no-op for backslashes on Linux/macOS,
+	// where a Windows-style path (C:\Windows) would otherwise slip past the checks below.
+	slash := strings.ToLower(strings.ReplaceAll(filepath.ToSlash(clean), "\\", "/"))
 
 	if IsFilesystemRootTarget(clean) || slash == "/" || (len(slash) == 3 && slash[1] == ':' && slash[2] == '/') || (len(slash) == 2 && slash[1] == ':') {
 		return fmt.Errorf("refusing to trust a filesystem or drive root: %s", p)

@@ -1391,12 +1391,12 @@ func RunExec(args []string) {
 
 		if stepUpResult == "non_interactive_deny" {
 			if isCrossFolder && targetPath != "" {
-				suggestion = authz.FormatOutOfWorkspaceSuggestion(targetPath, "fs:file:"+decomp.ActionType, authz.GetWorkspaceRoot())
+				suggestion = authz.FormatOutOfWorkspaceSuggestion(targetPath, "fs:file:"+authz.CrossFolderAccessType(decomp.ActionType, fullCommand), authz.GetWorkspaceRoot())
 			} else {
 				suggestion = "Action requires Human Step-Up Approval (HITL). In non-interactive environments, authorize via BAP_STEPUP_DECISION=approve or request a BAP Gateway Grant."
 			}
 		} else if isCrossFolder && targetPath != "" {
-			suggestion = authz.FormatOutOfWorkspaceSuggestion(targetPath, "fs:file:"+decomp.ActionType, authz.GetWorkspaceRoot())
+			suggestion = authz.FormatOutOfWorkspaceSuggestion(targetPath, "fs:file:"+authz.CrossFolderAccessType(decomp.ActionType, fullCommand), authz.GetWorkspaceRoot())
 		} else if strings.Contains(reason, "escapes_workspace") || authz.CheckCommandWorkspaceEscape(authz.GetWorkspaceRoot(), fullCommand) {
 			suggestion = "Directory traversal outside the workspace is prohibited. Commands and file paths must remain within the workspace boundary. Child project access (e.g. Maven child modules) inside the workspace is permitted, or grant Step-Up approval via BAP HITL."
 		}

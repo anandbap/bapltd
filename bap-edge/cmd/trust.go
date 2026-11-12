@@ -12,8 +12,13 @@ import (
 // RunTrust handles 'bapedge trust <path> [--project | --global | --session]'.
 func RunTrust(args []string) error {
 	// BAP-934: trust is a human decision. An agent must never be able to widen its own boundary by
-	// running `bapedge trust` (the denial text it receives even names the command).
-	if strings.TrimSpace(os.Getenv("BAP_IN_BROKER")) != "" || isAgentEnvironment(os.Getenv("LTD_SOURCE")) {
+	// running `bapedge trust`. The gate for agents is the hook/broker (agent tool calls that invoke
+	// trust are refused there, and the trust files are write-protected); this process-level check is
+	// defense in depth and keys ONLY on BAP_IN_BROKER, which the broker sets for sandboxed children.
+	// It deliberately does NOT sniff other environment variables (LTD_SOURCE, BAP_SESSION_ID, ...):
+	// a developer's shell or CI job can legitimately carry them, and a developer must always be able
+	// to run `bap trust`.
+	if strings.TrimSpace(os.Getenv("BAP_IN_BROKER")) != "" {
 		return fmt.Errorf("%w: `bapedge trust` is a human-operator action and cannot run inside an agent session; run it in your own terminal", authz.ErrHighRiskApprovalRequired)
 	}
 	fs := flag.NewFlagSet("trust", flag.ContinueOnError)
@@ -97,7 +102,7 @@ func RunTrust(args []string) error {
 
 // RunUntrust handles 'bapedge untrust <path> [--project | --global | --session]'.
 func RunUntrust(args []string) error {
-	if strings.TrimSpace(os.Getenv("BAP_IN_BROKER")) != "" || isAgentEnvironment(os.Getenv("LTD_SOURCE")) {
+	if strings.TrimSpace(os.Getenv("BAP_IN_BROKER")) != "" {
 		return fmt.Errorf("%w: `bapedge untrust` is a human-operator action and cannot run inside an agent session", authz.ErrHighRiskApprovalRequired)
 	}
 	fs := flag.NewFlagSet("untrust", flag.ContinueOnError)

@@ -1921,6 +1921,16 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 		}
 	}
 
+	// Human-only BAP commands can never be run by an agent tool call (BAP-934).
+	if verb, ok := humanOnlyBAPCommand(command); ok {
+		return types.ExecResponse{
+			Allowed:    false,
+			ExitCode:   1,
+			Reason:     "Security Invariant Violation: `bap " + verb + "` is a human-operator command and cannot be run by an agent",
+			Suggestion: "AGENT: stop and ask the developer to run `bap " + verb + "` in their own terminal (BAP cannot widen its own boundary or policy). Do not retry or work around this.",
+		}
+	}
+
 	// Allow atomic ZSP control commands (e.g. 'bapedge zsp authorize', 'bapedge status')
 	if command != "" && authz.IsZSPControlCommand(command) {
 		return types.ExecResponse{

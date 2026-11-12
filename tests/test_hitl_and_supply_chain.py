@@ -260,7 +260,11 @@ class TestHitlAndSupplyChain(unittest.TestCase):
         data = json.loads(proc.stdout)
         self.assertFalse(data.get("allowed"))
         suggestion = data.get("suggestion", "")
-        self.assertIn("bapedge trust", suggestion)
+        # Prescriptive guidance (BAP-934): the developer is told the exact command to run in their own terminal.
+        self.assertIn("bap trust", suggestion)
+        self.assertIn("DEVELOPER ACTION REQUIRED", suggestion)
+        self.assertIn(sibling_dir, suggestion)
+        self.assertIn("needs write access", suggestion)
 
     def test_11_cross_folder_write_allowed_via_bapedge_trust_project(self):
         """Verify bapedge trust <path> --project persistently authorizes cross-folder mutations for workspace."""

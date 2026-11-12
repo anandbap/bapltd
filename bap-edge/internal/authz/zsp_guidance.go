@@ -30,6 +30,18 @@ func OutOfWorkspaceTarget(checks []ZSPActionCheck) (target string, action string
 	return "", "", false
 }
 
+// CrossFolderAccessType returns "write" for commands that redirect output into a file (a redirect is a
+// write even when the executable, such as echo, is classified as a read), else the classified type.
+func CrossFolderAccessType(actionType, fullCommand string) string {
+	if strings.Contains(fullCommand, ">") {
+		return "write"
+	}
+	if actionType == "" {
+		return "read"
+	}
+	return actionType
+}
+
 // trustFolderFor picks the folder a developer should trust for a target: the directory itself, or the
 // parent directory of a file.
 func trustFolderFor(target string) string {

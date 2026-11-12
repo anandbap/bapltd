@@ -282,6 +282,26 @@ func TestE2E_TrustedFolderIsReadableByTheAgent(t *testing.T) {
 	}
 }
 
+// A developer must always be able to run `bap trust`, even from a shell or CI job whose environment carries
+// agent-launcher variables (LTD_SOURCE, BAP_SESSION_ID). Only the broker's BAP_IN_BROKER marks an agent child.
+func TestE2E_DeveloperTrustWorksDespiteAgentLauncherEnvironment(t *testing.T) {
+	e2eEnv(t)
+	t.Setenv("LTD_SOURCE", "antigravity")
+	t.Setenv("BAP_SESSION_ID", "sess-dev-shell")
+	t.Setenv("BAP_GLOBAL_PERMISSIONS", filepath.Join(t.TempDir(), "global_permissions.json"))
+	folder := t.TempDir()
+
+	if err := RunTrust([]string{"--global", folder}); err != nil {
+		t.Fatalf("a developer's `bap trust` must work with launcher variables present, got %v", err)
+	}
+	if ok, scope := authz.IsTargetAuthorized(authz.GetWorkspaceRoot(), "sess-dev-shell", filepath.Join(folder, "x.txt"), "write"); !ok || scope != "global" {
+		t.Fatalf("trust was not recorded: ok=%v scope=%q", ok, scope)
+	}
+	if err := RunUntrust([]string{"--global", folder}); err != nil {
+		t.Fatalf("a developer's `bap untrust` must work, got %v", err)
+	}
+}
+
 // BAP-934: the agent must not be able to widen its own boundary through the trust store.
 func TestE2E_AgentCannotSelfTrustOrTamperWithTheTrustStore(t *testing.T) {
 	e2eEnv(t)
@@ -304,9 +324,16 @@ func TestE2E_AgentCannotSelfTrustOrTamperWithTheTrustStore(t *testing.T) {
 	for _, c := range []string{
 		`bapedge trust "C:\Users" --global`,
 		`bapedge trust C:\Users\User\Downloads --project`,
+		`bap trust D:\data --session`,
+		`cd . && bapedge untrust D:\data --project`,
+		`bapedge dev-override on`,
+		`bapedge zsp policy-sign --file p.json`,
+		`& "C:\Program Files\BAP\bapedge.exe" trust D:\data --global`,
 	} {
-		if resp := evaluateWithBapedgeTool(sess, "claude-code", "PowerShell", c, ""); resp.Allowed {
-			t.Errorf("agent must not be able to run %q", c)
+		resp := evaluateWithBapedgeTool(sess, "claude-code", "PowerShell", c, "")
+		// Either the explicit human-only rule or the broker-invocation guard refuses it; both are agent-proof.
+		if resp.Allowed || !(strings.Contains(resp.Reason, "human-operator command") || strings.Contains(resp.Reason, "untrusted BAPEdge invocation")) {
+			t.Errorf("agent must not be able to run %q, and the refusal must say why; got allowed=%v reason=%q", c, resp.Allowed, resp.Reason)
 		}
 	}
 	for _, p := range []string{

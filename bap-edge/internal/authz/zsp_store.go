@@ -684,7 +684,7 @@ func trustActionForZSP(action string) string {
 
 // isProtectedCredentialPath is true for paths a trust entry must never open to an agent.
 func isProtectedCredentialPath(p string) bool {
-	norm := "/" + strings.ToLower(strings.Trim(filepath.ToSlash(p), "/"))
+	norm := "/" + strings.ToLower(strings.Trim(strings.ReplaceAll(filepath.ToSlash(p), "\\", "/"), "/"))
 	base := norm[strings.LastIndex(norm, "/")+1:]
 	if base == ".env" || strings.HasPrefix(base, ".env.") || base == "id_rsa" || base == "id_ed25519" || strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key") {
 		return true
