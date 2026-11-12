@@ -2,10 +2,12 @@ package api
 
 import (
 	"bap-controlplane/internal/audit"
+	"bap-controlplane/internal/session"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func transcriptText(t *testing.T, s *Server, configure func(*http.Request)) (text string, unlocked bool) {
@@ -112,5 +114,60 @@ func TestTranscriptCallsFormatIncludesAllowedBlockedAndNarrowed(t *testing.T) {
 	}
 	if res.ZSPConcepts["ZSP_DENY_NO_GRANT"] != 1 || res.ZSPConcepts["ZSP_SCOPE_NARROWED"] != 1 {
 		t.Fatalf("unexpected zsp_concepts: %+v", res.ZSPConcepts)
+	}
+}
+
+func TestSessionToActivityEventPreservesNarrowingAcrossLaterPrompts(t *testing.T) {
+	s := &Server{}
+	t1 := time.Now().UTC().Add(-2 * time.Minute)
+	t2 := t1.Add(30 * time.Second)
+	t3 := t2.Add(30 * time.Second)
+
+	sess := &session.Session{
+		SessionID:    "sess-multi-10",
+		AppID:        "claude-code",
+		Status:       "active",
+		LastActiveAt: t3,
+		UserPrompt:   "Scenario 10 prompt",
+		Intent:       session.IntentContext{Primary: "CODE_INSPECTION", PromptHash: "hash-10"},
+		Events: []audit.Event{
+			{
+				EventID:          "ev-narrow",
+				SessionID:        "sess-multi-10",
+				Timestamp:        t1.Format(time.RFC3339Nano),
+				Decision:         "allow",
+				PromptHash:       "hash-3",
+				FullCommand:      "bapedge zsp authorize --actions repo:* [NARROWED -> repo:read,repo:push]",
+				GrantID:          "grant-n1",
+				NarrowingApplied: true,
+				NarrowingReason:  "Monotonic scope attenuation: [repo:*] -> [repo:read repo:push]",
+				RequestedActions: []string{"repo:*"},
+				AllowedActions:   []string{"repo:read", "repo:push"},
+				ZSPConcept:       "ZSP_SCOPE_NARROWED",
+			},
+			{
+				EventID:     "ev-p10",
+				SessionID:   "sess-multi-10",
+				Timestamp:   t2.Format(time.RFC3339Nano),
+				FullCommand: "USER_PROMPT_SUBMITTED",
+				UserPrompt:  "Scenario 10 prompt",
+			},
+			{
+				EventID:     "ev-deny",
+				SessionID:   "sess-multi-10",
+				Timestamp:   t3.Format(time.RFC3339Nano),
+				Decision:    "deny",
+				PromptHash:  "hash-10",
+				FullCommand: "curl https://example.com",
+			},
+		},
+	}
+
+	act := s.sessionToActivityEvent(sess)
+	if !act.NarrowingApplied {
+		t.Fatalf("expected NarrowingApplied=true to be preserved across later prompts, got false (outcome=%s)", act.OutcomeCategory)
+	}
+	if len(act.AllowedActions) != 2 || act.GrantID != "grant-n1" {
+		t.Fatalf("expected narrowing metadata preserved, got grant=%q allowed=%v", act.GrantID, act.AllowedActions)
 	}
 }

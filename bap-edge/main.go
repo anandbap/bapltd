@@ -110,6 +110,13 @@ func main() {
 	command := os.Args[1]
 	args := os.Args[2:]
 
+	if requiresEnrolledWorkstation(command, args) {
+		if err := cmd.EnsureEnrolledOrAutoFix(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+
 	switch command {
 	case "start":
 		if err := cmd.RunDaemon(append([]string{"start"}, args...)); err != nil {
@@ -322,6 +329,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error displaying version: %v\n", err)
 			os.Exit(1)
 		}
+	case "ensure-enrolled":
+		if err := cmd.EnsureEnrolledOrAutoFix(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		os.Exit(0)
@@ -329,4 +341,23 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Unknown command %q\n\n%s", command, usage)
 		os.Exit(1)
 	}
+}
+
+func requiresEnrolledWorkstation(command string, args []string) bool {
+	switch command {
+	case "claude", "claude-code",
+		"codex", "openai-codex",
+		"start", "restart",
+		"enable", "setup",
+		"sync", "attest", "onboarding", "sweep", "watch",
+		"review", "review-session", "review-sessions", "sessions",
+		"trust", "untrust", "permissions", "why", "explain",
+		"rollback", "pin", "scan", "adapter", "antibypass", "shield", "stepup", "delegate", "subagent":
+		return true
+	case "daemon":
+		if len(args) > 0 && (args[0] == "start" || args[0] == "restart") {
+			return true
+		}
+	}
+	return false
 }

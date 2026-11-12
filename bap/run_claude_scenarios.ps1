@@ -294,10 +294,11 @@ if (-not $NoReview) {
             }
         }
         if (-not $foundUnified) {
+            Write-Warning "Unified session '$bapSessionId' was not found in local audit ledgers; scanning for newest sess-$Agent* session (ignoring observed-* heartbeat sessions)."
             $detectedSid = "1"
             foreach ($lp in $ledgerCandidates) {
                 if (Test-Path $lp) {
-                    $recent = Get-Content $lp -Tail 200 | ForEach-Object {
+                    $recent = Get-Content $lp -Tail 500 | ForEach-Object {
                         try { $_ | ConvertFrom-Json } catch { $null }
                     } | Where-Object {
                         $_ -and $_.session_id -and $_.session_id -like "sess-$Agent*" -and $_.timestamp

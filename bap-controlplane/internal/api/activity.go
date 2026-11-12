@@ -234,6 +234,16 @@ func (s *Server) sessionToActivityEvent(sess *session.Session) *types.AgentActiv
 		promptTime = s.sessionStore.LatestPromptTime(sess.SessionID)
 	}
 	for _, ev := range sess.Events {
+		// Preserve session-wide ZSP narrowing telemetry across all prompts/turns in the session
+		// so later scenarios (e.g. Scenarios 4-10) never hide Scenario 3's narrowing badge.
+		if ev.NarrowingApplied {
+			narrowingApplied = true
+			narrowingReason = ev.NarrowingReason
+			requestedActions = ev.RequestedActions
+			allowedActions = ev.AllowedActions
+			grantID = ev.GrantID
+			zspConcept = ev.ZSPConcept
+		}
 		if ev.PromptHash != "" && sess.Intent.PromptHash != "" && ev.PromptHash != sess.Intent.PromptHash {
 			continue
 		}
@@ -243,14 +253,6 @@ func (s *Server) sessionToActivityEvent(sess *session.Session) *types.AgentActiv
 		t, err := time.Parse(time.RFC3339Nano, ev.Timestamp)
 		if ev.PromptHash == "" && ev.UserPrompt == "" && t.Before(promptTime) {
 			continue
-		}
-		if ev.NarrowingApplied {
-			narrowingApplied = true
-			narrowingReason = ev.NarrowingReason
-			requestedActions = ev.RequestedActions
-			allowedActions = ev.AllowedActions
-			grantID = ev.GrantID
-			zspConcept = ev.ZSPConcept
 		}
 		if err != nil || t.Before(latestTime) || ev.Decision == "" {
 			continue

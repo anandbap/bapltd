@@ -1795,3 +1795,95 @@ func reloadStoredCredentials(creds *StoredCredentials) bool {
 	}
 	return false
 }
+
+func loadFirstValidCredentials() (StoredCredentials, bool) {
+	var creds StoredCredentials
+	paths := []string{
+		DefaultCredentialsPath(),
+		state.CredentialsPath(),
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		paths = append(paths,
+			filepath.Join(home, ".bapstate", "credentials.json"),
+			filepath.Join(home, ".ltd", "credentials.json"),
+			filepath.Join(home, ".bap", "credentials.json"),
+		)
+	}
+	paths = append(paths,
+		filepath.Join(".bapstate", "credentials.json"),
+		filepath.Join(".ltd", "credentials.json"),
+		filepath.Join(".bap", "credentials.json"),
+	)
+	if envCreds := os.Getenv("BAP_CREDENTIALS"); envCreds != "" {
+		paths = append(paths, envCreds)
+	}
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		if data, err := os.ReadFile(p); err == nil && len(data) > 0 {
+			if json.Unmarshal(data, &creds) == nil && creds.AgentID != "" {
+				return creds, true
+			}
+		}
+	}
+	return StoredCredentials{}, false
+}
+
+// EnsureEnrolledOrAutoFix blocks guarded BAP commands when the workstation is unenrolled,
+// attempts auto-remediation if local credentials are out of sync with a reachable Control Plane,
+// and still permits offline operation when valid local credentials exist but the Control Plane
+// is network-unreachable.
+func EnsureEnrolledOrAutoFix() error {
+	creds, ok := loadFirstValidCredentials()
+	if !ok || creds.AgentID == "" || creds.SessionToken == "" {
+		return fmt.Errorf("[BAP ZERO-TRUST] Workstation is unenrolled. Run 'bap login' (or 'bap register --dev') to enroll before running this command")
+	}
+
+	targetCP := strings.TrimRight(creds.ServerURL, "/")
+	if targetCP == "" {
+		ep := config.ResolveEndpoints()
+		targetCP = strings.TrimRight(ep.ControlPlaneURL, "/")
+	}
+	if targetCP == "" {
+		targetCP = strings.TrimRight(config.DefaultControlPlaneURL, "/")
+	}
+
+	// Probe Control Plane reachability; if unreachable, allow offline execution with cached credentials.
+	probeClient := httptransport.New(1500 * time.Millisecond)
+	hResp, hErr := probeClient.Get(targetCP + "/health")
+	if hErr != nil {
+		return nil
+	}
+	_ = hResp.Body.Close()
+
+	// Control Plane is reachable: verify enrollment is active or auto-remediate out-of-sync state.
+	vClient := httptransport.New(2500 * time.Millisecond)
+	vURL := fmt.Sprintf("%s/api/v1/agents/verify?agent_id=%s", targetCP, url.QueryEscape(creds.AgentID))
+	vReq, _ := http.NewRequest(http.MethodGet, vURL, nil)
+	vReq.Header.Set("Authorization", "Bearer "+creds.SessionToken)
+	vResp, vErr := vClient.Do(vReq)
+	if vErr != nil {
+		return nil
+	}
+	defer vResp.Body.Close()
+
+	var vData struct {
+		Status string `json:"status"`
+	}
+	_ = json.NewDecoder(vResp.Body).Decode(&vData)
+
+	if vData.Status == "revoked" || vData.Status == "deregistered" {
+		return fmt.Errorf("[BAP ZERO-TRUST] Workstation enrollment is %s on the Control Plane. Run 'bap login --force' (or 'bap register --dev') to re-enroll", vData.Status)
+	}
+	if vResp.StatusCode == http.StatusNotFound || vResp.StatusCode == http.StatusUnauthorized ||
+		vData.Status == "not_found" || vData.Status == "token_invalid" {
+		fmt.Println("[*] 🛠️  Workstation enrollment is out of sync with Central Control Plane — attempting auto-remediation...")
+		label, remErr := remediateOutOfSyncEnrollment(targetCP, &creds, isTerminal(os.Stdin))
+		if remErr != nil {
+			return fmt.Errorf("[BAP ZERO-TRUST] Workstation enrollment is out of sync and auto-remediation failed (%v). Run 'bap login --force' (or 'bap register --dev') to enroll", remErr)
+		}
+		fmt.Printf("[+] 🛠️  Auto-remediated workstation enrollment: %s\n", label)
+	}
+	return nil
+}

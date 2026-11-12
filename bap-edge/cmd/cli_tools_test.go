@@ -240,3 +240,44 @@ func TestRunStatus_UnmonitoredSessionWithHooksDisabled(t *testing.T) {
 		t.Fatalf("unmonitored session must not be labeled 'Active (Verified)', got:\n%s", out)
 	}
 }
+
+func TestEnsureEnrolledOrAutoFixBlocksWhenUnenrolled(t *testing.T) {
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+	t.Setenv("BAP_STATE_DIR", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("HOME", tmp)
+	t.Setenv("BAP_CREDENTIALS", filepath.Join(tmp, "missing-credentials.json"))
+
+	err := EnsureEnrolledOrAutoFix()
+	if err == nil {
+		t.Fatalf("expected error when workstation is unenrolled, got nil")
+	}
+	if !strings.Contains(err.Error(), "bap login") {
+		t.Fatalf("expected error to instruct user to run 'bap login', got: %v", err)
+	}
+}
+
+func TestEnsureEnrolledOrAutoFixAllowsOfflineWhenControlPlaneUnreachable(t *testing.T) {
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+	t.Setenv("BAP_STATE_DIR", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("HOME", tmp)
+	credPath := filepath.Join(tmp, "credentials.json")
+	t.Setenv("BAP_CREDENTIALS", credPath)
+
+	creds := StoredCredentials{
+		AgentID:      "agent-offline-1",
+		SessionToken: "tok-offline-1",
+		ServerURL:    "http://127.0.0.1:1",
+	}
+	data, _ := json.Marshal(creds)
+	if err := os.WriteFile(credPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := EnsureEnrolledOrAutoFix(); err != nil {
+		t.Fatalf("expected offline operation to succeed when Control Plane is unreachable, got: %v", err)
+	}
+}

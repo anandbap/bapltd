@@ -377,6 +377,11 @@ def main():
             print("[✓] Local session credentials removed. Workstation is logged out.")
         sys.exit(rc)
     elif cmd == "launch":
+        bapedge = find_bapedge()
+        if os.path.isfile(bapedge):
+            rc = subprocess.call([bapedge, "ensure-enrolled"])
+            if rc != 0:
+                sys.exit(rc)
         sys.argv = [sys.argv[0]] + rest
         launch_main()
     elif cmd == "doctor":
