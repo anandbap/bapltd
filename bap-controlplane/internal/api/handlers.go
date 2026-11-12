@@ -3539,6 +3539,7 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 			it.Kind, it.Text, it.Captured = "response", ev.AgentResponse, ev.AgentResponse != ""
 		default:
 			it.Kind, it.Action = "action", ev.FullCommand
+			decLow := strings.ToLower(ev.Decision)
 			if it.ZSPConcept == "" {
 				rLow := strings.ToLower(ev.Reason)
 				switch {
@@ -3555,10 +3556,10 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 			if it.ZSPConcept != "" {
 				conceptsSeen[it.ZSPConcept]++
 			}
-			if it.NarrowingApplied {
+			if it.NarrowingApplied || strings.Contains(decLow, "limit") || strings.Contains(decLow, "narrow") {
+				it.Decision = "ALLOWED-LIMITED"
 				narrowedGrants = append(narrowedGrants, it)
 			}
-			decLow := strings.ToLower(ev.Decision)
 			if strings.Contains(decLow, "deny") || strings.Contains(decLow, "block") {
 				blockedCalls = append(blockedCalls, it)
 			} else if decLow != "" {
@@ -3569,14 +3570,16 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 	}
 	if strings.EqualFold(r.URL.Query().Get("format"), "calls") {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"session_id":      sessionID,
-			"allowed_count":   len(allowedCalls),
-			"blocked_count":   len(blockedCalls),
-			"narrowed_count":  len(narrowedGrants),
-			"zsp_concepts":    conceptsSeen,
-			"allowed_calls":   allowedCalls,
-			"blocked_calls":   blockedCalls,
-			"narrowed_grants": narrowedGrants,
+			"session_id":            sessionID,
+			"allowed_count":         len(allowedCalls),
+			"blocked_count":         len(blockedCalls),
+			"narrowed_count":        len(narrowedGrants),
+			"allowed_limited_count": len(narrowedGrants),
+			"zsp_concepts":          conceptsSeen,
+			"allowed_calls":         allowedCalls,
+			"blocked_calls":         blockedCalls,
+			"narrowed_grants":       narrowedGrants,
+			"allowed_limited_calls": narrowedGrants,
 		})
 		return
 	}
@@ -3591,14 +3594,15 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"session_id":      sessionID,
-		"count":           len(items),
-		"items":           items,
-		"allowed_count":   len(allowedCalls),
-		"blocked_count":   len(blockedCalls),
-		"narrowed_count":  len(narrowedGrants),
-		"zsp_concepts":    conceptsSeen,
-		"unlocked":        isAdmin,
+		"session_id":            sessionID,
+		"count":                 len(items),
+		"items":                 items,
+		"allowed_count":         len(allowedCalls),
+		"blocked_count":         len(blockedCalls),
+		"narrowed_count":        len(narrowedGrants),
+		"allowed_limited_count": len(narrowedGrants),
+		"zsp_concepts":          conceptsSeen,
+		"unlocked":              isAdmin,
 	})
 }
 

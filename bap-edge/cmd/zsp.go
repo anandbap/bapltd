@@ -313,14 +313,17 @@ func RunZSP(args []string) error {
 			}
 			return err
 		}
+		decision := "allow"
 		zspConcept := "ZSP_GRANT_MINTED"
 		if grant.NarrowingApplied {
+			decision = "ALLOWED-LIMITED"
 			zspConcept = "ZSP_SCOPE_NARROWED"
 		}
-		recordZSPAuditEvent(sessionID, clientType, grant.RequestedActions, grant.AllowedActions, grant.NarrowingApplied, grant.NarrowingReason, grant.GrantID, "allow", grant.NarrowingReason, zspConcept)
+		recordZSPAuditEvent(sessionID, clientType, grant.RequestedActions, grant.AllowedActions, grant.NarrowingApplied, grant.NarrowingReason, grant.GrantID, decision, grant.NarrowingReason, zspConcept)
 		if *jsonFlag {
 			data, _ := json.MarshalIndent(map[string]any{
 				"allowed":           true,
+				"decision":          decision,
 				"grant":             grant,
 				"envelope_id":       env.EnvelopeID,
 				"narrowing_applied": grant.NarrowingApplied,
@@ -330,7 +333,7 @@ func RunZSP(args []string) error {
 			return nil
 		}
 		if grant.NarrowingApplied {
-			fmt.Printf("[BAP ZERO-TRUST] Policy Narrowing Applied (Monotonic Scope Attenuation)\n")
+			fmt.Printf("[BAP ZERO-TRUST] Decision: ALLOWED-LIMITED (Policy Narrowing Applied: Monotonic Scope Attenuation)\n")
 			fmt.Printf("  Requested Actions: %v -> Attenuated: %v\n", grant.RequestedActions, grant.AllowedActions)
 			fmt.Printf("  Reason:            %s\n", grant.NarrowingReason)
 		}

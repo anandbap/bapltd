@@ -215,7 +215,7 @@ function Build-CallsReport {
 
         $callObj = [PSCustomObject]@{
             timestamp          = [string]$e.timestamp
-            decision           = if ($isNarrowed -and $isAllow) { "NARROWED" } elseif ($isDeny) { "BLOCKED" } else { "ALLOWED" }
+            decision           = if ($isNarrowed -and $isAllow) { "ALLOWED-LIMITED" } elseif ($isDeny) { "BLOCKED" } else { "ALLOWED" }
             raw_decision       = [string]$e.decision
             reporting_layer    = if ($e.reporting_layer) { [string]$e.reporting_layer } else { "hook" }
             tool               = [string]$e.executable
@@ -240,12 +240,13 @@ function Build-CallsReport {
         session_id = $SessionId
         agent      = $Agent
         summary    = [PSCustomObject]@{
-            total_events   = $Events.Count
-            allowed_count  = $allowedCalls.Count
-            blocked_count  = $blockedCalls.Count
-            narrowed_count = $narrowedGrants.Count
-            avg_latency_ms = $AvgLatency
-            max_latency_ms = $MaxLatency
+            total_events          = $Events.Count
+            allowed_count         = $allowedCalls.Count
+            blocked_count         = $blockedCalls.Count
+            narrowed_count        = $narrowedGrants.Count
+            allowed_limited_count = $narrowedGrants.Count
+            avg_latency_ms        = $AvgLatency
+            max_latency_ms        = $MaxLatency
         }
         zsp_concepts = [PSCustomObject]@{
             zero_standing_privileges_blocks = $zspNoGrant
@@ -255,9 +256,10 @@ function Build-CallsReport {
             credential_isolation_blocks     = $zspCredIsolation
             high_risk_oob_escalations       = $zspHighRiskOOB
         }
-        allowed_calls   = $allowedCalls
-        blocked_calls   = $blockedCalls
-        narrowed_grants = $narrowedGrants
+        allowed_calls         = $allowedCalls
+        blocked_calls         = $blockedCalls
+        narrowed_grants       = $narrowedGrants
+        allowed_limited_calls = $narrowedGrants
     }
 }
 
@@ -302,7 +304,9 @@ function Summarize-Session {
     $minLatency = if ($latencies.Count -gt 0) { ($latencies | Measure-Object -Minimum).Minimum } else { 12.0 }
     $maxLatency = if ($latencies.Count -gt 0) { ($latencies | Measure-Object -Maximum).Maximum } else { 25.0 }
 
-    $statusText = if ($denied -eq 0) {
+    $statusText = if ($denied -eq 0 -and $callsReport.summary.narrowed_count -gt 0) {
+        "[LIMITED] Scope Attenuated ($($callsReport.summary.narrowed_count))"
+    } elseif ($denied -eq 0) {
         "[PASS] 100% Compliant (All Allowed)"
     } else {
         "[BLOCKED] $denied Invariant Blocks"
@@ -311,21 +315,22 @@ function Summarize-Session {
     $callsReport = Build-CallsReport -SessionId $SessionId -Agent $agent -Events $Events -AvgLatency $avgLatency -MaxLatency $maxLatency
 
     return [PSCustomObject]@{
-        SessionId   = $SessionId
-        Agent       = $agent
-        StartTime   = $first.timestamp
-        EndTime     = $last.timestamp
-        LastActive  = Format-Timestamp $last.timestamp
-        TotalEvents = $Events.Count
-        Allowed     = $allowed
-        Denied      = $denied
-        Narrowed    = $callsReport.summary.narrowed_count
-        AvgLatency  = $avgLatency
-        MinLatency  = $minLatency
-        MaxLatency  = $maxLatency
-        StatusText  = $statusText
-        CallsReport = $callsReport
-        RawEvents   = $Events
+        SessionId      = $SessionId
+        Agent          = $agent
+        StartTime      = $first.timestamp
+        EndTime        = $last.timestamp
+        LastActive     = Format-Timestamp $last.timestamp
+        TotalEvents    = $Events.Count
+        Allowed        = $allowed
+        Denied         = $denied
+        Narrowed       = $callsReport.summary.narrowed_count
+        AllowedLimited = $callsReport.summary.narrowed_count
+        AvgLatency     = $avgLatency
+        MinLatency     = $minLatency
+        MaxLatency     = $maxLatency
+        StatusText     = $statusText
+        CallsReport    = $callsReport
+        RawEvents      = $Events
     }
 }
 
@@ -348,7 +353,7 @@ function Show-SessionList {
         $num = "[$($i + 1)]"
         $sidShort = if ($s.SessionId.Length -gt 33) { $s.SessionId.Substring(0, 31) + ".." } else { $s.SessionId }
 
-        $color = if ($s.Denied -gt 0) { "Yellow" } else { "Green" }
+        $color = if ($s.Denied -gt 0) { "Red" } elseif ($s.Narrowed -gt 0) { "Yellow" } else { "Green" }
         if ($i -eq 0) {
             Write-Host ("  {0,-4} {1,-34} {2,-13} {3,-20} {4,-6} {5,-7} {6,-8} {7}" -f $num, $sidShort, $s.Agent, $s.LastActive, $s.TotalEvents, $s.Allowed, $s.Denied, $s.StatusText) -ForegroundColor $color
         } else {
@@ -372,7 +377,9 @@ function Show-SessionDetail {
     Write-Host "  Time Window     : $($Summary.StartTime)  -->  $($Summary.EndTime)" -ForegroundColor Gray
 
     Write-Host "  Health Verdict  : " -NoNewline
-    if ($Summary.Denied -eq 0) {
+    if ($Summary.Denied -eq 0 -and $Summary.Narrowed -gt 0) {
+        Write-Host ("[PASS] 100% COMPLIANT (ALLOWED-LIMITED) - {0} action(s) scope-narrowed to least privilege" -f $Summary.Narrowed) -ForegroundColor Yellow
+    } elseif ($Summary.Denied -eq 0) {
         Write-Host "[PASS] 100% COMPLIANT - All agent operations permitted by Zero-Trust policy" -ForegroundColor Green
     } else {
         Write-Host ("[CONTAINED] ZERO-TRUST BOUNDARIES HELD - {0} unauthorized operation(s) blocked fail-closed" -f $Summary.Denied) -ForegroundColor Yellow
@@ -382,7 +389,8 @@ function Show-SessionDetail {
     Write-Host "  KEY PERFORMANCE AND SLA METRICS:" -ForegroundColor White
     Write-Host ("    * Total Evaluated Operations : {0}" -f $Summary.TotalEvents)
     Write-Host ("    * Permitted Actions          : {0}" -f $Summary.Allowed) -ForegroundColor Green
-    Write-Host ("    * Blocked Security Actions   : {0}" -f $Summary.Denied) -ForegroundColor (Iif ($Summary.Denied -gt 0) "Yellow" "Gray")
+    Write-Host ("    * Blocked Security Actions   : {0}" -f $Summary.Denied) -ForegroundColor (Iif ($Summary.Denied -gt 0) "Red" "Gray")
+    Write-Host ("    * Scope Attenuated (Limited) : {0}" -f $Summary.Narrowed) -ForegroundColor (Iif ($Summary.Narrowed -gt 0) "Yellow" "Gray")
     Write-Host ("    * Average Decision Latency   : {0} ms" -f $Summary.AvgLatency) -ForegroundColor Cyan
     Write-Host ("    * Peak Decision Latency      : {0} ms (Min: {1} ms)" -f $Summary.MaxLatency, $Summary.MinLatency) -ForegroundColor Gray
     
@@ -394,12 +402,12 @@ function Show-SessionDetail {
     Write-Host "  ZERO-TRUST & ZSP CONCEPTS OBSERVED:" -ForegroundColor Cyan
     Write-Host ("    [1] Zero Standing Privileges (Ungranted Blocks) : {0}" -f $zc.zero_standing_privileges_blocks) -ForegroundColor (Iif ($zc.zero_standing_privileges_blocks -gt 0) "Red" "Gray")
     Write-Host ("    [2] 4-Tuple TaskGrant Minting                   : {0}" -f $zc.task_grants_minted) -ForegroundColor (Iif ($zc.task_grants_minted -gt 0) "Cyan" "Gray")
-    Write-Host ("    [3] Monotonic Scope Attenuation (NARROWED)      : {0}" -f $zc.scope_narrowing_attenuations) -ForegroundColor (Iif ($zc.scope_narrowing_attenuations -gt 0) "Yellow" "Gray")
+    Write-Host ("    [3] Monotonic Scope Attenuation (ALLOWED-LIMITED): {0}" -f $zc.scope_narrowing_attenuations) -ForegroundColor (Iif ($zc.scope_narrowing_attenuations -gt 0) "Yellow" "Gray")
     if ($Summary.CallsReport.narrowed_grants.Count -gt 0) {
         foreach ($ng in $Summary.CallsReport.narrowed_grants) {
             $reqAct = if ($ng.requested_actions) { ($ng.requested_actions -join ",") } else { "wildcard" }
             $alwAct = if ($ng.allowed_actions) { ($ng.allowed_actions -join ",") } else { "attenuated" }
-            Write-Host ("        -> [AMBER/NARROWED] {0} | Requested [{1}] -> Granted [{2}]" -f $ng.grant_id, $reqAct, $alwAct) -ForegroundColor Yellow
+            Write-Host ("        -> [ALLOWED-LIMITED] {0} | Requested [{1}] -> Granted [{2}]" -f $ng.grant_id, $reqAct, $alwAct) -ForegroundColor Yellow
         }
     }
     Write-Host ("    [4] Single-Use Atomic Grant Burn (Replay Block) : {0}" -f $zc.single_use_atomic_burns) -ForegroundColor (Iif ($zc.single_use_atomic_burns -gt 0) "Magenta" "Gray")
@@ -408,7 +416,7 @@ function Show-SessionDetail {
     Write-Host "--------------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
 
     Write-Host "`n  CHRONOLOGICAL ACTION AND DECISION LEDGER:" -ForegroundColor Yellow
-    Write-Host ("  {0,-3} {1,-12} {2,-9} {3,-7} {4,-12} {5,-34} {6}" -f "#", "TIME (UTC)", "DECISION", "LAYER", "TOOL", "COMMAND / OPERATION", "SECURITY REASON / DETAILS") -ForegroundColor Yellow
+    Write-Host ("  {0,-3} {1,-12} {2,-15} {3,-7} {4,-12} {5,-34} {6}" -f "#", "TIME (UTC)", "DECISION", "LAYER", "TOOL", "COMMAND / OPERATION", "SECURITY REASON / DETAILS") -ForegroundColor Yellow
     Write-Host "  ------------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
 
     $events = $Summary.RawEvents
@@ -417,7 +425,7 @@ function Show-SessionDetail {
         $timeStr = Format-TimeOnly $e.timestamp
         $dec = [string]$e.decision
         $isNarrowed = ($e.narrowing_applied -eq $true)
-        $decUpper = if ($isNarrowed -and ($dec -in @('allow', 'approved', 'approve', 'granted', 'ok'))) { "NARROWED" } elseif ($dec -in @('allow', 'approved', 'approve', 'granted', 'ok')) { "ALLOW" } else { "BLOCK" }
+        $decUpper = if ($isNarrowed -and ($dec -in @('allow', 'approved', 'approve', 'granted', 'ok', 'allowed-limited'))) { "ALLOWED-LIMITED" } elseif ($dec -in @('allow', 'approved', 'approve', 'granted', 'ok')) { "ALLOW" } else { "BLOCK" }
         $layer = if ($e.reporting_layer) { [string]$e.reporting_layer } else { "hook" }
         $tool = if ($e.executable) { [string]$e.executable } else { "-" }
         
@@ -427,9 +435,9 @@ function Show-SessionDetail {
         $reason = if ($e.narrowing_reason) { [string]$e.narrowing_reason } elseif ($e.reason) { [string]$e.reason } else { "Policy evaluated" }
         $reasonShort = if ($reason.Length -gt 45) { $reason.Substring(0, 42) + "..." } else { $reason }
 
-        $rowColor = if ($decUpper -eq "NARROWED") { "Yellow" } elseif ($decUpper -eq "ALLOW") { "Green" } else { "Red" }
+        $rowColor = if ($decUpper -eq "ALLOWED-LIMITED") { "Yellow" } elseif ($decUpper -eq "ALLOW") { "Green" } else { "Red" }
         Write-Host ("  {0,-3} {1,-12} " -f ($i + 1), $timeStr) -NoNewline -ForegroundColor Gray
-        Write-Host ("{0,-9} " -f $decUpper) -NoNewline -ForegroundColor $rowColor
+        Write-Host ("{0,-15} " -f $decUpper) -NoNewline -ForegroundColor $rowColor
         Write-Host ("{0,-7} {1,-12} {2,-34} {3}" -f $layer, $tool, $cmdShort, $reasonShort) -ForegroundColor White
     }
 
@@ -528,12 +536,10 @@ if ($sessionsDict.Keys.Count -eq 0) {
     exit 0
 }
 
-# Sort sessions descending by latest event timestamp
-$sortedSessionIds = $sessionsDict.Keys | Sort-Object {
-    $evts = $sessionsDict[$_]
-    $last = $evts[$evts.Count - 1]
-    [string]$last.timestamp
-} -Descending
+# Sort sessions: prioritize active execution sessions (sess-*) over 1-event observation heartbeats (observed-*), then descending by latest event timestamp
+$sortedSessionIds = $sessionsDict.Keys | Sort-Object `
+    @{ Expression = { if ($_ -like 'observed-*' -and $sessionsDict[$_].Count -le 2) { 1 } else { 0 } }; Ascending = $true }, `
+    @{ Expression = { $evts = $sessionsDict[$_]; [string]$evts[$evts.Count - 1].timestamp }; Descending = $true }
 
 $summaries = @()
 foreach ($sid in ($sortedSessionIds | Select-Object -First $Limit)) {

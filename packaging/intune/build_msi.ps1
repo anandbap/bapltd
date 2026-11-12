@@ -3,9 +3,9 @@
     Builds Windows Installer (.msi) for BAP Edge
 #>
 param(
-    [string]$Version = "1.12.34",
+    [string]$Version = "1.12.35",
     [string]$DistDir = "dist\windows-amd64",
-    [string]$OutputFile = "dist\bapedge-windows-amd64-1.12.34.msi"
+    [string]$OutputFile = "dist\bapedge-windows-amd64-1.12.35.msi"
 )
 
 $rootDir = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)

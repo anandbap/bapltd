@@ -272,8 +272,11 @@ func (s *Server) sessionToActivityEvent(sess *session.Session) *types.AgentActiv
 		outcome = "Flagged"
 	case strings.Contains(decision, "DENY") || strings.Contains(decision, "DENIED") || strings.Contains(decision, "BLOCK"):
 		outcome = "Blocked"
-	case narrowingApplied:
-		outcome = "Narrowed"
+	case narrowingApplied || strings.Contains(decision, "LIMITED") || strings.Contains(decision, "NARROW"):
+		outcome = "Allowed-Limited"
+		if decision == "ALLOW" || decision == "ALLOWED" || decision == "UNKNOWN" {
+			decision = "ALLOWED-LIMITED"
+		}
 	case decision == "ALLOW" || decision == "ALLOWED":
 		outcome = "Success"
 	}
