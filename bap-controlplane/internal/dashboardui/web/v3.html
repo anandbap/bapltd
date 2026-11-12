@@ -97,6 +97,7 @@
   .fleet-cap { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); font-weight: 700; margin-bottom: 12px; }
   .chip { display: inline-block; font-size: 11.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 2px 9px; border-radius: 99px; margin-left: 8px; vertical-align: 1px; }
   .chip.wr { background: var(--warn-bg); color: var(--warn); }
+  .chip.limited { background: #ffedd5; color: #9a3412; border: 1.5px solid #ea580c; font-weight: 800; letter-spacing: .05em; box-shadow: 0 1px 3px rgba(234,88,12,0.2); }
   .chip.ok { background: var(--ok-bg); color: var(--ok); } .chip.no { background: var(--bad); color: #fff; }
   .row { display: flex; gap: 12px; }
   .av { flex: none; width: 34px; height: 34px; border-radius: 50%; background: #e9e7df; color: var(--ink-2); font-weight: 700; font-size: 12.5px; display: grid; place-items: center; }
@@ -385,6 +386,11 @@
             </div>
             <div class="admin-error" id="adminError" hidden>Incorrect admin token</div>
             <div class="admin-hint">Unlocks unmasked prompt &amp; reply telemetry.</div>
+            <div id="adminStudioLink" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line)" hidden>
+              <a href="/#policies" target="_blank" style="font-weight:700;font-size:12px;color:var(--accent);text-decoration:none;display:inline-flex;align-items:center;gap:4px">
+                Open Cedar Policy Studio &amp; What-If Simulator &rarr;
+              </a>
+            </div>
           </form>
         </div>
       </div>
@@ -393,6 +399,7 @@
         <button id="modeLive" aria-pressed="true">Live</button>
         <button id="modeDemo" aria-pressed="false">Demo</button>
       </div>
+      <a class="link" href="/#policies" target="_blank" title="Open Cedar Policy Studio and What-If Simulator">Cedar Policy Studio</a>
       <a class="link" href="/dashboard/v2/">Operator console</a>
     </div>
   </header>
@@ -837,6 +844,8 @@
       var inp = $('adminTokenInput');
       if (inp) inp.value = '';
     }
+    var stLink = $('adminStudioLink');
+    if (stLink) stLink.hidden = !active;
     document.querySelectorAll('[data-admin-control]').forEach(function (el) { el.hidden = !active; });
   }
 
@@ -1005,11 +1014,11 @@
         askHtml = '<span style="color:var(--ink-2);font-weight:500">' + esc(f.ask) + '</span> ' +
           '<button type="button" class="convo-unlock-link" style="font-size:11px;padding:1px 7px;margin-left:4px" onclick="openAdminPopover();event.stopPropagation();" title="Prompt text is masked for privacy. Click to unlock with Admin Token">Unlock Prompt</button>';
       }
-      var narrowBadge = f.narrowed ? ' <span class="chip wr" style="background:#fef7e0;color:#b06000;border:1px solid #f9ab00;font-weight:700" title="' + esc(f.narrowingReason || 'Monotonic scope attenuation applied') + '">ALLOWED-LIMITED</span>' : '';
+      var narrowBadge = f.narrowed ? ' <span class="chip limited" title="' + esc(f.narrowingReason || 'Monotonic scope attenuation applied') + '">ALLOWED-LIMITED</span>' : '';
       var badgeHtml = (f.blocked ? '<span class="chip no">Blocked</span>' : (f.narrowed ? '' : (f.shadow ? '<span class="chip wr" style="background:#fef7e0;color:#b06000;border:1px solid #f9ab00" title="Executed on host in audit mode; would be blocked by policy in enforce mode">Audit Allowed (Flagged)</span>' : (f.unknown ? '<span class="chip wr">Not evaluated</span>' : '<span class="chip ok">Allowed</span>')))) + narrowBadge;
       li.innerHTML = '<div class="row"><div class="av" aria-hidden="true">' + esc(ini) + '</div><div><div class="who">' + esc(f.who) + '</div>' +
         '<div class="ask">' + askHtml + badgeHtml + '</div>' +
-        '<div class="did">' + esc(f.did) + (f.blocked ? ' &mdash; <u>see the proof</u>' : (f.narrowed ? ' <span class="open-hint" style="color:#b06000;font-weight:700">&mdash; scope limited by policy (allowed-limited)</span>' : (f.shadow ? ' <span class="open-hint" style="color:#b06000;font-weight:600">&mdash; executed in audit mode, policy violation flagged</span>' : ' <span class="open-hint">&mdash; click for every prompt and reply</span>'))) + '</div></div></div>';
+        '<div class="did">' + esc(f.did) + (f.blocked ? ' &mdash; <u>see the proof</u>' : (f.narrowed ? ' <span class="open-hint" style="color:#c2410c;font-weight:700">&mdash; scope limited by policy (allowed-limited)</span>' : (f.shadow ? ' <span class="open-hint" style="color:#b06000;font-weight:600">&mdash; executed in audit mode, policy violation flagged</span>' : ' <span class="open-hint">&mdash; click for every prompt and reply</span>'))) + '</div></div></div>';
       var open = function () { if (f.blocked && stories[f.storyId]) { openStory(f.storyId, f.sessionId); } else { openConvo(f); } };
       li.addEventListener('click', open);
       li.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
@@ -1125,8 +1134,8 @@
           text = i.action || '';
         } else if (isNarrowed) {
           cls += ' narrowed';
-          var badge = '<span class="chip wr" style="margin:0 8px 0 0;font-size:10.5px;padding:2px 8px;letter-spacing:.05em;background:#fef7e0;color:#b06000;border:1px solid #f9ab00;font-weight:700">ALLOWED-LIMITED</span>';
-          labelHtml = '<span style="display:inline-flex;align-items:center">' + badge + '<span style="color:#b06000;font-weight:700">ZSP Scope Attenuated (Least Privilege)</span></span>';
+          var badge = '<span class="chip limited" style="margin:0 8px 0 0;font-size:10.5px;padding:2px 8px">ALLOWED-LIMITED</span>';
+          labelHtml = '<span style="display:inline-flex;align-items:center">' + badge + '<span style="color:#c2410c;font-weight:700">ZSP Scope Attenuated (Least Privilege)</span></span>';
           text = i.action || '';
         } else {
           cls += isDeny ? ' deny' : ' allow';
@@ -1145,7 +1154,7 @@
             var reqStr = (i.requested_actions || []).join(', ');
             var allowStr = (i.allowed_actions || []).join(', ');
             var nDetail = (reqStr && allowStr) ? ('Requested: <span style="text-decoration:line-through;color:#d93025">[' + esc(reqStr) + ']</span> &rarr; Granted: <span style="color:#188038;font-weight:700">[' + esc(allowStr) + ']</span>') : esc(i.narrowing_reason || i.reason || 'Scope narrowed');
-            meta = '<div class="tm" style="font-size:12.5px;margin-top:8px;padding-top:6px;border-top:1px solid rgba(245,158,11,0.35);color:#b06000;font-weight:600"><b>ALLOWED-LIMITED</b> &mdash; ' + nDetail + conceptTag + '</div>';
+            meta = '<div class="tm" style="font-size:12.5px;margin-top:8px;padding-top:6px;border-top:1px solid rgba(234,88,12,0.35);color:#9a3412;font-weight:600"><b style="color:#c2410c">ALLOWED-LIMITED</b> &mdash; ' + nDetail + conceptTag + '</div>';
           } else {
             var decText = esc(i.decision ? i.decision.toUpperCase() : (isDeny ? 'DENY' : 'ALLOW'));
             var reasonText = i.reason ? ' &mdash; ' + esc(i.reason) : '';
@@ -1160,7 +1169,7 @@
       var callsUrl = '/api/v1/sessions/transcript?session_id=' + encodeURIComponent(sessionId) + '&format=calls';
       var conceptKeys = Object.keys(r.zsp_concepts || {});
       var zspBar = '<li class="convo-note" style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;background:rgba(15,23,42,0.03);padding:8px 10px;border-radius:8px">' +
-        '<span><b>Calls:</b> ' + (r.allowed_count || 0) + ' allowed &middot; ' + (r.blocked_count || 0) + ' blocked &middot; <span style="color:#b06000;font-weight:700">' + (r.allowed_limited_count || r.narrowed_count || 0) + ' allowed-limited</span>' +
+        '<span><b>Calls:</b> ' + (r.allowed_count || 0) + ' allowed &middot; ' + (r.blocked_count || 0) + ' blocked &middot; <span style="color:#c2410c;font-weight:800">' + (r.allowed_limited_count || r.narrowed_count || 0) + ' allowed-limited</span>' +
         (conceptKeys.length ? ' &middot; <b>ZSP:</b> ' + conceptKeys.map(esc).join(', ') : '') + '</span>' +
         '<a class="convo-unlock-link" href="' + callsUrl + '" download="session-' + esc(sessionId) + '-calls.json" style="text-decoration:none;font-size:11.5px;padding:3px 9px">Download Calls JSON</a></li>';
       box.insertAdjacentHTML('afterbegin', zspBar);

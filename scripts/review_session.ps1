@@ -390,7 +390,7 @@ function Show-SessionDetail {
     Write-Host ("    * Total Evaluated Operations : {0}" -f $Summary.TotalEvents)
     Write-Host ("    * Permitted Actions          : {0}" -f $Summary.Allowed) -ForegroundColor Green
     Write-Host ("    * Blocked Security Actions   : {0}" -f $Summary.Denied) -ForegroundColor (Iif ($Summary.Denied -gt 0) "Red" "Gray")
-    Write-Host ("    * Scope Attenuated (Limited) : {0}" -f $Summary.Narrowed) -ForegroundColor (Iif ($Summary.Narrowed -gt 0) "Yellow" "Gray")
+    Write-Host ("    * Scope Attenuated (Limited) : {0}" -f $Summary.Narrowed) -ForegroundColor (Iif ($Summary.Narrowed -gt 0) "DarkYellow" "Gray")
     Write-Host ("    * Average Decision Latency   : {0} ms" -f $Summary.AvgLatency) -ForegroundColor Cyan
     Write-Host ("    * Peak Decision Latency      : {0} ms (Min: {1} ms)" -f $Summary.MaxLatency, $Summary.MinLatency) -ForegroundColor Gray
     
@@ -402,12 +402,12 @@ function Show-SessionDetail {
     Write-Host "  ZERO-TRUST & ZSP CONCEPTS OBSERVED:" -ForegroundColor Cyan
     Write-Host ("    [1] Zero Standing Privileges (Ungranted Blocks) : {0}" -f $zc.zero_standing_privileges_blocks) -ForegroundColor (Iif ($zc.zero_standing_privileges_blocks -gt 0) "Red" "Gray")
     Write-Host ("    [2] 4-Tuple TaskGrant Minting                   : {0}" -f $zc.task_grants_minted) -ForegroundColor (Iif ($zc.task_grants_minted -gt 0) "Cyan" "Gray")
-    Write-Host ("    [3] Monotonic Scope Attenuation (ALLOWED-LIMITED): {0}" -f $zc.scope_narrowing_attenuations) -ForegroundColor (Iif ($zc.scope_narrowing_attenuations -gt 0) "Yellow" "Gray")
+    Write-Host ("    [3] Monotonic Scope Attenuation (ALLOWED-LIMITED): {0}" -f $zc.scope_narrowing_attenuations) -ForegroundColor (Iif ($zc.scope_narrowing_attenuations -gt 0) "DarkYellow" "Gray")
     if ($Summary.CallsReport.narrowed_grants.Count -gt 0) {
         foreach ($ng in $Summary.CallsReport.narrowed_grants) {
             $reqAct = if ($ng.requested_actions) { ($ng.requested_actions -join ",") } else { "wildcard" }
             $alwAct = if ($ng.allowed_actions) { ($ng.allowed_actions -join ",") } else { "attenuated" }
-            Write-Host ("        -> [ALLOWED-LIMITED] {0} | Requested [{1}] -> Granted [{2}]" -f $ng.grant_id, $reqAct, $alwAct) -ForegroundColor Yellow
+            Write-Host ("        -> [ALLOWED-LIMITED] {0} | Requested [{1}] -> Granted [{2}]" -f $ng.grant_id, $reqAct, $alwAct) -ForegroundColor DarkYellow
         }
     }
     Write-Host ("    [4] Single-Use Atomic Grant Burn (Replay Block) : {0}" -f $zc.single_use_atomic_burns) -ForegroundColor (Iif ($zc.single_use_atomic_burns -gt 0) "Magenta" "Gray")
@@ -435,7 +435,7 @@ function Show-SessionDetail {
         $reason = if ($e.narrowing_reason) { [string]$e.narrowing_reason } elseif ($e.reason) { [string]$e.reason } else { "Policy evaluated" }
         $reasonShort = if ($reason.Length -gt 45) { $reason.Substring(0, 42) + "..." } else { $reason }
 
-        $rowColor = if ($decUpper -eq "ALLOWED-LIMITED") { "Yellow" } elseif ($decUpper -eq "ALLOW") { "Green" } else { "Red" }
+        $rowColor = if ($decUpper -eq "ALLOWED-LIMITED") { "DarkYellow" } elseif ($decUpper -eq "ALLOW") { "Green" } else { "Red" }
         Write-Host ("  {0,-3} {1,-12} " -f ($i + 1), $timeStr) -NoNewline -ForegroundColor Gray
         Write-Host ("{0,-15} " -f $decUpper) -NoNewline -ForegroundColor $rowColor
         Write-Host ("{0,-7} {1,-12} {2,-34} {3}" -f $layer, $tool, $cmdShort, $reasonShort) -ForegroundColor White

@@ -93,13 +93,22 @@ When an agent like Claude Code or Antigravity decides to execute `npm test`, the
 #### 2. Ambient Credential Shielding & Canary Tripwires
 BAP scans for exposed `.env` files, SSH keys, and cloud credentials in the workspace and virtualizes them during untrusted agent runs. Furthermore, BAP seeds decoy honeytokens (`.bap_canary_token`). If a prompt-injected agent attempts to read or transmit a canary token, BAP triggers an immediate fail-closed quarantine and notifies SecOps.
 
-#### 3. Ephemeral Single-Use JIT Grants
-Rather than giving agents long-lived API keys to production or staging services, agents receive short-lived (5-minute TTL) signed cryptographic grants. When the agent calls an internal API through the BAP Gateway PEP, the gateway burns the grant atomically. Replay attacks fail with HTTP 401 `GrantAlreadyBurned`.
+#### 3. Zero Standing Privileges (ZSP) & Ephemeral Single-Use JIT Grants
+Rather than giving agents long-lived API keys or ambient workstation rights, agents operate with **Zero Standing Privileges** ($\emptyset$). To execute, the agent submits an atomic 4-tuple task authorization envelope $(Who, AuthorizedBy, Intent, PermissionAsk)$ signed with an ephemeral Ed25519 key. Downstream services receive short-lived (5-minute TTL) signed cryptographic grants that burn atomically upon execution. Replay attacks fail with HTTP 401 `GrantAlreadyBurned`.
 
-#### 4. Agent Watch V2: Unified Enterprise Visibility
-Security teams gain instant, centralized visibility through **Agent Watch V2**:
-- **CIO Mission Control**: Answers the 10-second executive question: *"What are our agents doing? Is it safe? What business value is being created?"* with honest telemetry and enterprise activity topology maps.
-- **CISO Trust Command**: Live fleet radar with SPIFFE ID tracking, sub-second kill-switches, fail-close step-up escalation queues, and Merkle hash-chain verification.
+#### 4. Monotonic Scope Attenuation: The First-Class `ALLOWED-LIMITED` State
+When an agent requests broad wildcard access (e.g. `repo:*`), a binary `ALLOW`/`DENY` system either blocks the agent entirely (breaking developer flow) or over-privileges it. BAP introduces **Monotonic Scope Attenuation**: Cedar deterministically attenuates the grant to the minimum required actions (`repo:read`, `repo:push`). The decision is logged and visualized across the V3 Dashboard and CLI as **`ALLOWED-LIMITED`** with an eye-catching burnt-orange / amber chip (`#d97706`), ensuring zero friction for developers while maintaining ironclad least-privilege boundaries.
+
+#### 5. Tamper-Proof Cryptographic Cedar Policy Bundles
+To prevent developers or compromised processes from modifying local policy files, the Control Plane cryptographically signs all policy bundles with HMAC-SHA256 / Ed25519. The local edge daemon verifies signatures before loading or executing commands; any unauthorized local modification to `policy.cedar` causes an immediate fail-closed halt. Security administrators manage and simulate policies directly in the embedded **Cedar Policy Studio** (`/#policies`) with instant "What-If" sandbox testing.
+
+#### 6. Semantic Action Classification: The Airport TSA Mental Model
+Developers run over 5,000 distinct CLI binaries. Writing AST parsers for 5,000 tools is fragile and unmaintainable. Instead, BAP operates like an Airport TSA checkpoint: commands are categorized into five canonical security archetypes based on real-world impact: `inspect:read`, `workspace:mutate`, `credential:access`, `network:egress`, and `system:recon`. Local execution occurs in sub-2ms with zero additional LLM token overhead (<1% turn impact).
+
+#### 7. Agent Watch V3: Unified Enterprise Visibility
+Security teams gain instant, centralized visibility through **Agent Watch V3**:
+- **CIO Mission Control**: Answers the 10-second executive question: *"What are our agents doing? Is it safe? What business value is being created?"* with honest telemetry, active task grants, and enterprise activity topology maps.
+- **CISO Trust Command**: Live fleet radar with SPIFFE ID tracking, sub-second kill-switches, fail-close step-up escalation queues, `ALLOWED-LIMITED` attenuation tracking, and Merkle hash-chain verification.
 - **Capability Atlas**: Objective, evidence-backed evaluation comparing agent governance across architecture layers.
 
 ---

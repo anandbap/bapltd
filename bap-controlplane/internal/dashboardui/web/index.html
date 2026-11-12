@@ -2543,8 +2543,10 @@ setInterval(()=>{
   await buildChain();
   connUI();
 
-  // Landing view according to persona
-  if (S.persona === 'cio') go('pulse');
+  // Landing view according to hash or persona
+  const initialHash = (location.hash || '').replace(/^#/, '');
+  if (initialHash && VIEWS[initialHash]) go(initialHash);
+  else if (S.persona === 'cio') go('pulse');
   else if (S.persona === 'it') go('endpoint');
   else go('overview');
 

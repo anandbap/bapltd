@@ -107,9 +107,23 @@ Alongside the invariants, four operational rules govern all interventions:
 
 ---
 
-### Extended Causal Governance Chain
+### Extended Causal Governance Chain & Semantic Action Archetypes
 
-$$\text{Human IdP} \longrightarrow \text{Cryptographic Agent SVID} \longrightarrow \text{4-Tuple Task Envelope} \longrightarrow \text{Policy Narrowing} \longrightarrow \text{Single-Use JIT Grant} \longrightarrow \text{Broker Execution & Burn} \longrightarrow \text{HMAC Lineage Proof}$$
+$$\text{Human IdP} \longrightarrow \text{Cryptographic Agent SVID} \longrightarrow \text{4-Tuple Task Envelope} \longrightarrow \text{Decomposition (5 Archetypes)} \longrightarrow \text{Policy Narrowing} \longrightarrow \text{Single-Use JIT Grant} \longrightarrow \text{Broker Execution & Burn} \longrightarrow \text{HMAC Lineage Proof}$$
+
+#### The Airport TSA Mental Model: Intent vs. Syntax
+Enterprise workstations run over 5,000 distinct CLI binaries (`git`, `npm`, `pytest`, `cargo`, `docker`, `aws`, `go`, etc.). Writing an AST parser for 5,000 tools is an unmaintainable anti-pattern. BAP models security like an **Airport TSA Security Gate**: rather than attempting to parse the inner syntax of every single tool, it classifies the command's real-world impact into **Five Canonical Security Archetypes**:
+1. **`inspect:read`**: Non-mutating read inspection of workspace files and repository metadata (`git status`, `git diff`, `cat`, `ls`, `grep`, `pwd`). Permitted by default under an active task envelope.
+2. **`workspace:mutate`**: Project-scoped file modifications, builds, and test runs (`git commit`, `npm test`, `go build`, `pytest`, `cargo check`). Permitted within workspace boundaries; cross-folder writes trigger interactive HITL step-up.
+3. **`credential:access`**: Secret exfiltration and credential reading (`.env`, `~/.aws`, `~/.ssh`, private keys). **Inviolably BLOCKED** across all policy layers.
+4. **`network:egress`**: Raw, unmediated network exfiltration (`curl`, `wget`, `nc`, raw sockets). **BLOCKED**; outbound network access must route through the BAP Gateway PEP.
+5. **`system:recon`**: Host environment and privilege discovery (`whoami`, `id`, `netstat`, `ipconfig`, `ps`). Denied ambient execution; gated behind explicit task envelope or step-up.
+
+#### First-Class Monotonic Scope Attenuation: `ALLOWED-LIMITED`
+When an agent requests broad wildcard privileges (e.g. `repo:*`), a binary `ALLOW`/`DENY` system either blocks the agent entirely (breaking velocity) or over-privileges it (violating least privilege). BAP introduces **Monotonic Scope Attenuation**: Cedar deterministically attenuates the grant to the minimum required actions (`repo:read`, `repo:push`). The decision is logged and visualized across the V3 Dashboard and CLI as **`ALLOWED-LIMITED`** with an eye-catching burnt-orange / amber chip (`#d97706`), ensuring zero developer friction while maintaining ironclad least-privilege boundaries.
+
+#### Cryptographic Cedar Policy Bundles & Tamper Verification
+The Central Control Plane cryptographically signs all policy bundles with HMAC-SHA256 / Ed25519. The local edge daemon verifies signatures before loading or executing commands; any unauthorized local modification to `policy.cedar` causes an immediate fail-closed halt. Security administrators manage and simulate policies directly in the embedded **Cedar Policy Studio** (`/#policies`) with instant "What-If" sandbox testing.
 
 ---
 
@@ -401,6 +415,14 @@ The BAP platform has advanced through aggressive implementation phases, progress
   - Windows Installer (`.msi`) with Microsoft Intune CSP / Win32 App deployment bundle.
   - Debian (`.deb`) package with systemd unit.
   - Cryptographic release ledger and manifest (`SHA256SUMS.txt`).
+- [x] **Zero Standing Privileges, Monotonic Scope Attenuation & Policy Bundle Signing (Epics 31–32 / BAP-911–BAP-922):**
+  - Ephemeral Ed25519 Agent Keypair generation and cryptographically signed Agent SVIDs.
+  - Atomic 4-Tuple Task Authorization Envelopes $(Who, AuthorizedBy, Intent, PermissionAsk)$.
+  - Single-Use JIT TaskGrants burned atomically upon execution ($N_{\text{uses}}=1$, TTL $\le 300\text{s}$).
+  - Semantic Action Classification (Airport TSA Mental Model) decomposing commands into 5 canonical archetypes (`inspect:read`, `workspace:mutate`, `credential:access`, `network:egress`, `system:recon`).
+  - First-class `ALLOWED-LIMITED` monotonic scope attenuation across edge broker, API, V3 Dashboard (burnt-orange `#d97706` chip), and CLI ledger.
+  - Cryptographic HMAC-SHA256 / Ed25519 Policy Bundle Signing and local edge tamper verification (`VerifyBundleSignature`).
+  - Embedded Cedar Policy Studio (`/#policies`) with "What-If" sandbox simulation and instant signed deployment.
 
 ### Future Horizons
 - [ ] **Linux eBPF TC/cgroups Kernel Filter Driver:** Native in-kernel socket enforcement bypassing userspace proxy configuration.

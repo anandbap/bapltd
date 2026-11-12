@@ -5264,3 +5264,19 @@ Provides automated crash recovery, fleet state reconciliation, and streamlined o
     - `python -m unittest tests/test_e2e_fortified_identities_and_launchers.py -v` under clean CI env (`AllowDevOverrides="false"`, isolated `HOME`/`USERPROFILE`, `CI=true`, `GITHUB_ACTIONS=true`) (5 tests OK)
     - `python -m unittest tests/test_bap_install_multiplatform.py -v` (18 tests OK)
     - `python -m unittest tests/test_harness_multi_session.py -v` (4 tests OK)
+
+#### Story BAP-921: Cryptographic Bundle Signing & Offline Anti-Tamper Non-Repudiation for Cedar Policies
+- **Type**: Story | **Points**: 5 | **Priority**: P0 - Highest | **Status**: `DONE`
+- **Description**:
+  As an enterprise security administrator, I want central Cedar policy bundles to be cryptographically signed by the Control Plane, so that developers and local administrators cannot forge or tamper with local `policy.cedar` or `policy-state.json` on disk while offline.
+  1. `bap-controlplane` signs published policy bundles with HMAC-SHA256/Ed25519 digital signatures binding `(Version, Digest, KillSwitch)`.
+  2. `bap-edge` verifies the digital signature on both bundle receipt (`Accept`) and during local policy resolution (`Current`).
+  3. Detects offline tampering of `policy.cedar` or `policy-state.json` fail-closed (`ErrDigestMismatch`), preventing local root/admin attackers from spoofing policy rules.
+- **Acceptance Criteria**:
+  - Central Control Plane bundles emit cryptographic signatures in `Bundle.Signature`.
+  - Edge `Accept` and `Current` verify bundle signatures before persisting or executing Cedar policies.
+  - Forged, modified, or missing signatures are rejected fail-closed.
+- **Implementation Evidence**:
+  - Control Plane: `bap-controlplane/internal/policy/store.go` (`SignBundle`, `VerifySignature`, `SetSigningKey`).
+  - Edge Policystore: `bap-edge/internal/policystore/store.go` (`VerifyBundleSignature`, `Accept`, `Current`).
+  - Unit Tests: `TestPolicyStore_BundleSigning` in `bap-controlplane/internal/policy/store_test.go` (PASS), `TestPolicyStore_CryptographicSignatureVerification` in `bap-edge/internal/policystore/store_test.go` (PASS).

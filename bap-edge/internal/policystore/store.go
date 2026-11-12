@@ -6,6 +6,9 @@ import (
 	"bap-edge/internal/state"
 	"bap-edge/pkg/version"
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +30,7 @@ var (
 type Bundle struct {
 	Version               uint64 `json:"version"`
 	Digest                string `json:"digest"`
+	Signature             string `json:"signature,omitempty"`
 	PolicyCedar           string `json:"policy_cedar"`
 	SchemaJSON            string `json:"schema_json,omitempty"`
 	KillSwitch            bool   `json:"kill_switch"`
@@ -38,6 +42,7 @@ type Bundle struct {
 type PolicyState struct {
 	Version               uint64    `json:"version"`
 	Digest                string    `json:"digest"`
+	Signature             string    `json:"signature,omitempty"`
 	KillSwitch            bool      `json:"kill_switch"`
 	StrictToolEnforcement bool      `json:"strict_tool_enforcement"`
 	EnforcementTier       string    `json:"enforcement_tier,omitempty"`
@@ -53,7 +58,8 @@ type SyncResponse struct {
 }
 
 type Store struct {
-	directory string
+	directory  string
+	signingKey []byte
 }
 
 // DefaultPolicyDir returns the cached policy directory in .bapstate/policy.
@@ -73,6 +79,25 @@ func (s *Store) Directory() string {
 	return s.directory
 }
 
+func (s *Store) SetSigningKey(key []byte) {
+	s.signingKey = key
+}
+
+// VerifyBundleSignature validates that the bundle's signature matches the expected HMAC-SHA256 signature
+func VerifyBundleSignature(version uint64, digest string, killSwitch bool, signature string, key []byte) bool {
+	if len(key) == 0 {
+		return true // Unmanaged or dev mode
+	}
+	if signature == "" {
+		return false
+	}
+	mac := hmac.New(sha256.New, key)
+	payload := fmt.Sprintf("bap-policy-v1:%d:%s:%t", version, digest, killSwitch)
+	mac.Write([]byte(payload))
+	expected := hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(signature), []byte(expected))
+}
+
 // ComputeDigest computes SHA-256 over cedarCode + schemaJSON
 func ComputeDigest(cedarCode, schemaJSON string) string {
 	return authz.ComputePolicyDigest(cedarCode, schemaJSON)
@@ -83,6 +108,10 @@ func (s *Store) Accept(bundle Bundle) error {
 	computed := ComputeDigest(bundle.PolicyCedar, bundle.SchemaJSON)
 	if bundle.Digest != "" && bundle.Digest != computed {
 		return fmt.Errorf("%w: expected %s, got %s", ErrDigestMismatch, bundle.Digest, computed)
+	}
+
+	if len(s.signingKey) > 0 && !VerifyBundleSignature(bundle.Version, computed, bundle.KillSwitch, bundle.Signature, s.signingKey) {
+		return fmt.Errorf("%w: policy bundle cryptographic signature verification failed (forged or unauthenticated bundle)", ErrDigestMismatch)
 	}
 
 	current, err := s.LoadState()
@@ -109,6 +138,7 @@ func (s *Store) Accept(bundle Bundle) error {
 	state := PolicyState{
 		Version:               bundle.Version,
 		Digest:                computed,
+		Signature:             bundle.Signature,
 		KillSwitch:            bundle.KillSwitch,
 		StrictToolEnforcement: bundle.StrictToolEnforcement,
 		EnforcementTier:       bundle.EnforcementTier,
@@ -161,6 +191,11 @@ func (s *Store) Current() (string, string, PolicyState, error) {
 				computed := ComputeDigest(string(data), string(schemaData))
 				if computed != state.Digest && ComputeDigest(string(data), "") != state.Digest {
 					return "", "", state, fmt.Errorf("%w: cached policy.cedar has been tampered with or modified locally (expected %s, got %s)", ErrDigestMismatch, state.Digest, computed)
+				}
+				if len(s.signingKey) > 0 && state.Signature != "" {
+					if !VerifyBundleSignature(state.Version, state.Digest, state.KillSwitch, state.Signature, s.signingKey) {
+						return "", "", state, fmt.Errorf("%w: cached policy bundle cryptographic signature invalid or forged (possible offline tampering)", ErrDigestMismatch)
+					}
 				}
 			}
 

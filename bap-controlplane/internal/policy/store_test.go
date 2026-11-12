@@ -64,3 +64,35 @@ func TestPolicyStore_Sync(t *testing.T) {
 		t.Fatalf("expected KILL_SWITCH, got %v", resp.Directive)
 	}
 }
+
+func TestPolicyStore_BundleSigning(t *testing.T) {
+	cedar := "permit(principal, action, resource);"
+	schema := "{}"
+	key := []byte("test-controlplane-signing-key-32b")
+	store := NewStoreWithKey(cedar, schema, key)
+
+	b := store.GetBundle()
+	if b.Signature == "" {
+		t.Fatalf("expected signed bundle, got empty signature")
+	}
+
+	if !VerifySignature(b.Version, b.Digest, b.KillSwitch, b.Signature, key) {
+		t.Fatalf("signature verification failed for valid bundle")
+	}
+
+	if VerifySignature(b.Version, b.Digest, b.KillSwitch, "forged-sig", key) {
+		t.Fatalf("signature verification should have failed for forged signature")
+	}
+
+	// Update bumps version and generates new signature
+	b2 := store.Update("permit(principal, action, resource) when { false };", schema, false)
+	if b2.Version != 2 {
+		t.Fatalf("expected version 2, got %d", b2.Version)
+	}
+	if b2.Signature == "" || b2.Signature == b.Signature {
+		t.Fatalf("expected unique signature for version 2")
+	}
+	if !VerifySignature(b2.Version, b2.Digest, b2.KillSwitch, b2.Signature, key) {
+		t.Fatalf("signature verification failed for version 2 bundle")
+	}
+}

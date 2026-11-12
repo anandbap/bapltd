@@ -1621,6 +1621,135 @@ Every executed action generates an unforgeable `AuditLineageProof`:
   $$\text{HMAC}\Big(K, \text{HumanOwner} \,\|\, \text{AgentSVID} \,\|\, \text{EnvelopeDigest} \,\|\, \text{GrantID} \,\|\, \text{Command} \,\|\, \text{CommandHash} \,\|\, \text{BinaryHash} \,\|\, \text{ProcessTree} \,\|\, \text{ExitCode}\Big)$$
 - **Forensic Guarantee**: Enables complete, independent reconstruction of any action: who authorized it, which agent ran it, what policy evaluated it, what exact binary executed, and proof that the grant was burned.
 
+### 19.10. Canonical Semantic Action Classification & AST Decomposition Pipeline (BAP-919, BAP-920)
+Autonomous coding agents interact with developer environments by invoking hundreds of command-line tools (`git`, `npm`, `pytest`, `cargo`, `docker`, `aws`, `go`, etc.). Writing an AST parser for 5,000 distinct CLI binaries is fragile, unmaintainable, and an architectural anti-pattern.
+
+BAP solves this through **Semantic Action Decomposition** using the **Airport Security / Real-World Impact Mental Model**:
+Rather than inspecting binary syntax, BAP classifies commands based on their real-world impact across five canonical security archetypes:
+
+| Canonical Archetype | Example Commands | Security Impact & Default Baseline | Cedar Target Mapping |
+|:---|:---|:---|:---|
+| **`inspect:read`** | `git status`, `git diff`, `cat`, `ls`, `grep`, `pwd`, `Get-ChildItem` | Non-mutating read inspection of workspace files and metadata. Permitted by default under active task envelope. | `action: inspect:read`, `resource: repo:local` / `workspace://current` |
+| **`workspace:mutate`** | `git commit`, `npm test`, `go build`, `pytest`, `cargo check`, `New-Item` | Project-scoped modifications, compilation, and testing. Permitted within workspace boundaries; cross-folder writes trigger HITL step-up. | `action: workspace:mutate`, `resource: workspace://current` |
+| **`credential:access`** | `cat .env`, `type ~/.aws/credentials`, `Get-Content ~/.ssh/id_rsa` | Secret exfiltration and credential reading. **Inviolably BLOCKED** across all policy layers without exception. | `action: credential:access`, `resource: system://secret` |
+| **`network:egress`** | `curl https://...`, `wget`, `nc -zv`, raw socket creation | Raw, unmediated network exfiltration. **BLOCKED**; outbound network access must route through the BAP Gateway PEP. | `action: network:egress`, `resource: network://external` |
+| **`system:recon`** | `whoami`, `id`, `netstat`, `ipconfig`, `ps`, `tasklist` | Host environment and privilege reconnaissance. Denied ambient execution; gated behind explicit task envelope or step-up. | `action: system:recon`, `resource: system://local` |
+
+#### How the Decomposition Pipeline Works:
+1. **Deconstruction & Normalization (`bap-edge/internal/authz/decomposer.go`)**:
+   - Parses multi-command pipelines (`|`, `&&`, `||`, `;`), subshells, and flags.
+   - Normalizes command aliases (`g` $\rightarrow$ `git`, `dir` $\rightarrow$ `Get-ChildItem`, `gc` $\rightarrow$ `git commit`).
+   - Resolves target paths relative to the active workspace jail.
+2. **Deterministic Intent Classifier (`bap-edge/internal/classifier/classifier.go`)**:
+   - Matches commands against the 5 canonical action archetypes and extracts concrete target resources.
+   - Produces a normalized 4-tuple: `(Principal, Action, Resource, Context)`.
+3. **Cedar Policy Evaluation (`policy.cedar`)**:
+   - The normalized tuple is evaluated against compiled AWS Cedar policies in **$<1.5\text{ms}$**, completely eliminating syntax parsing complexity at the policy tier.
+
+### 19.11. First-Class Monotonic Scope Attenuation: ALLOWED-LIMITED State & Visual Governance (BAP-921)
+In traditional security systems, permission decisions are binary: `ALLOW` or `DENY`. When an agent requests broad wildcard privileges (e.g. `repo:*`), a binary decision either:
+- **Denies the request**, terminating the agent's task and inducing unproductive agent retry loops; or
+- **Grants the request**, creating massive standing privilege and violating least privilege.
+
+BAP introduces **Monotonic Scope Attenuation** as a first-class operational state:
+$$\text{Scope}_{\text{granted}} = \text{Attenuate}(\text{Scope}_{\text{requested}}, \text{CedarPolicy}) \subseteq \text{Scope}_{\text{requested}}$$
+
+```mermaid
+flowchart LR
+    Ask["Agent Requests Broad Scope\n[repo:*]"] --> Evaluator["Cedar Attenuation Engine"]
+    Evaluator -->|"Attenuates to Minimum Necessary"| Granted["Mints Attenuated Grant\n[repo:read, repo:push]"]
+    Granted --> Verdict["First-Class Verdict:\nALLOWED-LIMITED"]
+    Verdict --> UI["V3 Dashboard Ledger:\nAmber Badge (#d97706)"]
+    Verdict --> CLI["review_session.ps1:\nDarkYellow High-Contrast Chip"]
+```
+
+#### First-Class Platform Integration:
+1. **ZSP Engine (`bap-edge/cmd/zsp.go`)**:
+   - When requested permissions exceed permitted policy bounds but a safe subset exists, the engine mints the grant with the narrowed scope and marks the decision as `ALLOWED-LIMITED`.
+   - Logs the precise monotonic attenuation: `[ALLOWED-LIMITED] Requested [repo:*] -> Granted [repo:read,repo:push]`.
+2. **Central Control Plane (`bap-controlplane/internal/api/`)**:
+   - Serializes `decision: "ALLOWED-LIMITED"` and `scope_attenuated: true` across REST endpoints (`/api/v1/sessions/events`, `/api/v1/audit/ingest`).
+3. **Agent Watch V3 Dashboard (`v3.html` & `index.html`)**:
+   - Renders a distinctive burnt-orange / amber chip (`.chip.limited { background: rgba(217, 119, 6, 0.18); color: #d97706; border: 1px solid rgba(217, 119, 6, 0.45); }`).
+   - Surfaces attenuated operations in the executive summary banner: `Scope Attenuated (Limited): N`.
+4. **Session Performance & Governance CLI (`review_session.ps1`)**:
+   - Color-codes `ALLOWED-LIMITED` in bold amber/DarkYellow in the chronological action ledger and session summary.
+
+### 19.12. Cryptographic Policy Bundle Signing & Tamper Verification (BAP-922)
+To satisfy SOC 2 Type II, FedRAMP, and ISO 27001 compliance standards, developers and rogue processes on governed workstations must be cryptographically prevented from altering local policy files (`policy.cedar`, `schema.json`).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Admin as Enterprise Security Admin
+    participant Studio as Cedar Policy Studio (Control Plane UI)
+    participant CPStore as Central Policy Store (store.go)
+    participant EdgeStore as Edge Policy Store (bap-edge)
+    participant Rogue as Rogue Agent / Process
+
+    Admin->>Studio: Update Cedar Policy (e.g. restrict credential:access)
+    Studio->>CPStore: Save & Publish Bundle
+    Note over CPStore: Computes SHA-256 Digest of policies & schema<br/>Signs with Enterprise Secret Key via HMAC-SHA256 / Ed25519
+    CPStore->>EdgeStore: Distribute Signed Bundle {BundleID, Policies, Schema, Signature}
+    EdgeStore->>EdgeStore: VerifyBundleSignature(secretKey)
+    alt Valid Signature
+        EdgeStore->>EdgeStore: Atomically write ~/.ltd/policy/ with signature
+        EdgeStore-->>Admin: Bundle Accepted & Active (<2ms)
+    else Signature Invalid / Corrupted
+        EdgeStore->>EdgeStore: Reject & Fail-Closed (retain existing bundle)
+    end
+
+    Note over Rogue: Rogue agent attempts to modify ~/.ltd/policy/policy.cedar
+    Rogue->>EdgeStore: Injects "permit(principal, action, resource);"
+    EdgeStore->>EdgeStore: VerifyBundleSignature on load / exec
+    Note over EdgeStore: Cryptographic Hash Mismatch Detected!
+    EdgeStore-->>Rogue: Hard Fail-Closed: PolicyTamperDetectedException
+```
+
+#### Tamper-Proofing Mechanics:
+- **Control Plane Signing (`bap-controlplane/internal/policy/store.go`)**:
+  - `SignBundle()` generates an HMAC-SHA256 signature across the concatenated SHA-256 digest of `policy.cedar` and `schema.json`.
+  - Policies receive immutable version IDs (e.g. `bundle-sha256:f0b64f...`).
+- **Edge Attestation & Verification (`bap-edge/internal/policystore/store.go`)**:
+  - `VerifyBundleSignature()` verifies the digital signature before accepting or loading any policy bundle.
+  - If a developer or malware modifies the on-disk `.cedar` file, the edge engine detects the mismatch and immediately fails closed (`ErrInvalidSignature`), refusing to execute unbrokered commands.
+- **Cedar Policy Studio (`/#policies`)**:
+  - Embedded directly in the Control Plane dashboard (`v3.html`). Provides administrative syntax editing, "What-If" sandbox dry-run simulation, and instantaneous zero-downtime signed bundle distribution.
+
+### 19.13. Token Overhead & Runtime Performance Analysis
+A foundational requirement for enterprise AI adoption is that governance must not degrade developer flow or inflate AI inference costs.
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      BAP RUNTIME OVERHEAD PERFORMANCE                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 1. Decision Latency:                                                        │
+│    • In-Process Cedar Evaluation: <1.5 ms                                   │
+│    • AST Decomposition & Classification: <0.2 ms                            │
+│    • Total Execution Broker Overhead: <2.0 ms                               │
+│    • Human Perceptible Delay: 0.0% (imperceptible)                          │
+│                                                                             │
+│ 2. Token Consumption & AI Inference Impact:                                 │
+│    • LLM Tokens Consumed for Authorization: 0 tokens (pure Go/Rust code)    │
+│    • 4-Tuple Task Envelope Overhead: <1% total turn token budget            │
+│    • Prompt Ingestion & Streaming: Asynchronous background spooling         │
+│                                                                             │
+│ 3. Throughput & Scalability:                                                │
+│    • Control Plane Ingestion: 35,620 events / second                        │
+│    • Merkle Hash Verification: 50,000 sequential events in 32.6 ms          │
+│    • Fleet Kill-Switch Propagation: <100 ms global propagation              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+1. **Zero LLM Token Overhead**:
+   - Authorization decisions are evaluated deterministically in compiled Go code against Cedar invariants.
+   - BAP never calls external LLM APIs to approve or deny commands. Zero additional LLM tokens are billed for security evaluation.
+2. **Sub-2ms Execution Broker Latency**:
+   - `bapedge exec` evaluates cached, cryptographically signed policy bundles in-process. Local file operations (`git`, `npm`, `pytest`) run at near-native speed.
+3. **Asynchronous Telemetry Spooling**:
+   - Audit event notarization and Merkle hash chaining are decoupled from execution via persistent local ring buffers (`ltd-audit.jsonl`), ensuring network latency to the Control Plane never blocks local developer commands.
+
+
 
 
 

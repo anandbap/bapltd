@@ -7,6 +7,7 @@
 BAP is an open reference architecture and implementation for governing AI agents (Claude Code, GitHub Copilot CLI, autonomous worker scripts, and MCP toolchains) that execute commands, touch source files, call APIs, and access enterprise resources.
 
 📖 **Core Documentation Links:**
+- [📄 Technical Whitepaper: Zero Standing Privileges for AI Agents (`docs/WHITEPAPER_ZERO_TRUST_AI.md`)](docs/WHITEPAPER_ZERO_TRUST_AI.md) — Mathematical containment model, 4-tuple task authorization envelopes, monotonic scope attenuation (`ALLOWED-LIMITED`), and semantic action decomposition.
 - [🎮 Claude Code & Codex Zero-Trust Showcase Runbook (`DEMO_CLAUDE_CODEX_ZERO_TRUST.md`)](DEMO_CLAUDE_CODEX_ZERO_TRUST.md) — Step-by-step developer guide with HITL step-up approvals, RFC 8693 STS OBO exchanges, and V3 Cockpit inspection.
 - [🚀 5-Minute Developer Onboarding Guide (`docs/ONBOARDING.md`)](docs/ONBOARDING.md) — Single-click user-mode setup for Claude Code, Antigravity, Copilot, Cursor & Python.
 - [🔌 Native Agent Plugin Architecture (`PLUGIN_ARCHITECTURE.md`)](PLUGIN_ARCHITECTURE.md) — Native Claude Code, GitHub Copilot, Google Antigravity, OpenCode & OpenAI Codex plugin specifications & 5-layer Defense-in-Depth hierarchy.
@@ -18,7 +19,7 @@ BAP is an open reference architecture and implementation for governing AI agents
 - [🌟 Strategic Vision Document (`VISION.md`)](VISION.md) — The executive problem statement, the AI agent crisis, and strategic North Star.
 - [🏛️ Architecture & Technical Design (`ARCHITECTURE.md`)](ARCHITECTURE.md) — Complete 4-Plane technical architecture, state machines, and threat mitigations.
 - [📁 `.bapstate` Architecture & Troubleshooting (`docs/BAPSTATE_AND_TROUBLESHOOTING.md`)](docs/BAPSTATE_AND_TROUBLESHOOTING.md) — Unified state directory, command operations, and troubleshooting playbooks.
-- [📋 Jira Backlog & Stories (`JIRA_Stories.md`)](JIRA_Stories.md) — Complete epics, user stories, and delivery boards (BAP-100 through BAP-806).
+- [📋 Jira Backlog & Stories (`JIRA_STORIES.md`)](JIRA_STORIES.md) — Complete epics, user stories, and delivery boards (BAP-100 through BAP-922).
 - [🔒 Security Assurance Program: BAP-700 Series (`docs/adr/ADR-004-IAM-Federation-And-Fallback.md`)](docs/adr/ADR-004-IAM-Federation-And-Fallback.md) — Enterprise Trust, Containment, Evidence, and Risk-Based Acceleration (BAP-701 to BAP-806).
 - [🧪 10-Point Adversarial Test Matrix (`tests/test_bounded_authority_matrix.py`)](tests/test_bounded_authority_matrix.py) — 100% automated regression matrix.
 - [🎯 Adversarial Red-Team Test Suite (`tests/test_bap714_containment_redteam.py`)](tests/test_bap714_containment_redteam.py) — Automated escape validation across 5 attack vectors.

@@ -2,6 +2,9 @@ package policystore
 
 import (
 	"bap-edge/internal/httptransport"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -145,5 +148,58 @@ func TestPolicyStore_PersistentKillSwitch(t *testing.T) {
 	_, _, _, currentErr := store.Current()
 	if currentErr != ErrKillSwitchActive {
 		t.Fatalf("expected kill switch to persist offline, got: %v", currentErr)
+	}
+}
+
+func TestPolicyStore_CryptographicSignatureVerification(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "policystore-sig-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	store := New(tempDir)
+	key := []byte("corporate-secret-signing-key-32b")
+	store.SetSigningKey(key)
+
+	cedar := `permit(principal, action, resource);`
+	schema := `{}`
+	digest := ComputeDigest(cedar, schema)
+
+	if !VerifyBundleSignature(1, digest, false, "bad-sig", key) {
+		// Expected
+	} else {
+		t.Fatalf("expected bad signature to be rejected")
+	}
+
+	validBundle := Bundle{
+		Version:     1,
+		Digest:      digest,
+		PolicyCedar: cedar,
+		SchemaJSON:  schema,
+	}
+	// Sign bundle correctly
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte("bap-policy-v1:1:" + digest + ":false"))
+	validBundle.Signature = hex.EncodeToString(mac.Sum(nil))
+
+	if err := store.Accept(validBundle); err != nil {
+		t.Fatalf("failed to accept signed bundle: %v", err)
+	}
+
+	if _, _, _, err := store.Current(); err != nil {
+		t.Fatalf("expected valid signed policy, got error: %v", err)
+	}
+
+	// Forged signature rejection
+	forgedBundle := Bundle{
+		Version:     2,
+		Digest:      digest,
+		Signature:   "forged-signature-attempt",
+		PolicyCedar: cedar,
+		SchemaJSON:  schema,
+	}
+	if err := store.Accept(forgedBundle); err == nil {
+		t.Fatalf("expected signature verification error on forged bundle, got nil")
 	}
 }
