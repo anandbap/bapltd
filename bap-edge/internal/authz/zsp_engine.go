@@ -22,7 +22,45 @@ var (
 	ErrActionNotGranted               = errors.New("attempted action exceeds granted task scope")
 	ErrResourceNotGranted             = errors.New("attempted resource target exceeds granted task boundaries")
 	ErrInvalidEnvelope                = errors.New("invalid task authorization envelope")
+	ErrHighRiskApprovalRequired       = errors.New("high-risk privilege escalation requires out-of-band interactive human approval")
 )
+
+// IsHighRiskEscalationAction returns true for privilege-escalation, policy-mutation,
+// or governance-override actions that an autonomous agent may never self-mint.
+func IsHighRiskEscalationAction(action string) bool {
+	a := strings.ToLower(strings.TrimSpace(action))
+	if a == "" {
+		return false
+	}
+	highRiskPrefixes := []string{
+		"policy:",
+		"grant:",
+		"admin:",
+		"iam:",
+		"bap:override",
+		"bap:dev-override",
+		"dev-override:",
+		"security:override",
+		"sudo:",
+	}
+	for _, p := range highRiskPrefixes {
+		if strings.HasPrefix(a, p) || a == strings.TrimSuffix(p, ":") {
+			return true
+		}
+	}
+	return a == "system:admin" || strings.HasSuffix(a, ":elevate") || strings.HasSuffix(a, ":override")
+}
+
+// FindHighRiskEscalationActions returns the subset of requested actions that require out-of-band HITL approval.
+func FindHighRiskEscalationActions(actions []string) []string {
+	var hits []string
+	for _, act := range actions {
+		if IsHighRiskEscalationAction(act) {
+			hits = append(hits, act)
+		}
+	}
+	return hits
+}
 
 // ZSPEngine implements Zero Standing Privileges and Just-In-Time Task Grant issuance (BAP-917).
 type ZSPEngine struct {
@@ -71,13 +109,22 @@ func (e *ZSPEngine) AuthorizeTaskEnvelope(env *types.TaskAuthorizationEnvelope, 
 		return nil, fmt.Errorf("envelope rejected by Cedar invariants: %w", err)
 	}
 
+	// 3b. Enforce Out-of-Band Interactive Human Approval for High-Risk Escalation Actions
+	if highRisk := FindHighRiskEscalationActions(env.PermissionAsk.Actions); len(highRisk) > 0 {
+		if env.AuthorizedBy.DelegationType != "human_interactive_oob" {
+			return nil, fmt.Errorf("%w: action(s) %v cannot be autonomously minted by an agent", ErrHighRiskApprovalRequired, highRisk)
+		}
+	}
+
 	// 4. Apply Monotonic Scope Attenuation (BAP-902 & BAP-917)
 	var allowedActions []string
+	narrowed := false
 	for _, act := range env.PermissionAsk.Actions {
 		actLower := strings.ToLower(act)
 		if strings.Contains(actLower, "admin:*") || strings.Contains(actLower, "repo:*") {
 			// Attenuate wildcards
 			allowedActions = append(allowedActions, "repo:read", "repo:push")
+			narrowed = true
 		} else {
 			allowedActions = append(allowedActions, act)
 		}
@@ -88,9 +135,16 @@ func (e *ZSPEngine) AuthorizeTaskEnvelope(env *types.TaskAuthorizationEnvelope, 
 		resLower := strings.ToLower(res)
 		if resLower == "/*" || resLower == "repo://*" {
 			allowedResources = append(allowedResources, "workspace://current")
+			narrowed = true
 		} else {
 			allowedResources = append(allowedResources, res)
 		}
+	}
+
+	narrowingReason := ""
+	if narrowed {
+		narrowingReason = fmt.Sprintf("Monotonic scope attenuation: requested %v on %v narrowed to %v on %v",
+			env.PermissionAsk.Actions, env.PermissionAsk.Resources, allowedActions, allowedResources)
 	}
 
 	if maxUses <= 0 {
@@ -106,18 +160,22 @@ func (e *ZSPEngine) AuthorizeTaskEnvelope(env *types.TaskAuthorizationEnvelope, 
 
 	now := time.Now().UTC()
 	grant := &types.TaskGrant{
-		GrantID:          grantID,
-		EnvelopeID:       env.EnvelopeID,
-		SessionID:        env.Identity.SessionID,
-		PrincipalSVID:    env.Identity.Subject,
-		HumanOwner:       env.Identity.HumanOwner,
-		AllowedActions:   allowedActions,
-		AllowedResources: allowedResources,
-		MaxUses:          maxUses,
-		RemainingUses:    maxUses,
-		IssuedAt:         now,
-		ExpiresAt:        now.Add(ttl),
-		IsBurned:         false,
+		GrantID:            grantID,
+		EnvelopeID:         env.EnvelopeID,
+		SessionID:          env.Identity.SessionID,
+		PrincipalSVID:      env.Identity.Subject,
+		HumanOwner:         env.Identity.HumanOwner,
+		AllowedActions:     allowedActions,
+		AllowedResources:   allowedResources,
+		RequestedActions:   append([]string(nil), env.PermissionAsk.Actions...),
+		RequestedResources: append([]string(nil), env.PermissionAsk.Resources...),
+		NarrowingApplied:   narrowed,
+		NarrowingReason:    narrowingReason,
+		MaxUses:            maxUses,
+		RemainingUses:      maxUses,
+		IssuedAt:           now,
+		ExpiresAt:          now.Add(ttl),
+		IsBurned:           false,
 	}
 
 	// Sign the grant with PEP Authority Secret

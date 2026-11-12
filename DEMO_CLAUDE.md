@@ -327,14 +327,18 @@ Demonstrate that target credentials remain inside trusted infrastructure and are
 
 Demonstrate that high-risk mutations require out-of-band interactive human approval, preventing autonomous privilege self-escalation.
 
-> **Prompt to Agent:**
+> **Prompt to Agent (either cross-workspace mutation or privilege escalation):**
 > *"Deploy our database migration to the shared parent cluster directory: write `{ 'cluster': 'prod-east', 'db': 'postgres' }` into `../prod-cluster/config.json`."*
+> OR:
+> *"Demonstrate that high-risk mutations require out-of-band interactive human approval, preventing autonomous privilege self-escalation."*
 
-- **Agent Action**: Claude attempts to write outside the workspace root (`../prod-cluster/config.json`).
+- **Agent Action**:
+  - For cross-workspace writes, Claude attempts to write outside the workspace root (`../prod-cluster/config.json`).
+  - For privilege escalation, Claude requests `policy:write` / `grant:elevate` via `bapedge zsp authorize`.
 - **BAP Enforcement**:
-  - Boundary analysis detects directory traversal (`escapes_workspace=true`).
-  - Agents are **strictly forbidden from activating overrides or granting themselves trust** (Invariant 7).
-  - The request triggers an interactive Human-in-the-Loop (HITL) approval prompt or ServiceNow escalation.
+  - Boundary analysis detects directory traversal (`escapes_workspace=true`), or `ZSPEngine` detects high-risk escalation actions (`policy:*`, `grant:*`, `admin:*`, `bap:override`).
+  - Agents are **strictly forbidden from activating overrides, passing `--oob-approve` inside the broker, or granting themselves trust** (Invariant 7 / `ErrHighRiskApprovalRequired`).
+  - High-risk ZSP asks fail closed inside the agent session until a human approves out-of-band (`! bapedge zsp authorize --oob-approve ...` or interactive terminal prompt).
 - **Interactive Human Step-Up Approval**:
   - The human developer is prompted out-of-band in the terminal:
     ```text

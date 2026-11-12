@@ -2,6 +2,7 @@ package authz
 
 import (
 	"encoding/hex"
+	"strings"
 	"testing"
 	"time"
 
@@ -219,5 +220,59 @@ func TestBAP918_CryptographicAuditLineageAndNonRepudiation(t *testing.T) {
 	}
 	if proof.LedgerSignature == "" {
 		t.Errorf("Missing cryptographic ledger signature for non-repudiation")
+	}
+}
+
+func TestAuthorizeTaskEnvelopeBlocksHighRiskEscalationWithoutOOBApproval(t *testing.T) {
+	zspDir := t.TempDir()
+	_, _, err := SubmitTaskEnvelope(
+		zspDir, "sess-esc-1", "claude-code", "TASK_EXECUTION",
+		"Request privilege escalation", "Demonstrate high-risk gate",
+		[]string{"policy:write", "grant:elevate"}, []string{"workspace://current"},
+		"", 1, 300*time.Second,
+	)
+	if err == nil {
+		t.Fatal("expected ErrHighRiskApprovalRequired for autonomous policy:write/grant:elevate ask, got nil")
+	}
+	if !strings.Contains(err.Error(), "out-of-band interactive human approval") {
+		t.Fatalf("expected out-of-band approval error, got: %v", err)
+	}
+
+	grant, _, err := SubmitTaskEnvelopeWithDelegation(
+		zspDir, "sess-esc-1", "claude-code", "TASK_EXECUTION",
+		"Human-approved escalation", "Human approved out-of-band",
+		[]string{"policy:write", "grant:elevate"}, []string{"workspace://current"},
+		"", "human_interactive_oob", 1, 300*time.Second,
+	)
+	if err != nil {
+		t.Fatalf("expected human_interactive_oob escalation to succeed, got: %v", err)
+	}
+	if grant == nil || len(grant.AllowedActions) != 2 {
+		t.Fatalf("unexpected grant after oob approval: %+v", grant)
+	}
+}
+
+func TestAuthorizeTaskEnvelopeMarksNarrowingApplied(t *testing.T) {
+	zspDir := t.TempDir()
+	grant, _, err := SubmitTaskEnvelope(
+		zspDir, "sess-narrow-1", "claude-code", "TASK_EXECUTION",
+		"Broad repo ask", "Request repo:*",
+		[]string{"repo:*"}, []string{"workspace://current"},
+		"", 5, 300*time.Second,
+	)
+	if err != nil {
+		t.Fatalf("SubmitTaskEnvelope failed: %v", err)
+	}
+	if !grant.NarrowingApplied {
+		t.Fatalf("expected NarrowingApplied=true for repo:*, got false")
+	}
+	if len(grant.RequestedActions) != 1 || grant.RequestedActions[0] != "repo:*" {
+		t.Fatalf("expected RequestedActions=[repo:*], got %v", grant.RequestedActions)
+	}
+	if len(grant.AllowedActions) != 2 || grant.AllowedActions[0] != "repo:read" || grant.AllowedActions[1] != "repo:push" {
+		t.Fatalf("expected attenuated AllowedActions=[repo:read repo:push], got %v", grant.AllowedActions)
+	}
+	if grant.NarrowingReason == "" {
+		t.Fatalf("expected non-empty NarrowingReason")
 	}
 }

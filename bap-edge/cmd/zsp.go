@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"bufio"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -9,7 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"bap-edge/internal/audit"
 	"bap-edge/internal/authz"
+	"bap-edge/internal/config"
 	"bap-edge/internal/state"
 )
 
@@ -216,9 +220,14 @@ func RunZSP(args []string) error {
 		authByFlag := fs.String("authorized-by", "", "Approver/human owner email")
 		maxUsesFlag := fs.Int("max-uses", 1, "Maximum ephemeral execution uses before grant burns")
 		ttlFlag := fs.Duration("ttl", 300*time.Second, "Grant TTL (e.g. 300s)")
+		oobApproveFlag := fs.Bool("oob-approve", false, "Out-of-band human operator approval (forbidden inside agent broker)")
 		jsonFlag := fs.Bool("json", false, "JSON output")
 		if err := fs.Parse(rest); err != nil {
 			return err
+		}
+		inBroker := strings.TrimSpace(os.Getenv("BAP_IN_BROKER")) != ""
+		if *oobApproveFlag && inBroker {
+			return fmt.Errorf("%w: --oob-approve cannot be invoked from inside an agent broker sandbox; a human operator must approve out-of-band", authz.ErrHighRiskApprovalRequired)
 		}
 		maxUsesSet := false
 		fs.Visit(func(f *flag.Flag) {
@@ -245,7 +254,11 @@ func RunZSP(args []string) error {
 		if maxUses <= 0 {
 			return fmt.Errorf("--max-uses must be at least 1")
 		}
-		grant, env, err := authz.SubmitTaskEnvelope(
+		delegationType := "human_interactive_prompt"
+		if *oobApproveFlag && !inBroker {
+			delegationType = "human_interactive_oob"
+		}
+		grant, env, err := authz.SubmitTaskEnvelopeWithDelegation(
 			authz.ResolveZSPDir(),
 			sessionID,
 			clientType,
@@ -255,27 +268,71 @@ func RunZSP(args []string) error {
 			actions,
 			resources,
 			*authByFlag,
+			delegationType,
 			maxUses,
 			*ttlFlag,
 		)
+		if err != nil && errors.Is(err, authz.ErrHighRiskApprovalRequired) && !inBroker && isTerminal(os.Stdin) {
+			fmt.Fprintf(os.Stderr, "\n[BAP HITL ESCALATION] High-risk privilege action(s) %v requested for session %s.\n", authz.FindHighRiskEscalationActions(actions), sessionID)
+			fmt.Fprintf(os.Stderr, "Goal: %s | Resources: %v\n", *goalFlag, resources)
+			fmt.Fprintf(os.Stderr, "Authorize this high-risk escalation out-of-band? [y/N]: ")
+			reader := bufio.NewReader(os.Stdin)
+			ans, _ := reader.ReadString('\n')
+			if strings.EqualFold(strings.TrimSpace(ans), "y") || strings.EqualFold(strings.TrimSpace(ans), "yes") {
+				grant, env, err = authz.SubmitTaskEnvelopeWithDelegation(
+					authz.ResolveZSPDir(),
+					sessionID,
+					clientType,
+					*missionFlag,
+					*goalFlag,
+					*promptFlag,
+					actions,
+					resources,
+					*authByFlag,
+					"human_interactive_oob",
+					maxUses,
+					*ttlFlag,
+				)
+			}
+		}
 		if err != nil {
+			if errors.Is(err, authz.ErrHighRiskApprovalRequired) {
+				recordZSPAuditEvent(sessionID, clientType, actions, nil, false, "", "", "deny", err.Error(), "HIGH_RISK_OOB_GATE")
+			}
 			if *jsonFlag {
 				data, _ := json.MarshalIndent(map[string]any{
 					"allowed": false,
 					"error":   err.Error(),
 				}, "", "  ")
 				fmt.Println(string(data))
+			} else if errors.Is(err, authz.ErrHighRiskApprovalRequired) {
+				fmt.Fprintf(os.Stderr, "[BAP ZERO-TRUST] High-Risk Escalation Blocked (Out-of-Band Interactive Human Approval Required)\n")
+				fmt.Fprintf(os.Stderr, "  Requested Actions: %v\n", actions)
+				fmt.Fprintf(os.Stderr, "  Reason:            %v\n", err)
+				fmt.Fprintf(os.Stderr, "  Human Operator:    Run out-of-band in your own terminal: bapedge zsp authorize --oob-approve --session-id %q --actions %q --resources %q\n", sessionID, *actionsFlag, *resourcesFlag)
 			}
 			return err
 		}
+		zspConcept := "ZSP_GRANT_MINTED"
+		if grant.NarrowingApplied {
+			zspConcept = "ZSP_SCOPE_NARROWED"
+		}
+		recordZSPAuditEvent(sessionID, clientType, grant.RequestedActions, grant.AllowedActions, grant.NarrowingApplied, grant.NarrowingReason, grant.GrantID, "allow", grant.NarrowingReason, zspConcept)
 		if *jsonFlag {
 			data, _ := json.MarshalIndent(map[string]any{
-				"allowed":     true,
-				"grant":       grant,
-				"envelope_id": env.EnvelopeID,
+				"allowed":           true,
+				"grant":             grant,
+				"envelope_id":       env.EnvelopeID,
+				"narrowing_applied": grant.NarrowingApplied,
+				"narrowing_reason":  grant.NarrowingReason,
 			}, "", "  ")
 			fmt.Println(string(data))
 			return nil
+		}
+		if grant.NarrowingApplied {
+			fmt.Printf("[BAP ZERO-TRUST] Policy Narrowing Applied (Monotonic Scope Attenuation)\n")
+			fmt.Printf("  Requested Actions: %v -> Attenuated: %v\n", grant.RequestedActions, grant.AllowedActions)
+			fmt.Printf("  Reason:            %s\n", grant.NarrowingReason)
 		}
 		fmt.Printf("[BAP ZERO-TRUST] 4-Tuple Task Envelope Authorized -> JIT TaskGrant Minted\n")
 		fmt.Printf("  Grant ID:          %s\n", grant.GrantID)
@@ -334,6 +391,47 @@ func RunZSP(args []string) error {
 	default:
 		printZSPUsage()
 		return fmt.Errorf("unknown zsp subcommand: %s", sub)
+	}
+}
+
+func recordZSPAuditEvent(
+	sessionID, clientType string,
+	requestedActions, allowedActions []string,
+	narrowingApplied bool,
+	narrowingReason, grantID, decision, reason, zspConcept string,
+) {
+	fullCmd := fmt.Sprintf("bapedge zsp authorize --actions %s", strings.Join(requestedActions, ","))
+	if narrowingApplied {
+		fullCmd = fmt.Sprintf("bapedge zsp authorize --actions %s [NARROWED -> %s]", strings.Join(requestedActions, ","), strings.Join(allowedActions, ","))
+	}
+	entry := audit.AuditEntry{
+		EventID:           fmt.Sprintf("zsp-%d", time.Now().UnixNano()),
+		ReportingLayer:    "broker",
+		SessionID:         sessionID,
+		Timestamp:         time.Now().UTC(),
+		Source:            clientType,
+		ClientPID:         os.Getppid(),
+		Executable:        "bapedge",
+		Arguments:         "zsp authorize",
+		FullCommand:       fullCmd,
+		Decision:          decision,
+		Reason:            reason,
+		CanonicalAction:   "zsp:authorize",
+		CanonicalResource: "workspace://current",
+		GrantID:           grantID,
+		NarrowingApplied:  narrowingApplied,
+		NarrowingReason:   narrowingReason,
+		RequestedActions:  requestedActions,
+		AllowedActions:    allowedActions,
+		ZSPConcept:        zspConcept,
+	}
+	if reason == "" {
+		entry.Reason = fmt.Sprintf("TaskGrant %s minted (%v)", grantID, allowedActions)
+	}
+	_ = audit.Log(&entry, "")
+	ep := config.ResolveEndpoints()
+	if ep.ControlPlaneURL != "" {
+		_, _, _ = audit.Transmit(entry, ep.ControlPlaneURL, "")
 	}
 }
 

@@ -235,9 +235,13 @@ type TaskGrant struct {
 	SessionID         string    `json:"session_id"`
 	PrincipalSVID     string    `json:"principal_svid"`
 	HumanOwner        string    `json:"human_owner"`
-	AllowedActions    []string  `json:"allowed_actions"`
-	AllowedResources  []string  `json:"allowed_resources"`
-	MaxUses           int       `json:"max_uses"`
+	AllowedActions     []string  `json:"allowed_actions"`
+	AllowedResources   []string  `json:"allowed_resources"`
+	RequestedActions   []string  `json:"requested_actions,omitempty"`
+	RequestedResources []string  `json:"requested_resources,omitempty"`
+	NarrowingApplied   bool      `json:"narrowing_applied,omitempty"`
+	NarrowingReason    string    `json:"narrowing_reason,omitempty"`
+	MaxUses            int       `json:"max_uses"`
 	RemainingUses     int       `json:"remaining_uses"`
 	ExpiresAt         time.Time `json:"expires_at"`
 	IssuedAt          time.Time `json:"issued_at"`

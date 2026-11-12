@@ -225,6 +225,9 @@ func (s *Server) sessionToActivityEvent(sess *session.Session) *types.AgentActiv
 	// A session heartbeat is liveness, not an authorization decision. Use the
 	// newest recorded decision instead of manufacturing an ALLOW for every session.
 	decision, outcome, action := "UNKNOWN", "Unknown", "No policy decision recorded"
+	var narrowingApplied bool
+	var narrowingReason, grantID, zspConcept string
+	var requestedActions, allowedActions []string
 	var latestTime time.Time
 	var promptTime time.Time
 	if s.sessionStore != nil {
@@ -241,18 +244,34 @@ func (s *Server) sessionToActivityEvent(sess *session.Session) *types.AgentActiv
 		if ev.PromptHash == "" && ev.UserPrompt == "" && t.Before(promptTime) {
 			continue
 		}
+		if ev.NarrowingApplied {
+			narrowingApplied = true
+			narrowingReason = ev.NarrowingReason
+			requestedActions = ev.RequestedActions
+			allowedActions = ev.AllowedActions
+			grantID = ev.GrantID
+			zspConcept = ev.ZSPConcept
+		}
 		if err != nil || t.Before(latestTime) || ev.Decision == "" {
 			continue
 		}
 		latestTime = t
 		decision = strings.ToUpper(ev.Decision)
 		action = ev.FullCommand
+		if ev.GrantID != "" {
+			grantID = ev.GrantID
+		}
+		if ev.ZSPConcept != "" {
+			zspConcept = ev.ZSPConcept
+		}
 	}
 	switch {
 	case strings.Contains(decision, "AUDIT_PERMITTED") || strings.Contains(decision, "SHADOW"):
 		outcome = "Flagged"
 	case strings.Contains(decision, "DENY") || strings.Contains(decision, "DENIED") || strings.Contains(decision, "BLOCK"):
 		outcome = "Blocked"
+	case narrowingApplied:
+		outcome = "Narrowed"
 	case decision == "ALLOW" || decision == "ALLOWED":
 		outcome = "Success"
 	}
@@ -274,10 +293,16 @@ func (s *Server) sessionToActivityEvent(sess *session.Session) *types.AgentActiv
 		DataClassification: "Internal",
 		PolicyDecision:     decision,
 		RiskScore:          risk,
+		GrantID:            grantID,
 		ActionStatus:       status,
 		OutcomeCategory:    outcome,
 		TraceID:            "tr-" + sess.SessionID,
 		DeviationLevel:     devLevel,
+		NarrowingApplied:   narrowingApplied,
+		NarrowingReason:    narrowingReason,
+		RequestedActions:   requestedActions,
+		AllowedActions:     allowedActions,
+		ZSPConcept:         zspConcept,
 	}
 }
 

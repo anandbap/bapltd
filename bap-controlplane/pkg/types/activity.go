@@ -28,8 +28,13 @@ type AgentActivityEvent struct {
 	ActionStatus       string  `json:"action_status"`    // "working", "waiting", "completed", "denied", "failed"
 	OutcomeCategory    string  `json:"outcome_category"` // "Success", "Blocked", "Exception", "Timeout"
 	TraceID            string  `json:"trace_id"`
-	DeviationLevel     string  `json:"deviation_level,omitempty"` // "NONE", "LOW", "MEDIUM", "CRITICAL"
-	DeviationReason    string  `json:"deviation_reason,omitempty"`
+	DeviationLevel     string   `json:"deviation_level,omitempty"` // "NONE", "LOW", "MEDIUM", "CRITICAL"
+	DeviationReason    string   `json:"deviation_reason,omitempty"`
+	NarrowingApplied   bool     `json:"narrowing_applied,omitempty"`
+	NarrowingReason    string   `json:"narrowing_reason,omitempty"`
+	RequestedActions   []string `json:"requested_actions,omitempty"`
+	AllowedActions     []string `json:"allowed_actions,omitempty"`
+	ZSPConcept         string   `json:"zsp_concept,omitempty"`
 }
 
 // ActivitySummary is the legacy/demo fixture model. Live metrics_version=2

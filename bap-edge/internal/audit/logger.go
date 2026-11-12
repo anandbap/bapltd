@@ -43,6 +43,12 @@ type AuditEntry struct {
 	RootAgentID   string   `json:"root_agent_id,omitempty"`
 	ParentGrantID string   `json:"parent_grant_id,omitempty"`
 	GrantID       string   `json:"grant_id,omitempty"`
+	// ZSP Scope Attenuation & Concept Telemetry
+	NarrowingApplied bool     `json:"narrowing_applied,omitempty"`
+	NarrowingReason  string   `json:"narrowing_reason,omitempty"`
+	RequestedActions []string `json:"requested_actions,omitempty"`
+	AllowedActions   []string `json:"allowed_actions,omitempty"`
+	ZSPConcept       string   `json:"zsp_concept,omitempty"`
 	// Identity-Aware Egress Control (BAP-530)
 	DestinationTenantID string `json:"destination_tenant_id,omitempty"`
 	// Process-Level Supervision & Child Ancestry Tracking (BAP-534)

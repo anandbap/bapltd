@@ -461,6 +461,21 @@ func SubmitTaskEnvelope(
 	maxUses int,
 	ttl time.Duration,
 ) (*types.TaskGrant, *types.TaskAuthorizationEnvelope, error) {
+	return SubmitTaskEnvelopeWithDelegation(
+		zspDir, sessionID, clientType, mission, goal, promptText,
+		actions, resources, authorizedBy, "human_interactive_prompt", maxUses, ttl,
+	)
+}
+
+// SubmitTaskEnvelopeWithDelegation creates, signs, evaluates, and persists a 4-Tuple Task Authorization
+// Envelope with an explicit delegation type (e.g. "human_interactive_oob" for out-of-band HITL approval).
+func SubmitTaskEnvelopeWithDelegation(
+	zspDir, sessionID, clientType, mission, goal, promptText string,
+	actions, resources []string,
+	authorizedBy, delegationType string,
+	maxUses int,
+	ttl time.Duration,
+) (*types.TaskGrant, *types.TaskAuthorizationEnvelope, error) {
 	if zspDir == "" {
 		zspDir = ResolveZSPDir()
 	}
@@ -490,8 +505,11 @@ func SubmitTaskEnvelope(
 	}
 
 	promptDigest := sha256.Sum256([]byte(promptText))
+	if strings.TrimSpace(delegationType) == "" {
+		delegationType = "human_interactive_prompt"
+	}
 	deleg := types.DelegationIdentity{
-		DelegationType: "human_interactive_prompt",
+		DelegationType: delegationType,
 		ApproverEmail:  svid.HumanOwner,
 	}
 	if authorizedBy != "" {

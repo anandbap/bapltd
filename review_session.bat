@@ -6,9 +6,11 @@ rem  BAP ZERO-TRUST SESSION REVIEWER & PERFORMANCE INSPECTOR
 rem  Windows Batch Wrapper for review_session.ps1
 rem
 rem  Usage:
-rem    review_session.bat           (Interactive session selector)
-rem    review_session.bat 1         (View latest session #1 directly)
-rem    review_session.bat <session> (View specific session ID)
+rem    review_session.bat                       (Interactive session selector)
+rem    review_session.bat 1                     (View latest session #1 directly)
+rem    review_session.bat 1 -Json               (Output allowed/blocked/narrowed calls as JSON)
+rem    review_session.bat 1 -JsonOut calls.json (Save allowed/blocked/narrowed calls JSON to file)
+rem    review_session.bat <session>             (View specific session ID)
 rem ==============================================================================
 
 set "SCRIPT_DIR=%~dp0"

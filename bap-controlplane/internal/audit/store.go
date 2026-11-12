@@ -41,6 +41,12 @@ type Event struct {
 	ExitCode            int      `json:"exit_code"`
 	DestinationTenantID string   `json:"destination_tenant_id,omitempty"`
 	CanonicalResource   string   `json:"canonical_resource,omitempty"`
+	GrantID             string   `json:"grant_id,omitempty"`
+	NarrowingApplied    bool     `json:"narrowing_applied,omitempty"`
+	NarrowingReason     string   `json:"narrowing_reason,omitempty"`
+	RequestedActions    []string `json:"requested_actions,omitempty"`
+	AllowedActions      []string `json:"allowed_actions,omitempty"`
+	ZSPConcept          string   `json:"zsp_concept,omitempty"`
 	PreviousHash        string   `json:"previous_hash"`
 	EventHash           string   `json:"event_hash"`
 }

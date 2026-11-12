@@ -69,3 +69,48 @@ func TestTranscriptUnlocksOnlyWithAdminToken(t *testing.T) {
 		t.Fatalf("no configured token must not mean admin, got unlocked=%v text=%q", unlocked, text)
 	}
 }
+
+func TestTranscriptCallsFormatIncludesAllowedBlockedAndNarrowed(t *testing.T) {
+	s := setupTestServer()
+	if _, err := s.auditStore.Ingest([]audit.Event{
+		{
+			EventID: "ev-c1", SessionID: "sess-calls", Source: "claude-code", Executable: "powershell",
+			FullCommand: "whoami", Decision: "deny", Reason: "ZeroStandingPrivilegeViolation: no grant",
+		},
+		{
+			EventID: "ev-c2", SessionID: "sess-calls", Source: "claude-code", Executable: "bapedge",
+			FullCommand: "bapedge zsp authorize --actions repo:*", Decision: "allow",
+			GrantID: "grant-narrow-1", NarrowingApplied: true,
+			NarrowingReason: "Monotonic scope attenuation: [repo:*] -> [repo:read, repo:push]",
+			RequestedActions: []string{"repo:*"}, AllowedActions: []string{"repo:read", "repo:push"},
+			ZSPConcept: "ZSP_SCOPE_NARROWED",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	r := httptest.NewRequest("GET", "/api/v1/sessions/transcript?session_id=sess-calls&format=calls", nil)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	var res struct {
+		AllowedCount   int            `json:"allowed_count"`
+		BlockedCount   int            `json:"blocked_count"`
+		NarrowedCount  int            `json:"narrowed_count"`
+		ZSPConcepts    map[string]int `json:"zsp_concepts"`
+		AllowedCalls   []any          `json:"allowed_calls"`
+		BlockedCalls   []any          `json:"blocked_calls"`
+		NarrowedGrants []any          `json:"narrowed_grants"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("unmarshal failed: %v\n%s", err, w.Body.String())
+	}
+	if res.AllowedCount != 1 || res.BlockedCount != 1 || res.NarrowedCount != 1 {
+		t.Fatalf("unexpected counts: %+v", res)
+	}
+	if res.ZSPConcepts["ZSP_DENY_NO_GRANT"] != 1 || res.ZSPConcepts["ZSP_SCOPE_NARROWED"] != 1 {
+		t.Fatalf("unexpected zsp_concepts: %+v", res.ZSPConcepts)
+	}
+}

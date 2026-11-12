@@ -3496,21 +3496,42 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	type item struct {
-		Kind      string `json:"kind"` // prompt | response | action
-		Timestamp string `json:"timestamp"`
-		Text      string `json:"text,omitempty"`
-		Action    string `json:"action,omitempty"`
-		Decision  string `json:"decision,omitempty"`
-		Reason    string `json:"reason,omitempty"`
-		Intent    string `json:"intent,omitempty"`
-		EventHash string `json:"event_hash"`
-		PrevHash  string `json:"previous_hash"`
-		Captured  bool   `json:"captured"`
+		Kind             string   `json:"kind"` // prompt | response | action
+		Timestamp        string   `json:"timestamp"`
+		Text             string   `json:"text,omitempty"`
+		Action           string   `json:"action,omitempty"`
+		Decision         string   `json:"decision,omitempty"`
+		Reason           string   `json:"reason,omitempty"`
+		Intent           string   `json:"intent,omitempty"`
+		GrantID          string   `json:"grant_id,omitempty"`
+		NarrowingApplied bool     `json:"narrowing_applied,omitempty"`
+		NarrowingReason  string   `json:"narrowing_reason,omitempty"`
+		RequestedActions []string `json:"requested_actions,omitempty"`
+		AllowedActions   []string `json:"allowed_actions,omitempty"`
+		ZSPConcept       string   `json:"zsp_concept,omitempty"`
+		EventHash        string   `json:"event_hash"`
+		PrevHash         string   `json:"previous_hash"`
+		Captured         bool     `json:"captured"`
 	}
 	items := make([]item, 0)
+	allowedCalls := make([]item, 0)
+	blockedCalls := make([]item, 0)
+	narrowedGrants := make([]item, 0)
+	conceptsSeen := make(map[string]int)
 	for _, ev := range s.auditStore.ListBySession(sessionID) {
-		it := item{Timestamp: ev.Timestamp, Decision: ev.Decision, Reason: ev.Reason,
-			EventHash: ev.EventHash, PrevHash: ev.PreviousHash}
+		it := item{
+			Timestamp:        ev.Timestamp,
+			Decision:         ev.Decision,
+			Reason:           ev.Reason,
+			GrantID:          ev.GrantID,
+			NarrowingApplied: ev.NarrowingApplied,
+			NarrowingReason:  ev.NarrowingReason,
+			RequestedActions: ev.RequestedActions,
+			AllowedActions:   ev.AllowedActions,
+			ZSPConcept:       ev.ZSPConcept,
+			EventHash:        ev.EventHash,
+			PrevHash:         ev.PreviousHash,
+		}
 		switch ev.FullCommand {
 		case "USER_PROMPT_SUBMITTED":
 			it.Kind, it.Text, it.Intent, it.Captured = "prompt", ev.UserPrompt, ev.PrimaryIntent, ev.PromptCaptured
@@ -3518,8 +3539,46 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 			it.Kind, it.Text, it.Captured = "response", ev.AgentResponse, ev.AgentResponse != ""
 		default:
 			it.Kind, it.Action = "action", ev.FullCommand
+			if it.ZSPConcept == "" {
+				rLow := strings.ToLower(ev.Reason)
+				switch {
+				case strings.Contains(rLow, "max uses exceeded") || strings.Contains(rLow, "already burned"):
+					it.ZSPConcept = "ZSP_SINGLE_USE_BURN"
+				case strings.Contains(rLow, "zero standing privilege") || strings.Contains(rLow, "zerostandingprivilege"):
+					it.ZSPConcept = "ZSP_DENY_NO_GRANT"
+				case strings.Contains(rLow, "credential") || strings.Contains(rLow, ".env"):
+					it.ZSPConcept = "CREDENTIAL_ISOLATION"
+				case strings.Contains(rLow, "out-of-band") || strings.Contains(rLow, "high-risk"):
+					it.ZSPConcept = "HIGH_RISK_OOB_GATE"
+				}
+			}
+			if it.ZSPConcept != "" {
+				conceptsSeen[it.ZSPConcept]++
+			}
+			if it.NarrowingApplied {
+				narrowedGrants = append(narrowedGrants, it)
+			}
+			decLow := strings.ToLower(ev.Decision)
+			if strings.Contains(decLow, "deny") || strings.Contains(decLow, "block") {
+				blockedCalls = append(blockedCalls, it)
+			} else if decLow != "" {
+				allowedCalls = append(allowedCalls, it)
+			}
 		}
 		items = append(items, it)
+	}
+	if strings.EqualFold(r.URL.Query().Get("format"), "calls") {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"session_id":      sessionID,
+			"allowed_count":   len(allowedCalls),
+			"blocked_count":   len(blockedCalls),
+			"narrowed_count":  len(narrowedGrants),
+			"zsp_concepts":    conceptsSeen,
+			"allowed_calls":   allowedCalls,
+			"blocked_calls":   blockedCalls,
+			"narrowed_grants": narrowedGrants,
+		})
+		return
 	}
 	// Unmasking requires a valid admin token supplied by the viewer (header, query or the
 	// dashboard cookie). Being on loopback, or having no token configured, is not admin.
@@ -3532,10 +3591,14 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"session_id": sessionID,
-		"count":      len(items),
-		"items":      items,
-		"unlocked":   isAdmin,
+		"session_id":      sessionID,
+		"count":           len(items),
+		"items":           items,
+		"allowed_count":   len(allowedCalls),
+		"blocked_count":   len(blockedCalls),
+		"narrowed_count":  len(narrowedGrants),
+		"zsp_concepts":    conceptsSeen,
+		"unlocked":        isAdmin,
 	})
 }
 
