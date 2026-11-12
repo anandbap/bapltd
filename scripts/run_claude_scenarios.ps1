@@ -45,6 +45,7 @@ New-Item -ItemType Directory -Force -Path $runsBase | Out-Null
 $lastSessionMeta = Join-Path $runsBase "last-session.json"
 
 $claudeSessionId = $null
+$bapSessionId = $null
 $isResuming = $Resume.IsPresent -or (-not [string]::IsNullOrWhiteSpace($ResumeSession))
 
 if ($isResuming -and (Test-Path $lastSessionMeta)) {
@@ -52,6 +53,9 @@ if ($isResuming -and (Test-Path $lastSessionMeta)) {
         $meta = Get-Content $lastSessionMeta -Raw | ConvertFrom-Json
         if ([string]::IsNullOrWhiteSpace($ResumeSession) -and $meta.claude_session_id) {
             $ResumeSession = $meta.claude_session_id
+        }
+        if ($meta.bap_session_id) {
+            $bapSessionId = $meta.bap_session_id
         }
         if ([string]::IsNullOrWhiteSpace($OutDir) -and $meta.out_dir) {
             $OutDir = $meta.out_dir
@@ -73,8 +77,12 @@ if ($isResuming) {
         throw "Cannot resume: no previous session found in $lastSessionMeta and -ResumeSession was not provided."
     }
     $claudeSessionId = $ResumeSession
+    if ([string]::IsNullOrWhiteSpace($bapSessionId)) {
+        $bapSessionId = "sess-$Agent-" + ($claudeSessionId -replace '-', '')
+    }
 } else {
     $claudeSessionId = [guid]::NewGuid().ToString()
+    $bapSessionId = "sess-$Agent-" + ($claudeSessionId -replace '-', '')
 }
 
 $scenarioDefs = [ordered]@{
@@ -161,6 +169,7 @@ $lines = foreach ($sc in $selected) {
 @{
     agent             = $Agent
     claude_session_id = $claudeSessionId
+    bap_session_id    = $bapSessionId
     out_dir           = $OutDir
     output_file       = $streamJsonl
     updated_at        = (Get-Date).ToString("o")
@@ -170,7 +179,8 @@ Write-Host "====================================================================
 Write-Host "  BAP Zero-Trust Single-Command Scenario Runner ($Agent)" -ForegroundColor Cyan
 Write-Host "================================================================================" -ForegroundColor Cyan
 Write-Host "  Scenarios   : $($selected.Id -join ', ')"
-Write-Host "  Session ID  : $claudeSessionId $(if ($isResuming) { '(RESUMING)' } else { '(NEW)' })"
+Write-Host "  Claude SID  : $claudeSessionId $(if ($isResuming) { '(RESUMING)' } else { '(NEW)' })"
+Write-Host "  BAP SID     : $bapSessionId"
 Write-Host "  Input JSONL : $inputJsonl"
 Write-Host "  Output File : $streamJsonl (append mode)"
 Write-Host "  Calls JSON  : $callsJson"
@@ -180,9 +190,13 @@ if ($DryRun) {
     Write-Host "[DRY RUN] Generated $Agent input stream:" -ForegroundColor Yellow
     Get-Content $inputJsonl | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
     if ($Agent -eq "claude") {
-        $sessFlag = if ($isResuming) { "--resume $claudeSessionId" } else { "--session-id $claudeSessionId" }
-        Write-Host "`n[DRY RUN] Command:" -ForegroundColor Yellow
-        Write-Host "  Get-Content `"$inputJsonl`" -Raw | bap claude -p $sessFlag --input-format stream-json --output-format stream-json --include-hook-events --replay-user-messages --verbose 2>&1 | Tee-Object -FilePath `"$streamJsonl`" -Append"
+        Write-Host "`n[DRY RUN] Commands (BAP_SESSION_ID=$bapSessionId):" -ForegroundColor Yellow
+        $idx = 0
+        foreach ($sc in $selected) {
+            $sessFlag = if ($isResuming -or $idx -gt 0) { "--resume $claudeSessionId" } else { "--session-id $claudeSessionId" }
+            Write-Host "  bap claude -p $sessFlag --output-format stream-json --include-hook-events --verbose `"[Scenario $($sc.Id): $($sc.Name)] $($sc.Prompt)`" >> $streamJsonl"
+            $idx++
+        }
     } else {
         Write-Host "`n[DRY RUN] Command:" -ForegroundColor Yellow
         Write-Host "  bap codex exec --json <prompt> (appended to $streamJsonl)"
@@ -195,28 +209,45 @@ $bapCmd = Get-Command bap -ErrorAction SilentlyContinue
 if (-not $bapCmd) { $bapCmd = Get-Command bapedge -ErrorAction SilentlyContinue }
 if (-not $bapCmd) { throw "Neither 'bap' nor 'bapedge' was found on PATH." }
 
-if ($Agent -eq "claude") {
-    Write-Host "[*] Launching single-session `bap claude` stream-json run (appending to $streamJsonl)..." -ForegroundColor Green
-    $rawInput = Get-Content -Path $inputJsonl -Raw
-    $sessArgs = if ($isResuming) { @("--resume", $claudeSessionId) } else { @("--session-id", $claudeSessionId) }
-    $rawInput | & $bapCmd.Source claude -p @sessArgs `
-        --input-format stream-json `
-        --output-format stream-json `
-        --include-hook-events `
-        --replay-user-messages `
-        --verbose 2>&1 | Tee-Object -FilePath $streamJsonl -Append
-    $exitCode = $LASTEXITCODE
-    Write-Host "`n[*] `bap claude` exited with code $exitCode." -ForegroundColor Cyan
-} else {
-    Write-Host "[*] Launching `bap codex exec --json` sequential scenario run (appending to $streamJsonl)..." -ForegroundColor Green
-    $codexSid = if ($isResuming) { $ResumeSession } else { $null }
-    foreach ($sc in $selected) {
-        Write-Host "  -> Scenario $($sc.Id): $($sc.Name)" -ForegroundColor Yellow
-        if ($codexSid) {
-            & $bapCmd.Source codex exec resume $codexSid --json "[Scenario $($sc.Id): $($sc.Name)] $($sc.Prompt)" 2>&1 | Tee-Object -FilePath $streamJsonl -Append
-        } else {
-            & $bapCmd.Source codex exec --json "[Scenario $($sc.Id): $($sc.Name)] $($sc.Prompt)" 2>&1 | Tee-Object -FilePath $streamJsonl -Append
+$hadPrevBapSid = Test-Path Env:\BAP_SESSION_ID
+$prevBapSid = $env:BAP_SESSION_ID
+$env:BAP_SESSION_ID = $bapSessionId
+
+try {
+    if ($Agent -eq "claude") {
+        Write-Host "[*] Launching sequential single-session `bap claude` turns (BAP_SESSION_ID=$bapSessionId, appending to $streamJsonl)..." -ForegroundColor Green
+        $turnIdx = 0
+        foreach ($sc in $selected) {
+            $useResume = $isResuming -or ($turnIdx -gt 0)
+            $sessArgs = if ($useResume) { @("--resume", $claudeSessionId) } else { @("--session-id", $claudeSessionId) }
+            $promptText = "[Scenario $($sc.Id): $($sc.Name)] $($sc.Prompt)"
+            Write-Host "  -> Scenario $($sc.Id): $($sc.Name) ($(if ($useResume) { 'resume' } else { 'new' }))" -ForegroundColor Yellow
+            & $bapCmd.Source claude -p @sessArgs `
+                --output-format stream-json `
+                --include-hook-events `
+                --verbose `
+                $promptText 2>&1 | Tee-Object -FilePath $streamJsonl -Append
+            $exitCode = $LASTEXITCODE
+            Write-Host "     exited with code $exitCode" -ForegroundColor DarkGray
+            $turnIdx++
         }
+    } else {
+        Write-Host "[*] Launching `bap codex exec --json` sequential scenario run (appending to $streamJsonl)..." -ForegroundColor Green
+        $codexSid = if ($isResuming) { $ResumeSession } else { $null }
+        foreach ($sc in $selected) {
+            Write-Host "  -> Scenario $($sc.Id): $($sc.Name)" -ForegroundColor Yellow
+            if ($codexSid) {
+                & $bapCmd.Source codex exec resume $codexSid --json "[Scenario $($sc.Id): $($sc.Name)] $($sc.Prompt)" 2>&1 | Tee-Object -FilePath $streamJsonl -Append
+            } else {
+                & $bapCmd.Source codex exec --json "[Scenario $($sc.Id): $($sc.Name)] $($sc.Prompt)" 2>&1 | Tee-Object -FilePath $streamJsonl -Append
+            }
+        }
+    }
+} finally {
+    if ($hadPrevBapSid) {
+        $env:BAP_SESSION_ID = $prevBapSid
+    } else {
+        Remove-Item Env:\BAP_SESSION_ID -ErrorAction SilentlyContinue
     }
 }
 
@@ -245,8 +276,9 @@ if (-not $NoReview) {
         $reviewScript = Join-Path $PSScriptRoot "review_session.ps1"
     }
     if (Test-Path $reviewScript) {
-        # Find newest matching session ID from local or userhome audit ledger
-        $detectedSid = "1"
+        # Prefer our unified BAP_SESSION_ID if present in the audit ledger
+        $detectedSid = $bapSessionId
+        $foundUnified = $false
         $ledgerCandidates = @(
             (Join-Path $repoRoot ".bapstate\audit.jsonl"),
             (Join-Path $env:USERPROFILE ".bapstate\audit.jsonl"),
@@ -254,19 +286,31 @@ if (-not $NoReview) {
         )
         foreach ($lp in $ledgerCandidates) {
             if (Test-Path $lp) {
-                $recent = Get-Content $lp -Tail 200 | ForEach-Object {
-                    try { $_ | ConvertFrom-Json } catch { $null }
-                } | Where-Object {
-                    $_ -and $_.session_id -and $_.session_id -like "sess-$Agent*" -and $_.timestamp
-                } | Sort-Object timestamp -Descending | Select-Object -First 1
-                if ($recent) {
-                    try {
-                        $ts = [DateTime]::Parse($recent.timestamp).ToUniversalTime()
-                        if ($ts -ge $startTimeUtc) {
-                            $detectedSid = $recent.session_id
-                            break
-                        }
-                    } catch { }
+                $hit = Get-Content $lp -Tail 500 | Where-Object { $_ -like "*$bapSessionId*" } | Select-Object -First 1
+                if ($hit) {
+                    $foundUnified = $true
+                    break
+                }
+            }
+        }
+        if (-not $foundUnified) {
+            $detectedSid = "1"
+            foreach ($lp in $ledgerCandidates) {
+                if (Test-Path $lp) {
+                    $recent = Get-Content $lp -Tail 200 | ForEach-Object {
+                        try { $_ | ConvertFrom-Json } catch { $null }
+                    } | Where-Object {
+                        $_ -and $_.session_id -and $_.session_id -like "sess-$Agent*" -and $_.timestamp
+                    } | Sort-Object timestamp -Descending | Select-Object -First 1
+                    if ($recent) {
+                        try {
+                            $ts = [DateTime]::Parse($recent.timestamp).ToUniversalTime()
+                            if ($ts -ge $startTimeUtc) {
+                                $detectedSid = $recent.session_id
+                                break
+                            }
+                        } catch { }
+                    }
                 }
             }
         }

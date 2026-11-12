@@ -208,7 +208,10 @@ func RunClaude(args []string) error {
 		}
 	}
 
-	sessionID := fmt.Sprintf("sess-claude-%d-%d", os.Getpid(), time.Now().Unix())
+	sessionID := strings.TrimSpace(os.Getenv("BAP_SESSION_ID"))
+	if sessionID == "" {
+		sessionID = fmt.Sprintf("sess-claude-%d-%d", os.Getpid(), time.Now().Unix())
+	}
 	cmd := exec.Command(claudeBin, claudeArgs...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
