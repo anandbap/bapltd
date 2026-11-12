@@ -347,17 +347,8 @@ func requiresEnrolledWorkstation(command string, args []string) bool {
 	switch command {
 	case "claude", "claude-code",
 		"codex", "openai-codex",
-		"start", "restart",
-		"enable", "setup",
-		"sync", "attest", "onboarding", "sweep", "watch",
-		"review", "review-session", "review-sessions", "sessions",
-		"trust", "untrust", "permissions", "why", "explain",
-		"rollback", "pin", "scan", "adapter", "antibypass", "shield", "stepup", "delegate", "subagent":
+		"attest", "onboarding":
 		return true
-	case "daemon":
-		if len(args) > 0 && (args[0] == "start" || args[0] == "restart") {
-			return true
-		}
 	}
 	return false
 }
