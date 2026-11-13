@@ -21,6 +21,10 @@ func expandHome(p string) string {
 	return filepath.ToSlash(p)
 }
 
+// EnvPassthrough is the environment variable names a contained process may inherit (secret-looking
+// names are always dropped).
+func EnvPassthrough(p Profile) []string { return envPassthrough(p) }
+
 func envPassthrough(p Profile) []string {
 	names := append([]string(nil), p.EnvAllow...)
 	sort.Strings(names)
@@ -123,8 +127,10 @@ func SeatbeltProfile(p Profile) (string, error) {
 	for _, m := range MaskedPaths { // explicit denies win over any broader allow
 		fmt.Fprintf(&b, "(deny file-read* file-write* (subpath %q))\n", expandHome(m))
 	}
-	if p.ProxyAddr != "" {
-		fmt.Fprintf(&b, "(allow network-outbound (remote ip %q))\n", p.ProxyAddr)
+	// Network: nothing, except the unix socket to the egress proxy and loopback for the in-sandbox relay.
+	if sock := strings.TrimPrefix(p.ProxyAddr, "unix:"); sock != p.ProxyAddr && sock != "" {
+		fmt.Fprintf(&b, "(allow network-outbound (remote unix-socket (path-literal %q)))\n", sock)
+		b.WriteString("(allow network-bind (local ip \"localhost:*\"))\n(allow network-inbound (local ip \"localhost:*\"))\n(allow network-outbound (remote ip \"localhost:*\"))\n")
 	}
 	return b.String(), nil
 }

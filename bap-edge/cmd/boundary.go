@@ -155,15 +155,18 @@ func RunRun(args []string) error {
 		p.Image = *image
 	}
 	prov := *provider
-	if prov == "auto" {
+	if prov == "auto" { // native, unprivileged, no Docker: AppContainer / bubblewrap / Seatbelt
 		switch runtime.GOOS {
 		case "linux":
 			prov = "bwrap"
 		case "darwin":
 			prov = "seatbelt"
 		default:
-			prov = "docker"
+			prov = "appcontainer"
 		}
+	}
+	if prov == "appcontainer" {
+		return runAppContainer(p, argv)
 	}
 	var bin string
 	var full []string
@@ -189,9 +192,22 @@ func RunRun(args []string) error {
 		full, err = capability.DockerArgs(p, *network, argv)
 	case "seatbelt":
 		bin = "sandbox-exec"
+		sock := filepath.Join(os.TempDir(), fmt.Sprintf("bap-egress-%d.sock", os.Getpid()))
+		p.ProxyAddr = "unix:" + sock
+		self, _ := os.Executable()
+		if !*printOnly {
+			if _, lerr := exec.LookPath(bin); lerr != nil {
+				return fmt.Errorf("provider %q needs %q installed. Nothing was run: BAP will not fall back to an unsandboxed process", prov, bin)
+			}
+			stop, serr := egress.ServeUnix(egress.New(p, effectLog(), "run"), sock)
+			if serr != nil {
+				return serr
+			}
+			defer stop()
+		}
 		var prof string
 		prof, err = capability.SeatbeltProfile(p)
-		full = append([]string{"-p", prof}, argv...)
+		full = append([]string{"-p", prof, self, "__shim", "--socket", sock, "--"}, argv...)
 	default:
 		return fmt.Errorf("unknown provider %q", prov)
 	}
