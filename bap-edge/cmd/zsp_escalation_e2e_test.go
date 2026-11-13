@@ -244,6 +244,12 @@ func TestE2E_TrustedFolderIsReadableByTheAgent(t *testing.T) {
 	t.Setenv("BAP_WORKSPACE_ROOT", t.TempDir())
 	sess := "sess-e2e-trust"
 	outside := t.TempDir()
+	// Keep the original input spelling for the trust round trip, but expect
+	// guidance to name the real directory, including expansion of Windows 8.3 aliases.
+	canonicalOutside, err := filepath.EvalSymlinks(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
 	report := filepath.Join(outside, "calls-report.json")
 	if err := os.WriteFile(report, []byte("{}"), 0600); err != nil {
 		t.Fatal(err)
@@ -260,7 +266,7 @@ func TestE2E_TrustedFolderIsReadableByTheAgent(t *testing.T) {
 		t.Fatalf("untrusted outside folder must be refused at the ZSP boundary, got allowed=%v reason=%q", resp.Allowed, resp.Reason)
 	}
 	// The refusal must be prescriptive: the developer runs `bap trust <folder>`; the agent is told to stop.
-	for _, want := range []string{"DEVELOPER ACTION REQUIRED", `bap trust "` + outside + `" --project`, "--session", "--global", "AGENT: do not run `bap trust`"} {
+	for _, want := range []string{"DEVELOPER ACTION REQUIRED", `bap trust "` + canonicalOutside + `" --project`, "--session", "--global", "AGENT: do not run `bap trust`"} {
 		if !strings.Contains(resp.Suggestion, want) {
 			t.Errorf("suggestion missing %q:\n%s", want, resp.Suggestion)
 		}
