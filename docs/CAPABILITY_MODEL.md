@@ -58,3 +58,21 @@ or advisory-only mode must wait for the native escape suite to prove equivalent
 boundaries. Brokered credential injection and comprehensive credential masking
 inside writable workspaces remain open; an environment allowlist alone does not
 complete BAP-1014.
+
+## Official packaging and laptop development
+
+`python scripts/build_wheel.py --universal` requires a Go toolchain and builds
+official edge/hook clients for each target with developer override compiled out.
+Compiler errors stop the build. Staging uses those official outputs rather than
+choosing a newer development executable by modification time. Go dependencies
+must already be available from the approved cache or corporate mirror; this does
+not authorize public-registry downloads.
+
+This release behavior is separate from a development laptop build. For local
+BAP development, the human can compile with
+`./update_binaries.ps1 -AllowDevOverrides "true"`, install the matching broker
+and hook, and activate the time-limited override interactively. Agents cannot
+activate it. Production environments and official release binaries continue to
+reject developer override. A valid development override skips grant checks while
+retaining credential, boundary and revocation checks; installed-copy confirmation
+is still required for BAP-1006.

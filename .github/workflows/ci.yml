@@ -132,6 +132,8 @@ jobs:
 
       - name: Run Full Python Test Suite (100+ Tests)
         timeout-minutes: 10
+        env:
+          BAP_REQUIRE_WHEEL_TESTS: '1'
         run: |
           python -X faulthandler -m unittest discover -v tests
 

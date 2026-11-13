@@ -58,173 +58,93 @@ def get_platform_id() -> str:
     else:
         return "linux-arm64" if is_arm else "linux-amd64"
 
-def _latest_go_source_mtime(dir_path: str) -> float:
-    latest = 0.0
-    for walk_root, _, files in os.walk(dir_path):
-        for fn in files:
-            if fn.endswith(".go") or fn in ("go.mod", "go.sum") or fn.endswith((".cedar", ".json", ".crt", ".pem")):
-                try:
-                    mt = os.path.getmtime(os.path.join(walk_root, fn))
-                    if mt > latest:
-                        latest = mt
-                except OSError:
-                    pass
-    return latest
-
-
 def ensure_binaries(platforms: list):
-    """
-    Verifies that fresh client binaries (bapedge and interceptor) exist for all requested platforms.
-    Recompiles using Go (CGO_ENABLED=0) when missing OR older than Go source files.
+    """Build official clients with developer override compiled out.
+
+    A timestamp cannot distinguish a newer laptop development build from an
+    official artifact. Release packaging always compiles its own client outputs.
     """
     go_cmd = shutil.which("go")
-    bapedge_src_mtime = _latest_go_source_mtime(os.path.join(REPO_ROOT, "bap-edge"))
-    cchook_src_mtime = _latest_go_source_mtime(os.path.join(REPO_ROOT, "cchook"))
-
+    if not go_cmd:
+        raise RuntimeError("Go is required to compile and verify official release clients")
     git_commit = "dev"
     try:
         git_commit = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, text=True, stderr=subprocess.DEVNULL
+            ["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT,
+            text=True, stderr=subprocess.DEVNULL, timeout=10
         ).strip() or "dev"
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         pass
-
     for plat in platforms:
-        plat_cfg = PLATFORM_GO_MAP.get(plat)
-        if not plat_cfg:
-            continue
-        ext = plat_cfg["ext"]
-        target_dir = os.path.join(REPO_ROOT, "dist", plat, "claude-client")
-        os.makedirs(target_dir, exist_ok=True)
-
-        bapedge_target = os.path.join(target_dir, f"bapedge{ext}")
-        interceptor_target = os.path.join(target_dir, f"interceptor{ext}")
-
-        bapedge_candidates = [
-            bapedge_target,
-            os.path.join(REPO_ROOT, "dist", plat, f"bapedge{ext}"),
+        cfg = PLATFORM_GO_MAP.get(plat)
+        if not cfg:
+            raise ValueError(f"Unsupported release platform: {plat}")
+        directory = os.path.join(REPO_ROOT, "dist", plat, "claude-client")
+        os.makedirs(directory, exist_ok=True)
+        env = dict(os.environ, CGO_ENABLED="0", GOOS=cfg["GOOS"], GOARCH=cfg["GOARCH"])
+        components = [
+            ("bap-edge", "bapedge", f"-s -w -X bap-edge/pkg/version.GitCommit={git_commit} -X bap-edge/pkg/version.AllowDevOverrides=false"),
+            ("cchook", "interceptor", "-s -w -X main.AllowDevOverrides=false"),
         ]
-        if plat == "windows-amd64":
-            bapedge_candidates.extend([
-                os.path.join(REPO_ROOT, "bap-edge", "bapedge.exe"),
-                os.path.join(REPO_ROOT, "bapedge.exe"),
-            ])
-        newest_bapedge = max((os.path.getmtime(c) for c in bapedge_candidates if os.path.isfile(c)), default=0.0)
-        need_bapedge = (newest_bapedge == 0.0) or (newest_bapedge < bapedge_src_mtime)
+        for module, name, flags in components:
+            target = os.path.join(directory, name + cfg["ext"])
+            print(f"[*] Compiling official {name} for {plat}...")
+            result = subprocess.run(
+                [go_cmd, "build", "-trimpath", "-ldflags", flags, "-o", target, "."],
+                cwd=os.path.join(REPO_ROOT, module), env=env,
+                capture_output=True, text=True, timeout=180
+            )
+            if result.returncode:
+                raise RuntimeError(f"Official {name} build failed for {plat}: {result.stderr}")
+            if name == "interceptor":
+                legacy_dir = os.path.join(directory, "cchook")
+                os.makedirs(legacy_dir, exist_ok=True)
+                shutil.copy2(target, os.path.join(legacy_dir, name + cfg["ext"]))
 
-        interceptor_candidates = [
-            interceptor_target,
-            os.path.join(target_dir, "cchook", f"interceptor{ext}"),
-            os.path.join(REPO_ROOT, "dist", plat, f"interceptor{ext}"),
-        ]
-        if plat == "windows-amd64":
-            interceptor_candidates.extend([
-                os.path.join(REPO_ROOT, "cchook", "interceptor.exe"),
-                os.path.join(REPO_ROOT, "interceptor.exe"),
-            ])
-        newest_interceptor = max((os.path.getmtime(c) for c in interceptor_candidates if os.path.isfile(c)), default=0.0)
-        need_interceptor = (newest_interceptor == 0.0) or (newest_interceptor < cchook_src_mtime)
 
-        if (need_bapedge or need_interceptor) and go_cmd:
-            env = os.environ.copy()
-            env["CGO_ENABLED"] = "0"
-            env["GOOS"] = plat_cfg["GOOS"]
-            env["GOARCH"] = plat_cfg["GOARCH"]
+def _safe_build_directory(path):
+    root = os.path.realpath(REPO_ROOT)
+    target = os.path.realpath(path)
+    try:
+        inside = os.path.commonpath([root, target]) == root
+    except ValueError:
+        inside = False
+    if not inside or target == root or os.path.islink(path):
+        raise RuntimeError(f"Build directory must remain inside the source workspace: {path}")
+    return target
 
-            if need_bapedge:
-                print(f"[*] Cross-compiling fresh bapedge for {plat} (GOOS={env['GOOS']}, GOARCH={env['GOARCH']})...")
-                res = subprocess.run(
-                    [go_cmd, "build", "-trimpath", "-ldflags", f"-s -w -X bap-edge/pkg/version.GitCommit={git_commit}", "-o", bapedge_target, "."],
-                    cwd=os.path.join(REPO_ROOT, "bap-edge"),
-                    env=env,
-                    capture_output=True,
-                    text=True
-                )
-                if res.returncode != 0:
-                    print(f"[!] Warning: failed to build bapedge for {plat}: {res.stderr}")
-                else:
-                    print(f"  [+] Built: {bapedge_target}")
-
-            if need_interceptor:
-                print(f"[*] Cross-compiling fresh interceptor for {plat} (GOOS={env['GOOS']}, GOARCH={env['GOARCH']})...")
-                res = subprocess.run(
-                    [go_cmd, "build", "-trimpath", "-ldflags", "-s -w", "-o", interceptor_target, "."],
-                    cwd=os.path.join(REPO_ROOT, "cchook"),
-                    env=env,
-                    capture_output=True,
-                    text=True
-                )
-                if res.returncode != 0:
-                    print(f"[!] Warning: failed to build interceptor for {plat}: {res.stderr}")
-                else:
-                    cchook_sub = os.path.join(target_dir, "cchook")
-                    os.makedirs(cchook_sub, exist_ok=True)
-                    shutil.copy2(interceptor_target, os.path.join(cchook_sub, f"interceptor{ext}"))
-                    print(f"  [+] Built: {interceptor_target}")
 
 def stage_binaries(platforms: list):
-    """Stages newest precompiled Go client binaries and configs into bap/bin/<plat>/."""
-    if os.path.isdir(BAP_BIN_DIR):
-        shutil.rmtree(BAP_BIN_DIR)
-    os.makedirs(BAP_BIN_DIR, exist_ok=True)
-
+    """Stage only the official outputs; developer copies never win by mtime."""
+    destination = _safe_build_directory(BAP_BIN_DIR)
+    if os.path.isdir(destination):
+        shutil.rmtree(destination)
+    os.makedirs(destination, exist_ok=True)
     staged_count = 0
     for plat in platforms:
-        plat_src = os.path.join(REPO_ROOT, "dist", plat, "claude-client")
-        if not os.path.isdir(plat_src):
-            plat_src = os.path.join(REPO_ROOT, "dist", plat)
-
-        target_dir = os.path.join(BAP_BIN_DIR, plat)
+        if plat not in PLATFORM_GO_MAP:
+            raise ValueError(f"Unsupported release platform: {plat}")
+        target_dir = os.path.join(destination, plat)
         os.makedirs(target_dir, exist_ok=True)
+        ext = PLATFORM_GO_MAP[plat]["ext"]
+        for name in ("bapedge", "interceptor"):
+            filename = name + ext
+            source = os.path.join(REPO_ROOT, "dist", plat, "claude-client", filename)
+            if not os.path.isfile(source):
+                raise RuntimeError(f"Missing official client artifact: {source}")
+            target = os.path.join(target_dir, filename)
+            shutil.copy2(source, target)
+            if not plat.startswith("windows"):
+                os.chmod(target, 0o755)
+            staged_count += 1
+        for filename in ("policy.cedar", "schema.json", "bap-config.json"):
+            source = os.path.join(REPO_ROOT, filename)
+            if not os.path.isfile(source):
+                source = os.path.join(REPO_ROOT, "dist", plat, filename)
+            if os.path.isfile(source):
+                shutil.copy2(source, os.path.join(target_dir, filename))
+    print(f"[*] Staged {staged_count} official clients across {len(platforms)} platforms")
 
-        ext = ".exe" if plat.startswith("windows") else ""
-        binaries = ["bapedge" + ext, "interceptor" + ext]
-
-        for b in binaries:
-            cand_paths = [
-                os.path.join(plat_src, b),
-                os.path.join(REPO_ROOT, "dist", plat, b),
-            ]
-            if b.startswith("interceptor"):
-                cand_paths.extend([
-                    os.path.join(plat_src, "cchook", b),
-                    os.path.join(plat_src, "cchook-interceptor" + ext),
-                ])
-                if plat == "windows-amd64":
-                    cand_paths.extend([
-                        os.path.join(REPO_ROOT, "cchook", "interceptor.exe"),
-                        os.path.join(REPO_ROOT, "interceptor.exe"),
-                    ])
-            elif b.startswith("bapedge") and plat == "windows-amd64":
-                cand_paths.extend([
-                    os.path.join(REPO_ROOT, "bap-edge", "bapedge.exe"),
-                    os.path.join(REPO_ROOT, "bapedge.exe"),
-                ])
-
-            existing = [p for p in cand_paths if os.path.isfile(p)]
-            existing.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-            src = existing[0] if existing else cand_paths[0]
-
-            if os.path.isfile(src):
-                dst = os.path.join(target_dir, b)
-                shutil.copy2(src, dst)
-                if not plat.startswith("windows"):
-                    os.chmod(dst, 0o755)
-                sz_mb = os.path.getsize(dst) / (1024 * 1024)
-                print(f"[+] Staged {plat}/{b} ({sz_mb:.2f} MB) from {os.path.relpath(src, REPO_ROOT)}")
-                staged_count += 1
-            else:
-                print(f"[!] Warning: Could not find {b} for {plat} at {src}")
-
-        # Copy configs
-        for cfg in ["policy.cedar", "schema.json", "bap-config.json"]:
-            src = os.path.join(REPO_ROOT, cfg)
-            if not os.path.isfile(src):
-                src = os.path.join(REPO_ROOT, "dist", plat, cfg)
-            if os.path.isfile(src):
-                shutil.copy2(src, os.path.join(target_dir, cfg))
-
-    print(f"[*] Total binaries staged: {staged_count} across {len(platforms)} platform(s)")
 
 def copy_installer_script():
     # 1. Scripts & Debugging tools
@@ -286,7 +206,9 @@ def copy_installer_script():
         shutil.copytree(plugins_src, plugins_dst, dirs_exist_ok=True)
 
 def clean_build_artifacts():
-    shutil.rmtree(os.path.join(REPO_ROOT, "build"), ignore_errors=True)
+    directory = _safe_build_directory(os.path.join(REPO_ROOT, "build"))
+    if os.path.isdir(directory):
+        shutil.rmtree(directory)
     shutil.rmtree(os.path.join(REPO_ROOT, "bap_ltd.egg-info"), ignore_errors=True)
 
 def build_single_wheel(plat_id: str, plat_tag: str = None):

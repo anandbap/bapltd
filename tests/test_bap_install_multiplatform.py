@@ -109,10 +109,30 @@ class TestBAPInstallMultiPlatform(unittest.TestCase):
     def test_wheel_package_contains_go_binaries(self):
         """Verify that built wheels in dist/ contain appropriate Go binaries."""
         dist_dir = os.path.join(REPO_ROOT, "dist")
-        wheels = [os.path.join(dist_dir, f) for f in os.listdir(dist_dir) if f.endswith(".whl") and "1.3.1" in f] if os.path.isdir(dist_dir) else []
+        wheels = [os.path.join(dist_dir, f) for f in os.listdir(dist_dir) if f.startswith("bap_ltd-") and f.endswith(".whl")] if os.path.isdir(dist_dir) else []
         
         if not wheels:
-            self.skipTest("No prebuilt 1.3.1 wheels in dist/ to inspect")
+            if os.environ.get("BAP_REQUIRE_WHEEL_TESTS") == "1":
+                self.fail("Release gate requires a built BAP wheel in dist/")
+            self.skipTest("No built BAP wheels in dist/ to inspect")
+
+        wheels.sort(key=os.path.getmtime, reverse=True)
+        universal = [w for w in wheels if w.endswith("-py3-none-any.whl")]
+        if universal:
+            with zipfile.ZipFile(universal[0], "r") as archive:
+                for target in ("windows-amd64", "linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"):
+                    extension = ".exe" if target.startswith("windows") else ""
+                    for binary in ("bapedge", "interceptor"):
+                        name = f"bap/bin/{target}/{binary}{extension}"
+                        self.assertIn(name, archive.namelist())
+                        with archive.open(name) as stream:
+                            magic = stream.read(4)
+                        if target.startswith("windows"):
+                            self.assertTrue(magic.startswith(b"MZ"), name)
+                        elif target.startswith("linux"):
+                            self.assertEqual(magic, b"\x7fELF", name)
+                        else:
+                            self.assertIn(magic, (b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf"), name)
 
         # Verify Windows wheel contains Windows binary
         win_wheels = [w for w in wheels if "win_amd64" in w or "py3-none-any" in w]
@@ -227,6 +247,8 @@ class TestBAPInstallMultiPlatform(unittest.TestCase):
         dist_dir = os.path.join(REPO_ROOT, "dist")
         wheels = [os.path.join(dist_dir, f) for f in os.listdir(dist_dir) if f.endswith("-py3-none-any.whl")] if os.path.isdir(dist_dir) else []
         if not wheels:
+            if os.environ.get("BAP_REQUIRE_WHEEL_TESTS") == "1":
+                self.fail("Release gate requires a universal BAP wheel in dist/")
             self.skipTest("No universal wheels in dist/")
 
         # Pick newest wheel
@@ -235,6 +257,8 @@ class TestBAPInstallMultiPlatform(unittest.TestCase):
 
         with zipfile.ZipFile(newest_wheel, "r") as z:
             names = z.namelist()
+            for helper in ("review_session.ps1", "review_session_impl.ps1", "session_calls.ps1"):
+                self.assertIn(f"bap/{helper}", names, f"Missing packaged review helper {helper}")
             # Verify configurations
             for asset in ["policy.cedar", "schema.json", "bap-config.json"]:
                 has_asset = any(f"bap/{asset}" in n or f"bap/launchers/{asset}" in n for n in names)
