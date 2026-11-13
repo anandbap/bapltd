@@ -87,6 +87,22 @@ func (s *Store) RotateSigner(next *Signer) {
 	_ = s.saveSettingsLocked()
 }
 
+// EnsureVersionAtLeast raises the policy version to at least v. A control plane on an ephemeral
+// disk (Render, containers) loses its persisted counter on every redeploy; clients refuse any
+// version lower than the one they hold (rollback protection), so a counter that restarts at 1 would
+// strand the whole fleet on old rules. Seeding the counter from the wall clock at startup keeps it
+// monotonic across redeploys without any storage.
+func (s *Store) EnsureVersionAtLeast(v uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.bundle.Version >= v {
+		return
+	}
+	s.bundle.Version = v
+	s.bundle.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	_ = s.saveSettingsLocked()
+}
+
 // EnablePersistence stores settings in path and restores them now. The version counter is
 // restored too (and advanced by one) so a restart never moves it backwards: clients refuse
 // rollbacks, so a reset counter would strand them on stale rules.

@@ -361,9 +361,13 @@ func runStart(args []string) {
 		}
 	}
 	// Enforcement settings (fleet default + per-asset overrides) and the version counter survive restarts.
+	// On an ephemeral disk the file is lost on redeploy, so the version is also floored at the wall
+	// clock (seconds): clients refuse a lower version than they hold, and a counter that restarted at 1
+	// would strand every enrolled machine on old rules.
 	if pErr := policyStore.EnablePersistence(filepath.Join(signerDir, "policy-settings.json")); pErr != nil {
 		log.Fatalf("[bapcontrolplane] policy settings unavailable (%v); refusing to start with unknown enforcement settings", pErr)
 	}
+	policyStore.EnsureVersionAtLeast(uint64(time.Now().Unix()))
 
 	sessionStore, err := session.NewStoreWithDB(resolvedDB)
 	if err != nil {

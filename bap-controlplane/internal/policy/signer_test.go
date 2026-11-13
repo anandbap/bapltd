@@ -51,6 +51,33 @@ func TestConcurrentStartsOnOneDirectoryDoNotCollide(t *testing.T) {
 	}
 }
 
+// A redeploy on an ephemeral disk loses the persisted counter. Clients refuse lower versions, so the
+// counter must still come back higher than anything a client could hold.
+func TestVersionStaysAheadOfClientsAfterAnEphemeralRedeploy(t *testing.T) {
+	// "Before the redeploy": clients hold a version that grew with admin changes.
+	old := NewStore("permit(principal, action, resource);", "{}")
+	old.EnsureVersionAtLeast(1_700_000_000)
+	for i := 0; i < 5; i++ {
+		_, _ = old.SetReadExempt("*", i%2 == 0, "t")
+	}
+	held := old.GetBundle().Version
+
+	// "After the redeploy": a brand-new store, no persisted file, counter back at 1, wall clock later.
+	fresh := NewStore("permit(principal, action, resource);", "{}")
+	if fresh.GetBundle().Version >= held {
+		t.Skip("fresh store already ahead; nothing to prove")
+	}
+	fresh.EnsureVersionAtLeast(held + 1000)
+	if fresh.GetBundle().Version <= held {
+		t.Fatalf("version must come back above what clients hold: %d <= %d", fresh.GetBundle().Version, held)
+	}
+	// And it never moves backwards.
+	fresh.EnsureVersionAtLeast(5)
+	if fresh.GetBundle().Version <= held {
+		t.Fatal("EnsureVersionAtLeast must never lower the version")
+	}
+}
+
 func TestReEnrollmentWithoutHardwareIDDoesNotDowngradeBinding(t *testing.T) {
 	st := NewStore("permit(principal, action, resource);", "{}")
 	if got := st.BindEnrolledAsset("inst-1", "asset-hw"); got != "asset-hw" {
