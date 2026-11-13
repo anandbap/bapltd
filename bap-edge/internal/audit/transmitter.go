@@ -23,6 +23,10 @@ var (
 	serverKnownOffline     bool
 	lastServerOfflineCheck time.Time
 	offlineBackoffDuration = 30 * time.Second
+	// A watcher, daemon and explicit sync can flush the same spool concurrently.
+	// Serialize snapshots and acknowledgements so a second flush sees the updated
+	// ledger rather than uploading the same backlog again.
+	flushMu sync.Mutex
 )
 
 var (
@@ -179,6 +183,8 @@ func Transmit(entry AuditEntry, serverURL string, logPath string) (bool, string,
 // FlushOfflineAudit reads un-ingested local audit entries and flushes them to the central control plane in batches.
 // Returns the count of successfully flushed entries.
 func FlushOfflineAudit(serverURL string, logPath string) (int, error) {
+	flushMu.Lock()
+	defer flushMu.Unlock()
 	serverURL = config.ReportingEndpoint(serverURL)
 	if err := config.CheckReportingEnrollment(serverURL); err != nil {
 		return 0, err
@@ -278,15 +284,17 @@ func FlushOfflineAudit(serverURL string, logPath string) (int, error) {
 
 			// Acknowledged by central control plane (either newly ingested or duplicate reconciled)
 			if ack.ChainValid && (ack.Status == "acknowledged" || ack.Ingested > 0) {
-				totalFlushed += len(batchIDs)
 				if os.Getenv("BAP_RETAIN_LOCAL") != "1" {
 					if !ack.Durable {
 						if err := archiveAcknowledged(serverURL, logPath, batch, ack.ServerEpoch); err != nil {
 							return totalFlushed, err
 						}
 					}
-					_ = RemoveEntries(batchIDs, logPath)
+					if err := RemoveEntries(batchIDs, logPath); err != nil {
+						return totalFlushed, fmt.Errorf("remove acknowledged audit entries: %w", err)
+					}
 				}
+				totalFlushed += len(batchIDs)
 			} else {
 				return totalFlushed, fmt.Errorf("unverified audit acknowledgement: chain_valid=%v", ack.ChainValid)
 			}

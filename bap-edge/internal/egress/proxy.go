@@ -26,6 +26,7 @@ type Proxy struct {
 	mu           sync.RWMutex
 	allow        []string
 	Session      string
+	Project      string
 	Log          *learn.Log
 	Approve      Approver // optional live approval
 	AllowPrivate bool     // tests only: permit loopback/private destinations
@@ -33,7 +34,7 @@ type Proxy struct {
 }
 
 func New(p capability.Profile, log *learn.Log, session string) *Proxy {
-	return &Proxy{allow: append([]string(nil), p.EgressAllow...), Log: log, Session: session,
+	return &Proxy{allow: append([]string(nil), p.EgressAllow...), Log: log, Session: session, Project: p.Workspace,
 		Dial: (&net.Dialer{Timeout: 10 * time.Second}).DialContext}
 }
 
@@ -52,7 +53,7 @@ func (p *Proxy) allowed(host, port string) bool {
 
 func (p *Proxy) record(host, port, verdict string, human bool) {
 	if p.Log != nil {
-		_ = p.Log.Append(learn.Event{Kind: "egress", Target: net.JoinHostPort(host, port), Verdict: verdict, Session: p.Session, Source: "egress-proxy", HumanApproved: human})
+		_ = p.Log.Append(learn.Event{Kind: "egress", Mode: "connect", Target: net.JoinHostPort(host, port), Verdict: verdict, Session: p.Session, Project: p.Project, Source: "egress-proxy", Observed: true, HumanApproved: human})
 	}
 }
 

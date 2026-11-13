@@ -3,14 +3,17 @@ package cmd
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"bap-edge/internal/capability"
 	"bap-edge/internal/egress"
@@ -74,7 +77,13 @@ func RunEgress(args []string) error {
 		if err := next.Save(path); err != nil {
 			return err
 		}
-		_ = effectLog().Append(learn.Event{Kind: "egress", Target: args[1], Verdict: "allow", Source: "bap-egress-allow", HumanApproved: true})
+		human, err := user.Current()
+		if err != nil {
+			return fmt.Errorf("resolve human identity: %w", err)
+		}
+		if err := effectLog().Append(learn.Event{Kind: "egress", Mode: "connect", Target: args[1], Verdict: "allow", Project: p.Workspace, Source: "bap-egress-allow", HumanApproved: true, HumanID: human.Uid, DecisionID: fmt.Sprintf("operator-%d", time.Now().UnixNano())}); err != nil {
+			return fmt.Errorf("record approval: %w", err)
+		}
 		fmt.Printf("Allowed egress to %s for %s\n", args[1], p.Workspace)
 		return nil
 	case "serve":
@@ -104,7 +113,30 @@ func RunLearn(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Legacy unscoped events cannot establish authority for this project.
+	scoped := make([]learn.Event, 0, len(events))
+	for _, event := range events {
+		if event.Project == p.Workspace {
+			scoped = append(scoped, event)
+		}
+	}
+	events = scoped
 	props := learn.Mine(events, p)
+	if len(args) > 0 && args[0] == "profile" {
+		recommendation, err := learn.GenerateProfile(events, p, 3)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(recommendation)
+	}
+	if len(args) > 0 && args[0] == "report" {
+		return json.NewEncoder(os.Stdout).Encode(struct {
+			Project    string           `json:"project"`
+			Metrics    learn.Metrics    `json:"metrics"`
+			Proposals  []learn.Proposal `json:"proposals"`
+			Mismatches []learn.Mismatch `json:"mismatches"`
+		}{p.Workspace, learn.Summarize(events), props, learn.PredictionMismatches(events)})
+	}
 	if len(args) >= 2 && args[0] == "apply" {
 		for _, pr := range props {
 			if strings.EqualFold(pr.Value, args[1]) {
@@ -166,6 +198,13 @@ func RunRun(args []string) error {
 		}
 	}
 	if prov == "appcontainer" {
+		if *printOnly {
+			return json.NewEncoder(os.Stdout).Encode(struct {
+				Provider string             `json:"provider"`
+				Profile  capability.Profile `json:"profile"`
+				Argv     []string           `json:"argv"`
+			}{prov, p, argv})
+		}
 		return runAppContainer(p, argv)
 	}
 	var bin string
@@ -222,6 +261,7 @@ func RunRun(args []string) error {
 		return fmt.Errorf("provider %q needs %q installed. Nothing was run: BAP will not fall back to an unsandboxed process", prov, bin)
 	}
 	cmd := exec.Command(bin, full...)
+	cmd.Env = capability.EnvValues(p)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
 }

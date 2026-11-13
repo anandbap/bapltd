@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "features": [
+    {"name": "Landlock", "pattern": "Landlock(?: LSM)?", "status": "not implemented", "qualifier": "not implemented"},
+    {"name": "eBPF", "pattern": "eBPF", "status": "simulation only", "qualifier": "simulation only"},
+    {"name": "WFP", "pattern": "Windows Filtering Platform \\(WFP\\)|WFP", "status": "not implemented", "qualifier": "not implemented"},
+    {"name": "Endpoint Security", "pattern": "Endpoint Security", "status": "not implemented", "qualifier": "not implemented"},
+    {"name": "NetworkExtension", "pattern": "NetworkExtension", "status": "not implemented", "qualifier": "not implemented"},
+    {"name": "Seatbelt", "pattern": "Seatbelt", "status": "native execution unverified", "qualifier": "native execution unverified"}
+  ],
+  "verified": ["Windows AppContainer boundary tests", "egress proxy and unix-socket relay", "task-grant enforcement", "control-plane policy administration"],
+  "native_execution_pending": ["Linux bubblewrap", "macOS Seatbelt"]
+}

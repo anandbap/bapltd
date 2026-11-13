@@ -25,6 +25,15 @@ func expandHome(p string) string {
 // names are always dropped).
 func EnvPassthrough(p Profile) []string { return envPassthrough(p) }
 
+// EnvValues is a complete child environment, not an addition to os.Environ.
+func EnvValues(p Profile) []string {
+	values := []string{}
+	for _, name := range envPassthrough(p) {
+		if value, ok := os.LookupEnv(name); ok { values = append(values, name+"="+value) }
+	}
+	return values
+}
+
 func envPassthrough(p Profile) []string {
 	names := append([]string(nil), p.EnvAllow...)
 	sort.Strings(names)
@@ -130,7 +139,7 @@ func SeatbeltProfile(p Profile) (string, error) {
 	// Network: nothing, except the unix socket to the egress proxy and loopback for the in-sandbox relay.
 	if sock := strings.TrimPrefix(p.ProxyAddr, "unix:"); sock != p.ProxyAddr && sock != "" {
 		fmt.Fprintf(&b, "(allow network-outbound (remote unix-socket (path-literal %q)))\n", sock)
-		b.WriteString("(allow network-bind (local ip \"localhost:*\"))\n(allow network-inbound (local ip \"localhost:*\"))\n(allow network-outbound (remote ip \"localhost:*\"))\n")
+		b.WriteString("(allow network-bind (local ip \"localhost:3128\"))\n(allow network-inbound (local ip \"localhost:3128\"))\n(allow network-outbound (remote ip \"localhost:3128\"))\n")
 	}
 	return b.String(), nil
 }

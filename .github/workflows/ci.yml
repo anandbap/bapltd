@@ -58,6 +58,17 @@ jobs:
             go test -v -race -timeout=5m ./...
           fi
 
+      - name: Test gateway and Copilot adapter
+        shell: bash
+        run: |
+          for module in bap-gateway copilot; do
+            if [ "${{ matrix.os }}" = "windows-latest" ]; then
+              (cd "$module" && go test -v -timeout=5m ./...) || exit 1
+            else
+              (cd "$module" && go test -v -race -timeout=5m ./...) || exit 1
+            fi
+          done
+
       - name: Test onboarding probe protocol end to end
         working-directory: bap-controlplane
         env:
@@ -123,6 +134,9 @@ jobs:
         timeout-minutes: 10
         run: |
           python -X faulthandler -m unittest discover -v tests
+
+      - name: Check product capability claims
+        run: python scripts/check_capability_claims.py
 
       - name: Upload Windows AMD64 Executables & Distributions
         uses: actions/upload-artifact@v4

@@ -59,7 +59,7 @@ The **Bounded Authority Plane (BAP)** Enterprise Pilot is designed to evaluate r
 │   │                              ▼                               │     │
 │   │  bapedge (Local Daemon & Execution Broker)                   │     │
 │   │  ├─ In-Process Sub-2ms Cedar Authorization Engine            │     │
-│   │  ├─ Layer 2: OS Sandbox (Windows Job Objects / Landlock)     │     │
+│   │  ├─ Layer 2: OS Sandbox (Windows Job Objects / Landlock (not implemented))     │     │
 │   │  ├─ Layer 3: Anti-Tamper & Credential Shielding (FIM / DLP)  │     │
 │   │  ├─ Layer 4: Continuous Health & Anomaly Watchdog (Heartbeat)│     │
 │   │  └─ Layer 5: Cryptographic Session SVIDs & PEP Grants        │     │
@@ -85,7 +85,7 @@ When AI agents attempt operations, BAP intervenes across 5 redundant layers:
    - **Layer 1A: Native Agent Plugin** (`plugins/claude`, `plugins/copilot`, `plugins/antigravity`, `plugins/opencode`, `plugins/codex`): Evaluates Cedar policy in-harness before tools run across Claude Code, GitHub Copilot, Google Antigravity, OpenCode, and OpenAI Codex.
    - **Layer 1B: Standalone Configuration Hook** (`.claude/settings.json`, `.codex/hooks.json`, `GEMINI.md`, shell shims): Intercepts commands if plugins are not supported, disabled, or bypassed.
    *(Dual-invocations are automatically deduplicated by `bapedge` within a 5-second window to prevent duplicate approval prompts).*
-2. **Layer 2: Execution Broker & OS Sandboxing**: Executes commands inside restricted Windows Job Objects or Linux Landlock tokens (`bapedge exec`), blocking unauthorized subshells and child-process escapes.
+2. **Layer 2: Execution Broker & OS Sandboxing**: Executes commands inside restricted Windows Job Objects or Linux Landlock (not implemented) tokens (`bapedge exec`), blocking unauthorized subshells and child-process escapes.
 3. **Layer 3: Anti-Tamper & Credential Shielding**: File Integrity Monitoring (FIM) guards `.claude/`, `policy.cedar`, and manifests. Environment scrubbing strips ambient cloud credentials (`AWS_*`, `GITHUB_*`, `OPENAI_*`), and DLP regex masks sensitive output tokens.
 4. **Layer 4: Continuous Health & Anomaly Watchdog**: Background Agent Watch monitors heartbeat liveness, tails IDE conversational prompts (120ms), detects policy drift, and enforces session isolation.
 5. **Layer 5: Cryptographic Identity & Zero-Trust Egress**: Binds every session to a hierarchical Session SVID. Egress traffic routes through the Gateway PEP, requiring single-use bounded grants (`maxUses=1`).
@@ -258,7 +258,7 @@ SecOps and developers can verify both manual step-by-step and automated agent wi
    ```
    *Expected progression:*
    - **Stage 1 (In-Harness Block)**: Claude/Copilot plugin/hook halts unauthorized credential read (`.env`).
-   - **Stage 2 (Subprocess Sandbox Block)**: Rogue agent attempting direct `pwsh -c` bypass is trapped by Windows Job Object / Landlock tokens (`EXECUTION BLOCKED`).
+   - **Stage 2 (Subprocess Sandbox Block)**: Rogue agent attempting direct `pwsh -c` bypass is trapped by Windows Job Object / Landlock (not implemented) tokens (`EXECUTION BLOCKED`).
    - **Stage 3 (Anti-Tamper FIM Block)**: Rogue agent attempting to overwrite `policy.cedar` or `.claude-plugin/plugin.json` is blocked by File Integrity Monitoring.
    - **Stage 4 (Watchdog Isolation & Token Revocation)**: Continuous heartbeat watchdog detects anomalous evasion; STS single-use token revoked and session quarantined fleet-wide.
 

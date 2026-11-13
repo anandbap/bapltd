@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 
 	"bap-edge/internal/capability"
@@ -18,6 +19,7 @@ type Proposal struct {
 	Human    bool   `json:"human"`    // a human approved this before
 	Risk     string `json:"risk"`     // low | review
 	Reason   string `json:"reason"`
+	Humans   int    `json:"humans"`
 	Replay   Replay `json:"replay"`
 }
 
@@ -28,57 +30,69 @@ type Replay struct {
 	Unsafe     []string `json:"unsafe,omitempty"`
 }
 
-// Thresholds: an agent repeatedly failing is not proof the access is wanted (it may be exfiltrating), so
-// agent-only evidence needs breadth (several sessions) and always lands as "review"; a human approval
-// is strong evidence on its own.
-const (
-	minAgentEvidence = 3
-	minAgentSessions = 2
-)
-
-// Mine turns denied egress events into proposals, strongest evidence first.
+// Mine recommends only exact hosts backed by two distinct, attributed human
+// decisions. The caller must supply events from an authenticated approval
+// producer, scoped to one project. Agent retries alone never qualify.
 func Mine(events []Event, current capability.Profile) []Proposal {
 	type agg struct {
-		n        int
-		sessions map[string]bool
-		human    bool
+		n             int
+		sessions      map[string]bool
+		humans        map[string]bool
+		contributions map[string]bool
+		decisions map[string]bool
 	}
 	byHost := map[string]*agg{}
 	for _, e := range events {
-		if e.Kind != "egress" || e.Verdict != "deny" {
+		if e.Kind != "egress" || (e.Verdict != "deny" && !e.HumanApproved) {
 			continue
 		}
 		host := hostOf(e.Target)
-		if host == "" {
+		port := portOf(e.Target)
+		portNumber, portErr := strconv.Atoi(port)
+		if host == "" || portErr != nil || portNumber < 1 || portNumber > 65535 {
 			continue
 		}
-		a := byHost[host]
+		destination := net.JoinHostPort(host, port)
+		a := byHost[destination]
 		if a == nil {
-			a = &agg{sessions: map[string]bool{}}
-			byHost[host] = a
+			a = &agg{sessions: map[string]bool{}, humans: map[string]bool{}, contributions: map[string]bool{}, decisions: map[string]bool{}}
+			byHost[destination] = a
 		}
-		a.n++
-		a.sessions[e.Session] = true
-		a.human = a.human || e.HumanApproved
+		// Retrying or inventing sessions is never human evidence. One agent/session
+		// contributes at most one denial to the ranking, regardless of retry count.
+		key := e.Agent + "\x00" + e.Session
+		if e.Agent != "" { key = e.Agent }
+		if e.Verdict == "deny" && !a.contributions[key] {
+			a.n++
+			a.contributions[key] = true
+		}
+		if e.Session != "" {
+			a.sessions[e.Session] = true
+		}
+		if e.HumanApproved && e.HumanID != "" && e.DecisionID != "" && !a.decisions[e.DecisionID] && (e.Source == "approval-service" || e.Source == "bap-egress-allow") {
+			a.humans[e.HumanID] = true
+			a.decisions[e.DecisionID] = true
+		}
 	}
 	var out []Proposal
-	for host, a := range byHost {
+	for destination, a := range byHost {
+		host, port := hostOf(destination), portOf(destination)
 		if capability.IsImmutableDenyHost(host) || isIP(host) {
 			continue // never proposed: not even as a suggestion
 		}
-		if capability.MatchEgress(current.EgressAllow, host, "") {
+		if capability.MatchEgress(current.EgressAllow, host, port) {
 			continue
 		}
-		if !a.human && (a.n < minAgentEvidence || len(a.sessions) < minAgentSessions) {
+		if len(a.humans) < 2 {
 			continue
 		}
 		risk := "review"
 		reason := fmt.Sprintf("agent was blocked %d time(s) across %d session(s) reaching %s", a.n, len(a.sessions), host)
-		if a.human {
+		if len(a.humans) >= 2 {
 			risk = "low"
-			reason = fmt.Sprintf("a human already approved %s; %d blocked attempt(s) observed", host, a.n)
+			reason = fmt.Sprintf("%d distinct humans approved %s; %d capped blocked contribution(s) observed", len(a.humans), host, a.n)
 		}
-		p := Proposal{Kind: "allow-egress", Value: host, Evidence: a.n, Sessions: len(a.sessions), Human: a.human, Risk: risk, Reason: reason}
+		p := Proposal{Kind: "allow-egress", Value: destination, Evidence: a.n, Sessions: len(a.sessions), Human: true, Humans: len(a.humans), Risk: risk, Reason: reason}
 		p.Replay = ReplayProposal(p, events, current)
 		out = append(out, p)
 	}
@@ -127,6 +141,9 @@ func Apply(p Proposal, current capability.Profile) (capability.Profile, error) {
 	}
 	if len(p.Replay.Unsafe) > 0 {
 		return current, fmt.Errorf("proposal failed replay safety: %s", strings.Join(p.Replay.Unsafe, ", "))
+	}
+	if strings.ContainsAny(p.Value, "*/\\?#@") || isIP(hostOf(p.Value)) {
+		return current, fmt.Errorf("learning can only add exact DNS destinations, never wildcards or raw addresses")
 	}
 	return current.AddEgress(p.Value)
 }

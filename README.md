@@ -286,8 +286,8 @@ BAP enforces defense-in-depth across developer workstations using an authoritati
 ┌────────────────────────────────────────────────────────────────────────┐
 │  LAYER 4: OS Execution & Boundary Control (Kernel / Hypervisor)        │
 │  - Windows Restricted Tokens (LUA) + Job Objects (Kill-on-Close)       │
-│  - Linux Landlock LSM (Filesystem Jail) + eBPF sys_enter_execve probe  │
-│  - macOS Endpoint Security (AUTH_EXEC, AUTH_OPEN) + Seatbelt profiles  │
+│  - Linux Landlock LSM (not implemented) (Filesystem Jail) + eBPF (simulation only) sys_enter_execve probe  │
+│  - macOS Endpoint Security (not implemented) (AUTH_EXEC, AUTH_OPEN) + Seatbelt (native execution unverified) profiles  │
 │  - Blocks hidden child subshells and theft of .env / id_rsa secrets    │
 └──────────────────────────────────┬─────────────────────────────────────┘
                                    │ (Perimeter Egress Pinning & ZSP Grant)
@@ -532,7 +532,7 @@ Epic 29 elevates BAP beyond cooperative hooks and MCP wrappers into operating-sy
 
 #### 1. Background Supervisor & Two-Tier Execution (`bapedge daemon`)
 Manages `bap-daemon`, a local background supervisor with dynamic loopback HTTP IPC (`127.0.0.1:<port>`), sub-2ms telemetry ingestion, automatic background spool flushing, and attached agent session tracking:
-- **Degraded Mode (Standard Non-Elevated User)**: Automatically detects when running without administrator / root rights (`TokenElevation` on Windows, `UID != 0` on Unix). Disarms kernel eBPF probes and driver packet filtering while maintaining robust user-mode containment (Windows Job Objects / Landlock, IPC hub, and background spooling). **Zero admin rights required.**
+- **Degraded Mode (Standard Non-Elevated User)**: Automatically detects when running without administrator / root rights (`TokenElevation` on Windows, `UID != 0` on Unix). Disarms kernel eBPF (simulation only) probes and driver packet filtering while maintaining robust user-mode containment (Windows Job Objects / Landlock (not implemented), IPC hub, and background spooling). **Zero admin rights required.**
 - **Optimal Mode (Elevated Administrator / Root)**: Activates full OS-level telemetry and kernel probes.
 
 ```powershell

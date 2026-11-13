@@ -1,0 +1,16 @@
+{
+ "session_id": "sess-report-parity-fixture",
+ "expected": {"total_actions":6,"allowed":2,"failed":1,"allowed_limited":1,"blocked":1,"unclassified":1,"raw_events":9},
+ "events": [
+  {"timestamp":"2026-11-13T12:00:00Z","full_command":"git status","decision":"allow","reporting_layer":"hook","grant_id":"g","zsp_concept":"ZSP_GRANT_MINTED"},
+  {"timestamp":"2026-11-13T12:00:01Z","full_command":"git status","decision":"allow","reporting_layer":"broker","grant_id":"g"},
+  {"timestamp":"2026-11-13T12:00:02Z","full_command":"go test","decision":"allow","reporting_layer":"broker","exit_code":1,"reason":"Command execution failed"},
+  {"timestamp":"2026-11-13T12:00:03Z","full_command":"bapedge zsp authorize --actions fs:read,fs:write","decision":"allow","reporting_layer":"hook"},
+  {"timestamp":"2026-11-13T12:00:04Z","full_command":"bapedge zsp authorize --actions fs:read,fs:write","decision":"ALLOWED-LIMITED","reporting_layer":"broker","narrowing_applied":true,"grant_id":"n"},
+  {"timestamp":"2026-11-13T12:00:05Z","full_command":"forbidden","decision":"allow","reporting_layer":"hook"},
+  {"timestamp":"2026-11-13T12:00:06Z","full_command":"forbidden","decision":"deny","reporting_layer":"broker","reason":"credential isolation"},
+  {"timestamp":"2026-11-13T12:00:07Z","full_command":"unknown","decision":"ERROR","reporting_layer":"hook"},
+  {"timestamp":"2026-11-13T12:01:00Z","full_command":"git status","decision":"allow","reporting_layer":"broker"},
+  {"timestamp":"2026-11-13T12:01:01Z","full_command":"USER_PROMPT_SUBMITTED","decision":"allow"}
+ ]
+}

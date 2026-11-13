@@ -56,6 +56,8 @@ if ($Debug) {
     Write-Host "`n[*] Deploying Debugging & Diagnostic Utilities (-Debug active)..." -ForegroundColor Cyan
     $debugFiles = @(
         "review_session.ps1",
+        "review_session_impl.ps1",
+        "session_calls.ps1",
         "review_session.bat",
         "review_session.sh",
         "watch_session.ps1",
@@ -73,6 +75,9 @@ if ($Debug) {
         $src = Join-Path (Join-Path $repoRoot "scripts") $df
         if (-not (Test-Path -LiteralPath $src)) {
             $src = Join-Path $repoRoot $df
+        }
+        if (-not (Test-Path -LiteralPath $src)) {
+            $src = Join-Path (Join-Path $repoRoot 'bap') $df
         }
         if (Test-Path -LiteralPath $src) {
             $dst = Join-Path $TargetDir $df

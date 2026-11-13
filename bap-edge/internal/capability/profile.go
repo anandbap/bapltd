@@ -72,6 +72,11 @@ func (p Profile) Validate() error {
 			return fmt.Errorf("%q is a credential location and can never be writable: %w", w, ErrImmutable)
 		}
 	}
+	for _, r := range p.ReadOnly {
+		if isFSRoot(r) || IsMasked(r) {
+			return fmt.Errorf("read-only mount %q exposes a root or credential location: %w", r, ErrImmutable)
+		}
+	}
 	for _, h := range p.EgressAllow {
 		if err := ValidateEgressPattern(h); err != nil {
 			return err
@@ -143,6 +148,9 @@ func LooksLikeSecretEnv(name string) bool {
 
 // IsMasked reports whether a path lies inside a masked credential location.
 func IsMasked(p string) bool {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		p = resolved
+	}
 	norm := "/" + strings.ToLower(strings.Trim(strings.ReplaceAll(filepath.ToSlash(p), "\\", "/"), "/"))
 	for _, m := range MaskedPaths {
 		leaf := strings.ToLower(strings.TrimPrefix(m, "~/"))
@@ -150,8 +158,12 @@ func IsMasked(p string) bool {
 			return true
 		}
 	}
-	base := norm[strings.LastIndex(norm, "/")+1:]
-	return base == ".env" || strings.HasPrefix(base, ".env.") || base == "id_rsa" || base == "id_ed25519" || strings.HasSuffix(base, ".pem")
+	for _, base := range strings.Split(norm, "/") {
+		if base == ".env" || strings.HasPrefix(base, ".env.") || base == "id_rsa" || base == "id_ed25519" || strings.HasSuffix(base, ".pem") {
+			return true
+		}
+	}
+	return false
 }
 
 func isFSRoot(p string) bool {

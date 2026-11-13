@@ -377,6 +377,8 @@ class TestBAPInstallMultiPlatform(unittest.TestCase):
         deployed_count = bap_install.install_debug_scripts(test_bin_debug)
         self.assertGreater(deployed_count, 0)
         self.assertTrue(os.path.isfile(os.path.join(test_bin_debug, "review_session.ps1")))
+        self.assertTrue(os.path.isfile(os.path.join(test_bin_debug, "review_session_impl.ps1")))
+        self.assertTrue(os.path.isfile(os.path.join(test_bin_debug, "session_calls.ps1")))
         self.assertTrue(os.path.isfile(os.path.join(test_bin_debug, "watch_session.ps1")))
         self.assertTrue(os.path.isfile(os.path.join(test_bin_debug, "check_stale_copies.ps1")))
         self.assertTrue(os.path.isfile(os.path.join(test_bin_debug, "check_stale_copies.bat")))

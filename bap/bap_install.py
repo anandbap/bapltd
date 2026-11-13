@@ -808,6 +808,8 @@ def install_debug_scripts(target_dir: str) -> int:
     debug_files = [
         # Session review & performance inspector
         "review_session.ps1",
+        "review_session_impl.ps1",
+        "session_calls.ps1",
         "review_session.bat",
         "review_session.sh",
         # Session liveness watcher
@@ -836,6 +838,7 @@ def install_debug_scripts(target_dir: str) -> int:
         dst = os.path.join(target_dir, name)
         candidates = [
             os.path.join(REPO_ROOT, "scripts", name),
+            os.path.join(REPO_ROOT, "bap", name),
             os.path.join(REPO_ROOT, name),
             os.path.join(pkg_dir, name),
             os.path.join(pkg_dir, "launchers", name),
@@ -1790,7 +1793,7 @@ def uninstall(target_dir: str, workspace_root: str = None, portable: bool = Fals
         "policy-state.json", "ltd-audit.jsonl", ".bap-pin.json",
         "copilot-wrap.bat", "copilot-wrap.ps1", "copilot-wrap.sh",
         "codex.cmd", "claude.cmd", "agy.cmd", "copilot.cmd", "bap-profile.ps1",
-        "review_session.ps1", "review_session.bat", "review_session.sh",
+        "review_session.ps1", "review_session_impl.ps1", "session_calls.ps1", "review_session.bat", "review_session.sh",
         "watch_session.ps1", "watch_session.bat", "watch_session.sh",
         "verify_sts_obo_exchange.py", "verify_sts.bat", "verify_sts.sh",
         "check_stale_copies.ps1", "check_stale_copies.bat", "check_stale_copies.sh",

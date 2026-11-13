@@ -14,12 +14,24 @@ import (
 
 // Event is one observed effect.
 type Event struct {
-	Time    time.Time `json:"time"`
-	Kind    string    `json:"kind"`    // egress | fs | exec
-	Target  string    `json:"target"`  // host:port, path, ...
-	Verdict string    `json:"verdict"` // allow | deny
-	Session string    `json:"session,omitempty"`
-	Source  string    `json:"source,omitempty"` // egress-proxy | sandbox | hook
+	ID           string    `json:"id,omitempty"`
+	Agent        string    `json:"agent,omitempty"`
+	Project      string    `json:"project,omitempty"`
+	Mode         string    `json:"mode,omitempty"`
+	Rule         string    `json:"rule,omitempty"`
+	Grant        string    `json:"grant,omitempty"`
+	Outcome      string    `json:"outcome,omitempty"`
+	HumanID      string    `json:"human_id,omitempty"`
+	DecisionID   string    `json:"decision_id,omitempty"`
+	PredictionID string    `json:"prediction_id,omitempty"`
+	Observed     bool      `json:"observed,omitempty"`
+	WouldDeny    bool      `json:"would_deny,omitempty"`
+	Time         time.Time `json:"time"`
+	Kind         string    `json:"kind"`    // egress | fs | exec
+	Target       string    `json:"target"`  // host:port, path, ...
+	Verdict      string    `json:"verdict"` // allow | deny
+	Session      string    `json:"session,omitempty"`
+	Source       string    `json:"source,omitempty"` // egress-proxy | sandbox | hook
 	// HumanApproved marks evidence grounded in a human decision (HITL approve / `egress allow`), the only
 	// evidence strong enough to justify widening the boundary on its own.
 	HumanApproved bool `json:"human_approved,omitempty"`
@@ -38,6 +50,9 @@ func (l *Log) Path() string { return l.path }
 func (l *Log) Append(e Event) error {
 	if e.Time.IsZero() {
 		e.Time = time.Now().UTC()
+	}
+	if e.Outcome == "" {
+		e.Outcome = e.Verdict
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()

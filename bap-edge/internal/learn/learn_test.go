@@ -8,7 +8,13 @@ import (
 )
 
 func deny(host, session string, human bool) Event {
-	return Event{Kind: "egress", Target: host + ":443", Verdict: "deny", Session: session, HumanApproved: human}
+	e := Event{Kind: "egress", Target: host + ":443", Verdict: "deny", Session: session, HumanApproved: human}
+	if human {
+		e.HumanID = session
+		e.DecisionID = "decision-" + host + session
+		e.Source = "approval-service"
+	}
+	return e
 }
 
 func TestLogRoundTripSkipsCorruptLines(t *testing.T) {
@@ -34,19 +40,19 @@ func TestMineNeedsBreadthForAgentOnlyEvidence(t *testing.T) {
 	if ps := Mine(evs, cur); len(ps) != 0 {
 		t.Errorf("single-session noise must not become a proposal: %+v", ps)
 	}
-	// Repeated across sessions it becomes a REVIEW proposal, not a low-risk one.
+	// Session breadth is still agent activity, never human approval evidence.
 	evs = append(evs, deny("registry.npmjs.org", "s1", false), deny("registry.npmjs.org", "s2", false), deny("registry.npmjs.org", "s3", false))
 	ps := Mine(evs, cur)
-	if len(ps) != 1 || ps[0].Value != "registry.npmjs.org" || ps[0].Risk != "review" || ps[0].Replay.WouldAllow != 3 {
+	if len(ps) != 0 {
 		t.Fatalf("got %+v", ps)
 	}
 }
 
 func TestHumanApprovedEvidenceIsStrongAndRanksFirst(t *testing.T) {
 	cur := capability.New(t.TempDir())
-	evs := []Event{deny("github.com", "s1", true), deny("a.com", "s1", false), deny("a.com", "s2", false), deny("a.com", "s3", false)}
+	evs := []Event{deny("github.com", "alice", true), deny("github.com", "bob", true), deny("a.com", "s1", false), deny("a.com", "s2", false), deny("a.com", "s3", false)}
 	ps := Mine(evs, cur)
-	if len(ps) != 2 || ps[0].Value != "github.com" || ps[0].Risk != "low" || !ps[0].Human {
+	if len(ps) != 1 || ps[0].Value != "github.com:443" || ps[0].Risk != "low" || !ps[0].Human || ps[0].Humans != 2 {
 		t.Fatalf("got %+v", ps)
 	}
 }
@@ -64,19 +70,25 @@ func TestImmutableAndRawIPTargetsAreNeverProposed(t *testing.T) {
 
 func TestAlreadyAllowedHostsAreNotReproposedAndApplyWorks(t *testing.T) {
 	cur, _ := capability.New(t.TempDir()).AddEgress("*.pypi.org")
-	evs := []Event{deny("files.pypi.org", "s1", true), deny("crates.io", "s1", true)}
+	evs := []Event{deny("files.pypi.org", "s1", true), deny("crates.io", "alice", true), deny("crates.io", "bob", true)}
 	ps := Mine(evs, cur)
-	if len(ps) != 1 || ps[0].Value != "crates.io" {
+	if len(ps) != 1 || ps[0].Value != "crates.io:443" {
 		t.Fatalf("got %+v", ps)
 	}
 	next, err := Apply(ps[0], cur)
 	if err != nil || !capability.MatchEgress(next.EgressAllow, "crates.io", "443") {
 		t.Fatalf("apply: %+v %v", next, err)
 	}
+	if capability.MatchEgress(next.EgressAllow, "crates.io", "8443") { t.Fatal("proposal widened an approved port") }
 	if _, err := Apply(Proposal{Kind: "allow-egress", Value: "169.254.169.254"}, cur); err == nil {
 		t.Error("apply must refuse an immutable target even if a proposal were forged")
 	}
 	if _, err := Apply(Proposal{Kind: "allow-egress", Value: "x.com", Replay: Replay{Unsafe: []string{"y"}}}, cur); err == nil {
 		t.Error("a proposal that failed replay safety must not apply")
+	}
+	for _, value := range []string{"*.example.com", "203.0.113.9", "example.com/path"} {
+		if _, err := Apply(Proposal{Kind: "allow-egress", Value: value}, cur); err == nil {
+			t.Errorf("forged broad proposal accepted: %s", value)
+		}
 	}
 }

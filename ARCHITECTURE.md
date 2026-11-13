@@ -626,7 +626,7 @@ graph TD
     subgraph Layer4 ["Layer 4: In-Process Broker, OS Kernel Boundary Sandbox & Merkle Audit"]
         K1["bapedge exec In-Process Cedar Engine (<1.5ms)"]
         K2["Windows: Job Objects & Restricted Tokens (LUA)"]
-        K3["Linux: Landlock LSM & eBPF Probes / macOS: Seatbelt"]
+        K3["Linux: Landlock LSM (not implemented) & eBPF (simulation only) Probes / macOS: Seatbelt (native execution unverified)"]
         K4["Merkle SHA-256 Ledger & Local Rollback"]
         K1 --- K2 --- K3 --- K4
     end
@@ -647,7 +647,7 @@ graph TD
 * **Layer 1 (Process & Lifecycle Hooks):** Fast user-space interception for optimal developer experience (<1ms evaluation). Enforces `dangerouslySkipPermissions: false`, prompt classification, and workspace invariants.
 * **Layer 2 (MCP Authority Boundary):** Governed tool exposure via `bapmcp.exe`, requiring Cedar policy authorization on all structured tool calls before dispatch.
 * **Layer 3 (Terminal Interceptor Shims):** Dynamic per-session PATH interception trapping unmediated subshell commands (`git`, `python`, `curl`, `powershell`) and re-routing to `bapedge exec`.
-* **Layer 4 (OS Kernel Boundary Sandbox & Local Broker):** Hard OS containment denying unauthorized process spawns, hidden subshells (`npm` lifecycle scripts), access to standing secrets (`.env`, `id_rsa`), backed by Windows Job Objects / Restricted Tokens, Landlock, and Seatbelt.
+* **Layer 4 (OS Kernel Boundary Sandbox & Local Broker):** Hard OS containment denying unauthorized process spawns, hidden subshells (`npm` lifecycle scripts), access to standing secrets (`.env`, `id_rsa`), backed by Windows Job Objects / Restricted Tokens, Landlock (not implemented), and Seatbelt (native execution unverified).
 * **Layer 5 (Authoritative Network Gateway PEP & Perimeter Backstop):** Centralized perimeter enforcement through `bapgateway` (Envoy `ext_authz`), requiring single-use cryptographic Zero-Trust Session Protocol (ZSP) grant burning and tenant egress pinning before any packet leaves the perimeter.
 
 ---
@@ -656,9 +656,9 @@ graph TD
 
 | Control Point | macOS (Sequoia / Sonoma) | Linux (Ubuntu 22.04+ / RHEL 9+) | Windows 11 Enterprise |
 | :--- | :--- | :--- | :--- |
-| **Execution & Filesystem** | Endpoint Security (`AUTH_EXEC`, `AUTH_OPEN`) + Seatbelt | Landlock LSM + eBPF (`sys_enter_execve`, `bprm_check_security`) | Restricted Tokens (LUA) + Windows Job Objects (Kill-on-Close) |
-| **Network Egress** | NetworkExtension Content Filter | eBPF cgroup socket filter | Windows Filtering Platform (WFP) |
-| **Agent Sandbox** | Seatbelt sandbox profile | Bubblewrap + seccomp-bpf | AppContainer Isolation |
+| **Execution & Filesystem** | Endpoint Security (not implemented) (`AUTH_EXEC`, `AUTH_OPEN`) + Seatbelt (native execution unverified) | Landlock LSM (not implemented) + eBPF (simulation only) (`sys_enter_execve`, `bprm_check_security`) | Restricted Tokens (LUA) + Windows Job Objects (Kill-on-Close) |
+| **Network Egress** | NetworkExtension (not implemented) Content Filter | eBPF (simulation only) cgroup socket filter | Windows Filtering Platform (WFP) (not implemented) |
+| **Agent Sandbox** | Seatbelt (native execution unverified) sandbox profile | Bubblewrap + seccomp-bpf | AppContainer Isolation |
 | **MDM Packaging** | Jamf Pro / Kandji (`.mobileconfig`) | Ansible / Puppet / Intune Linux | Microsoft Intune (OMA-URI / Custom CSP) |
 
 ---
@@ -666,7 +666,7 @@ graph TD
 ### 8.3. Enterprise MDM Deployment Profiles
 
 BAP automatically generates ready-to-deploy configuration profiles:
-* **Microsoft Intune (Windows):** Enforces `C:\ProgramData\Claude\managed-settings.json` with `dangerouslySkipPermissions: false`, activates Restricted Token launch wrappers, and configures WFP redirection.
+* **Microsoft Intune (Windows):** Enforces `C:\ProgramData\Claude\managed-settings.json` with `dangerouslySkipPermissions: false`, activates Restricted Token launch wrappers, and configures WFP (not implemented) redirection.
 * **Jamf Pro (macOS):** Deploys `/Library/Application Support/Claude/managed-settings.json` and pre-approves system extension and Full Disk Access permissions with zero developer popups.
 
 ---
@@ -1049,7 +1049,7 @@ flowchart TD
 | :--- | :--- | :--- | :--- | :--- |
 | **macOS (Jamf Pro / Kandji)** | `bapedge-darwin-arm64.pkg` | `com.bap.edge.mobileconfig` | LaunchDaemon (`/Library/LaunchDaemons/com.bap.edge.plist`) | Apple TCC Full Disk Access profile for `/usr/local/bin/bapedge` |
 | **Windows (Microsoft Intune)** | `bapedge-windows-amd64.msi` | `Intune-BAP-Policy.xml` (OMA-URI CSP) | Windows Service / Scheduled Task (`BAPEdgeDaemon`) | System-level execution & PATH registration in `C:\Program Files\BAP\` |
-| **Linux (Ansible / Chef)** | `bapedge-linux-amd64.deb` | `/etc/bap/bap-config.json` | systemd unit (`bapedge.service`) | POSIX root execution with Landlock LSM / eBPF |
+| **Linux (Ansible / Chef)** | `bapedge-linux-amd64.deb` | `/etc/bap/bap-config.json` | systemd unit (`bapedge.service`) | POSIX root execution with Landlock LSM (not implemented) / eBPF (simulation only) |
 
 ### 11.3. Cryptographic Code Signing & Supply Chain Integrity
 
@@ -1108,8 +1108,8 @@ While MicroVMs (Firecracker, Cloud-Hypervisor, QEMU/KVM) provide hypervisor-grad
 **The BAP Hybrid Sandboxing Architecture**:
 - **Tier 1 (Host-Native Zero-Dependency Sandbox - Default for CLI/IDE Work)**:
   - Windows: Windows Job Objects (kill-on-close, memory limits) + Restricted Security Tokens (dropping administrative SIDs and `SE_DEBUG_NAME`).
-  - Linux: Landlock LSM + unprivileged user/mount namespaces + seccomp-bpf.
-  - macOS: `sandbox-exec` Seatbelt confinement.
+  - Linux: Landlock LSM (not implemented) + unprivileged user/mount namespaces + seccomp-bpf.
+  - macOS: `sandbox-exec` Seatbelt (native execution unverified) confinement.
   - Provides sub-millisecond execution, zero hypervisor requirements, and 100% cross-OS mobility.
 - **Tier 2 (On-Demand Ephemeral MicroVM Cloud Runner)**:
   - High-risk, unvetted binaries, unapproved container builds, or untrusted network downloads are routed via BAP Gateway PEP to remote ephemeral Firecracker/E2B microVM workers.
@@ -1295,7 +1295,7 @@ To govern multi-turn agent workflows and temporal delegation lifetimes:
 
 ### 16.4. Kernel-Level Filesystem Virtualization & Restricted Tokens (BAP-819)
 - **Windows Write-Restricted SIDs**: `CreateRestrictedToken` applies `DISABLE_MAX_PRIVILEGE` and restricts write access strictly to `$WORKSPACE_ROOT` and `%TEMP%\bap_*`, returning native NT kernel `ACCESS_DENIED` on escaping file writes.
-- **Linux Landlock LSM**: Establishes Landlock rulesets restricting `LANDLOCK_ACCESS_FS_WRITE` to the approved workspace prior to process execution.
+- **Linux Landlock LSM (not implemented)**: Establishes Landlock (not implemented) rulesets restricting `LANDLOCK (not implemented)_ACCESS_FS_WRITE` to the approved workspace prior to process execution.
 
 ### 16.5. JWS Policy Streaming & In-Memory Hot-Reload (BAP-821)
 - **RFC 7515 JWS Policy Bundles**: Authoritative policy bundles (`policy.cedar`, `schema.json`) are signed with the Control Plane enterprise key.

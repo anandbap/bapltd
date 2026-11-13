@@ -35,6 +35,9 @@ Commands:
   why <cmd>     Explain Cedar policy decision for a command
   daemon <cmd>  Manage background supervisor daemon (start, stop, status)
   exec <cmd>    Execute a shell command under Zero-Trust Cedar invariants
+  run -- <agent> Launch an entire process through the native sandbox provider
+  learn report  Show project-scoped effect metrics and recommendations as JSON
+  learn profile Recommend an exact capability profile from observed sessions
   check <cmd>   Evaluate command against policy in decision-only mode
   pin <subcmd>  Manage cryptographic content pins (scan, list, verify)
   version       Display current BAP version
@@ -392,7 +395,7 @@ def main():
         if not os.path.isfile(bapedge):
             print(f"[!] bapedge binary not found. Please run 'bap install' first.")
             sys.exit(1)
-        sub_cmd = [bapedge, "exec"] + rest
+        sub_cmd = [bapedge, cmd] + rest
         sys.exit(subprocess.call(sub_cmd))
     elif cmd == "daemon":
         bapedge = find_bapedge()

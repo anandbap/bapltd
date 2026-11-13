@@ -22,6 +22,7 @@ import (
 	"bap-edge/internal/authz"
 	"bap-edge/internal/config"
 	"bap-edge/internal/fim"
+	"bap-edge/internal/learn"
 	"bap-edge/internal/pinning"
 	"bap-edge/internal/sandbox"
 	"bap-edge/internal/snapshot"
@@ -833,6 +834,11 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 		entry.Reason = "Blocked by security policy"
 	}
 	_ = audit.Log(&entry, ec.auditLogPath)
+	if effect, ok := learn.NormalizeDecision(learn.Decision{ID: entry.EventID, Agent: ec.source, Project: authz.GetWorkspaceRoot(), Session: ec.sessionID, Source: entry.ReportingLayer, Action: entry.CanonicalAction, Resource: entry.CanonicalResource, Verdict: entry.Decision, Grant: entry.GrantID, Time: entry.Timestamp}); ok && ec.auditLogPath != "off" && ec.auditLogPath != "none" {
+		if err := effectLog().Append(effect); err != nil {
+			fmt.Fprintf(os.Stderr, "[bapedge] Effect evidence could not be persisted: %v\n", err)
+		}
+	}
 
 	daemonNotified := false
 	if ds, err := ReadDaemonState(); err == nil && ds != nil {
