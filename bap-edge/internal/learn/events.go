@@ -65,8 +65,10 @@ func (l *Log) Append(e Event) error {
 	}
 	defer f.Close()
 	b, _ := json.Marshal(e)
-	_, err = f.Write(append(b, '\n'))
-	return err
+	if _, err = f.Write(append(b, '\n')); err != nil {
+		return err
+	}
+	return f.Sync()
 }
 
 // ReadAll returns every readable event; a missing file is an empty history and corrupt lines are skipped.

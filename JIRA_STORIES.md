@@ -13,10 +13,10 @@
 - `git add` and `git commit` through the hook, once the parser bugs below were fixed.
 
 **Not what the old docs say**
-- **Kernel containment is real on Windows only** (restricted token, low integrity, Job Object). Linux has namespaces and no Landlock/seccomp. **macOS sandbox is a no-op** (`sandbox_darwin.go` returns an empty function). eBPF, Landlock LSM, WFP and Endpoint Security are not implemented; the control-plane "eBPF/Landlock" is a Go simulation.
+- The legacy `bap exec` path has Windows restricted-token/Job Object containment, limited Linux namespaces and a no-op macOS sandbox. The newer `bap run` path uses Windows AppContainer with real boundary tests; Linux bubblewrap and macOS native profiles are wired but native execution remains unverified here. eBPF, Landlock LSM, WFP and Endpoint Security are not implemented as host enforcement; the control-plane "eBPF/Landlock" is a Go simulation.
 - **Command parsing is the security boundary today, and it cannot be finished.** This month alone: heredoc bodies read as paths, a lone `/` read as the filesystem root, quoted `&&` splitting commands, relative `.bap/` paths bypassing protection, `*rm *` matching "platform", env-variable sniffing locking out developers, re-quoting hiding PowerShell control blocks, `git ls-files` needing a grant, and `git commit` failing because the broker hides the git identity.
 - Only Claude Code was exercised live. Antigravity, Codex and Copilot adapters are unverified.
-- Developer experience is not yet usable: the hook stops ordinary work, approvals need a terminal, telemetry does not reach the cockpit (thousands of unflushed events), and CI broke on the last push.
+- The original review found ordinary-work refusals, terminal-only approvals, unflushed telemetry and broken CI. Subsequent fixes and the V3 control-plane inbox are recorded below; edge-local approvals still require terminal action, end-to-end telemetry latency is unproven, and native macOS acceptance is pending.
 
 ## 2. Thesis
 
@@ -43,7 +43,7 @@ Enterprises do not need a shell parser. They need to answer four questions for e
 - The command decomposer, text-pattern Cedar rules and the planned "command packs" (old BAP-922/923) are **not extended**. They stay as a fast, advisory layer.
 - Raw shell is allowed inside the sandbox. Where precision matters, use typed tools (MCP) so policy sees structured arguments.
 - Approvals are triggered by the denied effect and name the real path or host.
-- Windows needs an explicit decision (BAP-1031); the pragmatic MVP runs the agent in a container or WSL2 with the workspace mounted.
+- The user requires native execution on all three OSes, without administrator rights, Docker or WSL. The Windows choice is AppContainer (BAP-1031); native Linux/macOS acceptance and a fallback for Linux hosts that disable unprivileged namespaces remain open.
 
 **Prior art to compare against (verify before building; from general knowledge, not checked in this review).** Claude Code and Codex ship their own sandbox modes (Seatbelt on macOS, bubblewrap/Landlock on Linux; Windows support lags). BAP should *configure and govern* those where they exist and supply its own runner where they do not, instead of competing with them.
 
@@ -133,12 +133,12 @@ Implementation update (2026-11-13): the prompt-spool compare-and-swap guard alre
 
 **BAP-1010 (M) Capability model spec.** Define a grant as a capability set: filesystem `[{path, mode}]`, network `[{host, port}]`, process rules, environment allow-list, TTL. Map today's tiers to capability requests. Define the denial event schema (`kind`, `target`, `mode`, `session`). *Accept:* a reviewed spec plus a Go package that converts an existing TaskGrant into a capability set, with tests.
 
-**BAP-1011 (L) `bap run <agent>` with pluggable sandbox providers.**
-- *Container/WSL2 provider (do first):* mounts only the workspace and trusted folders, passes no host environment or profile, routes network through the proxy. Works on all three OSes.
-- *Linux native:* Landlock + seccomp + network namespace (rootless).
-- *macOS native:* Seatbelt profile.
-- *Windows native:* existing restricted token and Job Object, labelled "limited".
-*Accept:* the escape suite (BAP-1030) is blocked in the container provider with the hook disabled.
+**BAP-1011 (L) `bap run <agent>` with pluggable native sandbox providers.**
+- *User constraint:* all three OSes, without admin rights, Docker or WSL. Optional container rendering is not the default or the acceptance provider.
+- *Linux:* bubblewrap with a private network namespace and unix-socket egress relay. A native fallback is still needed where unprivileged user namespaces are disabled; do not claim that fallback exists.
+- *macOS:* native `sandbox-exec` profile and the unix-socket/loopback relay; real execution must be verified on a macOS runner.
+- *Windows:* AppContainer with no network capabilities and a unix-socket relay. The older `exec` restricted-token/Job Object path remains separately labelled limited.
+*Accept:* the escape suite (BAP-1030) is blocked by each native provider with the hook disabled; missing providers fail closed. Launch the entire agent process, not only a selected child command.
 
 **BAP-1012 (L) Egress proxy as the only network path.** Promote `bapgateway`: default deny, allow-list from the grant, HTTPS host-level (CONNECT) decisions, request log, presets for package registries and git hosts. *Accept:* `curl https://example.com` from inside the sandbox fails with no route except via the proxy; an allow-listed host works; every request is logged.
 
@@ -188,7 +188,7 @@ Implementation update (2026-11-13): the prompt-spool compare-and-swap guard alre
 
 ### Cross-cutting
 
-**BAP-1030 (M) Escape red-team harness.** Real escape attempts run inside the sandbox in CI (Linux container provider first): read outside the workspace, raw network, encoded and chained commands, symlink and hardlink tricks, git hooks, environment harvesting, process spawning. *Accept:* 100% blocked by the sandbox with the hook disabled. Any new escape found becomes a permanent case.
+**BAP-1030 (M) Escape red-team harness.** Real escape attempts run inside each native provider in CI: read outside the workspace, raw network, encoded and chained commands, symlink and hardlink tricks, git hooks, environment harvesting, process spawning. *Accept:* 100% of prohibited effects are blocked by the sandbox with the hook disabled, without admin rights, Docker or WSL. A skipped or rendering-only test is not acceptance. Any new escape found becomes a permanent case.
 
 ## 7. Plan
 
@@ -204,21 +204,28 @@ Legend: **Verified** = unit-tested here. **Spec only** = generated config is tes
 
 | Story | Status | What exists | What is NOT proven |
 |---|---|---|---|
+| BAP-1001 release gate | Expanded | CI now includes gateway and Copilot Go modules on all three OSes, alongside edge/control-plane/native hook, Python and Node suites; capability-claim lint added | Installed `doctor --e2e` and remote required-check configuration remain open |
+| BAP-1003 truthful claims | Implemented and tested | Machine-readable capability matrix; README, architecture and pilot/demo claims qualified; CI lint and seeded false-claim tests | Matrix changes still require an actual native verification result |
+| BAP-1004 telemetry | Partial, regression verified | Serialized in-process spool flushes; acknowledged-removal errors surfaced; 20-action plus concurrent-append regression | Cockpit backlog warning, separate-process coordination and full 10-second edge-to-cockpit proof |
+| BAP-1005 calls report parity | Implemented and tested on Windows | Three entry points share one packaged implementation; the same fixture is tested by PowerShell/Python and the Go cockpit summarizer; limited/failed/unknown outcomes handled; installers include shared files | Native PowerShell execution on other OSes is not verified here |
 | BAP-1006 developer bootstrap | Implemented, automated checks pass; developer confirmation pending | Broker/plugin/hook grant checks and grant guidance skip a valid override, with marker discovery parity and production/release/expiry tests | The developer's newly installed broker/hook copies still require manual confirmation |
 | BAP-1007 V3 admin operations | Implemented and tested | Native V3 policy studio and HITL inbox; authenticated decisions and historical simulation; deployment validation, version precondition, signed freeze versions; error/demo/logout tests | Individual SSO reviewer identity and edge-local ZSP request synchronization |
 | BAP-1022 approval inbox | Partial (BAP-1007) | Control-plane request review and audited approve/deny | Signed edge transport, local TaskGrant minting/resume, restart persistence, notification and pending-request expiry |
-| BAP-1010 capability model | Partial, verified | `internal/capability`: Profile (workspace rw, read-only, trusted writes, egress allowlist, env allowlist), validation, masked credential paths, immutable deny hosts (metadata/link-local), JSON store in the BAP state dir (not agent-writable workspace) | Conversion of an existing TaskGrant into a Profile |
+| BAP-1010 capability model | Conversion and spec implemented; runner binding pending | `internal/capability`: Profile plus effect-level Set; typed TaskGrant conversion preserves read/write/delete modes, exact DNS host/port, TTL and granted scope; burned/expired/exhausted grants and unsupported command grants fail closed; `docs/CAPABILITY_MODEL.md` | Signature/session verification remains the caller's responsibility. Set is not yet the active runner authority; a read-only Set is deliberately not widened into the current workspace-rw Profile |
 | BAP-1011 `bap run` (+ BAP-1031 Windows decision: **AppContainer**) | **Windows: verified end to end, no admin, no Docker, no WSL.** Linux/macOS: spec only | Constraint set by the user: all three OSes, no admin, no Docker. Windows runs the command in an AppContainer (`internal/appcontainer`): measured on Windows 11 as a standard user, a contained process can write the workspace, cannot read a file outside it, cannot open a TCP connection to the host (even loopback), and reaches the BAP proxy only through a unix socket via the in-sandbox relay; a request to a non-allowlisted host gets the 403 with the next step and is recorded as an effect event (`TestBapRunAppContainerEndToEnd`, `TestAppContainerBoundaryWithoutAdmin`). macOS = Seatbelt (`sandbox-exec`, ships with the OS, unprivileged); Linux = bubblewrap. Docker is no longer a default or a dependency. Refuses to run unsandboxed if a provider is missing | macOS Seatbelt and Linux bubblewrap were never executed here. Linux where unprivileged user namespaces are disabled (e.g. hardened Ubuntu) needs a Landlock fallback (not written). AppContainer grants persist as ACLs on the workspace (removable). Tools installed under the user profile need `read_only` entries. Running `bap run` for the whole agent session (not just one command) and making `bap run claude` the entry point is the next step |
 | BAP-1012 egress proxy | Verified (proxy + unix-socket relay path), wired for bwrap only: `bap run` serves the proxy on a 0600 unix socket, binds only that socket into a network-less bubblewrap sandbox, and runs the command under `bap __shim` (loopback:3128 relay + HTTP(S)_PROXY). The relay-to-proxy policy path is tested end to end; bwrap itself was not run (no Linux here). Docker is still unwired | `internal/egress`: allowlist by destination (HTTP + CONNECT), cloud-metadata always blocked, private/loopback addresses refused at dial time (SSRF/DNS rebinding), live allowlist swap, every decision logged | It is only the sole path if the sandbox network is closed (needs the BAP-1011 plumbing). `bap egress serve` runs it standalone; no TLS inspection by design |
 | BAP-1013 denial-driven approval | Partial | Denials carry the exact next step (`bap egress allow HOST`); a live `Approve` hook exists and records human evidence | Wiring `Approve` to the HITL request queue |
-| BAP-1014 credentials by construction | Spec only | Masked paths + env allowlist (secret-looking names refused) in the rendered specs | Broker-side token injection |
-| BAP-1040 effect events | Partial, verified | `internal/learn` JSONL effect log, egress events emitted by the proxy | Events from the hook/ledger/HITL; fs and exec events from sandboxes |
-| BAP-1042 miner | Partial, verified | Mines blocked egress into ranked proposals | Friction miners over the existing ledger (quoted `&&`, lone `/`, etc.) |
+| BAP-1014 credentials by construction | Partial, tested | Native launcher environment is explicitly allowlisted; direct credential read-only mounts and existing credential symlink aliases are refused; macOS rendered relay rules no longer allow arbitrary loopback ports | Native provider acceptance, comprehensive masking of credentials within writable workspaces and broker-side token injection |
+| BAP-1040 effect events | Partial, verified | Project/agent/session/mode/grant/decision/correlation schema; proxy observations and broker canonical-decision projections; no prompt field; optional tenant-keyed target HMAC; durable JSONL append and 20-event round trip; project-scoped `bap learn report` | Independent hook/HITL producers, native fs/exec observations, control-plane effect ingestion and cockpit integration |
+| BAP-1041 complain mode | Package mechanism tested; not yet active rollout | Exact rule/project evaluator, immutable-deny protection, positive observed soak requirement and promotion refusal on friction | Persisted operator configuration, boundary wiring and cockpit promotion |
+| BAP-1042 miner and prediction auditor | Partial, verified | Exact host/port proposals; correlated prediction audit requires a completed boundary trace and never treats missing telemetry as a false positive; five classifier-failure-shaped fixtures tested | Actual completed native trace producers and real recorded false-positive replay |
+| BAP-1043 profile generator | Recommendation implemented and tested | `bap learn profile`: three observed sessions, exact read-only external paths and DNS host/ports, human review required, no automatic writes or generalization; forbidden targets excluded | Native filesystem observations and fresh real-agent acceptance under the generated profile |
 | BAP-1044 proposals + replay | Partial, verified | Replay of a proposal over history; refuses proposals that open immutable targets | Signed-policy diffs, auto-generated regression cases |
 | BAP-1045 inbox | Partial | `bap learn` lists, `bap learn apply HOST` applies (human-only: agents are blocked by the hook gate) | Cockpit UI, canary, rollback |
-| BAP-1046 safety rails | Partial, verified | Immutable deny tier; agent-only evidence needs 3 attempts across 2 sessions and is always "review"; raw IPs and metadata never proposed; forged proposals cannot apply | Per-agent caps, audited decisions |
+| BAP-1046 safety rails | Strengthened, tested; remote identity incomplete | Agent-only activity never produces a proposal, including 500 retries; two distinct attributed human decisions required; repeated decision IDs ignored; identified agent contributions capped; exact destination ports retained; forged wildcard/raw-IP proposals rejected; operator approval intent persisted before profile mutation | Individual SSO and signed remote evidence verification; the miner expects protected local producer records, not untrusted source labels |
+| BAP-1049 loop KPIs | CLI subset implemented | Project-scoped recorded event/session/denial/approval/would-deny/mismatch counts in `bap learn report` | Developer-hour denominators, proposal-vs-code fix rate, resolution latency and cockpit display |
 
-Not started: BAP-1001..1005, 1015, 1020..1021, 1023..1024, 1030, 1031, 1041, 1043, 1047..1049. BAP-1022 has the partial delivery described above.
+Still requiring implementation or full acceptance: BAP-1001/1002/1004, 1010..1015, 1020..1024, 1030, 1040..1049 as qualified above. BAP-1031's Windows AppContainer choice and proof already exist; it is not an unstarted decision. BAP-1048 remains optional. Do not close the full roadmap from package-level or rendering tests. See `docs/CAPABILITY_MODEL.md` and `docs/LEARNING_LOOP.md` for command behavior and remaining integrations.
 
 **Risks.** Windows containment is the hardest piece (BAP-1031 first). Live filesystem approvals are limited by what each provider can remount. The agent vendors' own sandboxes may overlap; decide per agent whether BAP configures or replaces them.
 

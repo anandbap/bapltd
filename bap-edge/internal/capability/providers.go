@@ -29,7 +29,9 @@ func EnvPassthrough(p Profile) []string { return envPassthrough(p) }
 func EnvValues(p Profile) []string {
 	values := []string{}
 	for _, name := range envPassthrough(p) {
-		if value, ok := os.LookupEnv(name); ok { values = append(values, name+"="+value) }
+		if value, ok := os.LookupEnv(name); ok {
+			values = append(values, name+"="+value)
+		}
 	}
 	return values
 }

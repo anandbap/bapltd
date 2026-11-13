@@ -79,7 +79,9 @@ func TestAlreadyAllowedHostsAreNotReproposedAndApplyWorks(t *testing.T) {
 	if err != nil || !capability.MatchEgress(next.EgressAllow, "crates.io", "443") {
 		t.Fatalf("apply: %+v %v", next, err)
 	}
-	if capability.MatchEgress(next.EgressAllow, "crates.io", "8443") { t.Fatal("proposal widened an approved port") }
+	if capability.MatchEgress(next.EgressAllow, "crates.io", "8443") {
+		t.Fatal("proposal widened an approved port")
+	}
 	if _, err := Apply(Proposal{Kind: "allow-egress", Value: "169.254.169.254"}, cur); err == nil {
 		t.Error("apply must refuse an immutable target even if a proposal were forged")
 	}
@@ -87,7 +89,7 @@ func TestAlreadyAllowedHostsAreNotReproposedAndApplyWorks(t *testing.T) {
 		t.Error("a proposal that failed replay safety must not apply")
 	}
 	for _, value := range []string{"*.example.com", "203.0.113.9", "example.com/path"} {
-		if _, err := Apply(Proposal{Kind: "allow-egress", Value: value}, cur); err == nil {
+		if _, err := Apply(Proposal{Kind: "allow-egress", Value: value, Human: true, Humans: 2}, cur); err == nil {
 			t.Errorf("forged broad proposal accepted: %s", value)
 		}
 	}

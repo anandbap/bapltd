@@ -39,7 +39,7 @@ func Mine(events []Event, current capability.Profile) []Proposal {
 		sessions      map[string]bool
 		humans        map[string]bool
 		contributions map[string]bool
-		decisions map[string]bool
+		decisions     map[string]bool
 	}
 	byHost := map[string]*agg{}
 	for _, e := range events {
@@ -58,10 +58,10 @@ func Mine(events []Event, current capability.Profile) []Proposal {
 			a = &agg{sessions: map[string]bool{}, humans: map[string]bool{}, contributions: map[string]bool{}, decisions: map[string]bool{}}
 			byHost[destination] = a
 		}
-		// Retrying or inventing sessions is never human evidence. One agent/session
+		// Retrying or inventing sessions is never human evidence. One agent
 		// contributes at most one denial to the ranking, regardless of retry count.
-		key := e.Agent + "\x00" + e.Session
-		if e.Agent != "" { key = e.Agent }
+		// Unattributed events share one bucket rather than gaining session breadth.
+		key := e.Agent
 		if e.Verdict == "deny" && !a.contributions[key] {
 			a.n++
 			a.contributions[key] = true
@@ -69,7 +69,7 @@ func Mine(events []Event, current capability.Profile) []Proposal {
 		if e.Session != "" {
 			a.sessions[e.Session] = true
 		}
-		if e.HumanApproved && e.HumanID != "" && e.DecisionID != "" && !a.decisions[e.DecisionID] && (e.Source == "approval-service" || e.Source == "bap-egress-allow") {
+		if attributedHumanApproval(e) && !a.decisions[e.DecisionID] {
 			a.humans[e.HumanID] = true
 			a.decisions[e.DecisionID] = true
 		}
@@ -138,6 +138,9 @@ func ReplayProposal(p Proposal, events []Event, current capability.Profile) Repl
 func Apply(p Proposal, current capability.Profile) (capability.Profile, error) {
 	if p.Kind != "allow-egress" {
 		return current, fmt.Errorf("unsupported proposal kind %q", p.Kind)
+	}
+	if !p.Human || p.Humans < 2 {
+		return current, fmt.Errorf("proposal requires distinct attributed human evidence")
 	}
 	if len(p.Replay.Unsafe) > 0 {
 		return current, fmt.Errorf("proposal failed replay safety: %s", strings.Join(p.Replay.Unsafe, ", "))

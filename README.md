@@ -19,7 +19,10 @@ BAP is an open reference architecture and implementation for governing AI agents
 - [🌟 Strategic Vision Document (`VISION.md`)](VISION.md) — The executive problem statement, the AI agent crisis, and strategic North Star.
 - [🏛️ Architecture & Technical Design (`ARCHITECTURE.md`)](ARCHITECTURE.md) — Complete 4-Plane technical architecture, state machines, and threat mitigations.
 - [📁 `.bapstate` Architecture & Troubleshooting (`docs/BAPSTATE_AND_TROUBLESHOOTING.md`)](docs/BAPSTATE_AND_TROUBLESHOOTING.md) — Unified state directory, command operations, and troubleshooting playbooks.
-- [📋 Jira Backlog & Stories (`JIRA_STORIES.md`)](JIRA_STORIES.md) — Complete epics, user stories, and delivery boards (BAP-100 through BAP-922).
+- [📋 Jira Backlog & Stories (`JIRA_STORIES.md`)](JIRA_STORIES.md) — Current milestones, acceptance criteria and implementation status.
+- [Capability model and native runner](docs/CAPABILITY_MODEL.md) — Grant conversion, provider behavior and verification limits.
+- [Effect observations and learning](docs/LEARNING_LOOP.md) — Operator commands, evidence requirements and unfinished integrations.
+- [Capability claim matrix](docs/capability-matrix.json) — Source of truth checked by `python scripts/check_capability_claims.py`.
 - [🔒 Security Assurance Program: BAP-700 Series (`docs/adr/ADR-004-IAM-Federation-And-Fallback.md`)](docs/adr/ADR-004-IAM-Federation-And-Fallback.md) — Enterprise Trust, Containment, Evidence, and Risk-Based Acceleration (BAP-701 to BAP-806).
 - [🧪 10-Point Adversarial Test Matrix (`tests/test_bounded_authority_matrix.py`)](tests/test_bounded_authority_matrix.py) — 100% automated regression matrix.
 - [🎯 Adversarial Red-Team Test Suite (`tests/test_bap714_containment_redteam.py`)](tests/test_bap714_containment_redteam.py) — Automated escape validation across 5 attack vectors.

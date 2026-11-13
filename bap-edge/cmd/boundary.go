@@ -32,6 +32,14 @@ func profilePath(workspace string) string {
 
 func effectLog() *learn.Log { return learn.NewLog(filepath.Join(state.Dir(), "effects.jsonl")) }
 
+func recordBoundaryApproval(kind, target, project, source string) error {
+	human, err := user.Current()
+	if err != nil || human.Uid == "" {
+		return fmt.Errorf("cannot resolve operator identity")
+	}
+	return effectLog().Append(learn.Event{Kind: kind, Mode: "approve", Target: target, Verdict: "approved", Project: project, Source: source, HumanApproved: true, HumanID: human.Uid, DecisionID: fmt.Sprintf("operator-%d", time.Now().UnixNano())})
+}
+
 func currentWorkspace() string {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -74,15 +82,11 @@ func RunEgress(args []string) error {
 		if err != nil {
 			return fmt.Errorf("refused: %w", err)
 		}
+		if err := recordBoundaryApproval("egress", args[1], p.Workspace, "bap-egress-allow"); err != nil {
+			return fmt.Errorf("record approval: %w", err)
+		}
 		if err := next.Save(path); err != nil {
 			return err
-		}
-		human, err := user.Current()
-		if err != nil {
-			return fmt.Errorf("resolve human identity: %w", err)
-		}
-		if err := effectLog().Append(learn.Event{Kind: "egress", Mode: "connect", Target: args[1], Verdict: "allow", Project: p.Workspace, Source: "bap-egress-allow", HumanApproved: true, HumanID: human.Uid, DecisionID: fmt.Sprintf("operator-%d", time.Now().UnixNano())}); err != nil {
-			return fmt.Errorf("record approval: %w", err)
 		}
 		fmt.Printf("Allowed egress to %s for %s\n", args[1], p.Workspace)
 		return nil
@@ -143,6 +147,9 @@ func RunLearn(args []string) error {
 				next, err := learn.Apply(pr, p)
 				if err != nil {
 					return fmt.Errorf("refused: %w", err)
+				}
+				if err := recordBoundaryApproval("policy", pr.Value, p.Workspace, "bap-learn"); err != nil {
+					return fmt.Errorf("record proposal decision: %w", err)
 				}
 				if err := next.Save(path); err != nil {
 					return err

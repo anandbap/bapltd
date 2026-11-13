@@ -148,9 +148,14 @@ func LooksLikeSecretEnv(name string) bool {
 
 // IsMasked reports whether a path lies inside a masked credential location.
 func IsMasked(p string) bool {
-	if resolved, err := filepath.EvalSymlinks(p); err == nil {
-		p = resolved
+	if isMaskedSpelling(p) {
+		return true
 	}
+	resolved, err := filepath.EvalSymlinks(p)
+	return err == nil && isMaskedSpelling(resolved)
+}
+
+func isMaskedSpelling(p string) bool {
 	norm := "/" + strings.ToLower(strings.Trim(strings.ReplaceAll(filepath.ToSlash(p), "\\", "/"), "/"))
 	for _, m := range MaskedPaths {
 		leaf := strings.ToLower(strings.TrimPrefix(m, "~/"))

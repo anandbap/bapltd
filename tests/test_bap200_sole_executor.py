@@ -33,6 +33,8 @@ def run_interceptor(payload: dict, env=None) -> dict:
     """Invokes the Claude Code PreToolUse interceptor binary with a JSON payload."""
     test_env = os.environ.copy()
     test_env["BAP_WORKSPACE_ROOT"] = WORKSPACE_ROOT
+    if payload.get("session_id"):
+        test_env["BAP_SESSION_ID"] = payload["session_id"]
     test_env.setdefault("BAP_ENFORCEMENT_MODE", "enforce")
     test_env.setdefault("BAP_NON_INTERACTIVE", "1")
     if env:
@@ -597,12 +599,14 @@ class TestBAP200SoleExecutor(unittest.TestCase):
             "hook_event_name": "SessionStart",
             "session_id": test_sess_id,
         }
-        resp_start = run_interceptor(start_payload)
+        resp_start = run_interceptor(start_payload, env={"BAP_NO_BACKGROUND_WATCHER": "1"})
         self.assertEqual(resp_start.get("status"), "ok")
 
         # Session marker should have been generated
-        session_marker = os.path.join(WORKSPACE_ROOT, ".bap", "session.json")
+        session_marker = os.path.join(self.test_state_dir, "session.json")
         self.assertTrue(os.path.exists(session_marker), "SessionStart must generate local session marker")
+        with open(session_marker, encoding="utf-8") as marker:
+            self.assertEqual(json.load(marker)["session_id"], test_sess_id)
 
         # SessionEnd hook fires on Claude shutdown
         end_payload = {

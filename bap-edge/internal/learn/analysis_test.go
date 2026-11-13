@@ -50,7 +50,7 @@ func TestSingleHumanRetriesAreCapped(t *testing.T) {
 	}
 	events = append(events, deny("registry.example", "bob", true))
 	got := Mine(events, cur)
-	if len(got) != 1 || got[0].Evidence != 2 || got[0].Humans != 2 {
+	if len(got) != 1 || got[0].Evidence != 1 || got[0].Humans != 2 {
 		t.Fatalf("evidence not capped: %+v", got)
 	}
 }
@@ -91,7 +91,7 @@ func TestComplainPromotionNeedsCleanObservedSoak(t *testing.T) {
 	if _, err := rule.Promote(nil, now, time.Hour); err == nil {
 		t.Fatal("empty soak promoted")
 	}
-	events := []Event{{Time: now.Add(-time.Minute), Rule: "r", Project: "p", Verdict: "allow"}}
+	events := []Event{{Time: now.Add(-time.Minute), Rule: "r", Project: "p", Kind: "egress", Verdict: "allow", Observed: true, Source: "egress-proxy"}}
 	promoted, err := rule.Promote(events, now, time.Hour)
 	if err != nil || promoted.Mode != "enforce" {
 		t.Fatalf("clean soak: %+v %v", promoted, err)

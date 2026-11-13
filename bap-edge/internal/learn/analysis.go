@@ -103,9 +103,11 @@ func (s RuleScope) Promote(events []Event, now time.Time, soak time.Duration) (R
 		if e.Rule != s.Rule || e.Project != s.Project || e.Time.Before(s.Since) || e.Time.After(now) {
 			continue
 		}
-		count++
 		if e.WouldDeny || e.Verdict == "deny" || e.Outcome == "halted" {
 			return s, fmt.Errorf("promotion refused: friction observed during soak")
+		}
+		if e.Observed && (e.Source == "sandbox" || e.Source == "egress-proxy") && e.Kind != "trace-complete" {
+			count++
 		}
 	}
 	if count == 0 {
@@ -139,7 +141,7 @@ func Summarize(events []Event) Metrics {
 		if e.WouldDeny {
 			m.WouldDeny++
 		}
-		if e.HumanApproved && e.HumanID != "" && e.DecisionID != "" && !decisions[e.DecisionID] {
+		if attributedHumanApproval(e) && !decisions[e.DecisionID] {
 			decisions[e.DecisionID] = true
 			m.Approvals++
 		}
@@ -147,4 +149,11 @@ func Summarize(events []Event) Metrics {
 	m.Sessions = len(sessions)
 	m.PredictionMismatches = len(PredictionMismatches(events))
 	return m
+}
+
+func attributedHumanApproval(e Event) bool {
+	if !e.HumanApproved || e.HumanID == "" || e.DecisionID == "" {
+		return false
+	}
+	return (e.Kind == "egress" && (e.Source == "approval-service" || e.Source == "bap-egress-allow")) || (e.Kind == "policy" && e.Source == "bap-learn")
 }
