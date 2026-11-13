@@ -102,8 +102,9 @@ jobs:
           python scripts/build_wheel.py --universal
 
       - name: Run Full Python Test Suite (100+ Tests)
+        timeout-minutes: 30
         run: |
-          python -m unittest discover tests
+          python -X faulthandler -m unittest discover -v tests
 
       - name: Upload Windows AMD64 Executables & Distributions
         uses: actions/upload-artifact@v4
