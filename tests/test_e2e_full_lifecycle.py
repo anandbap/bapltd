@@ -348,8 +348,9 @@ when {
             f"{CP_URL}/api/v1/policies/cedar/simulate",
             method="POST",
             data={"draft_policy": valid_policy, "scenarios": scenarios},
+            headers={"X-BAP-Admin-Token": TEST_ADMIN_TOKEN},
         )
-        self.assertEqual(status, 200)
+        self.assertEqual(status, 200, sim_body)
         self.assertEqual(sim_body.get("draft_allowed"), 1)
         self.assertEqual(sim_body.get("draft_denied"), 1)
 
