@@ -249,6 +249,23 @@ func TestPolicySettingsInputValidation(t *testing.T) {
 	}
 }
 
+// An override for a machine this control plane has never enrolled must be refused, not silently
+// stored: it would apply to nothing now and to whoever is later bound to that id.
+func TestOverrideForUnenrolledAssetIsRefused(t *testing.T) {
+	s, pol := newSettingsServer(t, t.TempDir())
+	body := map[string]any{"asset_id": "asset-never-enrolled", "zsp_read_exempt": false}
+	if w := settingsCall(s, http.MethodPost, "/api/v1/admin/policy/settings", body, true); w.Code != http.StatusNotFound {
+		t.Fatalf("unenrolled asset must be 404, got %d %s", w.Code, w.Body.String())
+	}
+	if snap := pol.Settings(); len(snap.AssetOverrides) != 0 {
+		t.Fatalf("a refused override must not be stored: %+v", snap.AssetOverrides)
+	}
+	// The fleet default never needs an enrolled machine.
+	if w := settingsCall(s, http.MethodPost, "/api/v1/admin/policy/settings", map[string]any{"asset_id": "*", "zsp_read_exempt": true}, true); w.Code != http.StatusOK {
+		t.Fatalf("fleet default must be settable, got %d", w.Code)
+	}
+}
+
 func TestSettingsEnrollmentAndVersionSurviveRestart(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := newSettingsServer(t, dir)

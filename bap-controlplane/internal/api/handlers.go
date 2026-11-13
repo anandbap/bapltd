@@ -2590,6 +2590,12 @@ func (s *Server) handlePolicySettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "asset_id must be '*' or 1-128 chars of [A-Za-z0-9._:-]")
 			return
 		}
+		if asset != policy.FleetAssetID && !s.policyStore.AssetKnown(asset) {
+			writeError(w, http.StatusNotFound, "asset_id is not an enrolled machine on this control plane. "+
+				"GET this endpoint and use an id from enrolled_assets; a machine appears there once it has enrolled and synced "+
+				"(after a control plane redeploy that is within seconds of its next sync).")
+			return
+		}
 		if _, err := s.policyStore.SetReadExempt(asset, *req.ZSPReadExempt, "admin"); err != nil {
 			writeError(w, http.StatusInternalServerError, "Failed to persist policy settings: "+err.Error())
 			return

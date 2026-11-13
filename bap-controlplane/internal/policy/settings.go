@@ -70,6 +70,20 @@ func (s *Store) BindEnrolledAsset(instanceID, reportedAssetID string) string {
 	return asset
 }
 
+// AssetKnown reports whether an enrolled workstation is bound to assetID. Overrides may only be
+// set for machines this control plane actually knows, so a typo or a stale id cannot silently
+// create a rule that no machine will ever receive (or that a future machine could inherit).
+func (s *Store) AssetKnown(assetID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, a := range s.enrolledAssets {
+		if a == assetID {
+			return true
+		}
+	}
+	return false
+}
+
 // EnrolledAsset returns the asset bound to an enrolled workstation instance.
 func (s *Store) EnrolledAsset(instanceID string) (string, bool) {
 	s.mu.RLock()
