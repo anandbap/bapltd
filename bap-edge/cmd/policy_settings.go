@@ -30,20 +30,31 @@ func init() {
 
 // pinPolicyEnrollment stores the trust anchor from an authenticated OTC/OIDC enrollment.
 // Re-enrolling (e.g. after a control-plane key loss) is the one authenticated way to replace a pin.
-func pinPolicyEnrollment(keyID, publicKey, assetID, serverURL string) {
+//
+// token is the credential this enrollment just received. It is used explicitly for the first sync
+// because credentials may have been saved somewhere other than the default path (`--config`).
+func pinPolicyEnrollment(keyID, publicKey, assetID, serverURL, token string) {
 	if keyID == "" || publicKey == "" {
 		return // older control plane: falls back to first-contact pinning at the first sync
 	}
 	store := policystore.New(policystore.DefaultPolicyDir())
+	prev, hadPrev := store.LoadPin()
 	if err := store.PinEnrollment(keyID, publicKey, assetID, serverURL); err != nil {
 		fmt.Fprintf(os.Stderr, "[BAP] warning: could not pin the control plane policy key: %v\n", err)
 		return
 	}
-	// Pinning makes this a managed machine, which only trusts signed rules. Fetch them right
-	// away so an enrolled machine is never left holding unsigned rules from before enrollment
-	// (that state fails closed until some later sync happens to succeed).
+	// Pinning makes this a managed machine, which only trusts signed rules, so the signed rules must
+	// arrive in the same step. If they cannot (control plane unreachable, wrong asset, rejected
+	// bundle) the pin is undone: a machine pinned without signed rules fails closed on everything,
+	// which is a worse outcome than staying as it was and retrying at the next sync.
+	store.SetAuthToken(token)
 	if _, _, err := store.SyncWithServer(serverURL, "", 8*time.Second); err != nil {
-		fmt.Fprintf(os.Stderr, "[BAP] warning: enrolled, but the first signed policy sync failed: %v\n", err)
+		if hadPrev {
+			_ = store.RestorePin(prev)
+		} else {
+			store.RemovePin()
+		}
+		fmt.Fprintf(os.Stderr, "[BAP] warning: enrolled, but the first signed policy sync failed (%v); policy pinning will be retried at the next sync\n", err)
 	}
 }
 

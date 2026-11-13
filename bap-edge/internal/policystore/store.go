@@ -91,6 +91,20 @@ type Store struct {
 	directory  string
 	signingKey []byte
 	assetID    string
+	authToken  string
+}
+
+// SetAuthToken makes this store authenticate its syncs with an explicit enrollment credential
+// instead of looking one up at the default location. Enrollment uses it: `register --config <path>`
+// saves credentials somewhere else, and an unauthenticated sync would be issued a bundle for no
+// asset, which a freshly pinned machine rightly rejects.
+func (s *Store) SetAuthToken(tok string) { s.authToken = tok }
+
+func (s *Store) credential() string {
+	if s.authToken != "" {
+		return s.authToken
+	}
+	return currentCredential()
 }
 
 // SetAssetID overrides the machine identity the store binds signed policy to (tests).
@@ -178,7 +192,7 @@ func (s *Store) Accept(bundle Bundle) error {
 		}
 		// Machines pinned by first contact before enrollment binding existed adopt their asset on the
 		// first authenticated sync, but only for a bundle that verifies under the key they pinned.
-		if pin.AssetID == "" && s.assetID == "" && bundle.AssetID != "" && currentCredential() != "" &&
+		if pin.AssetID == "" && s.assetID == "" && bundle.AssetID != "" && s.credential() != "" &&
 			verifyBundleAgainstPin(pin, bundle.AssetID, bundle, computed) == nil {
 			pin.AssetID = bundle.AssetID
 			_ = s.writePin(pin)
@@ -452,7 +466,7 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("X-BAP-Agent-Version", version.Version)
-	if tok := currentCredential(); tok != "" {
+	if tok := s.credential(); tok != "" {
 		// The control plane derives this machine's asset from the enrolled credential, never from the body.
 		httpReq.Header.Set("Authorization", "Bearer "+tok)
 	}
@@ -535,6 +549,20 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 	}
 
 	if syncResp.Directive == "UPDATE_REQUIRED" && syncResp.Bundle != nil {
+		// An enrolled machine that syncs WITHOUT its credential (credentials saved elsewhere, a
+		// plain `bapedge sync` from another shell) is answered as an anonymous caller: the fleet
+		// bundle, issued for no asset. That is not tampering, it is simply not this machine's bundle.
+		// Keep the verified cached rules, exactly as when the control plane is unreachable.
+		if s.Managed() && s.credential() == "" && syncResp.Bundle.AssetID != s.AssetID() {
+			cedarPath, schemaPath, cur, err := s.Current()
+			if err != nil {
+				return Bundle{}, true, err
+			}
+			cedarData, _ := os.ReadFile(cedarPath)
+			schemaData, _ := os.ReadFile(schemaPath)
+			fmt.Fprintln(os.Stderr, "[BAP] policy sync was anonymous (no enrollment credential found); keeping the verified cached rules. Run `bap login` or pass the credentials this machine enrolled with.")
+			return Bundle{Version: cur.Version, Digest: cur.Digest, PolicyCedar: string(cedarData), SchemaJSON: string(schemaData), KillSwitch: cur.KillSwitch}, true, nil
+		}
 		if err := s.Accept(*syncResp.Bundle); err != nil {
 			undoFreshPin()
 			return Bundle{}, false, err

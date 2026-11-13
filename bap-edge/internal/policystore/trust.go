@@ -142,6 +142,12 @@ func (s *Store) PinEnrollment(keyID, publicKeyB64, assetID, serverURL string) er
 	return s.writePin(TrustAnchor{KeyID: keyID, PublicKey: publicKeyB64, AssetID: assetID, ServerURL: normalizeServerURL(serverURL), PinnedAt: time.Now().UTC().Format(time.RFC3339)})
 }
 
+// RestorePin puts a previously loaded trust anchor back (used to undo a failed enrollment).
+func (s *Store) RestorePin(ta TrustAnchor) error { return s.writePin(ta) }
+
+// RemovePin deletes the trust anchor, returning the machine to the unmanaged state it was in before.
+func (s *Store) RemovePin() { _ = os.Remove(s.pinPath()) }
+
 func (s *Store) writePin(ta TrustAnchor) error {
 	data, _ := json.MarshalIndent(ta, "", "  ")
 	tmp := s.pinPath() + ".tmp"

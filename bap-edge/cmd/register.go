@@ -253,8 +253,9 @@ func RunRegister(args []string) error {
 
 	// 3. Pin the signing key + asset id handed out by this authenticated enrollment, then cache
 	// the initial signed policy bundle. (No key step exists for the user.)
-	pinPolicyEnrollment(regResp.PolicyKeyID, regResp.PolicyPublicKey, regResp.PolicyAssetID, *serverURL)
+	pinPolicyEnrollment(regResp.PolicyKeyID, regResp.PolicyPublicKey, regResp.PolicyAssetID, *serverURL, regResp.SessionToken)
 	policyStore := policystore.New("")
+	policyStore.SetAuthToken(regResp.SessionToken)
 	bundle, _, syncErr := policyStore.SyncWithServer(*serverURL, regResp.AgentID, 3*time.Second)
 	policySynced := syncErr == nil
 

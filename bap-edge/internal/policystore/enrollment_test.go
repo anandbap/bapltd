@@ -239,6 +239,86 @@ func TestReEnrollingWithTheSameControlPlaneAfterKeyLossIsAllowed(t *testing.T) {
 	}
 }
 
+// Reproduces the CI failure: `bapedge register --config <custom path>` saves credentials somewhere
+// other than the default location, so the enrollment's first sync went out WITHOUT a credential, was
+// issued a bundle for no asset, and the freshly pinned machine rejected it - leaving it managed but
+// holding unsigned rules, which fails closed on every later command.
+func TestEnrollmentSyncUsesTheTokenItWasGivenNotADefaultLocation(t *testing.T) {
+	cp := newFakeCP(t)
+	cp.enrolledAsset = "asset-enrolled"
+	CredentialProvider = func() string { return "" } // credentials are NOT at the default location
+	t.Cleanup(func() { CredentialProvider = nil })
+
+	s := New(t.TempDir())
+	if err := s.PinEnrollment(cp.keyID, pubB64(cp), "asset-enrolled", cp.srv.URL); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.SyncWithServer(cp.srv.URL, "", 2*time.Second); err == nil {
+		t.Fatal("without any credential the control plane issues a bundle for no asset; it must be rejected")
+	}
+
+	s.SetAuthToken(cp.token)
+	if _, _, err := s.SyncWithServer(cp.srv.URL, "", 2*time.Second); err != nil {
+		t.Fatalf("with the enrollment's own token the first sync must succeed: %v", err)
+	}
+	if _, _, st, err := s.Current(); err != nil || st.AssetID != "asset-enrolled" {
+		t.Fatalf("signed state for the enrolled asset must be in place: %+v err=%v", st, err)
+	}
+}
+
+// The other half of the CI failure: a LATER plain `bapedge sync` (credentials saved elsewhere, so
+// anonymous) is answered with the fleet bundle for no asset. That is not tampering; the machine must
+// keep its verified rules and report success, not fail closed.
+func TestAnonymousSyncOnAnEnrolledMachineKeepsVerifiedRulesInsteadOfFailingClosed(t *testing.T) {
+	cp := newFakeCP(t)
+	cp.enrolledAsset = "asset-enrolled"
+	CredentialProvider = func() string { return "" }
+	t.Cleanup(func() { CredentialProvider = nil })
+
+	s := New(t.TempDir())
+	_ = s.PinEnrollment(cp.keyID, pubB64(cp), "asset-enrolled", cp.srv.URL)
+	s.SetAuthToken(cp.token)
+	if _, _, err := s.SyncWithServer(cp.srv.URL, "", 2*time.Second); err != nil {
+		t.Fatalf("enrolling sync: %v", err)
+	}
+
+	anon := New(s.Directory()) // same machine, a later shell with no credential
+	cp.version++
+	b, fallback, err := anon.SyncWithServer(cp.srv.URL, "", 2*time.Second)
+	if err != nil || !fallback {
+		t.Fatalf("an anonymous sync must keep the verified cached rules: fallback=%v err=%v", fallback, err)
+	}
+	if b.Version != 1 {
+		t.Fatalf("cached rules must be unchanged, got version %d", b.Version)
+	}
+	if _, _, _, err := anon.Current(); err != nil {
+		t.Fatalf("the machine must still verify afterwards: %v", err)
+	}
+}
+
+func TestPinCanBeRestoredOrRemovedToUndoAFailedEnrollment(t *testing.T) {
+	cp := newFakeCP(t)
+	s := New(t.TempDir())
+	if err := s.PinEnrollment(cp.keyID, pubB64(cp), "asset-A", cp.srv.URL); err != nil {
+		t.Fatal(err)
+	}
+	prev, _ := s.LoadPin()
+	other := newFakeCP(t)
+	if err := s.PinEnrollment(other.keyID, pubB64(other), "asset-A", cp.srv.URL); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RestorePin(prev); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.LoadPin(); got.KeyID != cp.keyID {
+		t.Fatalf("restore must bring back the previous pin, got %s", got.KeyID)
+	}
+	s.RemovePin()
+	if s.Managed() {
+		t.Fatal("remove must return the machine to unmanaged")
+	}
+}
+
 // If the first bundle a machine pins for cannot be accepted, the pin is undone: a machine must not be
 // left managed (and failing closed) with an old unsigned cache and no signed rules.
 func TestFirstContactPinIsUndoneWhenTheFirstBundleIsRejected(t *testing.T) {
