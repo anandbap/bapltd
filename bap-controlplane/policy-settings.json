@@ -1,8 +1,0 @@
-{
-  "version": 8,
-  "fleet_zsp_read_exempt": true,
-  "asset_overrides": null,
-  "enrolled_assets": {
-    "inst-logout-01": "inst:inst-logout-01"
-  }
-}

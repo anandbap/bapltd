@@ -102,6 +102,14 @@ bap-gateway/bapgateway.exe
 bap-controlplane.db*
 *.pid
 policy-state.json
+# Control plane runtime state written next to its database (settings overrides, enrolled asset
+# bindings, key-rotation chain, retired signing keys). Never commit: it is per-deployment state.
+policy-settings.json
+policy-settings-*.tmp
+policy-rotation.json
+policy-signing.key*
+policy-signed.json
+policy-trust.json
 manual-acceptance-results.json
 .bapstate/
 .bap/

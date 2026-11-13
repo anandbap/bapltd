@@ -4,8 +4,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -233,6 +236,30 @@ func TestReEnrollingWithTheSameControlPlaneAfterKeyLossIsAllowed(t *testing.T) {
 	fresh := newFakeCP(t)
 	if err := s.PinEnrollment(fresh.keyID, pubB64(fresh), "asset-A", real.srv.URL); err != nil {
 		t.Fatalf("same control plane, new key (key loss) must re-enroll without extra steps: %v", err)
+	}
+}
+
+// If the first bundle a machine pins for cannot be accepted, the pin is undone: a machine must not be
+// left managed (and failing closed) with an old unsigned cache and no signed rules.
+func TestFirstContactPinIsUndoneWhenTheFirstBundleIsRejected(t *testing.T) {
+	cp := newFakeCP(t)
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/policy/pubkey") {
+			_ = json.NewEncoder(w).Encode(map[string]string{"alg": "ed25519", "key_id": cp.keyID, "public_key": pubB64(cp)})
+			return
+		}
+		b := cp.bundleFor("") // properly signed...
+		b.Digest = strings.Repeat("0", 64) // ...but its digest does not match its content
+		_ = json.NewEncoder(w).Encode(map[string]any{"directive": "UPDATE_REQUIRED", "bundle": b})
+	}))
+	t.Cleanup(bad.Close)
+
+	s := New(t.TempDir())
+	if _, _, err := s.SyncWithServer(bad.URL, "", 2*time.Second); err == nil {
+		t.Fatal("a bundle with a wrong digest must be rejected")
+	}
+	if s.Managed() {
+		t.Fatal("a rejected first bundle must not leave the machine pinned (managed) without signed rules")
 	}
 }
 

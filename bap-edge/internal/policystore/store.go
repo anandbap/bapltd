@@ -492,9 +492,19 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 
 	// First contact with a signing control plane: pin its public key (trust on first use over
 	// the already-trusted control plane channel). Afterwards only that key is honored.
+	pinnedNow := false
 	if syncResp.Bundle != nil && syncResp.Bundle.SigAlg == "ed25519" && !s.Managed() {
 		if pubErr := s.pinFromServer(client, serverURL, syncResp.Bundle.KeyID, syncResp.Bundle.AssetID); pubErr != nil {
 			return Bundle{}, false, fmt.Errorf("could not pin control plane policy key: %w", pubErr)
+		}
+		pinnedNow = true
+	}
+	// A machine must never be left "managed" (pinned) without signed rules to go with the pin: if the
+	// first bundle we pinned for cannot be accepted, undo the pin so the machine stays as it was
+	// instead of failing closed on its previous, unsigned cache.
+	undoFreshPin := func() {
+		if pinnedNow {
+			_ = os.Remove(s.pinPath())
 		}
 	}
 
@@ -511,6 +521,7 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 				if err := s.Accept(kb); err == nil {
 					return Bundle{}, false, ErrKillSwitchActive
 				}
+				undoFreshPin()
 			}
 		}
 		if !s.Managed() {
@@ -525,6 +536,7 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 
 	if syncResp.Directive == "UPDATE_REQUIRED" && syncResp.Bundle != nil {
 		if err := s.Accept(*syncResp.Bundle); err != nil {
+			undoFreshPin()
 			return Bundle{}, false, err
 		}
 		s.adoptServerURL(serverURL)

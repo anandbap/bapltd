@@ -134,6 +134,10 @@ jobs:
         timeout-minutes: 10
         env:
           BAP_REQUIRE_WHEEL_TESTS: '1'
+          # `unittest discover` does not load tests/conftest.py (only pytest does), so give the whole
+          # suite its own state directory here. Without it the tests share one policy cache / pinned
+          # key / audit log, and one test's enrollment fails the next test's bapedge closed.
+          BAP_STATE_DIR: ${{ runner.temp }}\bap-ci-state
         run: |
           python -X faulthandler -m unittest discover -v tests
 

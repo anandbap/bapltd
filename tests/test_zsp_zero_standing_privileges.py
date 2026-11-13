@@ -50,6 +50,10 @@ class TestZSPZeroStandingPrivileges(unittest.TestCase):
     def _base_env(self):
         env = os.environ.copy()
         env["BAP_ZSP"] = "enforce"
+        # This suite proves task-grant behaviour (mint, consume once, burn, replay refused) using
+        # read-only commands such as `git status`. Plain local reads are exempt from grants by default,
+        # so strict mode keeps the grant lifecycle under test.
+        env["BAP_ZSP_STRICT_READS"] = "1"
         env["BAP_ZSP_DIR"] = self.zsp_dir
         env["BAP_STATE_DIR"] = self.state_dir
         env["BAP_ENFORCEMENT_MODE"] = "enforce"

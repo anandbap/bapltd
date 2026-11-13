@@ -63,8 +63,10 @@ func TestIsLocalReadOnlyCommand(t *testing.T) {
 		{"git branch can create or delete", "git branch -D feature", false},
 		{"read of a dotenv", "cat .env", false},
 		{"read of an ssh key", "cat ~/.ssh/id_rsa", false},
-		{"read outside the workspace", "cat ../../../Windows/win.ini", false},
-		{"listing the filesystem root", "dir C:\\", false},
+		{"read outside the workspace", "cat ../../../../../../outside-workspace.txt", false},
+		// "C:\" is only a root on Windows; on Linux/macOS it is an ordinary relative name. Use this
+		// platform's real root so the case means the same thing everywhere.
+		{"listing the filesystem root", "ls " + filepath.VolumeName(ws) + string(os.PathSeparator), false},
 		{"mixed read and write", "git status && touch x", false},
 		{"network", "curl https://example.invalid", false},
 		{"empty", "", false},
