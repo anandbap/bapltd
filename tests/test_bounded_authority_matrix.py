@@ -376,6 +376,8 @@ class TestBoundedAuthorityMatrix(unittest.TestCase):
             stderr=subprocess.PIPE,
             text=True,
             cwd=WORKSPACE_ROOT,
+            # Hermetic: a developer's live dev-override must not relax this denial check.
+            env={**os.environ, "BAP_ENVIRONMENT": "production", "BAP_DEV_OVERRIDE": "", "BAP_DEV_MODE": ""},
         )
         payload = {
             "hook_event_name": "PreToolUse",

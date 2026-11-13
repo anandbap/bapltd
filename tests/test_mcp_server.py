@@ -162,7 +162,7 @@ def test_mcp_bap_status(mcp_session):
 
     assert "agent" in status_data
     assert "governance" in status_data
-    assert status_data["governance"]["model"] == "Dual-PEP (Client Edge + Network Perimeter)"
+    assert status_data["governance"]["model"] .startswith("5-Layer Defense-in-Depth")
     assert "Cedar" in status_data["governance"]["engine"]
 
 

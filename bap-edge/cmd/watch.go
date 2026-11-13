@@ -20,6 +20,7 @@ import (
 	"bap-edge/internal/audit"
 	"bap-edge/internal/config"
 	"bap-edge/internal/fim"
+	"bap-edge/internal/policystore"
 	"bap-edge/internal/state"
 	"bap-edge/pkg/version"
 )
@@ -677,6 +678,17 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string, instanceIDOp
 	if instanceID == "" {
 		instanceID = resolveDefaultInstanceID("")
 	}
+
+	// Signed-policy gate and freshness: the watcher does not start on tampered rules (it waits
+	// for the control plane to re-issue them), then keeps this machine in step with admin
+	// changes every few seconds. If the control plane is unreachable the last signed rules stay.
+	if _, gateErr := config.WaitForTrustedPolicy(serverURL, 5*time.Second, 0, os.Stderr); gateErr != nil {
+		fmt.Fprintf(os.Stderr, "[BAP ZERO-TRUST] watcher not started: %v\n", gateErr)
+		return
+	}
+	syncCtx, stopSync := context.WithCancel(context.Background())
+	defer stopSync()
+	go policystore.New(policystore.DefaultPolicyDir()).RunSyncLoop(syncCtx, serverURL, policystore.DefaultSyncInterval)
 
 	initialPrompt := strings.TrimSpace(os.Getenv("BAP_USER_PROMPT"))
 

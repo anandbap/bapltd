@@ -37,6 +37,19 @@ type Bundle struct {
 	StrictToolEnforcement bool   `json:"strict_tool_enforcement"`
 	EnforcementTier       string `json:"enforcement_tier,omitempty"`
 	UpdatedAt             string `json:"updated_at"`
+
+	// Control-plane-managed enforcement setting (signed): plain read-only inspection inside
+	// the workspace needs no task grant.
+	ZSPReadExempt bool `json:"zsp_read_exempt"`
+
+	// Asset-scoped Ed25519 signature over all of the above (see trust.go).
+	AssetID          string `json:"asset_id,omitempty"`
+	SigAlg           string `json:"sig_alg,omitempty"`
+	KeyID            string `json:"key_id,omitempty"`
+	SignatureEd25519 string `json:"signature_ed25519,omitempty"`
+
+	// KeyChain: rotation links (each signed by the previous key) leading to KeyID.
+	KeyChain []rotationLink `json:"key_chain,omitempty"`
 }
 
 type PolicyState struct {
@@ -47,6 +60,23 @@ type PolicyState struct {
 	StrictToolEnforcement bool      `json:"strict_tool_enforcement"`
 	EnforcementTier       string    `json:"enforcement_tier,omitempty"`
 	LastSync              time.Time `json:"last_sync"`
+
+	UpdatedAt        string `json:"updated_at,omitempty"`
+	ZSPReadExempt    bool   `json:"zsp_read_exempt"`
+	AssetID          string `json:"asset_id,omitempty"`
+	SigAlg           string `json:"sig_alg,omitempty"`
+	KeyID            string `json:"key_id,omitempty"`
+	SignatureEd25519 string `json:"signature_ed25519,omitempty"`
+}
+
+// asBundle rebuilds the signed fields of a cached state for verification.
+func (st PolicyState) asBundle() Bundle {
+	return Bundle{
+		Version: st.Version, Digest: st.Digest, KillSwitch: st.KillSwitch,
+		StrictToolEnforcement: st.StrictToolEnforcement, EnforcementTier: st.EnforcementTier,
+		UpdatedAt: st.UpdatedAt, ZSPReadExempt: st.ZSPReadExempt,
+		AssetID: st.AssetID, SigAlg: st.SigAlg, KeyID: st.KeyID, SignatureEd25519: st.SignatureEd25519,
+	}
 }
 
 type SyncResponse struct {
@@ -60,6 +90,31 @@ type SyncResponse struct {
 type Store struct {
 	directory  string
 	signingKey []byte
+	assetID    string
+}
+
+// SetAssetID overrides the machine identity the store binds signed policy to (tests).
+func (s *Store) SetAssetID(id string) { s.assetID = id }
+
+// AssetID is the machine identity this store's signed rules must be issued for: the asset bound
+// by the authenticated enrollment (recorded in the pin), else the hardware-derived id.
+func (s *Store) AssetID() string {
+	if s.assetID != "" {
+		return s.assetID
+	}
+	if pin, ok := s.LoadPin(); ok {
+		return pin.AssetID // "" for machines pinned by first contact: they receive fleet bundles
+	}
+	return ResolveAssetID()
+}
+
+// requestAssetID is what this machine reports to the control plane (used at enrollment and for
+// legacy binding); the control plane derives the authoritative asset from the credential.
+func (s *Store) requestAssetID() string {
+	if s.assetID != "" {
+		return s.assetID
+	}
+	return ResolveAssetID()
 }
 
 // DefaultPolicyDir returns the cached policy directory in .bapstate/policy.
@@ -114,8 +169,30 @@ func (s *Store) Accept(bundle Bundle) error {
 		return fmt.Errorf("%w: policy bundle cryptographic signature verification failed (forged or unauthenticated bundle)", ErrDigestMismatch)
 	}
 
+	// Managed machine (a control-plane key is pinned): only a bundle signed by that key,
+	// for THIS asset, covering every enforcement flag, may change the rules.
+	if pin, managed := s.LoadPin(); managed {
+		// Follow an authorised key rotation (chain signed by the key we already trust).
+		if np, moved := s.followRotation(pin, bundle); moved {
+			pin = np
+		}
+		// Machines pinned by first contact before enrollment binding existed adopt their asset on the
+		// first authenticated sync, but only for a bundle that verifies under the key they pinned.
+		if pin.AssetID == "" && s.assetID == "" && bundle.AssetID != "" && currentCredential() != "" &&
+			verifyBundleAgainstPin(pin, bundle.AssetID, bundle, computed) == nil {
+			pin.AssetID = bundle.AssetID
+			_ = s.writePin(pin)
+		}
+		if err := verifyBundleAgainstPin(pin, s.AssetID(), bundle, computed); err != nil {
+			return err
+		}
+	}
+
+	// Rollback protection only counts a cached version that itself verifies. A tampered state
+	// (for example one whose version was bumped to block re-issue) must not be able to veto
+	// the control plane's signed correction.
 	current, err := s.LoadState()
-	if err == nil && current.Version > 0 {
+	if err == nil && current.Version > 0 && s.cachedStateVerifies(current) {
 		if bundle.Version < current.Version {
 			return ErrRollbackRejected
 		}
@@ -143,6 +220,12 @@ func (s *Store) Accept(bundle Bundle) error {
 		StrictToolEnforcement: bundle.StrictToolEnforcement,
 		EnforcementTier:       bundle.EnforcementTier,
 		LastSync:              time.Now().UTC(),
+		UpdatedAt:             bundle.UpdatedAt,
+		ZSPReadExempt:         bundle.ZSPReadExempt,
+		AssetID:               bundle.AssetID,
+		SigAlg:                bundle.SigAlg,
+		KeyID:                 bundle.KeyID,
+		SignatureEd25519:      bundle.SignatureEd25519,
 	}
 
 	stateData, err := json.MarshalIndent(state, "", "  ")
@@ -171,7 +254,18 @@ func (s *Store) LoadState() (PolicyState, error) {
 // If the cache directory is uninitialized, it falls back to checking local search paths.
 func (s *Store) Current() (string, string, PolicyState, error) {
 	state, err := s.LoadState()
+	pin, managed := s.LoadPin()
+	if managed && err != nil {
+		// A machine that has been enrolled must always have signed state. Deleting it must not
+		// downgrade the machine to an unsigned local policy file.
+		return "", "", PolicyState{}, fmt.Errorf("%w: signed policy state is missing or unreadable (%v)", ErrPolicyTampered, err)
+	}
 	if err == nil {
+		if managed {
+			if vErr := verifyBundleAgainstPin(pin, s.AssetID(), state.asBundle(), state.Digest); vErr != nil {
+				return "", "", state, vErr
+			}
+		}
 		if state.KillSwitch {
 			return "", "", state, ErrKillSwitchActive
 		}
@@ -201,6 +295,11 @@ func (s *Store) Current() (string, string, PolicyState, error) {
 
 			return cedarPath, schemaPath, state, nil
 		}
+	}
+
+	if managed {
+		// Signed state exists but the cached policy file is gone: fail closed, never fall back.
+		return "", "", state, fmt.Errorf("%w: cached policy.cedar is missing", ErrPolicyTampered)
 	}
 
 	// Fallback: search canonical release and candidate paths
@@ -267,12 +366,24 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 
 	client := httptransport.New(timeout)
 	state, _ := s.LoadState()
+	// (Managed only: on an unmanaged store Current() adopts local fallback policy files as a side
+	// effect, which must not happen as part of building a sync request.)
+	if s.Managed() {
+		if _, _, _, cerr := s.Current(); errors.Is(cerr, ErrPolicyTampered) {
+			// Our cache does not verify: claim to hold nothing so the control plane re-issues a
+			// freshly signed bundle instead of answering CURRENT.
+			state = PolicyState{}
+		}
+	}
 
 	reqPayload := map[string]any{
-		"agent_id":          agentID,
-		"installed_version": state.Version,
-		"installed_digest":  state.Digest,
-		"agent_version":     version.Version,
+		"asset_id":           s.requestAssetID(),
+		"agent_id":           agentID,
+		"installed_version":  state.Version,
+		"installed_digest":   state.Digest,
+		"installed_key_id":   state.KeyID,
+		"installed_asset_id": state.AssetID,
+		"agent_version":      version.Version,
 	}
 	body, _ := json.Marshal(reqPayload)
 
@@ -283,6 +394,10 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("X-BAP-Agent-Version", version.Version)
+	if tok := currentCredential(); tok != "" {
+		// The control plane derives this machine's asset from the enrolled credential, never from the body.
+		httpReq.Header.Set("Authorization", "Bearer "+tok)
+	}
 
 	resp, err := client.Do(httpReq)
 	if err != nil {
@@ -317,13 +432,36 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 		fmt.Fprintf(os.Stderr, "\n==================================================\n  [UPGRADE REQUIRED] %s\n==================================================\n\n", syncResp.Message)
 	}
 
+	// First contact with a signing control plane: pin its public key (trust on first use over
+	// the already-trusted control plane channel). Afterwards only that key is honored.
+	if syncResp.Bundle != nil && syncResp.Bundle.SigAlg == "ed25519" && !s.Managed() {
+		if pubErr := s.pinFromServer(client, serverURL, syncResp.Bundle.KeyID, syncResp.Bundle.AssetID); pubErr != nil {
+			return Bundle{}, false, fmt.Errorf("could not pin control plane policy key: %w", pubErr)
+		}
+	}
+
 	if syncResp.Directive == "KILL_SWITCH" || (syncResp.Bundle != nil && syncResp.Bundle.KillSwitch) {
-		// Persist kill-switch so it remains locked even offline
-		_ = s.Accept(Bundle{
-			Version:    state.Version,
-			Digest:     state.Digest,
-			KillSwitch: true,
-		})
+		// Persist kill-switch so it remains locked even offline. On a managed machine the
+		// signed bundle is stored as-is; an unsigned/forged kill directive still blocks this
+		// run but is not persisted.
+		if syncResp.Bundle != nil && syncResp.Bundle.PolicyCedar != "" {
+			kb := *syncResp.Bundle
+			if !s.Managed() {
+				kb.KillSwitch = true // legacy/unsigned: the directive itself is the instruction
+			}
+			if kb.KillSwitch {
+				if err := s.Accept(kb); err == nil {
+					return Bundle{}, false, ErrKillSwitchActive
+				}
+			}
+		}
+		if !s.Managed() {
+			_ = s.Accept(Bundle{
+				Version:    state.Version,
+				Digest:     state.Digest,
+				KillSwitch: true,
+			})
+		}
 		return Bundle{}, false, ErrKillSwitchActive
 	}
 
@@ -339,6 +477,7 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 	if err != nil {
 		return Bundle{}, false, err
 	}
+	s.touchLastSync() // freshness marker for RefreshIfStale; not part of the signed fields
 	cedarData, _ := os.ReadFile(cedarPath)
 	schemaData, _ := os.ReadFile(schemaPath)
 	return Bundle{

@@ -1283,6 +1283,33 @@ func isTargetAuthorized(workspaceRoot, sessionID, targetPath, action string) (bo
 		normAction = "write"
 	}
 
+	// Human-activated developer override pre-approves cross-folder step-up. Credential
+	// stores are never covered (they are hard-denied before this check is reached).
+	if active, _ := devOverrideActive(); active {
+		n := strings.ToLower(filepath.ToSlash(cleanTarget))
+		isSecret := strings.HasSuffix(n, ".env")
+		for _, m := range []string{"/.env", ".env.", "/.aws", "/.ssh", "id_rsa", "id_ed25519"} {
+			if strings.Contains(n, m) {
+				isSecret = true
+			}
+		}
+		// Never pre-approve filesystem/drive roots, the home dir itself, or OS system dirs.
+		if filepath.Dir(cleanTarget) == cleanTarget {
+			isSecret = true
+		}
+		if home, err := os.UserHomeDir(); err == nil && home != "" && strings.EqualFold(cleanTarget, filepath.Clean(home)) {
+			isSecret = true
+		}
+		for _, sys := range []string{"/etc", "/usr", "/bin", "/sbin", "/boot", "/sys", "/proc", "/var/lib", "c:/windows", "c:/program files", "c:/program files (x86)", "c:/programdata"} {
+			if n == sys || strings.HasPrefix(n, sys+"/") {
+				isSecret = true
+			}
+		}
+		if !isSecret {
+			return true, "dev-override"
+		}
+	}
+
 	checkFile := func(filePath, scope string) bool {
 		data, err := os.ReadFile(filePath)
 		if err != nil {
@@ -3005,6 +3032,8 @@ func evaluateNativeToolWithBapedge(sessionID, callerSource, toolName, targetPath
 	if !isZSPEnforcedClientSide() {
 		return true, "", ""
 	}
+	// Whether read-only inspection needs a grant is decided by bapedge from the control
+	// plane's signed, per-asset policy (zsp_read_exempt); the hook carries no copy of that rule.
 	binName := "bapedge"
 	fallbackName := "ltd-agent"
 	if runtime.GOOS == "windows" {

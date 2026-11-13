@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-    BAP Pilot Manual Step-by-Step Verification Script (v1.9.19)
+    BAP Pilot Manual Step-by-Step Verification Script
+    (For the unattended, all-features runner see scripts\run_pilot.ps1)
 .DESCRIPTION
     Executes instruction-by-instruction verification of BAP Zero-Trust
     governance, multi-module workspace support, HITL step-up authorization,

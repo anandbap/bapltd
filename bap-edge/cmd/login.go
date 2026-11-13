@@ -19,6 +19,7 @@ import (
 	"bap-edge/internal/attest"
 	"bap-edge/internal/config"
 	"bap-edge/internal/httptransport"
+	"bap-edge/internal/policystore"
 	"bap-edge/internal/state"
 )
 
@@ -53,6 +54,11 @@ type oidcDeviceTokenResponse struct {
 	InstanceID   string   `json:"instance_id"`
 	SessionToken string   `json:"session_token"`
 	Provider     string   `json:"provider"`
+
+	// Signed-policy trust anchor delivered by the authenticated enrollment.
+	PolicyAssetID   string `json:"policy_asset_id,omitempty"`
+	PolicyKeyID     string `json:"policy_key_id,omitempty"`
+	PolicyPublicKey string `json:"policy_public_key,omitempty"`
 }
 
 // RunLogin executes the RFC 8628 OAuth 2.0 / OIDC Device Authorization Flow
@@ -356,6 +362,7 @@ func RunLogin(args []string) error {
 	tokenURL := fmt.Sprintf("%s/api/v1/auth/oidc/device-token", *serverURL)
 	tokenReqBody, _ := json.Marshal(map[string]string{
 		"device_code": codeResp.DeviceCode,
+		"asset_id":    policystore.ResolveAssetID(), // binds signed policy to this machine at enrollment
 	})
 
 	interval := time.Duration(codeResp.Interval) * time.Second
@@ -441,6 +448,10 @@ func RunLogin(args []string) error {
 	if err := os.WriteFile(*configPath, credsData, 0600); err != nil {
 		return fmt.Errorf("failed to write credentials to %s: %w", *configPath, err)
 	}
+
+	// Pin the control plane's policy-signing key and this machine's asset id from the
+	// authenticated enrollment. The user never sees or handles a key.
+	pinPolicyEnrollment(tokenResp.PolicyKeyID, tokenResp.PolicyPublicKey, tokenResp.PolicyAssetID)
 
 	fmt.Println()
 	fmt.Printf("[✓] Corporate Identity Verified via %s\n", idpLabel)

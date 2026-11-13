@@ -37,6 +37,10 @@ def run_interceptor(payload: dict, env=None) -> dict:
         test_env["BAP_SESSION_ID"] = payload["session_id"]
     test_env.setdefault("BAP_ENFORCEMENT_MODE", "enforce")
     test_env.setdefault("BAP_NON_INTERACTIVE", "1")
+    # Hermetic: a developer's live dev-override must not relax denial assertions.
+    test_env["BAP_ENVIRONMENT"] = "production"
+    test_env["BAP_DEV_OVERRIDE"] = ""
+    test_env["BAP_DEV_MODE"] = ""
     if env:
         test_env.update(env)
 
@@ -59,6 +63,9 @@ def run_bapedge(args: list, env=None) -> tuple[int, dict, str]:
     test_env["BAP_WORKSPACE_ROOT"] = WORKSPACE_ROOT
     test_env.setdefault("BAP_SESSION_ID", "sess-bap200-test")
     test_env.setdefault("BAP_ENFORCEMENT_MODE", "enforce")
+    test_env["BAP_ENVIRONMENT"] = "production"
+    test_env["BAP_DEV_OVERRIDE"] = ""
+    test_env["BAP_DEV_MODE"] = ""
     if env:
         test_env.update(env)
 

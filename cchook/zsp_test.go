@@ -78,6 +78,15 @@ func setupZSPHookTestEnv(t *testing.T) (repoRoot, bapOut, interOut string) {
 	t.Setenv("LTD_SOURCE", "claude-code")
 	t.Setenv("BAP_SESSION_ID", "")
 	t.Setenv("CLAUDE_SESSION_ID", "")
+	// Hermetic: a developer's live override marker (repo .bap/dev-override.json or the home
+	// state dir) must not leak into ZSP grant assertions. Tests that exercise the override
+	// re-enable development explicitly.
+	t.Setenv("BAP_ENVIRONMENT", "production")
+	t.Setenv("BAP_DEV_OVERRIDE", "")
+	t.Setenv("BAP_DEV_MODE", "")
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("USERPROFILE", fakeHome)
 	t.Setenv("PATH", tmpBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return repoRoot, bapOut, interOut
 }

@@ -59,6 +59,7 @@ type Server struct {
 	otcStore            *otc.Store
 	minter              *authz.TokenMinter
 	policyStore         *policy.Store
+	policyKeyDir        string
 	auditStore          *audit.Store
 	sessionStore        *session.Store
 	govStore            *governance.Store
@@ -338,6 +339,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/agents", s.handleListAgents)
 	s.mux.HandleFunc("/api/v1/policy/bundle", s.handleGetPolicyBundle)
 	s.mux.HandleFunc("/api/v1/policy/sync", s.handlePolicySync)
+	s.mux.HandleFunc("/api/v1/policy/pubkey", s.handlePolicyPubKey)
+	s.mux.HandleFunc("/api/v1/admin/policy/settings", s.handlePolicySettings)
+	s.mux.HandleFunc("/api/v1/admin/policy/rotate-key", s.handlePolicyRotateKey)
 	s.mux.HandleFunc("/api/v1/policy/tier", s.handleEnforcementTier)
 	s.mux.HandleFunc("/api/v1/control/tier", s.handleEnforcementTier)
 	s.mux.HandleFunc("/api/v1/audit/ingest", s.handleAuditIngest)
@@ -721,8 +725,27 @@ func (s *Server) handleRegisterEdge(w http.ResponseWriter, r *http.Request) {
 		SessionToken:             sessionToken,
 		ServerVersion:            version.Version,
 		MinSupportedAgentVersion: s.minEdgeVersion,
+		PolicyEnrollment:         s.policyEnrollment(enrolled.InstanceID, req.AssetID),
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// policyEnrollment binds the machine's asset id to the just-authenticated workstation identity
+// (OTC register or OIDC login) and returns the signed-policy trust anchor for the client to pin.
+func (s *Server) policyEnrollment(instanceID, reportedAssetID string) types.PolicyEnrollment {
+	out := types.PolicyEnrollment{}
+	if instanceID == "" {
+		return out
+	}
+	if a := strings.TrimSpace(reportedAssetID); a != "" && !validAssetID(a) {
+		reportedAssetID = "" // hostile or malformed: fall back to the derived id
+	}
+	out.PolicyAssetID = s.policyStore.BindEnrolledAsset(instanceID, reportedAssetID)
+	if sg := s.policyStore.Signer(); sg != nil {
+		out.PolicyKeyID = sg.KeyID()
+		out.PolicyPublicKey = sg.PublicKeyB64()
+	}
+	return out
 }
 
 // handleVerifyAgent validates active registration status and token validity for a given agent or instance.
@@ -1101,6 +1124,7 @@ func (s *Server) handleOIDCDeviceToken(w http.ResponseWriter, r *http.Request) {
 		ExpiresIn:    int(time.Until(session.ExpiresAt).Seconds()),
 		Provider:     session.Provider,
 	}
+	resp.PolicyEnrollment = s.policyEnrollment(session.InstanceID, req.AssetID)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -2405,10 +2429,184 @@ func (s *Server) handlePolicySync(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Identity comes from the enrollment credential, never from the request body. A presented
+	// but invalid credential (revoked, logged out, blocked, forged) gets nothing.
+	if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+		claims, idErr := s.workstationIdentity(r)
+		if idErr != nil {
+			writeError(w, http.StatusUnauthorized, "Valid enrolled workstation credential required")
+			return
+		}
+		asset, ok := s.policyStore.EnrolledAsset(claims.InstanceID)
+		if !ok { // enrolled before asset binding existed: bind on first authenticated sync
+			reported := req.AssetID
+			if !validAssetID(reported) {
+				reported = ""
+			}
+			asset = s.policyStore.BindEnrolledAsset(claims.InstanceID, reported)
+		}
+		req.AssetID = asset
+	} else {
+		if os.Getenv("BAP_POLICY_SYNC_REQUIRE_AUTH") == "1" {
+			writeError(w, http.StatusUnauthorized, "Enrollment credential required for policy sync")
+			return
+		}
+		// Unenrolled/legacy caller: fleet default only, never a machine's overrides.
+		req.AssetID = ""
+	}
+
 	resp := s.policyStore.Sync(req)
 	resp.ServerVersion = version.Version
 	resp.MinEdgeVersion = s.minEdgeVersion
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handlePolicyPubKey publishes the public half of the policy-signing key. Clients pin it
+// at enrollment (trust on first use over the already-trusted control plane TLS channel) and
+// from then on accept only bundles signed by that key.
+func (s *Server) handlePolicyPubKey(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	signer := s.policyStore.Signer()
+	if signer == nil {
+		writeError(w, http.StatusServiceUnavailable, "Policy signing is not configured on this control plane")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"alg":        policy.SigAlgEd25519,
+		"key_id":     signer.KeyID(),
+		"public_key": signer.PublicKeyB64(),
+	})
+}
+
+// SetPolicyKeyDir tells the API where the signing key lives so it can be rotated.
+func (s *Server) SetPolicyKeyDir(dir string) { s.policyKeyDir = dir }
+
+// handlePolicyRotateKey generates a new policy-signing key and a rotation link signed by the
+// current one. Enrolled workstations follow the link automatically on their next sync; nothing
+// needs to be done on any machine.
+func (s *Server) handlePolicyRotateKey(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdminCaller(r) {
+		writeError(w, http.StatusUnauthorized, "Administrator authentication required")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	if os.Getenv("BAP_POLICY_SIGNING_SEED") != "" {
+		writeError(w, http.StatusConflict, "The key is supplied by BAP_POLICY_SIGNING_SEED; rotate by moving it to BAP_POLICY_SIGNING_SEED_PREVIOUS and setting a new seed")
+		return
+	}
+	cur := s.policyStore.Signer()
+	if cur == nil || s.policyKeyDir == "" {
+		writeError(w, http.StatusServiceUnavailable, "Policy signing is not configured for rotation")
+		return
+	}
+	next, err := cur.RotateAndPersist(s.policyKeyDir)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Rotation failed: "+err.Error())
+		return
+	}
+	s.policyStore.RotateSigner(next)
+	if s.auditStore != nil {
+		_, _ = s.auditStore.Ingest([]audit.Event{{
+			Source: "controlplane-admin", Executable: "POLICY_KEY_ROTATION", FullCommand: "policy-key rotate",
+			Decision: "UPDATED", Reason: fmt.Sprintf("Policy signing key rotated %s -> %s", cur.KeyID(), next.KeyID()),
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		}})
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"old_key_id": cur.KeyID(), "new_key_id": next.KeyID()})
+}
+
+func validAssetID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for _, c := range id {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.' || c == ':') {
+			return false
+		}
+	}
+	return true
+}
+
+// handlePolicySettings is the admin API for control-plane-owned enforcement settings.
+//
+//	GET    /api/v1/admin/policy/settings                       -> fleet default + per-asset overrides
+//	POST   /api/v1/admin/policy/settings {asset_id, zsp_read_exempt}
+//	                                       asset_id "*" (or omitted) sets the fleet default
+//	DELETE /api/v1/admin/policy/settings?asset_id=<id>         -> machine follows the fleet again
+//
+// Changes bump the single policy version, are Ed25519-signed per asset on the next sync, and are
+// audited. Clients pick them up within their sync interval (seconds).
+func (s *Server) handlePolicySettings(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdminCaller(r) {
+		writeError(w, http.StatusUnauthorized, "Administrator authentication required")
+		return
+	}
+	record := func(cmd, reason string) {
+		if s.auditStore == nil {
+			return
+		}
+		_, _ = s.auditStore.Ingest([]audit.Event{{
+			Source: "controlplane-admin", Executable: "POLICY_SETTINGS", FullCommand: cmd,
+			Decision: "UPDATED", Reason: reason, Timestamp: time.Now().UTC().Format(time.RFC3339),
+		}})
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, s.policyStore.Settings())
+	case http.MethodPost:
+		var req struct {
+			AssetID       string `json:"asset_id"`
+			ZSPReadExempt *bool  `json:"zsp_read_exempt"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+			return
+		}
+		if req.ZSPReadExempt == nil {
+			writeError(w, http.StatusBadRequest, "zsp_read_exempt is required")
+			return
+		}
+		asset := strings.TrimSpace(req.AssetID)
+		if asset == "" {
+			asset = policy.FleetAssetID
+		}
+		if asset != policy.FleetAssetID && !validAssetID(asset) {
+			writeError(w, http.StatusBadRequest, "asset_id must be '*' or 1-128 chars of [A-Za-z0-9._:-]")
+			return
+		}
+		if _, err := s.policyStore.SetReadExempt(asset, *req.ZSPReadExempt, "admin"); err != nil {
+			writeError(w, http.StatusInternalServerError, "Failed to persist policy settings: "+err.Error())
+			return
+		}
+		record(fmt.Sprintf("policy-settings --asset=%s --zsp_read_exempt=%v", asset, *req.ZSPReadExempt),
+			fmt.Sprintf("ZSP read exemption set to %v for %s", *req.ZSPReadExempt, asset))
+		writeJSON(w, http.StatusOK, s.policyStore.Settings())
+	case http.MethodDelete:
+		asset := strings.TrimSpace(r.URL.Query().Get("asset_id"))
+		if asset == "" || asset == policy.FleetAssetID || !validAssetID(asset) {
+			writeError(w, http.StatusBadRequest, "asset_id of a specific machine is required")
+			return
+		}
+		removed, err := s.policyStore.ClearAssetOverride(asset)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Failed to persist policy settings: "+err.Error())
+			return
+		}
+		if !removed {
+			writeError(w, http.StatusNotFound, "no override for that asset")
+			return
+		}
+		record(fmt.Sprintf("policy-settings --asset=%s --clear", asset), "Per-asset override removed; asset follows fleet default")
+		writeJSON(w, http.StatusOK, s.policyStore.Settings())
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
 }
 
 func (s *Server) handleEnforcementTier(w http.ResponseWriter, r *http.Request) {

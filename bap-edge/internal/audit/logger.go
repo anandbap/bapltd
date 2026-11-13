@@ -161,6 +161,12 @@ func Log(entryInput any, logPath string) error {
 		entry.Timestamp = entry.Timestamp.UTC()
 	}
 
+	// The in-process mutex does not protect against several bapedge/interceptor processes
+	// appending at once (read-tail-then-append would fork the hash chain). Serialize across
+	// processes with a lock file; on timeout, still log (best effort) rather than drop audit.
+	release := acquireLogLock(logPath)
+	defer release()
+
 	// Determine previous hash from existing file tail
 	lastHash := "genesis-ltd-local"
 	if info, err := os.Stat(logPath); err == nil && info.Size() > 0 {
@@ -194,6 +200,35 @@ func Log(entryInput any, logPath string) error {
 	data = append(data, '\n')
 	_, err = f.Write(data)
 	return err
+}
+
+// acquireLogLock takes an exclusive cross-process lock for appending to logPath using an
+// O_EXCL lock file. A lock older than staleAfter (crashed holder) is broken. It always
+// returns a release func; if the lock cannot be taken before the deadline the caller
+// proceeds unlocked so audit records are never dropped.
+func acquireLogLock(logPath string) func() {
+	const (
+		timeout    = 5 * time.Second
+		staleAfter = 10 * time.Second
+	)
+	lockPath := logPath + ".lock"
+	deadline := time.Now().Add(timeout)
+	for {
+		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if err == nil {
+			_, _ = f.WriteString(strconv.Itoa(os.Getpid()))
+			_ = f.Close()
+			return func() { _ = os.Remove(lockPath) }
+		}
+		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > staleAfter {
+			_ = os.Remove(lockPath)
+			continue
+		}
+		if time.Now().After(deadline) {
+			return func() {}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // VerifyLocalLog checks the cryptographic integrity of the local JSONL log.

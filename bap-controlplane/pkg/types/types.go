@@ -105,6 +105,7 @@ type RegisterEdgeRequest struct {
 	InstanceID      string `json:"instance_id,omitempty"`
 	AgentVersion    string `json:"agent_version,omitempty"`
 	ProtocolVersion int    `json:"protocol_version,omitempty"`
+	AssetID         string `json:"asset_id,omitempty"` // hardware-derived machine id, bound at enrollment
 }
 
 type RegisterEdgeResponse struct {
@@ -118,6 +119,7 @@ type RegisterEdgeResponse struct {
 	SessionToken             string    `json:"session_token"`
 	ServerVersion            string    `json:"server_version,omitempty"`
 	MinSupportedAgentVersion string    `json:"min_supported_agent_version,omitempty"`
+	PolicyEnrollment
 }
 
 type GrantConstraints struct {
@@ -239,6 +241,17 @@ type OIDCDeviceCodeResponse struct {
 
 type OIDCDeviceTokenRequest struct {
 	DeviceCode string `json:"device_code"`
+	// AssetID is the machine's hardware-derived id, recorded against the enrolled workstation
+	// identity so signed policy is scoped to the machine, not just the login.
+	AssetID string `json:"asset_id,omitempty"`
+}
+
+// PolicyEnrollment carries the signed-policy trust anchor handed out during authenticated
+// enrollment (OTC or OIDC). The client pins it; no separate key step exists for the user.
+type PolicyEnrollment struct {
+	PolicyAssetID   string `json:"policy_asset_id,omitempty"`
+	PolicyKeyID     string `json:"policy_key_id,omitempty"`
+	PolicyPublicKey string `json:"policy_public_key,omitempty"`
 }
 
 type OIDCDeviceTokenResponse struct {
@@ -255,6 +268,7 @@ type OIDCDeviceTokenResponse struct {
 	SessionToken string   `json:"session_token,omitempty"`
 	ExpiresIn    int      `json:"expires_in,omitempty"`
 	Provider     string   `json:"provider,omitempty"`
+	PolicyEnrollment
 }
 
 type OIDCDeviceVerifyRequest struct {

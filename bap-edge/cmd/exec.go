@@ -1122,7 +1122,7 @@ func RunExec(args []string) {
 				return
 			}
 
-			if isZSPRequiredForExec(ec) && taskGrantsEnforced() {
+			if isZSPRequiredForExec(ec) && taskGrantsEnforced() && !authz.IsWorkspaceReadOnlyToolCall(*toolNameFlag, *targetFlag, wsRoot) {
 				svid, grant, _, zspErr := authz.VerifyOrConsumeSessionZSP(
 					authz.ResolveZSPDir(), ec.sessionID, ec.source, action, res, ec.fullCommand, wsRoot, escapes, *consumeFlag, nil,
 				)

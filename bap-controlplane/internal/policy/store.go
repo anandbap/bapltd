@@ -30,12 +30,29 @@ type Bundle struct {
 	EnforcementTier       string `json:"enforcement_tier,omitempty"` // "tier_1_standard" (default) or "tier_2_strict"
 	UpdatedAt             string `json:"updated_at"`
 	RiskTier              string `json:"risk_tier,omitempty"`
+
+	// ZSPReadExempt lets plain read-only inspection inside the workspace run without a task
+	// grant. Credentials, outside-workspace targets and mutations are never covered.
+	ZSPReadExempt bool `json:"zsp_read_exempt"`
+
+	// Asset-scoped Ed25519 signature (see CanonicalBundlePayload). Filled per sync response.
+	AssetID          string `json:"asset_id,omitempty"`
+	SigAlg           string `json:"sig_alg,omitempty"`
+	KeyID            string `json:"key_id,omitempty"`
+	SignatureEd25519 string `json:"signature_ed25519,omitempty"`
+
+	// KeyChain lets a client pinned to an older key follow a rotation: each link is signed by
+	// the previous key (see Signer.Chain). Self-authenticating, so not part of the bundle signature.
+	KeyChain []RotationLink `json:"key_chain,omitempty"`
 }
 
 type SyncRequest struct {
+	AssetID          string `json:"asset_id,omitempty"` // workstation anchor / device ID the rules apply to
 	AgentID          string `json:"agent_id"`
 	InstalledVersion uint64 `json:"installed_version"`
 	InstalledDigest  string `json:"installed_digest"`
+	InstalledKeyID   string `json:"installed_key_id,omitempty"`
+	InstalledAssetID string `json:"installed_asset_id,omitempty"`
 	AgentVersion     string `json:"agent_version,omitempty"`
 	RiskTier         string `json:"risk_tier,omitempty"`
 }
@@ -51,8 +68,40 @@ type SyncResponse struct {
 type Store struct {
 	mu          sync.RWMutex
 	signingKey  []byte
+	signer      *Signer
 	bundle      Bundle
 	tierBundles map[types.RiskTier]Bundle
+
+	assetOverrides map[string]AssetOverride
+	enrolledAssets map[string]string // enrolled workstation instance id -> asset id
+	settingsPath   string
+}
+
+// SetSigner enables asset-scoped Ed25519 signing of every sync response.
+func (s *Store) SetSigner(sg *Signer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.signer = sg
+}
+
+// Signer returns the active policy signer (nil when signing is not configured).
+func (s *Store) Signer() *Signer {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.signer
+}
+
+// signedFor returns a copy of b stamped and signed for one asset. Caller holds s.mu.
+func (s *Store) signedFor(b Bundle, assetID string) Bundle {
+	if s.signer == nil {
+		return b
+	}
+	b.AssetID = assetID
+	b.SigAlg = SigAlgEd25519
+	b.KeyID = s.signer.KeyID()
+	b.SignatureEd25519 = s.signer.Sign(CanonicalBundlePayload(b, assetID))
+	b.KeyChain = s.signer.Chain()
+	return b
 }
 
 // SignBundle computes an HMAC-SHA256 signature over version:digest:kill_switch
@@ -141,7 +190,15 @@ func (s *Store) updateLocked(cedarCode, schema string, killSwitch bool) Bundle {
 
 	sig := SignBundle(newVersion, digest, killSwitch, s.signingKey)
 
+	// Developers must be able to have the agent read their own project, so read-only
+	// inspection is exempt from task grants by default; an admin can turn that off.
+	readExempt := true
+	if s.bundle.Version != 0 {
+		readExempt = s.bundle.ZSPReadExempt
+	}
+
 	s.bundle = Bundle{
+		ZSPReadExempt:         readExempt,
 		Version:               newVersion,
 		Digest:                digest,
 		Signature:             sig,
@@ -152,6 +209,7 @@ func (s *Store) updateLocked(cedarCode, schema string, killSwitch bool) Bundle {
 		EnforcementTier:       tier,
 		UpdatedAt:             time.Now().UTC().Format(time.RFC3339),
 	}
+	_ = s.saveSettingsLocked()
 	return s.bundle
 }
 
@@ -201,6 +259,7 @@ func (s *Store) SetKillSwitch(killSwitch bool) {
 	s.bundle.Version++
 	s.bundle.Signature = SignBundle(s.bundle.Version, s.bundle.Digest, s.bundle.KillSwitch, s.signingKey)
 	s.bundle.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	_ = s.saveSettingsLocked() // keep the persisted version counter monotonic across restarts
 }
 
 func (s *Store) SetStrictToolEnforcement(strict bool) {
@@ -215,6 +274,7 @@ func (s *Store) SetStrictToolEnforcement(strict bool) {
 	s.bundle.Version++
 	s.bundle.Signature = SignBundle(s.bundle.Version, s.bundle.Digest, s.bundle.KillSwitch, s.signingKey)
 	s.bundle.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	_ = s.saveSettingsLocked()
 }
 
 func (s *Store) IsStrictToolEnforcement() bool {
@@ -234,27 +294,38 @@ func (s *Store) Sync(req SyncRequest) SyncResponse {
 	defer s.mu.RUnlock()
 
 	if s.bundle.KillSwitch {
+		signed := s.signedFor(s.applyAssetOverride(s.bundle, req.AssetID), req.AssetID)
 		return SyncResponse{
 			Directive: DirectiveKillSwitch,
-			Bundle:    &s.bundle,
+			Bundle:    &signed,
 		}
 	}
 
-	targetBundle := &s.bundle
+	target := s.bundle
 	if req.RiskTier != "" {
 		if tb, exists := s.tierBundles[types.RiskTier(req.RiskTier)]; exists {
-			targetBundle = &tb
+			// Tier bundles carry their own Cedar rules but inherit fleet-wide enforcement flags.
+			tb.StrictToolEnforcement = s.bundle.StrictToolEnforcement
+			tb.EnforcementTier = s.bundle.EnforcementTier
+			tb.ZSPReadExempt = s.bundle.ZSPReadExempt
+			target = tb
 		}
 	}
+	// Machine-scoped overrides win over the fleet default (keyed by hardware asset id).
+	target = s.applyAssetOverride(target, req.AssetID)
 
-	if req.InstalledVersion == targetBundle.Version && req.InstalledDigest == targetBundle.Digest {
+	// A client is only "current" when it already holds this exact version, digest AND a
+	// signed copy for its own asset (a stored copy signed for another asset is not current).
+	if req.InstalledVersion == target.Version && req.InstalledDigest == target.Digest &&
+		(s.signer == nil || (req.InstalledKeyID == s.signer.KeyID() && req.InstalledAssetID == req.AssetID)) {
 		return SyncResponse{
 			Directive: DirectiveCurrent,
 		}
 	}
 
+	signed := s.signedFor(target, req.AssetID)
 	return SyncResponse{
 		Directive: DirectiveUpdateRequired,
-		Bundle:    targetBundle,
+		Bundle:    &signed,
 	}
 }

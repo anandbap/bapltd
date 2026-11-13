@@ -17,6 +17,13 @@ import (
 const maxDevOverrideWindow = 12 * time.Hour
 const defaultDevOverrideWindow = 4 * time.Hour
 
+func init() {
+	authz.DevOverrideActive = func() bool {
+		active, _ := devOverrideActive()
+		return active
+	}
+}
+
 // taskGrantsEnforced keeps broker, native-tool, and plugin checks consistent.
 // The existing developer override gates (build, environment, and expiry) also
 // govern this bootstrap exemption; all other authorization checks still run.

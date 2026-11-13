@@ -1,7 +1,7 @@
 # 🚀 BAP Enterprise Pilot Runbook & Evaluation Protocol
 ## A 30-Day Implementation Guide for CISOs, Platform Engineering, and Dev Leads
 
-**Version:** 3.1.0 (Updated for BAP-806 Native Agent Plugins, 5-Layer Defense-in-Depth & Agent Watch V3)  
+**Version:** 3.2.0 (Adds the unattended `run_pilot.ps1` runner; developer-override semantics; BAP-806 Native Agent Plugins, 5-Layer Defense-in-Depth & Agent Watch V3)  
 **Target Audience:** Enterprise Security Teams, Platform Engineers, Developer Productivity Leads  
 **Document Custodian:** BAP Security Architecture Team (`security@bapltd.com`)
 
@@ -221,12 +221,30 @@ Unlike cross-folder development, **sensitive credential files can never be autho
 - Even if a sibling directory is trusted, attempting `cp .env ../sibling-contracts/.env` is **hard blocked** with zero bypass possibility.
 
 ### 4. Running the Verification Suites
-SecOps and developers can verify both manual step-by-step and automated agent wire-protocol flows:
+
+**One command, fully unattended (recommended):** `scripts\run_pilot.ps1` exercises every BAP feature and prints a pass/fail table. It runs Go unit tests, starts a local Control Plane (`:8080`) and Gateway PEP (`:9090`), checks policy explain, the trust/untrust cycle, sandboxed exec, token containment, crash sweep and audit hash chain, runs the native plugin probes and 5-layer matrix, runs the Python integration suite, then tears everything down. Reports land in `.bap\pilot\report-<timestamp>.md` and `.json`; the exit code is non-zero if any check fails.
+
 ```powershell
-# 1. Step-by-Step Interactive Verification (all 6 phases)
+.\scripts\run_pilot.ps1                    # full run
+.\scripts\run_pilot.ps1 -Quick             # features + plugins only (about a minute)
+.\scripts\run_pilot.ps1 -IncludeNegative   # also run deny-path / red-team suites
+.\scripts\run_pilot.ps1 -SkipPython -SkipGo
+```
+
+Notes:
+- Enforcement checks run with `BAP_ENVIRONMENT=production`, so a developer override (`bapedge dev-override`) can never mask a denial. The override affects your interactive agent session, not the pilot results.
+- Deny-path and red-team checks are opt-in (`-IncludeNegative`) so default runs do not trip corporate EDR heuristics.
+- `bapedge plugin ...` and `bapedge dev-override` are human-operator commands. AI agents running under BAP are deliberately not allowed to invoke them, so run the pilot from your own terminal.
+
+**Manual walkthroughs** (for live demos, pause at every step):
+```powershell
+# Step-by-step interactive verification (all 6 phases)
 .\scripts\test_manual_pilot_verification.ps1
 
-# 2. Automated Agent Runtime Wire-Protocol Harness (Claude Code hooks & MCP)
+# Same script, unattended
+.\scripts\test_manual_pilot_verification.ps1 -Mode auto
+
+# Agent runtime wire-protocol harness (Claude Code hooks & MCP)
 .\scripts\test_agent_runtime.ps1 -Mode auto
 ```
 
@@ -526,6 +544,10 @@ If an urgent build or debug operation is impeded by local policies, a human deve
 ```bash
 bapedge dev-override on --duration 15m
 ```
+*While active, the override suspends:* anti-tamper checks on BAP assets, task-grant (ZSP) requirements, and cross-folder step-up (writes outside the workspace are pre-approved). *It never suspends:* credential-store protection (`.env`, `~/.aws`, `~/.ssh`), revocation, Cedar policy, or protection of filesystem roots, the home directory and OS system directories. It is unavailable in production environments and in release builds compiled with `AllowDevOverrides=false`.
+
+*Everyday development does not need the override.* Plain read-only inspection of the project (`Read`, `Glob`, `Grep`, directory listing) inside the workspace runs without a task grant. Writes, shell commands, anything outside the workspace and credential stores (`.env`, `~/.aws`, `~/.ssh`) still require a grant (or the override, except credentials). Set `BAP_ZSP_STRICT_READS=1` to require grants for reads too.
+
 *Invariants:* Override automatically expires after the TTL, emits high-severity `DEV_OVERRIDE_ACTIVE` audit events, and is protected by the **Agent Immunity Invariant** (AI agents cannot execute this command).
 
 ### Level 3: Project-Level Folder Trust

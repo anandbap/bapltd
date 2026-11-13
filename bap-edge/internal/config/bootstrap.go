@@ -211,6 +211,11 @@ func BootstrapControlPlane(serverOverride string) (BootstrapResult, error) {
 	// Control plane is offline / unreachable: check for local policy.cedar
 	cedarPath, _, stateRec, err := policyStore.Current()
 	if err != nil || cedarPath == "" {
+		if errors.Is(err, policystore.ErrPolicyTampered) {
+			// FAIL-CLOSED: the cached signed rules were altered/removed and the control plane
+			// cannot re-issue them right now. Refuse to run on them.
+			return BootstrapResult{}, fmt.Errorf("%w (control plane unreachable; bapedge will not run until it reconnects and re-issues signed rules)", policystore.ErrPolicyTampered)
+		}
 		// FAIL-CLOSED: No control plane and no local policy file exists.
 		return BootstrapResult{}, ErrNoPolicyAvailable
 	}

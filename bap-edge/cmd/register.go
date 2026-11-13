@@ -33,6 +33,7 @@ type RegisterRequest struct {
 	InstanceID      string `json:"instance_id,omitempty"`
 	AgentVersion    string `json:"agent_version,omitempty"`
 	ProtocolVersion int    `json:"protocol_version,omitempty"`
+	AssetID         string `json:"asset_id,omitempty"` // hardware-derived machine id, bound at enrollment
 }
 
 type RegisterResponse struct {
@@ -46,6 +47,11 @@ type RegisterResponse struct {
 	SessionToken             string    `json:"session_token"`
 	ServerVersion            string    `json:"server_version,omitempty"`
 	MinSupportedAgentVersion string    `json:"min_supported_agent_version,omitempty"`
+
+	// Signed-policy trust anchor delivered by the authenticated enrollment.
+	PolicyAssetID   string `json:"policy_asset_id,omitempty"`
+	PolicyKeyID     string `json:"policy_key_id,omitempty"`
+	PolicyPublicKey string `json:"policy_public_key,omitempty"`
 }
 
 type StoredCredentials struct {
@@ -168,6 +174,7 @@ func RunRegister(args []string) error {
 		InstanceID:      *customInstanceID,
 		AgentVersion:    version.Version,
 		ProtocolVersion: 1,
+		AssetID:         policystore.ResolveAssetID(),
 	}
 
 	reqBytes, err := json.Marshal(reqBody)
@@ -244,7 +251,9 @@ func RunRegister(args []string) error {
 		return fmt.Errorf("failed to write credentials to %s: %w", *configPath, err)
 	}
 
-	// 3. Cache initial policy bundle from control plane
+	// 3. Pin the signing key + asset id handed out by this authenticated enrollment, then cache
+	// the initial signed policy bundle. (No key step exists for the user.)
+	pinPolicyEnrollment(regResp.PolicyKeyID, regResp.PolicyPublicKey, regResp.PolicyAssetID)
 	policyStore := policystore.New("")
 	bundle, _, syncErr := policyStore.SyncWithServer(*serverURL, regResp.AgentID, 3*time.Second)
 	policySynced := syncErr == nil

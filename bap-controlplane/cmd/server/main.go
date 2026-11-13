@@ -338,6 +338,28 @@ func runStart(args []string) {
 		resolvedDB = "bap-controlplane.db"
 	}
 
+	// Ed25519 policy signing: the key lives beside the state database and never leaves this host.
+	signerDir := os.Getenv("BAP_STATE_DIR")
+	if signerDir == "" {
+		signerDir = filepath.Dir(resolvedDB)
+		if resolvedDB == ":memory:" || resolvedDB == "memory" {
+			signerDir = "."
+		}
+	}
+	if sg, sgErr := policy.LoadOrCreateSigner(signerDir); sgErr != nil {
+		log.Fatalf("[bapcontrolplane] policy signing key unavailable (%v); refusing to serve unsigned policy", sgErr)
+	} else {
+		policyStore.SetSigner(sg)
+		log.Printf("[bapcontrolplane] Policy signing active (ed25519 key_id=%s)", sg.KeyID())
+		if os.Getenv("BAP_POLICY_SIGNING_SEED") == "" && (os.Getenv("RENDER") != "" || os.Getenv("DYNO") != "" || os.Getenv("KUBERNETES_SERVICE_HOST") != "") {
+			log.Printf("[bapcontrolplane] WARNING: hosted environment detected without BAP_POLICY_SIGNING_SEED. If this disk is ephemeral the signing key is regenerated on redeploy and enrolled machines will refuse the new key until re-enrolled. Set BAP_POLICY_SIGNING_SEED (64 hex chars) as a secret or mount persistent storage at %s.", signerDir)
+		}
+	}
+	// Enforcement settings (fleet default + per-asset overrides) and the version counter survive restarts.
+	if pErr := policyStore.EnablePersistence(filepath.Join(signerDir, "policy-settings.json")); pErr != nil {
+		log.Fatalf("[bapcontrolplane] policy settings unavailable (%v); refusing to start with unknown enforcement settings", pErr)
+	}
+
 	sessionStore, err := session.NewStoreWithDB(resolvedDB)
 	if err != nil {
 		log.Printf("[bapcontrolplane] Warning: Failed to open SQLite DB %q (%v), falling back to in-memory store", resolvedDB, err)
@@ -347,6 +369,7 @@ func runStart(args []string) {
 	}
 
 	server := api.NewServer(regStore, otcStore, minter, policyStore, auditStore, sessionStore)
+	server.SetPolicyKeyDir(signerDir)
 	if *pilotRoster != "" {
 		f, err := os.Open(*pilotRoster)
 		if err != nil {

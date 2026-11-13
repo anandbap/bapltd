@@ -91,7 +91,7 @@ func TestDevOverrideExecWithoutGrants(t *testing.T) {
 				t.Setenv(key, value)
 			}
 			// Exercise authorization independently of host sandbox availability.
-			for _, toolArgs := range [][]string{{"--decision-only", "echo override-without-grant"}, {"--tool", "Read", "--target", filepath.Join(root, "README.md"), "--consume"}} {
+			for _, toolArgs := range [][]string{{"--decision-only", "echo override-without-grant"}, {"--tool", "Write", "--target", filepath.Join(root, "README.md"), "--consume"}} {
 				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 				defer cancel()
 				args := []string{"-test.run=^TestDevOverrideExecHelper$", "--", "--json", "--mode", "enforce", "--server", server.URL, "--source", "copilot", "--session-id", "sess-no-grants"}
@@ -171,7 +171,7 @@ func TestDevOverrideTaskGrantEnforcement(t *testing.T) {
 			}
 			for _, tool := range []struct{ name, command, path string }{
 				{"PowerShell", "git status --short", ""},
-				{"Read", "", filepath.Join(root, "README.md")},
+				{"Write", "", filepath.Join(root, "README.md")}, // mutating tools still need a grant (read-only ones do not)
 			} {
 				resp := evaluateWithBapedgeTool("sess-dev-bootstrap-"+tc.name, "codex", tool.name, tool.command, tool.path)
 				if resp.Allowed == tc.wantEnforce {

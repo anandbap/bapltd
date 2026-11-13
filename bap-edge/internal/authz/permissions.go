@@ -140,6 +140,42 @@ func IsPathCovered(trustedPath, targetPath string) bool {
 	return false
 }
 
+// DevOverrideActive is registered by the cmd package so the authz layer can honor the
+// human-activated developer override without an import cycle. Nil means "never active".
+var DevOverrideActive func() bool
+
+// isCredentialStorePath reports whether a path names a secret store that no override or trust
+// grant may ever unlock (.env files, cloud credentials, SSH keys).
+func isCredentialStorePath(p string) bool {
+	n := strings.ToLower(filepath.ToSlash(p))
+	for _, marker := range []string{"/.env", ".env.", "/.aws", "/.ssh", "id_rsa", "id_ed25519"} {
+		if strings.Contains(n, marker) {
+			return true
+		}
+	}
+	return strings.HasSuffix(n, ".env")
+}
+
+// isOverrideExcludedPath reports targets the developer override must never pre-approve:
+// filesystem/drive roots, the user's home directory itself, and OS system directories.
+// A developer override is for working across sibling projects, not for `rm -rf /`.
+func isOverrideExcludedPath(p string) bool {
+	clean := filepath.Clean(p)
+	if filepath.Dir(clean) == clean { // "/" or "C:\"
+		return true
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" && strings.EqualFold(clean, filepath.Clean(home)) {
+		return true
+	}
+	n := strings.ToLower(filepath.ToSlash(clean))
+	for _, sys := range []string{"/etc", "/usr", "/bin", "/sbin", "/boot", "/sys", "/proc", "/var/lib", "c:/windows", "c:/program files", "c:/program files (x86)", "c:/programdata"} {
+		if n == sys || strings.HasPrefix(n, sys+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // IsTargetAuthorized checks whether cross-folder operations on targetPath with action are authorized
 // across Session, Project, or Global scopes.
 func IsTargetAuthorized(workspaceRoot, sessionID, targetPath, action string) (bool, string) {
@@ -154,6 +190,13 @@ func IsTargetAuthorized(workspaceRoot, sessionID, targetPath, action string) (bo
 	cleanTarget := ResolveCanonicalPath(targetPath, workspaceRoot)
 	if cleanTarget == "" {
 		cleanTarget = filepath.Clean(targetPath)
+	}
+
+	// 0. Human-activated developer override: the operator has explicitly opened a time-boxed
+	// window, so cross-folder step-up is treated as pre-approved. Credential stores are never
+	// covered; those stay hard-denied by Cedar Rule 3 and the hook invariants.
+	if DevOverrideActive != nil && DevOverrideActive() && !isCredentialStorePath(cleanTarget) && !isOverrideExcludedPath(cleanTarget) {
+		return true, "dev-override"
 	}
 
 	// 1. Check Session Scope
