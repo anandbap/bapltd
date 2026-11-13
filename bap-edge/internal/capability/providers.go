@@ -89,6 +89,10 @@ func BwrapArgs(p Profile, argv []string) ([]string, error) {
 	// in; an in-sandbox forwarder (socat/BAP shim) turns it into HTTP(S)_PROXY. Without one: no network.
 	if sock := strings.TrimPrefix(p.ProxyAddr, "unix:"); sock != p.ProxyAddr && sock != "" {
 		args = append(args, "--bind", sock, "/run/bap-egress.sock", "--setenv", "BAP_EGRESS_SOCKET", "/run/bap-egress.sock")
+		if p.ShimPath != "" { // the BAP binary relays loopback:3128 -> the socket, then execs the command
+			args = append(args, "--ro-bind", p.ShimPath, "/bap-shim")
+			argv = append([]string{"/bap-shim", "__shim", "--socket", "/run/bap-egress.sock", "--"}, argv...)
+		}
 	}
 	for _, e := range envPassthrough(p) {
 		if v, ok := os.LookupEnv(e); ok {

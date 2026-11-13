@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"bap-edge/cmd"
+	"bap-edge/internal/egress"
 )
 
 const usage = `bapedge - BAP Local Trusted Daemon (LTD) & Zero-Trust Execution Broker
@@ -271,6 +272,19 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error granting trust: %v\n", err)
 			os.Exit(1)
 		}
+	case "__shim": // in-sandbox egress relay: __shim --socket PATH -- cmd args...
+		sock, rest := "", args
+		if len(rest) >= 2 && rest[0] == "--socket" {
+			sock, rest = rest[1], rest[2:]
+		}
+		if len(rest) > 0 && rest[0] == "--" {
+			rest = rest[1:]
+		}
+		code, err := egress.RunShim(sock, rest)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "bap shim: %v\n", err)
+		}
+		os.Exit(code)
 	case "egress":
 		if err := cmd.RunEgress(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)

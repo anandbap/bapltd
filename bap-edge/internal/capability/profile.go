@@ -25,6 +25,7 @@ type Profile struct {
 	EnvAllow    []string `json:"env_allow,omitempty"`    // environment variable names passed through
 	ProxyAddr   string   `json:"proxy_addr,omitempty"`   // egress proxy the sandbox is pointed at
 	Image       string   `json:"image,omitempty"`        // container image (docker provider)
+	ShimPath    string   `json:"-"`                      // path of this binary, mounted as the in-sandbox relay (bwrap)
 }
 
 // DefaultEnvAllow is the environment an agent gets: enough to build, nothing that looks like a credential.

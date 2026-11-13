@@ -100,7 +100,11 @@ func TestProvidersRenderWithoutCredentialsOrOpenNetwork(t *testing.T) {
 	}
 	pp := New(t.TempDir())
 	pp.ProxyAddr = "unix:/run/user/1000/bap-egress.sock"
+	pp.ShimPath = "/usr/local/bin/bap"
 	bp, _ := BwrapArgs(pp, []string{"sh"})
+	if !strings.Contains(strings.Join(bp, " "), "/bap-shim __shim --socket /run/bap-egress.sock -- sh") {
+		t.Errorf("command must run under the relay shim: %v", bp)
+	}
 	if strings.Contains(strings.Join(bp, " "), "--share-net") || !strings.Contains(strings.Join(bp, " "), "BAP_EGRESS_SOCKET") {
 		t.Errorf("even with a proxy the network namespace must stay unshared; only the socket is bound: %v", bp)
 	}

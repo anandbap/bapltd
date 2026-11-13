@@ -170,6 +170,19 @@ func RunRun(args []string) error {
 	switch prov {
 	case "bwrap":
 		bin = "bwrap"
+		sock := filepath.Join(os.TempDir(), fmt.Sprintf("bap-egress-%d.sock", os.Getpid()))
+		p.ProxyAddr = "unix:" + sock
+		p.ShimPath, _ = os.Executable()
+		if !*printOnly {
+			if _, lerr := exec.LookPath(bin); lerr != nil {
+				return fmt.Errorf("provider %q needs %q installed. Nothing was run: BAP will not fall back to an unsandboxed process", prov, bin)
+			}
+			stop, serr := egress.ServeUnix(egress.New(p, effectLog(), "run"), sock)
+			if serr != nil {
+				return serr
+			}
+			defer stop()
+		}
 		full, err = capability.BwrapArgs(p, argv)
 	case "docker":
 		bin = "docker"
