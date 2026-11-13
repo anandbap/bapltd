@@ -191,6 +191,10 @@ func isAdminPath(path string) bool {
 		path == "/api/v1/agents/pre-register" ||
 		path == "/api/v1/agents/revoke" ||
 		path == "/api/v1/apps/revoke" ||
+		path == "/api/v1/escalation/resolve" ||
+		path == "/api/v1/escalation/requests" ||
+		path == "/api/v1/policies/cedar/deploy" ||
+		path == "/api/v1/policies/cedar/simulate" ||
 		strings.HasPrefix(path, "/api/v1/demo/")
 }
 

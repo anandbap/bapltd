@@ -82,6 +82,57 @@ func setupZSPHookTestEnv(t *testing.T) (repoRoot, bapOut, interOut string) {
 	return repoRoot, bapOut, interOut
 }
 
+func TestInterceptorDevOverrideOmitsGrantGuidance(t *testing.T) {
+	_, _, interceptor := setupZSPHookTestEnv(t)
+	workspace := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("BAP_ENVIRONMENT", "development")
+	t.Setenv("BAP_DEV_OVERRIDE", "")
+	t.Setenv("BAP_DEV_MODE", "")
+	t.Setenv("BAP_CISO_TOKEN", "")
+	t.Setenv("BAP_ADMIN_TOKEN", "")
+	t.Setenv("BAP_WORKSPACE_ROOT", workspace)
+	t.Setenv("BAP_STATE_DIR", t.TempDir())
+	t.Setenv("BAP_SERVER_URL", "http://127.0.0.1:1")
+	// This test verifies prompt/tool decisions, not background watcher startup.
+	liveness := watcherLivenessPath("sess-dev-no-grants")
+	if err := os.MkdirAll(filepath.Dir(liveness), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(liveness, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	marker, _ := json.Marshal(map[string]any{"active": true, "expires_at": time.Now().Add(time.Hour)})
+	if err := os.WriteFile(filepath.Join(os.Getenv("BAP_STATE_DIR"), "dev-override.json"), marker, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, payload := range []map[string]any{
+		{"hook_event_name": "UserPromptSubmit", "app_id": "claude-code", "session_id": "sess-dev-no-grants", "user_prompt": "Read the README"},
+		{"hook_event_name": "PreToolUse", "app_id": "claude-code", "session_id": "sess-dev-no-grants", "tool_name": "Read", "tool_input": map[string]any{"file_path": filepath.Join(workspace, "README.md")}},
+	} {
+		body, _ := json.Marshal(payload)
+		cmd := exec.Command(interceptor)
+		cmd.Dir = workspace
+		cmd.Stdin = bytes.NewReader(body)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("hook: %v output=%s stderr=%s", err, out, stderr.String())
+		}
+		for _, forbidden := range []string{"bapedge zsp authorize", "ZeroStandingPrivilegeViolation", `"permissionDecision":"deny"`, `"permissionDecision": "deny"`} {
+			if strings.Contains(string(out), forbidden) {
+				t.Fatalf("override must not request a grant or deny the fixture: %s", out)
+			}
+		}
+		if !json.Valid(out) {
+			t.Fatalf("invalid hook response: %s", out)
+		}
+	}
+}
+
 func TestInterceptorPreToolUseBlocksScenario1WithBuiltBroker(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows binary verification test")

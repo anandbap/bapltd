@@ -74,6 +74,7 @@ jobs:
           node tests/test_v3_controls.cjs
           node tests/test_v3_discovery.cjs
           node tests/test_activity_metrics.cjs
+          node tests/test_v3_admin.cjs
 
   test-python:
     name: Python Integration & E2E Suites

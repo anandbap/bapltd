@@ -64,12 +64,12 @@ func FormatOutOfWorkspaceSuggestion(target, action, workspaceRoot string) string
 				"AGENT: stop and tell the developer. The developer can copy the file(s) you need into the workspace, or trust a specific, narrower folder with `bap trust \"<folder>\"` in their own terminal.",
 			target, workspaceRoot, err)
 	}
-	access := "read"
+	access := "read access"
 	if t := trustActionForZSP(action); t != "read" {
-		access = t + " (and read)"
+		access = t + " access (and read access)"
 	}
 	return fmt.Sprintf(
-		"BAP BOUNDARY: \"%s\" is outside the workspace (%s) and needs %s access. BAP never lets an agent widen its own boundary.\n"+
+		"BAP BOUNDARY: \"%s\" is outside the workspace (%s) and needs %s. BAP never lets an agent widen its own boundary.\n"+
 			"DEVELOPER ACTION REQUIRED: run ONE of these in your own terminal (not through the agent), then ask the agent to retry:\n"+
 			"    bap trust \"%s\" --project     # this project only\n"+
 			"    bap trust \"%s\" --session     # this session only\n"+

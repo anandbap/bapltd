@@ -449,14 +449,16 @@ class TestBAPEpic32AgentAuth(unittest.TestCase):
             "reviewer_email": "lead-secops@company.internal",
             "ttl_seconds": 300,
         }
-        st_res, body_res, _ = http_req(f"{CP_URL}/api/v1/escalation/resolve", method="POST", data=resolve_req)
+        st_res, body_res, _ = http_req(f"{CP_URL}/api/v1/escalation/resolve", method="POST", data=resolve_req,
+                                     headers={"X-BAP-Admin-Token": TEST_ADMIN_TOKEN})
         self.assertEqual(st_res, 200, f"Resolve failed: {body_res}")
         self.assertEqual(body_res.get("status"), "APPROVED")
         ephemeral_grant = body_res.get("ephemeral_grant", "")
         self.assertTrue(ephemeral_grant.startswith(f"task-grant-task-migration-55-s3:PutObject-{esc_id}"))
 
         # 4. List all active/resolved escalations
-        st_list, body_list, _ = http_req(f"{CP_URL}/api/v1/escalation/requests", method="GET")
+        st_list, body_list, _ = http_req(f"{CP_URL}/api/v1/escalation/requests", method="GET",
+                                      headers={"X-BAP-Admin-Token": TEST_ADMIN_TOKEN})
         self.assertEqual(st_list, 200)
         self.assertGreaterEqual(body_list.get("count", 0), 1)
 

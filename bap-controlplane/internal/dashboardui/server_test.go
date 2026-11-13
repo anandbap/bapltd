@@ -114,3 +114,24 @@ func TestRemoteAdministrativeProxyIsDeniedByDefault(t *testing.T) {
 		t.Fatalf("remote admin request status %d, want 403", w.Code)
 	}
 }
+
+func TestV3AdminAssetAndRemoteApprovalBoundary(t *testing.T) {
+	target, _ := url.Parse("http://127.0.0.1:1")
+	handler := Handler(target, http.DefaultTransport, false)
+	for _, path := range []string{"/api/v1/escalation/resolve", "/api/v1/escalation/requests", "/api/v1/policies/cedar/deploy", "/api/v1/policies/cedar/simulate"} {
+		r := httptest.NewRequest("POST", path, strings.NewReader(`{}`))
+		r.RemoteAddr = "203.0.113.9:1234"
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("remote %s: %d", path, w.Code)
+		}
+	}
+	for path, content := range map[string]string{"/dashboard/": "id=\"viewAdmin\"", "/dashboard/admin.js": "escalation_id:id"} {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		if w.Code != 200 || !strings.Contains(w.Body.String(), content) {
+			t.Fatalf("admin asset %s: %d", path, w.Code)
+		}
+	}
+}

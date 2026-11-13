@@ -632,6 +632,12 @@ function Restore-BapState {
         }
     }
 
+    foreach ($dName in @('.bapstate', '.bap')) {
+        $dPath = Join-Path ([string]$record.workspace) $dName
+        if ((Test-Path -LiteralPath $dPath -PathType Container) -and (@(Get-ChildItem -LiteralPath $dPath -Force -ErrorAction SilentlyContinue).Count -eq 0)) {
+            Remove-Item -LiteralPath $dPath -Force -ErrorAction SilentlyContinue
+        }
+    }
     Write-Host '[+] Original Claude settings restored.' -ForegroundColor Green
     return $true
 }
@@ -957,7 +963,19 @@ if ($Mode -eq 'Watchdog') {
 
 $Workspace = [System.IO.Path]::GetFullPath((Get-Location).Path)
 $ClaudeDir = Join-Path $Workspace '.claude'
-$ManifestPath = Join-Path $ClaudeDir '.bap-recovery.json'
+$BapStateDir = if (-not [string]::IsNullOrWhiteSpace($env:BAP_STATE_DIR)) { $env:BAP_STATE_DIR.Trim() } else {
+    $homeDir = [Environment]::GetFolderPath('UserProfile')
+    if ([string]::IsNullOrWhiteSpace($homeDir)) { $homeDir = $env:USERPROFILE }
+    if ([string]::IsNullOrWhiteSpace($homeDir)) { $homeDir = $HOME }
+    Join-Path (Join-Path $homeDir 'bin') '.bapstate'
+}
+$BapSessionsStateDir = Join-Path $BapStateDir 'sessions'
+if (-not (Test-Path -LiteralPath $BapSessionsStateDir)) {
+    New-Item -ItemType Directory -Path $BapSessionsStateDir -Force | Out-Null
+}
+$wsHashBytes = [System.Security.Cryptography.SHA256]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Workspace.ToLowerInvariant()))
+$wsHash = ([BitConverter]::ToString($wsHashBytes) -replace '-', '').ToLowerInvariant().Substring(0, 12)
+$ManifestPath = Join-Path $BapSessionsStateDir "recovery-claude-$wsHash.json"
 $MirrorPath = Get-RecoveryMirrorPath -ManifestPath $ManifestPath
 $MutexName = Get-WorkspaceMutexName -Workspace $Workspace
 $SessionId = if (-not [string]::IsNullOrWhiteSpace($env:BAP_SESSION_ID)) { $env:BAP_SESSION_ID.Trim() } else { "sess-claude-$([Guid]::NewGuid().ToString('N'))" }

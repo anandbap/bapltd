@@ -374,8 +374,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/intent/verify", s.handleVerifyIntent)
 	s.mux.HandleFunc("/api/v1/intent/", s.handleGetIntent)
 	s.mux.HandleFunc("/api/v1/escalation/request", s.handleEscalationRequest)
-	s.mux.HandleFunc("/api/v1/escalation/resolve", s.handleEscalationResolve)
-	s.mux.HandleFunc("/api/v1/escalation/requests", s.handleListEscalations)
+	s.mux.HandleFunc("/api/v1/escalation/resolve", s.requireAdminAuth(s.handleEscalationResolve))
+	s.mux.HandleFunc("/api/v1/escalation/requests", s.requireAdminAuth(s.handleListEscalations))
 	s.mux.HandleFunc("/api/v1/escalation/", s.handleGetEscalation)
 
 	// Web Inspector & React Admin Handshake / Login
@@ -423,7 +423,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/policies/cedar/validate", s.handleValidateCedarPolicy)
 	s.mux.HandleFunc("/api/v1/policies/cedar/current", s.handleGetCurrentCedarPolicy)
 	s.mux.HandleFunc("/api/v1/policies/cedar/deploy", s.requireAdminAuth(s.handleDeployCedarPolicy))
-	s.mux.HandleFunc("/api/v1/policies/cedar/simulate", s.handleSimulateCedarPolicy)
+	s.mux.HandleFunc("/api/v1/policies/cedar/simulate", s.requireAdminAuth(s.handleSimulateCedarPolicy))
 
 	// Epic 14: LLM Prompt Injection & Semantic Heuristic Detection (BAP-1401)
 	s.mux.HandleFunc("/api/v1/sessions/prompt/analyze", s.handleAnalyzePrompt)
@@ -4962,10 +4962,11 @@ func (s *Server) handleDeployCedarPolicy(w http.ResponseWriter, r *http.Request)
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req struct {
-		PolicyCedar string `json:"policy_cedar"`
-		SchemaJSON  string `json:"schema_json,omitempty"`
-		KillSwitch  bool   `json:"kill_switch"`
-		Reason      string `json:"reason"`
+		PolicyCedar     string  `json:"policy_cedar"`
+		SchemaJSON      string  `json:"schema_json,omitempty"`
+		KillSwitch      bool    `json:"kill_switch"`
+		Reason          string  `json:"reason"`
+		ExpectedVersion *uint64 `json:"expected_version,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
@@ -4979,7 +4980,17 @@ func (s *Server) handleDeployCedarPolicy(w http.ResponseWriter, r *http.Request)
 		})
 		return
 	}
-	bundle := s.policyStore.Update(req.PolicyCedar, req.SchemaJSON, req.KillSwitch)
+	var bundle policy.Bundle
+	if req.ExpectedVersion != nil {
+		var updated bool
+		bundle, updated = s.policyStore.UpdateIfVersion(req.PolicyCedar, req.SchemaJSON, req.KillSwitch, *req.ExpectedVersion)
+		if !updated {
+			writeError(w, http.StatusConflict, "Policy changed since it was loaded. Reload, validate and simulate again before deploying.")
+			return
+		}
+	} else {
+		bundle = s.policyStore.Update(req.PolicyCedar, req.SchemaJSON, req.KillSwitch)
+	}
 	if s.govStore != nil {
 		_ = s.govStore.ExecuteAdminAction(types.AdminActionRequest{
 			AdminID: "system-admin",
@@ -5957,6 +5968,15 @@ func (s *Server) handleEscalationResolve(w http.ResponseWriter, r *http.Request)
 
 	if req.EscalationID == "" || req.Decision == "" {
 		writeError(w, http.StatusBadRequest, "escalation_id and decision are required")
+		return
+	}
+	decision := strings.ToLower(strings.TrimSpace(req.Decision))
+	if decision != "approve" && decision != "deny" {
+		writeError(w, http.StatusBadRequest, "decision must be approve or deny")
+		return
+	}
+	if strings.TrimSpace(req.ReviewerEmail) == "" || req.TTLSeconds < 0 || req.TTLSeconds > 900 {
+		writeError(w, http.StatusBadRequest, "reviewer_email is required and ttl_seconds must be between 0 and 900")
 		return
 	}
 

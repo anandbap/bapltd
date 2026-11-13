@@ -31,7 +31,7 @@ CP_URL = f"http://127.0.0.1:{CP_PORT}"
 
 def http_req(url, method="GET", data=None, headers=None):
     hdrs = dict(headers or {})
-    if method == "POST" and url == CP_URL + "/api/v1/audit/ingest":
+    if method == "POST" and url in (CP_URL + "/api/v1/audit/ingest", CP_URL + "/api/v1/policies/cedar/simulate"):
         hdrs.setdefault("X-BAP-Admin-Token", TEST_ADMIN_TOKEN)
     body_bytes = None
     if data is not None:

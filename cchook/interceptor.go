@@ -1824,10 +1824,14 @@ func parseDevOverrideExpiry(raw string) (time.Time, bool) {
 var AllowDevOverrides = "true"
 
 // devOverrideActive reports whether the human operator has opened a time-boxed development
-// window. It relaxes only the anti-tampering rules on BAP's own files and binaries so BAP itself
-// can be developed under BAP. Credential protection, revocation and Cedar policy stay in force.
+// window. It relaxes anti-tampering and task-grant checks so BAP itself can be
+// developed under BAP. Credential protection, revocation and Cedar policy stay in force.
 func devOverrideActive() (bool, string) {
 	if !strings.EqualFold(strings.TrimSpace(AllowDevOverrides), "true") {
+		return false, ""
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("BAP_ENVIRONMENT"))) {
+	case "production", "prod", "staging":
 		return false, ""
 	}
 	configuredAdmin := resolveConfiguredAdminToken()
@@ -1850,7 +1854,7 @@ func devOverrideActive() (bool, string) {
 		if until, ok := parseDevOverrideExpiry(raw); ok {
 			now := time.Now()
 			if until.After(now) {
-				return true, fmt.Sprintf("[BAP DEV OVERRIDE ACTIVE until %s] Anti-tampering checks on BAP files are suspended; credentials, revocation and policy still apply.", until.Format(time.RFC3339))
+				return true, fmt.Sprintf("[BAP DEV OVERRIDE ACTIVE until %s] Anti-tampering and task-grant checks are suspended; credentials, revocation and policy still apply.", until.Format(time.RFC3339))
 			}
 		}
 	}
@@ -1859,6 +1863,9 @@ func devOverrideActive() (bool, string) {
 	markerCandidates := []string{
 		filepath.Join(".bap", "dev-override.json"),
 		"dev-override.json",
+	}
+	if dir := strings.TrimSpace(os.Getenv("BAP_STATE_DIR")); dir != "" {
+		markerCandidates = append(markerCandidates, filepath.Join(dir, "dev-override.json"))
 	}
 	if home, _ := os.UserHomeDir(); home != "" {
 		markerCandidates = append(markerCandidates,
@@ -1884,7 +1891,7 @@ func devOverrideActive() (bool, string) {
 					}
 				}
 				if d.ExpiresAt.After(time.Now()) {
-					return true, fmt.Sprintf("[BAP DEV OVERRIDE ACTIVE until %s (Auth: %s)] Anti-tampering checks on BAP files are suspended; credentials, revocation and policy still apply.", d.ExpiresAt.Format(time.RFC3339), d.AuthMethod)
+					return true, fmt.Sprintf("[BAP DEV OVERRIDE ACTIVE until %s (Auth: %s)] Anti-tampering and task-grant checks are suspended; credentials, revocation and policy still apply.", d.ExpiresAt.Format(time.RFC3339), d.AuthMethod)
 				}
 			}
 		}
@@ -1903,7 +1910,7 @@ func devOverrideActive() (bool, string) {
 			}
 			if json.Unmarshal(data, &cfg) == nil && cfg.DevOverride {
 				if configuredAdmin == "" {
-					return true, "[BAP DEV OVERRIDE ACTIVE via config] Anti-tampering checks on BAP files are suspended; credentials, revocation and policy still apply."
+					return true, "[BAP DEV OVERRIDE ACTIVE via config] Anti-tampering and task-grant checks are suspended; credentials, revocation and policy still apply."
 				}
 			}
 		}
@@ -2985,6 +2992,12 @@ func isZSPEnforcedClientSide() bool {
 	if v == "0" || v == "false" || v == "off" || v == "disabled" {
 		return false
 	}
+	// The same gate controls native-tool checks and the UserPromptSubmit grant
+	// instructions. An active human override must not ask the agent for grants.
+	if active, banner := devOverrideActive(); active {
+		fmt.Fprintln(os.Stderr, banner)
+		return false
+	}
 	return !isHooksDisabled()
 }
 
@@ -3103,9 +3116,12 @@ func main() {
 
 	// 2. Lifecycle Hook Handling: SessionStart
 	recordNativeCallback(payload)
-	if strings.EqualFold(payload.HookEventName,"PostToolUse") || strings.EqualFold(payload.HookEventName,"PostToolUseFailure") {
-		outcome:="succeeded";if strings.EqualFold(payload.HookEventName,"PostToolUseFailure"){outcome="failed"}
-		_ = spoolMCPObservation(payload,outcome)
+	if strings.EqualFold(payload.HookEventName, "PostToolUse") || strings.EqualFold(payload.HookEventName, "PostToolUseFailure") {
+		outcome := "succeeded"
+		if strings.EqualFold(payload.HookEventName, "PostToolUseFailure") {
+			outcome = "failed"
+		}
+		_ = spoolMCPObservation(payload, outcome)
 		fmt.Println("{}")
 		return
 	}
@@ -3143,7 +3159,7 @@ func main() {
 	}
 	prepareHookEvidence(payload, sessionID, activeCallerAppID)
 	activeMCPPayload = payload
-	_ = spoolMCPObservation(payload,"attempted")
+	_ = spoolMCPObservation(payload, "attempted")
 	fileHookEvidence.PID = targetPID
 	if revoked, reason := isSessionRevoked(resolveServerURL(), sessionID); revoked {
 		outputDecision("deny", reason, "This session cannot perform further governed tool actions.")
@@ -3763,7 +3779,9 @@ func outputDecisionWithUpdatedInput(decision, reason, context string, updatedInp
 	if err := spoolFileHookDecision(decision, reason); err != nil {
 		fmt.Fprintln(os.Stderr, "[BAP TELEMETRY] Unable to retain file-hook evidence:", err)
 	}
-	if strings.EqualFold(decision,"deny") { _ = spoolMCPObservation(activeMCPPayload,"denied") }
+	if strings.EqualFold(decision, "deny") {
+		_ = spoolMCPObservation(activeMCPPayload, "denied")
+	}
 	// If updatedInput has command, mirror across alternate tool input aliases
 	if updatedInput != nil {
 		if updatedInput.Command != "" {

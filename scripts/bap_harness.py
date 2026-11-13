@@ -27,7 +27,7 @@ import urllib.request
 import uuid
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-BAPSTATE_DIR = os.path.join(os.path.expanduser("~"), ".bapstate")
+BAPSTATE_DIR = os.environ.get("BAP_STATE_DIR") or os.path.join(os.path.expanduser("~"), "bin", ".bapstate")
 SESSIONS_DIR = os.path.join(BAPSTATE_DIR, "sessions")
 PROMPTS_DIR = os.path.join(BAPSTATE_DIR, "prompts")
 DEFAULT_SERVER_URL = "http://localhost:8080"

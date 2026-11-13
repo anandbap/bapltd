@@ -894,6 +894,20 @@ func isCedarInvariantViolation(reason string) bool {
 		strings.Contains(r, "protected")
 }
 
+// deniedCommandTarget uses the already-resolved boundary targets for guidance.
+// The decomposer may describe command data (for example echo's first argument)
+// rather than the redirection path that caused the boundary refusal.
+func deniedCommandTarget(executable, fullCommand, cmdArguments, workspaceRoot string) string {
+	if targets := authz.FindEscapingTargets(workspaceRoot, fullCommand); len(targets) > 0 {
+		return targets[0]
+	}
+	target := authz.Decompose(executable, fullCommand, cmdArguments).TargetEntity
+	if target == "" || target == executable {
+		return ""
+	}
+	return authz.ResolveCanonicalPath(target, workspaceRoot)
+}
+
 // RunExec handles the 'exec' subcommand.
 func RunExec(args []string) {
 	startTime := time.Now().UTC()
@@ -1378,15 +1392,7 @@ func RunExec(args []string) {
 	if !allowed {
 		suggestion := ""
 		decomp := authz.Decompose(executable, fullCommand, cmdArguments)
-		targetPath := decomp.TargetEntity
-		if targetPath == "" || targetPath == executable {
-			if parts := strings.Split(fullCommand, ">"); len(parts) > 1 {
-				targetPath = strings.TrimSpace(strings.Trim(parts[len(parts)-1], "\"'`"))
-			}
-		}
-		if targetPath != "" && !filepath.IsAbs(targetPath) {
-			targetPath = filepath.Clean(filepath.Join(authz.GetWorkspaceRoot(), targetPath))
-		}
+		targetPath := deniedCommandTarget(executable, fullCommand, cmdArguments, authz.GetWorkspaceRoot())
 
 		isCrossFolder := authz.CheckCommandWorkspaceEscape(authz.GetWorkspaceRoot(), fullCommand) || (targetPath != "" && authz.IsPathOutsideWorkspaceCanonical(authz.GetWorkspaceRoot(), targetPath))
 

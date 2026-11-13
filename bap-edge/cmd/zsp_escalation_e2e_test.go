@@ -370,9 +370,9 @@ func TestE2E_BroadAskIsNarrowedAndAudited(t *testing.T) {
 
 	// Refusals are classified, not opaque.
 	for act, want := range map[string]string{
-		"cli:*":                  "ZSP_WILDCARD_REJECTED",
+		"cli:*":                   "ZSP_WILDCARD_REJECTED",
 		"aws:secretsmanager:read": "ZSP_HARD_DENY",
-		"cli:python:exec":        "HIGH_RISK_OOB_GATE",
+		"cli:python:exec":         "HIGH_RISK_OOB_GATE",
 	} {
 		err := authorize(sess, "--actions", act)
 		if err == nil || zspDenialConcept(err) != want {

@@ -368,6 +368,7 @@
       <button id="navWorkstations" role="tab" aria-selected="false" type="button" title="Workstation Agents Registered &middot; Governed Workstations">💻 Registered Agents <span class="badge-count" id="navWsCount">0</span></button>
       <button id="navDiscovery" role="tab" aria-selected="false" type="button" title="Agent Tool Discovery &amp; Capability Coverage">🔍 Discovery &amp; Coverage</button>
       <button id="navOBO" role="tab" aria-selected="false" type="button" title="STS &amp; On-Behalf-Of Delegation Tokens">🔐 STS &amp; OBO Tokens <span class="badge-count" id="navOboCount">0</span></button>
+      <button id="navAdmin" role="tab" aria-selected="false" type="button">Admin &amp; approvals</button>
     </div>
     <div class="top-right">
       <span class="conn" id="buildVer" title="Build version and git commit" style="font-family:var(--mono);font-size:12px;color:var(--ink-3)"></span>
@@ -385,9 +386,9 @@
               <button type="submit" class="admin-submit" id="adminSubmitBtn">Verify</button>
             </div>
             <div class="admin-error" id="adminError" hidden>Incorrect admin token</div>
-            <div class="admin-hint">Unlocks unmasked prompt &amp; reply telemetry.</div>
+            <div class="admin-hint">Unlocks policies, approvals, fleet controls and unmasked telemetry.</div>
             <div id="adminStudioLink" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line)" hidden>
-              <a href="/#policies" target="_blank" style="font-weight:700;font-size:12px;color:var(--accent);text-decoration:none;display:inline-flex;align-items:center;gap:4px">
+              <a href="#admin" style="font-weight:700;font-size:12px;color:var(--accent);text-decoration:none;display:inline-flex;align-items:center;gap:4px">
                 Open Cedar Policy Studio &amp; What-If Simulator &rarr;
               </a>
             </div>
@@ -399,7 +400,7 @@
         <button id="modeLive" aria-pressed="true">Live</button>
         <button id="modeDemo" aria-pressed="false">Demo</button>
       </div>
-      <a class="link" href="/#policies" target="_blank" title="Open Cedar Policy Studio and What-If Simulator">Cedar Policy Studio</a>
+      <a class="link" href="#admin" title="Open policy administration and approvals">Policies &amp; approvals</a>
       <a class="link" href="/dashboard/v2/">Operator console</a>
     </div>
   </header>
@@ -410,6 +411,39 @@
   </section>
 
   <main>
+    <div id="viewAdmin" role="tabpanel" aria-labelledby="navAdmin" hidden>
+      <section class="panel">
+        <h1>Policies &amp; human approvals</h1>
+        <p>Review changes, test their impact, and record decisions before agents continue.</p>
+        <div id="adminLocked"><p>Verify your admin token to manage policies and review requests.</p><button class="btn" id="adminUnlock">Sign in as admin</button></div>
+        <p id="adminModeNotice" role="status" hidden>Administration is available in Live mode. Switch to Live to continue.</p>
+        <div id="adminWorkspace" hidden>
+          <section class="panel" aria-labelledby="approvalsHeading">
+            <h2 id="approvalsHeading">HITL approval inbox</h2>
+            <p>Control-plane step-up requests. Workstation-local ZSP requests are not synchronized to this inbox yet.</p>
+            <label>Reviewer email <input id="approvalReviewer" type="email" autocomplete="email" placeholder="you@company.com"></label>
+            <label>Approval lifetime <select id="approvalTTL"><option value="60">1 minute</option><option value="300" selected>5 minutes</option><option value="900">15 minutes</option></select></label>
+            <button class="btn" id="approvalsRefresh">Refresh inbox</button>
+            <p id="approvalsStatus" role="status" aria-live="polite">No requests loaded.</p>
+            <div id="approvalList"></div>
+          </section>
+          <section class="panel" aria-labelledby="policyHeading">
+            <h2 id="policyHeading">Cedar policy studio</h2>
+            <p id="policyVersion">Current policy not loaded.</p>
+            <button class="btn" id="policyReload">Reload current policy</button>
+            <label style="display:block;margin-top:16px">Policy draft<textarea id="policyDraft" rows="16" spellcheck="false" style="display:block;width:100%;font-family:var(--mono);padding:12px"></textarea></label>
+            <details><summary>Policy schema</summary><label>Schema JSON<textarea id="policySchema" rows="8" spellcheck="false" style="display:block;width:100%;font-family:var(--mono)"></textarea></label></details>
+            <details><summary>Additional simulation scenarios</summary><p>Optional JSON array of scenarios with id, executable, full_command, args and escapes_workspace. Recent audit records are included automatically.</p><label>Scenarios<textarea id="policyScenarios" rows="5" spellcheck="false" style="display:block;width:100%;font-family:var(--mono)">[]</textarea></label></details>
+            <p>Simulation evaluates Cedar rules against recorded commands. It does not verify operating-system sandbox containment.</p>
+            <div class="btns"><button class="btn" id="policyValidate">Validate draft</button><button class="btn" id="policySimulate">Simulate impact</button></div>
+            <pre id="policyResult" role="status" aria-live="polite" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+            <label>Change reason <input id="policyReason" placeholder="Explain why this policy should change" style="width:100%"></label>
+            <p>Deployment requires a validated draft and a simulation of that same draft. The fleet freeze state is preserved.</p>
+            <button class="btn" id="policyDeploy" disabled>Deploy reviewed policy</button>
+          </section>
+        </div>
+      </section>
+    </div>
     <!-- View 1: AI Agent Activity & Invariants -->
     <div id="viewActivity" role="tabpanel" aria-labelledby="navActivity">
       <section class="verdict" id="verdict" aria-labelledby="vHead">
@@ -744,6 +778,7 @@
 </div>
 
 <script src="/dashboard/discovery.js"></script>
+<script src="/dashboard/admin.js"></script>
 <script>
 (function () {
   'use strict';
@@ -847,6 +882,7 @@
     var stLink = $('adminStudioLink');
     if (stLink) stLink.hidden = !active;
     document.querySelectorAll('[data-admin-control]').forEach(function (el) { el.hidden = !active; });
+    if (window.BAPAdmin) window.BAPAdmin.authChanged();
   }
 
   function openAdminPopover() {
@@ -1048,13 +1084,14 @@
   }
 
   function decide(item, yes) {
+    if (S.mode !== 'demo') {
+      switchView('admin');
+      if (!isVerifiedAdmin()) openAdminPopover();
+      return;
+    }
     item.status = yes ? 'Approved. Recorded in the sealed log.' : 'Denied. The agent was told no.';
     S.waiting = S.queue.filter(function (x) { return !x.status; }).length;
-    if (S.mode === 'demo') { Demo.onDecision(yes); }
-    else {
-      apiFetch('/api/v1/escalation/resolve', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: item.id, approved: yes, reason: 'Decided in V3 executive view' }) }).catch(function () {});
-    }
+    Demo.onDecision(yes);
     render();
   }
 
@@ -1615,7 +1652,7 @@
     liveInFlight = true;
     var request = ++liveRequest;
     return Promise.allSettled([getJSON('/api/activity/summary'), getJSON('/api/activity/live'),
-                        getJSON('/api/v1/escalation/requests'), getJSON('/api/v1/control/chain/verify'),
+                        (typeof isVerifiedAdmin === 'function' && isVerifiedAdmin() ? getJSON('/api/v1/escalation/requests') : Promise.resolve(null)), getJSON('/api/v1/control/chain/verify'),
                         getJSON('/api/v1/agents'), getJSON('/api/v1/sessions'), getJSON('/api/v1/control/revocations')])
       .then(function (r) {
         if (request !== liveRequest) return;
@@ -1757,11 +1794,11 @@
         S.simHidden = simCount;
         S.blocked = sum && sum.denied_operation_records != null ? sum.denied_operation_records : null;
         if (S.shadow > 0) S.blocked = S.shadow; // audit mode: show flagged count instead
-        var reqs = esc_ ? (Array.isArray(esc_) ? esc_ : (esc_.requests || [])) : null;
-        var pend = reqs ? reqs.filter(function (x) { return !x.status || x.status === 'pending'; }) : null;
+        var reqs = esc_ ? (Array.isArray(esc_) ? esc_ : (esc_.escalations || esc_.requests || [])) : null;
+        var pend = reqs ? reqs.filter(function (x) { return !x.status || String(x.status).toUpperCase() === 'PENDING'; }) : null;
         S.waiting = pend ? pend.length : null;
         S.queue = (pend || []).slice(0, 3).map(function (x) {
-          return { id: x.id, title: x.action || x.command || 'Approval requested', why: x.reason || x.justification || 'An agent needs permission to continue.' };
+          return { id: x.escalation_id || x.id, title: x.action || x.command || 'Approval requested', why: x.reason || x.justification || 'An agent needs permission to continue.' };
         });
         S.record = chain ? (chain.valid === true || chain.status === 'valid' || chain.ok === true) : null;
         S.recordCount = chain && chain.total_events != null ? chain.total_events : null;
@@ -2122,6 +2159,7 @@
   /* ---------- mode switch ---------- */
   function setMode() {
     if (window.BAPDiscovery) window.BAPDiscovery.authChanged();
+    if (window.BAPAdmin) window.BAPAdmin.authChanged();
     $('modeLive').setAttribute('aria-pressed', S.mode === 'live');
     $('modeDemo').setAttribute('aria-pressed', S.mode === 'demo');
     $('ribbon').hidden = S.mode !== 'demo';
@@ -2134,8 +2172,8 @@
   }
   /* ---------- primary view navigation & tabs ---------- */
   function switchView(target) {
-    var isWs = target === 'workstations', isDiscovery = target === 'discovery', isObo = target === 'obo';
-    [['Activity',!isWs&&!isDiscovery&&!isObo],['Workstations',isWs],['Discovery',isDiscovery],['OBO',isObo]].forEach(function (entry) {
+    var isWs = target === 'workstations', isDiscovery = target === 'discovery', isObo = target === 'obo', isAdmin = target === 'admin';
+    [['Activity',!isWs&&!isDiscovery&&!isObo&&!isAdmin],['Workstations',isWs],['Discovery',isDiscovery],['OBO',isObo],['Admin',isAdmin]].forEach(function (entry) {
       var navBtn = $('nav'+entry[0]), viewDiv = $('view'+entry[0]);
       if (navBtn) navBtn.setAttribute('aria-selected', String(entry[1]));
       if (viewDiv) viewDiv.hidden = !entry[1];
@@ -2144,11 +2182,14 @@
     if (isWs) renderRegisteredAgents();
     if (isObo) renderOBOExchanges();
     if (window.BAPDiscovery) { if (isDiscovery) window.BAPDiscovery.show(); else window.BAPDiscovery.hide(); }
+    if (window.BAPAdmin) { if (isAdmin) window.BAPAdmin.show(); else window.BAPAdmin.hide(); }
   }
   $('navActivity').addEventListener('click', function () {switchView('activity');});
   $('navWorkstations').addEventListener('click', function () {switchView('workstations');});
   $('navDiscovery').addEventListener('click', function () {switchView('discovery');});
   $('navOBO').addEventListener('click', function () {switchView('obo');});
+  $('navAdmin').addEventListener('click', function () {switchView('admin');});
+  window.addEventListener('hashchange', function () { if (location.hash === '#admin' || location.hash === '#policies') { closeAdminPopover(); switchView('admin'); } });
   $('discoveryOpen').addEventListener('click', function () {switchView('discovery');});
 
   var oboRef = $('oboRefreshBtn');
@@ -2382,7 +2423,10 @@
   try { S.sessId = new URLSearchParams(location.search).get('session') || localStorage.getItem('aw3.session') || ''; } catch (_) { S.sessId = ''; }
   $('sessId').value = S.sessId;
   window.BAPDiscovery.init({getJSON:getJSON,apiFetch:apiFetch,isAdmin:function(){return isVerifiedAdmin();},hasAdminToken:function(){return isVerifiedAdmin();},isLive:function(){return S.mode==='live';},requireAdminLogin:openAdminPopover});
-  if (location.hash === '#discovery') {
+  window.BAPAdmin.init({getJSON:getJSON,apiFetch:apiFetch,isAdmin:isVerifiedAdmin,isLive:function(){return S.mode==='live';},requireAdminLogin:openAdminPopover,onDecision:function(){loadLive(true);}});
+  if (location.hash === '#admin' || location.hash === '#policies') {
+    switchView('admin');
+  } else if (location.hash === '#discovery') {
     switchView('discovery');
   } else if (location.hash === '#workstations') {
     switchView('workstations');

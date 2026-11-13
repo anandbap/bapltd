@@ -26,7 +26,7 @@ type Bundle struct {
 	PolicyCedar           string `json:"policy_cedar"`
 	SchemaJSON            string `json:"schema_json,omitempty"`
 	KillSwitch            bool   `json:"kill_switch"`
-	StrictToolEnforcement bool   `json:"strict_tool_enforcement"` // Tier 2 tool enforcement (Default: false)
+	StrictToolEnforcement bool   `json:"strict_tool_enforcement"`    // Tier 2 tool enforcement (Default: false)
 	EnforcementTier       string `json:"enforcement_tier,omitempty"` // "tier_1_standard" (default) or "tier_2_strict"
 	UpdatedAt             string `json:"updated_at"`
 	RiskTier              string `json:"risk_tier,omitempty"`
@@ -103,7 +103,20 @@ func (s *Store) SetSigningKey(key []byte) {
 func (s *Store) Update(cedarCode, schema string, killSwitch bool) Bundle {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.updateLocked(cedarCode, schema, killSwitch)
+}
 
+// UpdateIfVersion prevents an editor from overwriting a newer policy or freeze decision.
+func (s *Store) UpdateIfVersion(cedarCode, schema string, killSwitch bool, expected uint64) (Bundle, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.bundle.Version != expected {
+		return s.bundle, false
+	}
+	return s.updateLocked(cedarCode, schema, killSwitch), true
+}
+
+func (s *Store) updateLocked(cedarCode, schema string, killSwitch bool) Bundle {
 	hasher := sha256.New()
 	hasher.Write([]byte(cedarCode))
 	if schema != "" {
@@ -181,7 +194,12 @@ func (s *Store) GetPolicyBundleForTier(tier types.RiskTier) Bundle {
 func (s *Store) SetKillSwitch(killSwitch bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.bundle.KillSwitch == killSwitch {
+		return
+	}
 	s.bundle.KillSwitch = killSwitch
+	s.bundle.Version++
+	s.bundle.Signature = SignBundle(s.bundle.Version, s.bundle.Digest, s.bundle.KillSwitch, s.signingKey)
 	s.bundle.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 }
 
@@ -195,6 +213,7 @@ func (s *Store) SetStrictToolEnforcement(strict bool) {
 		s.bundle.EnforcementTier = "tier_1_standard"
 	}
 	s.bundle.Version++
+	s.bundle.Signature = SignBundle(s.bundle.Version, s.bundle.Digest, s.bundle.KillSwitch, s.signingKey)
 	s.bundle.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 }
 

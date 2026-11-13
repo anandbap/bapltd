@@ -11,17 +11,17 @@ import (
 )
 
 var (
-	ErrHookTampered      = errors.New("governance hook binary or configuration tampered or deleted on disk")
-	ErrSettingsTampered  = errors.New("managed settings modified to disable BAP protections")
-	ErrPolicyMissing     = errors.New("security policy bundle deleted or missing from disk")
+	ErrHookTampered     = errors.New("governance hook binary or configuration tampered or deleted on disk")
+	ErrSettingsTampered = errors.New("managed settings modified to disable BAP protections")
+	ErrPolicyMissing    = errors.New("security policy bundle deleted or missing from disk")
 )
 
 // IntegrityReport records the outcome of FIM validation
 type IntegrityReport struct {
-	Valid              bool     `json:"valid"`
-	IsQuarantined      bool     `json:"is_quarantined"`
-	QuarantineReason   string   `json:"quarantine_reason,omitempty"`
-	TamperDetails      []string `json:"tamper_details,omitempty"`
+	Valid            bool     `json:"valid"`
+	IsQuarantined    bool     `json:"is_quarantined"`
+	QuarantineReason string   `json:"quarantine_reason,omitempty"`
+	TamperDetails    []string `json:"tamper_details,omitempty"`
 }
 
 // VerifyIntegrity checks workspace hooks, managed configurations, and local quarantine status

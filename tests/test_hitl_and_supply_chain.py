@@ -39,6 +39,9 @@ class TestHitlAndSupplyChain(unittest.TestCase):
     def setUp(self):
         self.session_id = f"sess-hitl-{self._testMethodName}"
         self.env = os.environ.copy()
+        # The fixture invokes both operator commands and agent checks directly;
+        # it is not itself a sandboxed agent child, even when run through BAP.
+        self.env.pop("BAP_IN_BROKER", None)
         self.env["LTD_SOURCE"] = "antigravity"
         self.env["BAP_SESSION_ID"] = self.session_id
         self.env["BAP_ZSP"] = "off"

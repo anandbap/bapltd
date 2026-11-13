@@ -16,6 +16,38 @@ func isolate(t *testing.T) {
 	t.Setenv("BAP_ADMIN_TOKEN", "")
 	t.Setenv("BAP_DEV_MODE", "")
 	t.Setenv("BAP_DEV_OVERRIDE", "")
+	t.Setenv("BAP_ENVIRONMENT", "development")
+}
+
+func TestDevOverrideSkipsClientGrantChecks(t *testing.T) {
+	original := AllowDevOverrides
+	t.Cleanup(func() { AllowDevOverrides = original })
+	for _, tc := range []struct {
+		name, environment, buildFlag string
+		expiry                       time.Duration
+		wantEnforce                  bool
+	}{
+		{"active", "development", "true", time.Hour, false},
+		{"expired", "development", "true", -time.Hour, true},
+		{"production", "production", "true", time.Hour, true},
+		{"release", "development", "false", time.Hour, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			AllowDevOverrides = tc.buildFlag
+			t.Setenv("BAP_ENVIRONMENT", tc.environment)
+			t.Setenv("BAP_ZSP", "enforce")
+			t.Setenv("BAP_DEV_OVERRIDE", time.Now().Add(tc.expiry).UTC().Format(time.RFC3339))
+			if got := isZSPEnforcedClientSide(); got != tc.wantEnforce {
+				t.Fatalf("client grant enforcement=%v, want=%v", got, tc.wantEnforce)
+			}
+			if !tc.wantEnforce {
+				if allowed, reason, suggestion := evaluateNativeToolWithBapedge("sess-no-grants", "claude-code", "Read", "README.md"); !allowed || reason != "" || suggestion != "" {
+					t.Fatalf("override requested a grant: allowed=%v reason=%q suggestion=%q", allowed, reason, suggestion)
+				}
+			}
+		})
+	}
 }
 
 func TestDevOverrideActive(t *testing.T) {

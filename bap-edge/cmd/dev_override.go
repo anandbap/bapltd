@@ -175,8 +175,13 @@ func devOverrideActive() (bool, string) {
 		filepath.Join(".bap", "dev-override.json"),
 		"dev-override.json",
 	}
+	if dir := strings.TrimSpace(os.Getenv("BAP_STATE_DIR")); dir != "" {
+		markerCandidates = append(markerCandidates, filepath.Join(dir, "dev-override.json"))
+	}
 	if home, _ := os.UserHomeDir(); home != "" {
-		markerCandidates = append(markerCandidates, filepath.Join(home, ".bapstate", "dev-override.json"))
+		markerCandidates = append(markerCandidates,
+			filepath.Join(home, "bin", ".bapstate", "dev-override.json"),
+			filepath.Join(home, ".bapstate", "dev-override.json"))
 	}
 	for _, m := range markerCandidates {
 		if data, err := os.ReadFile(m); err == nil {

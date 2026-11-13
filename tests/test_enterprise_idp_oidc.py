@@ -42,7 +42,9 @@ class TestEnterpriseIdPFederation(unittest.TestCase):
             "-oidc-allowed-domains=corp.internal,enterprise.com",
             "-db=:memory:",
         ]
-        cls.dev_proc = subprocess.Popen(dev_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        dev_env = os.environ.copy()
+        dev_env["BAP_ENVIRONMENT"] = "development"
+        cls.dev_proc = subprocess.Popen(dev_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=dev_env)
 
         # 2. Start Control Plane in PROD mode
         prod_cmd = [
@@ -54,7 +56,9 @@ class TestEnterpriseIdPFederation(unittest.TestCase):
             "-oidc-allowed-domains=corp.internal,enterprise.com",
             "-db=:memory:",
         ]
-        cls.prod_proc = subprocess.Popen(prod_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        prod_env = os.environ.copy()
+        prod_env["BAP_ENVIRONMENT"] = "production"
+        cls.prod_proc = subprocess.Popen(prod_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=prod_env)
 
         # Wait for both servers to be healthy
         cls._wait_for_health(f"http://127.0.0.1:{DEV_PORT}")
