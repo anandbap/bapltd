@@ -1300,7 +1300,7 @@ func isTargetAuthorized(workspaceRoot, sessionID, targetPath, action string) (bo
 		if home, err := os.UserHomeDir(); err == nil && home != "" && strings.EqualFold(cleanTarget, filepath.Clean(home)) {
 			isSecret = true
 		}
-		for _, sys := range []string{"/etc", "/usr", "/bin", "/sbin", "/boot", "/sys", "/proc", "/var/lib", "c:/windows", "c:/program files", "c:/program files (x86)", "c:/programdata"} {
+		for _, sys := range []string{"/etc", "/usr", "/bin", "/sbin", "/boot", "/sys", "/proc", "/var/lib", "/private/etc", "/private/var/db", "/system", "/library", "c:/windows", "c:/program files", "c:/program files (x86)", "c:/programdata"} {
 			if n == sys || strings.HasPrefix(n, sys+"/") {
 				isSecret = true
 			}

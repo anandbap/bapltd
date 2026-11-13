@@ -4,11 +4,18 @@ import (
 	"bap-edge/internal/httptransport"
 	"bap-edge/internal/policystore"
 	"bap-edge/internal/state"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -108,6 +115,47 @@ func TestBootstrap_DegradedModeWithLocalPolicy(t *testing.T) {
 	}
 	if res.PolicyPath == "" {
 		t.Errorf("expected non-empty PolicyPath in degraded mode")
+	}
+}
+
+// An integrity failure fails closed - unless a human has activated the developer override, which
+// exists precisely so BAP never blocks the person who is repairing BAP.
+func TestBootstrap_TamperedPolicyFailsClosedButDevOverrideDegrades(t *testing.T) {
+	state.ResetForTesting()
+	defer state.ResetForTesting()
+	os.Setenv("BAP_TEST_MODE", "1")
+	defer os.Unsetenv("BAP_TEST_MODE")
+	tempDir := t.TempDir()
+	os.Setenv("BAP_STATE_DIR", tempDir)
+	defer os.Unsetenv("BAP_STATE_DIR")
+
+	// Managed machine (pinned key) whose signed state has been deleted.
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	sum := sha256.Sum256(pub)
+	store := policystore.New(policystore.DefaultPolicyDir())
+	if err := store.PinKey(hex.EncodeToString(sum[:8]), base64.StdEncoding.EncodeToString(pub), "", ""); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(store.Directory(), "policy.cedar"), []byte("permit(principal, action, resource);"), 0600)
+
+	unreachable := "http://127.0.0.1:59999"
+
+	DevOverrideActive = nil
+	if _, err := BootstrapControlPlane(unreachable); !errors.Is(err, policystore.ErrPolicyTampered) {
+		t.Fatalf("without override a tampered managed machine must fail closed, got %v", err)
+	}
+
+	DevOverrideActive = func() bool { return true }
+	defer func() { DevOverrideActive = nil }()
+	res, err := BootstrapControlPlane(unreachable)
+	if err != nil {
+		t.Fatalf("developer override must not be locked out by an integrity failure: %v", err)
+	}
+	if !res.DegradedMode || res.Connected || res.PolicyPath == "" {
+		t.Fatalf("expected flagged degraded mode with a policy path, got %+v", res)
+	}
+	if !strings.Contains(res.StatusText, "DEV OVERRIDE") {
+		t.Fatalf("degradation must be loudly labelled, got %q", res.StatusText)
 	}
 }
 

@@ -308,6 +308,34 @@ func (s *Store) LoadState() (PolicyState, error) {
 	return state, nil
 }
 
+// UnverifiedPolicyPath returns a local policy file WITHOUT verifying or caching anything. It exists
+// only for the human-activated developer override: while someone is repairing BAP itself, an
+// integrity failure must not lock them out of the tool they are fixing. Callers must not trust the
+// result as signed rules, must not Accept() it, and must surface it as degraded/unverified.
+func (s *Store) UnverifiedPolicyPath() string {
+	cached := filepath.Join(s.directory, "policy.cedar")
+	if data, err := os.ReadFile(cached); err == nil && len(data) > 0 {
+		return cached
+	}
+	var candidates []string
+	if exe, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "policy.cedar"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, "bin", "policy.cedar"), filepath.Join(home, ".local", "bin", "policy.cedar"))
+	}
+	candidates = append(candidates, "policy.cedar", filepath.Join("bap-edge", "policy.cedar"), filepath.Join("..", "policy.cedar"))
+	if ws := authz.GetWorkspaceRoot(); ws != "" {
+		candidates = append(candidates, filepath.Join(ws, "policy.cedar"), filepath.Join(ws, "bap-edge", "policy.cedar"))
+	}
+	for _, c := range candidates {
+		if data, err := os.ReadFile(c); err == nil && len(data) > 0 {
+			return c
+		}
+	}
+	return ""
+}
+
 // Current returns the cached policy path and verifies kill-switch is not active
 // and cryptographic SHA-256 digest integrity is intact.
 // If the cache directory is uninitialized, it falls back to checking local search paths.

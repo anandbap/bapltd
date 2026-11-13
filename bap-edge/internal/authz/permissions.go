@@ -164,11 +164,16 @@ func isOverrideExcludedPath(p string) bool {
 	if filepath.Dir(clean) == clean { // "/" or "C:\"
 		return true
 	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" && strings.EqualFold(clean, filepath.Clean(home)) {
-		return true
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if strings.EqualFold(clean, filepath.Clean(home)) {
+			return true
+		}
+		if resolved, rErr := filepath.EvalSymlinks(home); rErr == nil && strings.EqualFold(clean, filepath.Clean(resolved)) {
+			return true
+		}
 	}
 	n := strings.ToLower(filepath.ToSlash(clean))
-	for _, sys := range []string{"/etc", "/usr", "/bin", "/sbin", "/boot", "/sys", "/proc", "/var/lib", "c:/windows", "c:/program files", "c:/program files (x86)", "c:/programdata"} {
+	for _, sys := range []string{"/etc", "/usr", "/bin", "/sbin", "/boot", "/sys", "/proc", "/var/lib", "/private/etc", "/private/var/db", "/system", "/library", "c:/windows", "c:/program files", "c:/program files (x86)", "c:/programdata"} {
 		if n == sys || strings.HasPrefix(n, sys+"/") {
 			return true
 		}

@@ -22,6 +22,10 @@ const (
 var (
 	ErrNoPolicyAvailable = errors.New("policy.cedar not available: control plane unreachable (https://bap-controlplane.onrender.com failed after 30s cold-start budget, local 8443 and 8080 offline) and no local policy found. bapedge cannot start")
 
+	// DevOverrideActive is wired by cmd (like authz.DevOverrideActive) so the integrity gate can
+	// honor the human-activated developer override without importing cmd.
+	DevOverrideActive func() bool
+
 	// DefaultProbeTransport allows in-memory test mocks without creating OS loopback sockets.
 	DefaultProbeTransport http.RoundTripper
 )
@@ -211,6 +215,25 @@ func BootstrapControlPlane(serverOverride string) (BootstrapResult, error) {
 	// Control plane is offline / unreachable: check for local policy.cedar
 	cedarPath, _, stateRec, err := policyStore.Current()
 	if err != nil || cedarPath == "" {
+		integrityFailure := errors.Is(err, policystore.ErrPolicyTampered) || errors.Is(err, policystore.ErrDigestMismatch)
+		if integrityFailure && DevOverrideActive != nil && DevOverrideActive() {
+			// Developer override: a human is repairing BAP itself. Integrity failures must not lock
+			// them out, so run on the unverified local policy, loudly flagged as degraded.
+			// Nothing is accepted or re-cached; credentials/revocation/Cedar rules still apply.
+			if p := policyStore.UnverifiedPolicyPath(); p != "" {
+				fallbackURL := activeURL
+				if fallbackURL == "" {
+					fallbackURL = serverURL
+				}
+				return BootstrapResult{
+					ActiveURL:    fallbackURL,
+					Connected:    false,
+					DegradedMode: true,
+					PolicyPath:   p,
+					StatusText:   fmt.Sprintf("DEV OVERRIDE: policy integrity check bypassed (%v). Running on UNVERIFIED local policy %s until the control plane re-issues signed rules.", err, p),
+				}, nil
+			}
+		}
 		if errors.Is(err, policystore.ErrPolicyTampered) {
 			// FAIL-CLOSED: the cached signed rules were altered/removed and the control plane
 			// cannot re-issue them right now. Refuse to run on them.

@@ -13,7 +13,7 @@ import (
 
 var systemTrustPrefixes = []string{
 	"c:/windows", "c:/program files", "c:/program files (x86)", "c:/programdata",
-	"/etc", "/usr", "/bin", "/sbin", "/sys", "/proc", "/boot", "/dev", "/lib", "/lib64", "/var/lib",
+	"/etc", "/usr", "/bin", "/sbin", "/sys", "/proc", "/boot", "/dev", "/lib", "/lib64", "/var/lib", "/private/etc", "/private/var/db", "/system", "/library",
 }
 
 // ValidateTrustTarget returns an error when path is too broad or too sensitive to ever be trusted.
@@ -35,13 +35,26 @@ func ValidateTrustTarget(p string) error {
 		}
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		h := filepath.Clean(home)
-		if strings.EqualFold(clean, h) {
-			return fmt.Errorf("refusing to trust the whole home directory (%s); trust a specific subfolder such as Downloads", p)
+		// Compare against the home directory as written AND as the filesystem resolves it (8.3 short
+		// names, symlinks such as /Users -> /private/...): callers pass canonicalised paths.
+		homes := []string{filepath.Clean(home)}
+		if resolved, rErr := filepath.EvalSymlinks(home); rErr == nil && resolved != "" {
+			homes = append(homes, filepath.Clean(resolved))
 		}
-		// An ancestor of the home directory (C:\Users, C:\) would expose it.
-		if rel, relErr := filepath.Rel(clean, h); relErr == nil && rel != "." && !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel) {
-			return fmt.Errorf("refusing to trust %s: it contains the home directory", p)
+		cleans := []string{clean}
+		if resolved, rErr := filepath.EvalSymlinks(clean); rErr == nil && resolved != "" {
+			cleans = append(cleans, filepath.Clean(resolved))
+		}
+		for _, h := range homes {
+			for _, c := range cleans {
+				if strings.EqualFold(c, h) {
+					return fmt.Errorf("refusing to trust the whole home directory (%s); trust a specific subfolder such as Downloads", p)
+				}
+				// An ancestor of the home directory (C:\Users, C:\) would expose it.
+				if rel, relErr := filepath.Rel(c, h); relErr == nil && rel != "." && !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel) {
+					return fmt.Errorf("refusing to trust %s: it contains the home directory", p)
+				}
+			}
 		}
 	}
 	return nil

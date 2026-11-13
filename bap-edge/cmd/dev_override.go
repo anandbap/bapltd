@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"bap-edge/internal/authz"
+	"bap-edge/internal/config"
 	"bap-edge/pkg/version"
 )
 
@@ -22,6 +23,7 @@ func init() {
 		active, _ := devOverrideActive()
 		return active
 	}
+	config.DevOverrideActive = authz.DevOverrideActive
 }
 
 // taskGrantsEnforced keeps broker, native-tool, and plugin checks consistent.
