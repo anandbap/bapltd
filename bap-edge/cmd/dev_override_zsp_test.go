@@ -34,6 +34,9 @@ func TestDevOverrideExecHelper(t *testing.T) {
 }
 
 func TestDevOverrideExecWithoutGrants(t *testing.T) {
+	// The commands used here are read-only (exempt by default); strict mode keeps this test about
+	// the override, not the read exemption.
+	t.Setenv("BAP_ZSP_STRICT_READS", "1")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte("{}"))
@@ -122,6 +125,7 @@ func TestDevOverrideExecWithoutGrants(t *testing.T) {
 }
 
 func TestDevOverrideTaskGrantEnforcement(t *testing.T) {
+	t.Setenv("BAP_ZSP_STRICT_READS", "1") // see TestDevOverrideExecWithoutGrants
 	// Keep developer markers and identity state isolated from the workstation.
 	root := t.TempDir()
 	wd, err := os.Getwd()

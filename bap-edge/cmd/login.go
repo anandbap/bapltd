@@ -451,7 +451,7 @@ func RunLogin(args []string) error {
 
 	// Pin the control plane's policy-signing key and this machine's asset id from the
 	// authenticated enrollment. The user never sees or handles a key.
-	pinPolicyEnrollment(tokenResp.PolicyKeyID, tokenResp.PolicyPublicKey, tokenResp.PolicyAssetID)
+	pinPolicyEnrollment(tokenResp.PolicyKeyID, tokenResp.PolicyPublicKey, tokenResp.PolicyAssetID, *serverURL)
 
 	fmt.Println()
 	fmt.Printf("[✓] Corporate Identity Verified via %s\n", idpLabel)

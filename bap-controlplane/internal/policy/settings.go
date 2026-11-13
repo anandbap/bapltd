@@ -55,6 +55,14 @@ func (s *Store) BindEnrolledAsset(instanceID, reportedAssetID string) string {
 	if s.enrolledAssets == nil {
 		s.enrolledAssets = map[string]string{}
 	}
+	// An older client re-enrolling reports no hardware id. That must never downgrade a machine's
+	// existing binding to an id derived from its instance name (the pinned client would then
+	// reject every bundle it is sent).
+	if strings.TrimSpace(reportedAssetID) == "" {
+		if cur, ok := s.enrolledAssets[instanceID]; ok && cur != "" {
+			return cur
+		}
+	}
 	if s.enrolledAssets[instanceID] != asset {
 		s.enrolledAssets[instanceID] = asset
 		_ = s.saveSettingsLocked()
@@ -88,7 +96,11 @@ func (s *Store) EnablePersistence(path string) error {
 	s.settingsPath = path
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return s.saveSettingsLocked()
+		// First start: nothing to restore. Failing to write the initial file is not fatal (the
+		// settings simply stay in memory until a later write succeeds); only an unreadable or
+		// corrupt EXISTING file refuses to start, because enforcement settings would be unknown.
+		_ = s.saveSettingsLocked()
+		return nil
 	}
 	if err != nil {
 		return err
@@ -123,11 +135,33 @@ func (s *Store) saveSettingsLocked() error {
 	if err := os.MkdirAll(filepath.Dir(s.settingsPath), 0700); err != nil {
 		return err
 	}
-	tmp := s.settingsPath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
+	// A unique temp file per write: two control planes pointed at one directory (tests, a
+	// misconfigured second instance) must never collide on a shared ".tmp" name.
+	tmpFile, err := os.CreateTemp(filepath.Dir(s.settingsPath), "policy-settings-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.settingsPath)
+	tmp := tmpFile.Name()
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	// Windows refuses to replace a file that another writer/reader has open for a moment; the
+	// replacement succeeds as soon as they let go, so retry briefly before giving up.
+	var renameErr error
+	for attempt := 0; attempt < 40; attempt++ {
+		if renameErr = os.Rename(tmp, s.settingsPath); renameErr == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(5+attempt) * time.Millisecond)
+	}
+	_ = os.Remove(tmp)
+	return renameErr
 }
 
 func (s *Store) bumpLocked() {

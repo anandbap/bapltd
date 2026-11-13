@@ -280,7 +280,10 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("X-BAP-Server-Epoch", s.serverEpoch)
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Referrer-Policy", "no-referrer")
+		// "same-origin", not "no-referrer": with no-referrer browsers send `Origin: null` on
+		// same-origin form POSTs (the device-login portal), which the origin check rightly rejects.
+		// same-origin still never leaks the URL to another site.
+		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Add("Vary", "Origin")
 		origin := r.Header.Get("Origin")
@@ -297,6 +300,13 @@ func (s *Server) Handler() http.Handler {
 		isSameOrigin := (origin == sameOrigin) ||
 			(origin == "https://"+host) || (origin == "http://"+host) ||
 			(origin == "https://"+r.Host) || (origin == "http://"+r.Host)
+		// Some browsers/privacy settings send `Origin: null` on a same-origin form POST. The
+		// browser-set (unforgeable by page script) Sec-Fetch-Site header proves it really is
+		// same-origin, so accept exactly that case; any other "null" origin stays rejected.
+		nullSameOrigin := origin == "null" && strings.EqualFold(r.Header.Get("Sec-Fetch-Site"), "same-origin")
+		if nullSameOrigin {
+			origin = ""
+		}
 		if origin != "" {
 			if !isSameOrigin && !s.allowedOrigins[origin] {
 				writeError(w, http.StatusForbidden, "Browser origin is not allowed")

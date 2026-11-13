@@ -342,8 +342,13 @@ func runStart(args []string) {
 	signerDir := os.Getenv("BAP_STATE_DIR")
 	if signerDir == "" {
 		signerDir = filepath.Dir(resolvedDB)
-		if resolvedDB == ":memory:" || resolvedDB == "memory" {
-			signerDir = "."
+	}
+	if resolvedDB == ":memory:" || resolvedDB == "memory" {
+		// An in-memory control plane is ephemeral by definition (dev/test): its signing key and
+		// settings live in a private temp directory, never in the working directory (which would
+		// leave a stray key file in the repo) and never in a directory shared with another instance.
+		if d, mkErr := os.MkdirTemp("", "bapcp-ephemeral-"); mkErr == nil {
+			signerDir = d
 		}
 	}
 	if sg, sgErr := policy.LoadOrCreateSigner(signerDir); sgErr != nil {

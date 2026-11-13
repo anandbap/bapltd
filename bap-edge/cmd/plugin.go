@@ -1991,7 +1991,11 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 
 	// Zero Standing Privileges Enforcement for real agent sessions
 	if sessionID != "synthetic-probe-session" && taskGrantsEnforced() &&
-		!(command == "" && authz.IsWorkspaceReadOnlyToolCall(toolName, filePath, wsRoot)) {
+		!(command == "" && authz.IsWorkspaceReadOnlyToolCall(toolName, filePath, wsRoot)) &&
+		!(command != "" && func() bool {
+			en, ea := sandbox.ParseCommand(command)
+			return authz.IsLocalReadOnlyCommand(command, en, ea, wsRoot)
+		}()) {
 		if command == "" && filePath == "" && toolName == "" {
 			return types.ExecResponse{
 				Allowed:    false,

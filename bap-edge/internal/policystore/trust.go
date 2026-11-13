@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,8 +28,47 @@ type TrustAnchor struct {
 	PublicKey string `json:"public_key"` // standard base64
 	// AssetID is the machine identity bound at enrollment. Empty for machines that pinned the key
 	// by first contact before enrollment binding existed; they upgrade on their first authenticated sync.
-	AssetID  string `json:"asset_id,omitempty"`
-	PinnedAt string `json:"pinned_at"`
+	AssetID string `json:"asset_id,omitempty"`
+	// ServerURL is the control plane this machine enrolled with. Policy is only ever taken from
+	// it: a different control plane (a local test instance, a look-alike) is ignored rather than
+	// allowed to change, break or hijack this machine's rules.
+	ServerURL string `json:"server_url,omitempty"`
+	PinnedAt  string `json:"pinned_at"`
+}
+
+// normalizeServerURL reduces a control plane URL to scheme://host[:port], lower case, so that
+// trailing slashes and paths do not make the same server look different.
+func normalizeServerURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return strings.ToLower(strings.TrimRight(raw, "/"))
+	}
+	return strings.ToLower(u.Scheme + "://" + u.Host)
+}
+
+// foreignServer reports whether serverURL is a control plane other than the one this machine
+// enrolled with. Machines pinned before the URL was recorded (empty) are not affected.
+func (s *Store) foreignServer(serverURL string) bool {
+	pin, ok := s.LoadPin()
+	if !ok || pin.ServerURL == "" {
+		return false
+	}
+	return normalizeServerURL(serverURL) != pin.ServerURL
+}
+
+// adoptServerURL records the control plane for a machine that was pinned before URLs were
+// recorded. It is only called after a bundle verified under the already-pinned key.
+func (s *Store) adoptServerURL(serverURL string) {
+	pin, ok := s.LoadPin()
+	if !ok || pin.ServerURL != "" || pin.PublicKey == "" {
+		return
+	}
+	pin.ServerURL = normalizeServerURL(serverURL)
+	_ = s.writePin(pin)
 }
 
 // CredentialProvider returns the enrolled workstation credential (OTC or OIDC session token)
@@ -68,7 +108,7 @@ func (s *Store) Managed() bool {
 
 // PinKey pins the control plane's key on first contact. Re-pinning the SAME key is a no-op;
 // pinning a different key is refused (rotation must be authorised by the current key).
-func (s *Store) PinKey(keyID, publicKeyB64, assetID string) error {
+func (s *Store) PinKey(keyID, publicKeyB64, assetID, serverURL string) error {
 	raw, err := base64.StdEncoding.DecodeString(publicKeyB64)
 	if err != nil || len(raw) != ed25519.PublicKeySize {
 		return fmt.Errorf("invalid policy public key")
@@ -79,18 +119,27 @@ func (s *Store) PinKey(keyID, publicKeyB64, assetID string) error {
 		}
 		return fmt.Errorf("%w: control plane offered a different signing key (%s) than the pinned one (%s); re-run `bap login` to re-enroll if the control plane key was replaced", ErrPolicyTampered, keyID, existing.KeyID)
 	}
-	return s.writePin(TrustAnchor{KeyID: keyID, PublicKey: publicKeyB64, AssetID: assetID, PinnedAt: time.Now().UTC().Format(time.RFC3339)})
+	return s.writePin(TrustAnchor{KeyID: keyID, PublicKey: publicKeyB64, AssetID: assetID, ServerURL: normalizeServerURL(serverURL), PinnedAt: time.Now().UTC().Format(time.RFC3339)})
 }
 
 // PinEnrollment pins the trust anchor handed out by an AUTHENTICATED enrollment (OTC register or
 // OIDC login). Unlike first-contact pinning it may replace an existing pin: the enrollment
 // itself proved who the control plane is, so this is also the recovery path after a key loss.
-func (s *Store) PinEnrollment(keyID, publicKeyB64, assetID string) error {
+func (s *Store) PinEnrollment(keyID, publicKeyB64, assetID, serverURL string) error {
 	raw, err := base64.StdEncoding.DecodeString(publicKeyB64)
 	if err != nil || len(raw) != ed25519.PublicKeySize {
 		return fmt.Errorf("invalid policy public key")
 	}
-	return s.writePin(TrustAnchor{KeyID: keyID, PublicKey: publicKeyB64, AssetID: assetID, PinnedAt: time.Now().UTC().Format(time.RFC3339)})
+	// A machine already enrolled with one control plane must not be silently re-pointed at a
+	// different one (a test instance, a look-alike, a mistyped URL): that would swap the rules
+	// it trusts. Re-enrolling with the SAME control plane (key rotation, key loss) is always fine;
+	// moving to another control plane is a deliberate act.
+	if existing, ok := s.LoadPin(); ok && existing.ServerURL != "" && serverURL != "" &&
+		normalizeServerURL(serverURL) != existing.ServerURL && os.Getenv("BAP_ALLOW_REPIN") != "1" {
+		return fmt.Errorf("%w: this machine is enrolled with %s; refusing to re-pin to %s (set BAP_ALLOW_REPIN=1 for a deliberate move to a different control plane)",
+			ErrPolicyTampered, existing.ServerURL, normalizeServerURL(serverURL))
+	}
+	return s.writePin(TrustAnchor{KeyID: keyID, PublicKey: publicKeyB64, AssetID: assetID, ServerURL: normalizeServerURL(serverURL), PinnedAt: time.Now().UTC().Format(time.RFC3339)})
 }
 
 func (s *Store) writePin(ta TrustAnchor) error {
@@ -134,7 +183,7 @@ func (s *Store) followRotation(pin TrustAnchor, b Bundle) (TrustAnchor, bool) {
 		}
 		curID, curPub = l.NewKeyID, l.NewPublic
 		if curID == b.KeyID {
-			next := TrustAnchor{KeyID: curID, PublicKey: curPub, AssetID: pin.AssetID, PinnedAt: time.Now().UTC().Format(time.RFC3339)}
+			next := TrustAnchor{KeyID: curID, PublicKey: curPub, AssetID: pin.AssetID, ServerURL: pin.ServerURL, PinnedAt: time.Now().UTC().Format(time.RFC3339)}
 			if s.writePin(next) != nil {
 				return pin, false
 			}
@@ -166,7 +215,7 @@ func (s *Store) pinFromServer(client *http.Client, serverURL, expectKeyID, asset
 	if pk.Alg != "ed25519" || pk.KeyID == "" || pk.KeyID != expectKeyID {
 		return fmt.Errorf("control plane key id %q does not match signed bundle key id %q", pk.KeyID, expectKeyID)
 	}
-	return s.PinKey(pk.KeyID, pk.PublicKey, assetID)
+	return s.PinKey(pk.KeyID, pk.PublicKey, assetID, serverURL)
 }
 
 // canonicalPayload must match bap-controlplane/internal/policy.CanonicalBundlePayload byte for byte.
@@ -199,7 +248,7 @@ func verifyBundleAgainstPin(pin TrustAnchor, assetID string, b Bundle, digest st
 		return fmt.Errorf("%w: bundle signed by unpinned key %s", ErrPolicyTampered, b.KeyID)
 	}
 	if b.AssetID != assetID {
-		return fmt.Errorf("%w: bundle was issued for asset %q, not this machine (%q)", ErrPolicyTampered, b.AssetID, assetID)
+		return fmt.Errorf("%w: bundle was issued for asset %q, not this machine (%q); if the control plane was reinstalled or this machine's enrollment changed, run `bap login` to re-enroll", ErrPolicyTampered, b.AssetID, assetID)
 	}
 	if !verifyEd25519(pin, canonicalPayload(assetID, b.Version, digest, b.KillSwitch, b.StrictToolEnforcement, b.EnforcementTier, b.ZSPReadExempt, b.UpdatedAt), b.SignatureEd25519) {
 		return fmt.Errorf("%w: signature does not match bundle contents", ErrPolicyTampered)

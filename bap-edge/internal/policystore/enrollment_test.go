@@ -2,7 +2,10 @@ package policystore
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -22,7 +25,7 @@ func TestEnrollmentPinnedKeyAndAssetVerifyAuthenticatedSync(t *testing.T) {
 	cp := newFakeCP(t)
 	cp.enrolledAsset = "asset-enrolled"
 	s := New(t.TempDir()) // no SetAssetID: the asset must come from the pin
-	if err := s.PinEnrollment(cp.keyID, pubB64(cp), "asset-enrolled"); err != nil {
+	if err := s.PinEnrollment(cp.keyID, pubB64(cp), "asset-enrolled", cp.srv.URL); err != nil {
 		t.Fatal(err)
 	}
 	withCredential(t, cp.token)
@@ -41,7 +44,7 @@ func TestEnrollmentPinnedKeyAndAssetVerifyAuthenticatedSync(t *testing.T) {
 func TestBundleForAnotherAssetIsRejectedWhenAssetCameFromEnrollment(t *testing.T) {
 	cp := newFakeCP(t)
 	s := New(t.TempDir())
-	_ = s.PinEnrollment(cp.keyID, pubB64(cp), "asset-enrolled")
+	_ = s.PinEnrollment(cp.keyID, pubB64(cp), "asset-enrolled", cp.srv.URL)
 	if err := s.Accept(cp.bundleFor("asset-someone-else")); !errors.Is(err, ErrPolicyTampered) {
 		t.Fatalf("a bundle issued for another machine must be rejected, got %v", err)
 	}
@@ -77,7 +80,7 @@ func TestLegacyFirstContactPinUpgradesOnAuthenticatedSync(t *testing.T) {
 func TestLegacyUpgradeNeedsAKeyMatchingBundle(t *testing.T) {
 	cp := newFakeCP(t)
 	s := New(t.TempDir())
-	_ = s.PinEnrollment(cp.keyID, pubB64(cp), "") // legacy-style pin: no asset
+	_ = s.PinEnrollment(cp.keyID, pubB64(cp), "", cp.srv.URL) // legacy-style pin: no asset
 	withCredential(t, "any-token")
 
 	rogue := newFakeCP(t)
@@ -96,14 +99,140 @@ func TestReEnrollmentReplacesPinAfterKeyLoss(t *testing.T) {
 	s := newManagedStore(t, old, "asset-A")
 	fresh := newFakeCP(t) // the control plane lost its key and generated a new one
 
-	if err := s.PinKey(fresh.keyID, pubB64(fresh), ""); !errors.Is(err, ErrPolicyTampered) {
+	if err := s.PinKey(fresh.keyID, pubB64(fresh), "", ""); !errors.Is(err, ErrPolicyTampered) {
 		t.Fatalf("silently accepting a new key would defeat pinning, got %v", err)
 	}
-	if err := s.PinEnrollment(fresh.keyID, pubB64(fresh), "asset-A"); err != nil {
+	// Same control plane (its URL), new key: the key-loss recovery path.
+	if err := s.PinEnrollment(fresh.keyID, pubB64(fresh), "asset-A", old.srv.URL); err != nil {
 		t.Fatalf("re-enrollment must be able to replace the pin: %v", err)
 	}
 	if err := s.Accept(fresh.bundleFor("asset-A")); err != nil {
 		t.Fatalf("bundles from the re-enrolled key must verify: %v", err)
+	}
+}
+
+// A machine enrolled with control plane A must never take policy from, or be broken by, a
+// different control plane (a local test instance on a developer workstation, a look-alike).
+func TestOtherControlPlaneIsIgnoredAndCannotBreakTheMachine(t *testing.T) {
+	real := newFakeCP(t)
+	s := newManagedStore(t, real, "asset-A") // first contact pins `real` and its URL
+	before, _, _, err := s.Current()
+	if err != nil || before == "" {
+		t.Fatalf("baseline: %v", err)
+	}
+
+	other := newFakeCP(t) // different key, different URL (e.g. the pilot's throwaway control plane)
+	other.readEx = false
+	other.version = 99
+	_, fallback, err := s.SyncWithServer(other.srv.URL, "", 2*time.Second)
+	if err != nil || !fallback {
+		t.Fatalf("a foreign control plane must be skipped as if offline: fallback=%v err=%v", fallback, err)
+	}
+	if other.lastAuth != "" {
+		t.Fatal("a foreign control plane must never even receive a request (no credential leak)")
+	}
+	_, _, st, err := s.Current()
+	if err != nil || st.Version != 1 || !st.ZSPReadExempt {
+		t.Fatalf("enrolled rules must be unchanged and still verify: %+v err=%v", st, err)
+	}
+	if pin, _ := s.LoadPin(); pin.KeyID != real.keyID {
+		t.Fatal("pin must be unchanged")
+	}
+}
+
+func TestForeignControlPlaneDoesNotMaskTampering(t *testing.T) {
+	real := newFakeCP(t)
+	s := newManagedStore(t, real, "asset-A")
+	st, _ := s.LoadState()
+	st.ZSPReadExempt = !st.ZSPReadExempt
+	data, _ := json.Marshal(st)
+	_ = os.WriteFile(filepath.Join(s.Directory(), "policy-signed.json"), data, 0600)
+
+	other := newFakeCP(t)
+	if _, _, err := s.SyncWithServer(other.srv.URL, "", 2*time.Second); err == nil {
+		t.Fatal("tampered rules must still fail closed even when only a foreign control plane is reachable")
+	}
+}
+
+func TestLegacyPinWithoutURLAdoptsItOnVerifiedSync(t *testing.T) {
+	cp := newFakeCP(t)
+	s := New(t.TempDir())
+	s.SetAssetID("asset-A")
+	_ = s.PinEnrollment(cp.keyID, pubB64(cp), "asset-A", "") // pinned before URLs were recorded
+	if _, _, err := s.SyncWithServer(cp.srv.URL, "", 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if pin, _ := s.LoadPin(); pin.ServerURL == "" {
+		t.Fatal("a verified sync must record the control plane URL on a legacy pin")
+	}
+	other := newFakeCP(t)
+	if _, fallback, err := s.SyncWithServer(other.srv.URL, "", time.Second); err != nil || !fallback {
+		t.Fatalf("after adoption other servers are ignored: fallback=%v err=%v", fallback, err)
+	}
+}
+
+// Older bapedge builds (and other components) rewrite policy-state.json with a struct that has no
+// signature fields. That must neither break verification nor be able to change signed rules.
+func TestLegacyStateRewriteByOlderBuildDoesNotBreakOrChangeSignedRules(t *testing.T) {
+	cp := newFakeCP(t)
+	cp.readEx = false
+	s := newManagedStore(t, cp, "asset-A")
+
+	// Exactly what an old build writes after a "successful sync": no signature, flags loosened.
+	old := `{"version": 9, "digest": "deadbeef", "kill_switch": false, "strict_tool_enforcement": false, "enforcement_tier": "tier_1_standard", "last_sync": "2026-11-13T21:05:00Z"}`
+	if err := os.WriteFile(filepath.Join(s.Directory(), "policy-state.json"), []byte(old), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, st, err := s.Current()
+	if err != nil {
+		t.Fatalf("signed rules must still verify after an older build rewrote the legacy file: %v", err)
+	}
+	if st.ZSPReadExempt || st.Version != 1 || st.Digest == "deadbeef" {
+		t.Fatalf("the legacy rewrite must not change signed rules: %+v", st)
+	}
+}
+
+func TestEditingLegacyStateCannotLoosenSignedRules(t *testing.T) {
+	cp := newFakeCP(t)
+	cp.readEx = false
+	s := newManagedStore(t, cp, "asset-A")
+	st, _ := s.LoadState()
+	st.ZSPReadExempt = true
+	st.SigAlg, st.SignatureEd25519 = "", ""
+	data, _ := json.Marshal(st)
+	_ = os.WriteFile(filepath.Join(s.Directory(), "policy-state.json"), data, 0600)
+	if _, _, got, err := s.Current(); err != nil || got.ZSPReadExempt {
+		t.Fatalf("legacy edits must have no effect on signed rules: %+v err=%v", got, err)
+	}
+}
+
+// Enrolling against some other control plane (a throwaway test instance) must not silently
+// replace the pin of a machine that is enrolled with a real one.
+func TestEnrollmentAgainstADifferentControlPlaneDoesNotReplaceThePin(t *testing.T) {
+	real := newFakeCP(t)
+	s := newManagedStore(t, real, "asset-A")
+	if pin, _ := s.LoadPin(); pin.ServerURL == "" {
+		t.Fatal("setup: first contact must have recorded the control plane URL")
+	}
+	other := newFakeCP(t)
+	if err := s.PinEnrollment(other.keyID, pubB64(other), "asset-A", other.srv.URL); !errors.Is(err, ErrPolicyTampered) {
+		t.Fatalf("enrolling elsewhere must be refused, got %v", err)
+	}
+	if pin, _ := s.LoadPin(); pin.KeyID != real.keyID {
+		t.Fatal("pin must be unchanged")
+	}
+	t.Setenv("BAP_ALLOW_REPIN", "1")
+	if err := s.PinEnrollment(other.keyID, pubB64(other), "asset-A", other.srv.URL); err != nil {
+		t.Fatalf("a deliberate move must be possible: %v", err)
+	}
+}
+
+func TestReEnrollingWithTheSameControlPlaneAfterKeyLossIsAllowed(t *testing.T) {
+	real := newFakeCP(t)
+	s := newManagedStore(t, real, "asset-A")
+	fresh := newFakeCP(t)
+	if err := s.PinEnrollment(fresh.keyID, pubB64(fresh), "asset-A", real.srv.URL); err != nil {
+		t.Fatalf("same control plane, new key (key loss) must re-enroll without extra steps: %v", err)
 	}
 }
 

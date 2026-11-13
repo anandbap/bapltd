@@ -19,6 +19,9 @@ func TestPluginAllowsBrokerWrappedZSPAndCommandsButBlocksTampering(t *testing.T)
 	t.Setenv("BAP_ZSP_DIR", zspDir)
 	t.Setenv("BAP_ZSP", "enforce")
 	t.Setenv("BAP_MODE", "enforce")
+	// This test exercises the task-grant flow with read-only git commands, which are exempt by
+	// default (local reads need no grant). Strict mode restores the grant requirement.
+	t.Setenv("BAP_ZSP_STRICT_READS", "1")
 
 	sessID := "sess-plugin-zsp-1"
 

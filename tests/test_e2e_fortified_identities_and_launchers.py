@@ -107,11 +107,20 @@ class TestE2EFortifiedIdentitiesAndLaunchers(unittest.TestCase):
                 bap_install.uninstall(cls.mock_bin, cls.mock_ws, portable=True)
         finally:
             cls._env_patch.stop()
-        # Terminate any controlplane process spawned by launchers during tests
+        # Terminate only control planes spawned by launchers during THIS test (they run from the
+        # test's own temp tree). A global `taskkill /IM bapcontrolplane.exe` also killed the
+        # developer's real control plane and any other suite's servers.
+        scope = str(cls.temp_dir)
         if sys.platform == "win32":
-            subprocess.run(["taskkill", "/F", "/IM", "bapcontrolplane.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            ps = (
+                "Get-CimInstance Win32_Process -Filter \"Name='bapcontrolplane.exe'\" | "
+                "Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($env:BAP_TEST_SCOPE, [StringComparison]::OrdinalIgnoreCase) } | "
+                "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+            )
+            subprocess.run(["powershell", "-NoProfile", "-Command", ps], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           env={**os.environ, "BAP_TEST_SCOPE": scope})
         else:
-            subprocess.run(["pkill", "-9", "-f", "bapcontrolplane"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["pkill", "-9", "-f", scope + ".*bapcontrolplane"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         shutil.rmtree(cls.temp_dir, ignore_errors=True)
 
     def _isolated_env(self):

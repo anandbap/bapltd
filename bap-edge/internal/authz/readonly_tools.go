@@ -18,6 +18,49 @@ var readOnlyInspectionTools = map[string]bool{
 	"search_code": true, "search_files": true, "find": true, "find_files": true,
 }
 
+// isLocalReadAction reports canonical effect actions that only read local files or inspect
+// repository state. git:branch is deliberately absent (it also creates and deletes branches).
+func isLocalReadAction(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "fs:read", "fs:file:read", "fs:dir:read", "git:inspect:read",
+		"git:status", "git:log", "git:diff", "git:show":
+		return true
+	}
+	return false
+}
+
+// IsLocalReadOnlyCommand reports whether a shell command's EVERY effect is a plain local read
+// inside the workspace, so it needs no task grant (the same reasoning as Read/Glob/Grep). It is
+// conservative on purpose: any output redirection, any non-read effect, any target outside the
+// workspace or in a credential store makes it false, and a mixed command needs a grant covering
+// all of its effects.
+func IsLocalReadOnlyCommand(command, executable, args, workspaceRoot string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("BAP_ZSP_STRICT_READS"))) {
+	case "1", "true", "on", "yes":
+		return false
+	}
+	if ReadExemptProvider != nil && !ReadExemptProvider() {
+		return false
+	}
+	if strings.TrimSpace(command) == "" || strings.Contains(command, ">") {
+		return false
+	}
+	checks := ResolveZSPCommandChecks(command, executable, args, "", "", workspaceRoot)
+	if len(checks) == 0 {
+		return false
+	}
+	for _, c := range checks {
+		if c.EscapesWorkspace || !isLocalReadAction(c.Action) {
+			return false
+		}
+		res := strings.TrimPrefix(c.CanonicalResource, "file://")
+		if isCredentialStorePath(res) || IsFilesystemRootTarget(res) {
+			return false
+		}
+	}
+	return true
+}
+
 // IsWorkspaceReadOnlyToolCall reports whether a native tool call is plain read-only
 // inspection of the project (Read, Glob, Grep, directory listing, ...), so a developer's
 // agent can review their own code without first minting a task grant.

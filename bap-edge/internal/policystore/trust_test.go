@@ -157,7 +157,7 @@ func TestEditingAnyEnforcementFlagLocallyIsDetected(t *testing.T) {
 		st, _ := s.LoadState()
 		mutate(&st)
 		data, _ := json.Marshal(st)
-		if err := os.WriteFile(filepath.Join(s.Directory(), "policy-state.json"), data, 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(s.Directory(), "policy-signed.json"), data, 0600); err != nil {
 			t.Fatal(err)
 		}
 		if _, _, _, err := s.Current(); !errors.Is(err, ErrPolicyTampered) {
@@ -170,6 +170,7 @@ func TestDeletingStateDoesNotDowngradeToLocalPolicy(t *testing.T) {
 	cp := newFakeCP(t)
 	s := newManagedStore(t, cp, "asset-A")
 	_ = os.Remove(filepath.Join(s.Directory(), "policy-state.json"))
+	_ = os.Remove(filepath.Join(s.Directory(), "policy-signed.json"))
 	// A permissive policy.cedar sitting in the working directory must not be adopted.
 	wd := t.TempDir()
 	_ = os.WriteFile(filepath.Join(wd, "policy.cedar"), []byte(testCedar), 0600)
@@ -212,7 +213,7 @@ func TestDifferentKeyOfferedLaterIsRefusedNotRepinned(t *testing.T) {
 	cp := newFakeCP(t)
 	s := newManagedStore(t, cp, "asset-A")
 	rogue := newFakeCP(t)
-	if err := s.PinKey(rogue.keyID, base64.StdEncoding.EncodeToString(rogue.pub), ""); !errors.Is(err, ErrPolicyTampered) {
+	if err := s.PinKey(rogue.keyID, base64.StdEncoding.EncodeToString(rogue.pub), "", ""); !errors.Is(err, ErrPolicyTampered) {
 		t.Fatalf("re-pinning a different key must be refused, got %v", err)
 	}
 }
@@ -238,7 +239,7 @@ func TestControlPlaneDownPlusTamperFailsClosed(t *testing.T) {
 	st, _ := s.LoadState()
 	st.ZSPReadExempt = !st.ZSPReadExempt
 	data, _ := json.Marshal(st)
-	_ = os.WriteFile(filepath.Join(s.Directory(), "policy-state.json"), data, 0600)
+	_ = os.WriteFile(filepath.Join(s.Directory(), "policy-signed.json"), data, 0600)
 	cp.srv.Close()
 	if _, _, err := s.SyncWithServer(cp.srv.URL, "", 300*time.Millisecond); err == nil || !strings.Contains(err.Error(), "integrity") {
 		t.Fatalf("tampered rules with the control plane down must fail closed, got %v", err)

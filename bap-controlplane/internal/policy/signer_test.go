@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -23,6 +24,48 @@ func TestCanonicalPayloadGolden(t *testing.T) {
 	want := "bap-policy-v2\nasset=asset-1\nversion=7\ndigest=abc\nkill=true\nstrict=false\ntier=tier_1_standard\nzsp_read_exempt=true\nupdated_at=2026-01-02T03:04:05Z\n"
 	if got != want {
 		t.Fatalf("canonical payload changed:\n%q\n%q", got, want)
+	}
+}
+
+// Two control planes pointed at one state directory (tests, a second instance by mistake) must both
+// start: a shared ".tmp" name used to make the loser of a rename race refuse to start.
+func TestConcurrentStartsOnOneDirectoryDoNotCollide(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "policy-settings.json")
+	errs := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		go func() {
+			st := NewStore("permit(principal, action, resource);", "{}")
+			if err := st.EnablePersistence(path); err != nil {
+				errs <- err
+				return
+			}
+			_, err := st.SetReadExempt("*", false, "t")
+			errs <- err
+		}()
+	}
+	for i := 0; i < 8; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent control plane start/write failed: %v", err)
+		}
+	}
+}
+
+func TestReEnrollmentWithoutHardwareIDDoesNotDowngradeBinding(t *testing.T) {
+	st := NewStore("permit(principal, action, resource);", "{}")
+	if got := st.BindEnrolledAsset("inst-1", "asset-hw"); got != "asset-hw" {
+		t.Fatalf("hardware id must be bound, got %q", got)
+	}
+	if got := st.BindEnrolledAsset("inst-1", ""); got != "asset-hw" {
+		t.Fatalf("an older client that reports no id must keep the existing binding, got %q", got)
+	}
+	// A client that reports a (new) hardware id may still rebind: hardware was replaced.
+	if got := st.BindEnrolledAsset("inst-1", "asset-new"); got != "asset-new" {
+		t.Fatalf("an authenticated re-enrollment reporting a new id must rebind, got %q", got)
+	}
+	// With nothing bound yet the derived id is used.
+	if got := st.BindEnrolledAsset("inst-2", ""); got != "inst:inst-2" {
+		t.Fatalf("expected derived id, got %q", got)
 	}
 }
 

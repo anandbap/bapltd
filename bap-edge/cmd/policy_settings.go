@@ -30,12 +30,20 @@ func init() {
 
 // pinPolicyEnrollment stores the trust anchor from an authenticated OTC/OIDC enrollment.
 // Re-enrolling (e.g. after a control-plane key loss) is the one authenticated way to replace a pin.
-func pinPolicyEnrollment(keyID, publicKey, assetID string) {
+func pinPolicyEnrollment(keyID, publicKey, assetID, serverURL string) {
 	if keyID == "" || publicKey == "" {
 		return // older control plane: falls back to first-contact pinning at the first sync
 	}
-	if err := policystore.New(policystore.DefaultPolicyDir()).PinEnrollment(keyID, publicKey, assetID); err != nil {
+	store := policystore.New(policystore.DefaultPolicyDir())
+	if err := store.PinEnrollment(keyID, publicKey, assetID, serverURL); err != nil {
 		fmt.Fprintf(os.Stderr, "[BAP] warning: could not pin the control plane policy key: %v\n", err)
+		return
+	}
+	// Pinning makes this a managed machine, which only trusts signed rules. Fetch them right
+	// away so an enrolled machine is never left holding unsigned rules from before enrollment
+	// (that state fails closed until some later sync happens to succeed).
+	if _, _, err := store.SyncWithServer(serverURL, "", 8*time.Second); err != nil {
+		fmt.Fprintf(os.Stderr, "[BAP] warning: enrolled, but the first signed policy sync failed: %v\n", err)
 	}
 }
 

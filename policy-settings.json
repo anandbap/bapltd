@@ -1,0 +1,15 @@
+{
+  "version": 22,
+  "fleet_zsp_read_exempt": true,
+  "asset_overrides": null,
+  "enrolled_assets": {
+    "desktop-e63v3uh-26faaadc": "asset-562cfadaebc0e4da",
+    "desktop-e63v3uh-a24acd27": "asset-562cfadaebc0e4da",
+    "desktop-e63v3uh-ca22512f": "asset-562cfadaebc0e4da",
+    "dev-laptop-2c224b6d": "inst:dev-laptop-2c224b6d",
+    "eng-laptop-01-761ba89d": "inst:eng-laptop-01-761ba89d",
+    "sess-exec-bob": "inst:sess-exec-bob",
+    "sess-exec-carol": "inst:sess-exec-carol",
+    "sess-exec-eve": "inst:sess-exec-eve"
+  }
+}

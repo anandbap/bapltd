@@ -44,7 +44,12 @@ class TestEnterpriseIdPFederation(unittest.TestCase):
         ]
         dev_env = os.environ.copy()
         dev_env["BAP_ENVIRONMENT"] = "development"
-        cls.dev_proc = subprocess.Popen(dev_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=dev_env)
+        # Keep each control plane's output: when one fails to start, the reason must be in the report.
+        cls.dev_log = os.path.join(cls.temp_dir, "dev_cp.log")
+        cls.prod_log = os.path.join(cls.temp_dir, "prod_cp.log")
+        cls._dev_log_fh = open(cls.dev_log, "wb")
+        cls._prod_log_fh = open(cls.prod_log, "wb")
+        cls.dev_proc = subprocess.Popen(dev_cmd, stdout=cls._dev_log_fh, stderr=subprocess.STDOUT, env=dev_env)
 
         # 2. Start Control Plane in PROD mode
         prod_cmd = [
@@ -58,11 +63,11 @@ class TestEnterpriseIdPFederation(unittest.TestCase):
         ]
         prod_env = os.environ.copy()
         prod_env["BAP_ENVIRONMENT"] = "production"
-        cls.prod_proc = subprocess.Popen(prod_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=prod_env)
+        cls.prod_proc = subprocess.Popen(prod_cmd, stdout=cls._prod_log_fh, stderr=subprocess.STDOUT, env=prod_env)
 
         # Wait for both servers to be healthy
-        cls._wait_for_health(f"http://127.0.0.1:{DEV_PORT}")
-        cls._wait_for_health(f"http://127.0.0.1:{PROD_PORT}")
+        cls._wait_for_health(f"http://127.0.0.1:{DEV_PORT}", cls.dev_proc, cls.dev_log)
+        cls._wait_for_health(f"http://127.0.0.1:{PROD_PORT}", cls.prod_proc, cls.prod_log)
 
     @classmethod
     def tearDownClass(cls):
@@ -79,13 +84,21 @@ class TestEnterpriseIdPFederation(unittest.TestCase):
                     proc.kill()
                 except Exception:
                     pass
+        for fh in (getattr(cls, "_dev_log_fh", None), getattr(cls, "_prod_log_fh", None)):
+            try:
+                if fh:
+                    fh.close()
+            except OSError:
+                pass
         if os.path.exists(cls.temp_dir):
             shutil.rmtree(cls.temp_dir, ignore_errors=True)
 
     @classmethod
-    def _wait_for_health(cls, base_url):
-        deadline = time.time() + 10
+    def _wait_for_health(cls, base_url, proc=None, log_path=None):
+        deadline = time.time() + 30  # a loaded machine (full suite, antivirus scan) can be slow to start
         while time.time() < deadline:
+            if proc is not None and proc.poll() is not None:
+                break  # the process already exited: no point waiting
             try:
                 req = urllib.request.Request(f"{base_url}/health")
                 with urllib.request.urlopen(req, timeout=1) as resp:
@@ -93,7 +106,15 @@ class TestEnterpriseIdPFederation(unittest.TestCase):
                         return
             except Exception:
                 time.sleep(0.2)
-        raise RuntimeError(f"Server at {base_url} failed to start")
+        tail = ""
+        if log_path and os.path.exists(log_path):
+            try:
+                with open(log_path, "rb") as fh:
+                    tail = fh.read()[-1500:].decode("utf-8", errors="replace")
+            except OSError:
+                pass
+        code = "" if proc is None else f" (exit code: {proc.poll()})"
+        raise RuntimeError(f"Server at {base_url} failed to start{code}. Output:\n{tail}")
 
     def test_01_dev_mode_open_otc_request(self):
         """Dev mode: Open self-service OTC token generation succeeds without admin token."""

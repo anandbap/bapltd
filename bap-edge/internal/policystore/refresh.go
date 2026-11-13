@@ -42,6 +42,9 @@ func (s *Store) touchLastSync() {
 	if os.WriteFile(tmp, data, 0600) == nil {
 		_ = os.Rename(tmp, filepath.Join(s.directory, "policy-state.json"))
 	}
+	if st.SigAlg != "" {
+		_ = s.writeSignedRecord(st) // keep LastSync in step; it is not part of the signed payload
+	}
 }
 
 // RefreshIfStale syncs with the control plane when the cache is older than maxAge. Failures

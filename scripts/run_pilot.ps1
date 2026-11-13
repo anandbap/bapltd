@@ -43,9 +43,12 @@ Set-Location $repoRoot
 if ($Quick) { $SkipGo = $true; $SkipPython = $true }
 
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+# Reports go to .bap\pilot (written at the very end). Everything the run creates while it works
+# (logs, server directories, isolated state) lives under %TEMP%: .bap\ is BAP's own runtime
+# folder and `bapedge sweep` (one of the checks below) cleans it, which used to wipe the run's own files.
 $outDir = Join-Path $repoRoot '.bap\pilot'
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-$logDir = Join-Path $outDir "logs-$stamp"
+$logDir = Join-Path ([System.IO.Path]::GetTempPath()) "bap-pilot-$stamp"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
 $results = New-Object System.Collections.ArrayList
@@ -124,40 +127,75 @@ function Wait-Http {
     return $false
 }
 
-$cpUrl = 'http://localhost:8080'
-$gwUrl = 'http://localhost:9090'
+# The pilot NEVER touches the developer's real BAP installation:
+#   - its control plane and gateway run on their own ports (not 8080/9090), in their own working
+#     directory, with their own database and signing key, and only processes it started are stopped;
+#   - every bapedge call and test that could read or write policy, pins, credentials or the audit
+#     log uses an isolated BAP_STATE_DIR under the pilot log folder.
+# (Plugin/doctor checks inspect the real installation read-only and use the real state.)
+$cpPort = 18080
+$gwPort = 19090
+$cpUrl = "http://localhost:$cpPort"
+$gwUrl = "http://localhost:$gwPort"
+$serverDir = Join-Path $logDir 'servers'
+$pilotState = Join-Path $logDir 'state'
+New-Item -ItemType Directory -Force -Path $serverDir, $pilotState | Out-Null
+$isolatedVars = 'BAP_STATE_DIR', 'BAP_POLICY_DIR', 'BAP_CREDENTIALS'
+
+function Use-IsolatedState {
+    $env:BAP_STATE_DIR = $pilotState
+    Remove-Item Env:BAP_POLICY_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:BAP_CREDENTIALS -ErrorAction SilentlyContinue
+}
+
+function Use-RealState {
+    foreach ($k in $isolatedVars) { [Environment]::SetEnvironmentVariable($k, $savedEnv[$k], 'Process') }
+}
 
 function Start-PilotServers {
     param([string]$Label)
+    # Recreate the working folders on every start (cheap, and robust if anything cleaned them).
+    New-Item -ItemType Directory -Force -Path $serverDir, $pilotState, $logDir | Out-Null
     if (-not $cpExe -or -not $gwExe) {
         Add-Result 'servers' "$Label server binaries found" 'FAIL' 'bapcontrolplane/bapgateway missing in dist\windows-amd64'
         return $false
     }
-    Get-Process -Name bapcontrolplane, bapgateway -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 1
+    Use-IsolatedState
+    # Stage 3 forces BAP_ENVIRONMENT=production for the enforcement checks. The pilot's control
+    # plane must NOT inherit that: production mode is deliberately locked down (audit ingest needs an
+    # enrolled credential, self-service enrollment is off) and the integration tests expect a dev one.
+    $env:BAP_ENVIRONMENT = 'development'
+    $env:BAP_DEV_OVERRIDE = ''
     $env:BAP_ADMIN_TOKEN = 'admin123'
-    $cp = Start-Process -FilePath $cpExe -ArgumentList @('-port', '8080', '-admin-token', 'admin123', '-ttl', '30', '-trust-domain', 'bap.internal') `
-        -WorkingDirectory $repoRoot -WindowStyle Hidden -PassThru `
+    $cpArgs = @('-port', "$cpPort", '-admin-token', 'admin123', '-ttl', '30', '-trust-domain', 'bap.internal',
+        '-db', (Join-Path $serverDir 'bap-controlplane.db'),
+        '-policy', (Join-Path $repoRoot 'policy.cedar'), '-schema', (Join-Path $repoRoot 'schema.json'))
+    $cp = Start-Process -FilePath $cpExe -ArgumentList $cpArgs `
+        -WorkingDirectory $serverDir -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $logDir "controlplane-$Label.out") -RedirectStandardError (Join-Path $logDir "controlplane-$Label.err")
     [void]$started.Add($cp)
     $cpOk = Wait-Http "$cpUrl/api/v1/health" 25
-    if ($cpOk) { Add-Result 'servers' "control plane healthy on :8080 ($Label)" 'PASS' } else { Add-Result 'servers' "control plane healthy on :8080 ($Label)" 'FAIL' 'see logs' }
-    $gw = Start-Process -FilePath $gwExe -ArgumentList @('-port', '9090', '-controlplane', $cpUrl) `
-        -WorkingDirectory $repoRoot -WindowStyle Hidden -PassThru `
+    if ($cpOk) { Add-Result 'servers' "control plane healthy on :$cpPort ($Label)" 'PASS' } else { Add-Result 'servers' "control plane healthy on :$cpPort ($Label)" 'FAIL' 'see logs' }
+    $gw = Start-Process -FilePath $gwExe -ArgumentList @('-port', "$gwPort", '-controlplane', $cpUrl) `
+        -WorkingDirectory $serverDir -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $logDir "gateway-$Label.out") -RedirectStandardError (Join-Path $logDir "gateway-$Label.err")
     [void]$started.Add($gw)
     $gwOk = Wait-Http "$gwUrl/health" 20
-    if ($gwOk) { Add-Result 'servers' "gateway PEP healthy on :9090 ($Label)" 'PASS' } else { Add-Result 'servers' "gateway PEP healthy on :9090 ($Label)" 'FAIL' 'see logs' }
+    if ($gwOk) { Add-Result 'servers' "gateway PEP healthy on :$gwPort ($Label)" 'PASS' } else { Add-Result 'servers' "gateway PEP healthy on :$gwPort ($Label)" 'FAIL' 'see logs' }
     $env:BAP_SERVER_URL = $cpUrl
     $env:BAP_CONTROL_PLANE_URL = $cpUrl
     $env:BAP_CONTROLPLANE_URL = $cpUrl
+    $env:BAP_GATEWAY_URL = $gwUrl
     return ($cpOk -and $gwOk)
 }
 
 function Stop-PilotServers {
+    # Only the processes this run started; the developer's own control plane is never touched.
     foreach ($p in $started) { try { if (-not $p.HasExited) { $p.Kill() } } catch {} }
-    Get-Process -Name bapcontrolplane, bapgateway -ErrorAction SilentlyContinue | Where-Object { $started.Id -contains $_.Id } | Stop-Process -Force -ErrorAction SilentlyContinue
     $started.Clear()
+    foreach ($k in 'BAP_SERVER_URL', 'BAP_CONTROL_PLANE_URL', 'BAP_CONTROLPLANE_URL', 'BAP_GATEWAY_URL') {
+        [Environment]::SetEnvironmentVariable($k, $savedEnv[$k], 'Process')
+    }
 }
 
 Write-Host '===============================================================================' -ForegroundColor Cyan
@@ -171,7 +209,7 @@ $cpExe = Resolve-Exe @('dist\windows-amd64\controlplane\bapcontrolplane.exe', 'b
 $gwExe = Resolve-Exe @('dist\windows-amd64\gateway\bapgateway.exe', 'bapgateway.exe')
 
 $savedEnv = @{}
-foreach ($k in 'BAP_ENVIRONMENT', 'BAP_DEV_OVERRIDE', 'BAP_DEV_MODE', 'BAP_ADMIN_TOKEN', 'BAP_SERVER_URL', 'BAP_CONTROL_PLANE_URL', 'BAP_CONTROLPLANE_URL', 'BAP_TEST_MODE', 'BAP_NON_INTERACTIVE') {
+foreach ($k in 'BAP_ENVIRONMENT', 'BAP_DEV_OVERRIDE', 'BAP_DEV_MODE', 'BAP_ADMIN_TOKEN', 'BAP_SERVER_URL', 'BAP_CONTROL_PLANE_URL', 'BAP_CONTROLPLANE_URL', 'BAP_GATEWAY_URL', 'BAP_TEST_MODE', 'BAP_NON_INTERACTIVE', 'BAP_STATE_DIR', 'BAP_POLICY_DIR', 'BAP_CREDENTIALS') {
     $savedEnv[$k] = [Environment]::GetEnvironmentVariable($k, 'Process')
 }
 
@@ -193,7 +231,12 @@ try {
     if ($SkipGo) { Add-Result 'go' 'unit tests' 'SKIP' 'requested' } else {
         foreach ($mod in 'bap-edge', 'bap-controlplane', 'bap-gateway', 'cchook') {
             $r = Invoke-Capture 'go' @('test', './...') 900 (Join-Path $repoRoot $mod)
-            Test-Check 'go' "$mod go test ./..." $r
+            if ($r.Code -eq 0) { Add-Result 'go' "$mod go test ./..." 'PASS' } else {
+                Set-Content -Path (Join-Path $logDir "go-$mod.txt") -Value $r.Text -Encoding UTF8
+                # Show the failing tests/packages, not the first characters of the (long) output.
+                $bad = ($r.Text -split "`r?`n" | Where-Object { $_ -match '^(FAIL|--- FAIL|panic:)' } | Select-Object -First 6) -join ' ; '
+                Add-Result 'go' "$mod go test ./..." 'FAIL' ("exit=$($r.Code) $bad (full output: $logDir\go-$mod.txt)")
+            }
         }
     }
 
@@ -208,7 +251,7 @@ try {
     } else {
         # Smoke check only: start, verify health, stop. The server-dependent pytest files get a
         # fresh pair in stage 5b, because other tests run `taskkill /IM bapcontrolplane.exe`.
-        Start-PilotServers -Label 'smoke'
+        [void](Start-PilotServers -Label 'smoke')
         Stop-PilotServers
     }
 
@@ -216,6 +259,7 @@ try {
     # Stage 3: feature checks through bapedge (enforcement forced on)
     # -------------------------------------------------------------------------
     Write-Host "`n[3] Core feature checks (bapedge)" -ForegroundColor Yellow
+    Use-IsolatedState   # policy cache, pins, credentials and audit log of these checks live under the pilot log folder
     if (-not $bapedge) { Add-Result 'features' 'all' 'SKIP' 'bapedge missing' } else {
         $env:BAP_ENVIRONMENT = 'production'
         $env:BAP_DEV_OVERRIDE = ''
@@ -273,6 +317,7 @@ try {
     # Stage 4: native plugins and 5-layer matrix
     # -------------------------------------------------------------------------
     Write-Host "`n[4] Native plugins and 5-layer defense matrix" -ForegroundColor Yellow
+    Use-RealState       # these inspect the real installation (read-only)
     if ($SkipPlugins -or -not $bapedge) { Add-Result 'plugins' 'plugin probes' 'SKIP' 'requested or bapedge missing' } else {
         Test-Check 'plugins' 'plugin status' (Invoke-Capture $bapedge @('plugin', 'status'))
         Test-Check 'plugins' 'plugin verify all (5 harnesses)' (Invoke-Capture $bapedge @('plugin', 'verify', 'all') 240) '' 0 'Fail\)|\[x\]|FAILED'
@@ -284,6 +329,9 @@ try {
     # Stage 5: Python integration suite
     # -------------------------------------------------------------------------
     Write-Host "`n[5] Python integration suite" -ForegroundColor Yellow
+    Use-IsolatedState
+    # The integration tests start their own control planes and expect the caller's normal (non-production) environment.
+    [Environment]::SetEnvironmentVariable('BAP_ENVIRONMENT', $savedEnv['BAP_ENVIRONMENT'], 'Process')
     if ($SkipPython) { Add-Result 'python' 'pytest suite' 'SKIP' 'requested' } else {
         $env:BAP_TEST_MODE = '1'
         $pyArgs = @('-m', 'pytest', 'tests', '-q', '-p', 'no:cacheprovider',
@@ -354,6 +402,8 @@ Write-Host '====================================================================
 $results | Format-Table Stage, Check, Status -AutoSize | Out-String | Write-Host
 Write-Host ("  PASS={0}  FAIL={1}  SKIP={2}" -f $pass, $fail, $skip) -ForegroundColor $(if ($fail -eq 0) { 'Green' } else { 'Red' })
 
+# `bapedge sweep` (stage 3) can remove .bap\pilot; recreate it right before writing the report.
+New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $jsonPath = Join-Path $outDir "report-$stamp.json"
 $mdPath = Join-Path $outDir "report-$stamp.md"
 [pscustomobject]@{ timestamp = $stamp; pass = $pass; fail = $fail; skip = $skip; results = $results } | ConvertTo-Json -Depth 4 | Set-Content -Path $jsonPath -Encoding UTF8

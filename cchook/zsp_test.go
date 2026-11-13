@@ -66,7 +66,15 @@ func setupZSPHookTestEnv(t *testing.T) (repoRoot, bapOut, interOut string) {
 	zspDir := t.TempDir()
 	stateDir := t.TempDir()
 	pepHome := t.TempDir()
+	// The real bapedge/interceptor binaries run in these tests. Without an isolated state dir they
+	// read and write the developer's real policy cache, pinned key and credentials.
+	t.Setenv("BAP_STATE_DIR", stateDir)
+	t.Setenv("BAP_POLICY_DIR", "")
+	t.Setenv("BAP_CREDENTIALS", "")
 	t.Setenv("BAP_ZSP_DIR", zspDir)
+	// These tests exercise the task-grant flow using read-only commands (git status/log), which are
+	// exempt by default. Strict mode restores the grant requirement so the flow stays under test.
+	t.Setenv("BAP_ZSP_STRICT_READS", "1")
 	t.Setenv("BAP_ZSP", "enforce")
 	t.Setenv("BAP_ZSP_ENABLED", "1")
 	t.Setenv("BAP_NON_INTERACTIVE", "1")

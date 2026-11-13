@@ -772,7 +772,10 @@ print(stdout.strip())
             "tool_input": {"command": cmd_str},
             "session_id": "sess-bap200-test-ps-calc",
         }
-        resp = run_interceptor(payload)
+        # This test is about PowerShell rewriting, not task grants. The hermetic environment
+        # (production, no developer override) correctly requires a grant for shell tools, so
+        # grants are switched off for this one assertion.
+        resp = run_interceptor(payload, env={"BAP_ZSP": "off"})
         self.assertEqual(resp.get("status"), "ok")
         self.assertIn(resp.get("permissionDecision"), ("allow", "approve"))
         self.assertEqual(resp["hookSpecificOutput"]["permissionDecision"], "allow")

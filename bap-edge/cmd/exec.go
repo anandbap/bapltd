@@ -1347,7 +1347,8 @@ func RunExec(args []string) {
 	// Agents start with ZERO standing permissions and must hold an active signed TaskGrant covering the action & resource,
 	// except when invoking atomic ZSP control commands (e.g. 'bapedge zsp authorize' / 'bapedge status').
 	// An active development-only override suspends the grant requirement for bootstrapping BAP itself.
-	if allowed && isZSPRequiredForExec(ec) && taskGrantsEnforced() && !authz.IsZSPControlCommand(fullCommand) {
+	if allowed && isZSPRequiredForExec(ec) && taskGrantsEnforced() && !authz.IsZSPControlCommand(fullCommand) &&
+		!authz.IsLocalReadOnlyCommand(fullCommand, executable, cmdArguments, workspaceRoot) {
 		zspChecks := authz.ResolveZSPCommandChecks(fullCommand, executable, cmdArguments, "", "", workspaceRoot)
 		svid, grant, _, zspErr := authz.VerifyOrConsumeSessionZSPChecks(
 			authz.ResolveZSPDir(),

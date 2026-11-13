@@ -233,18 +233,63 @@ func (s *Store) Accept(bundle Bundle) error {
 		return err
 	}
 	statePath := filepath.Join(s.directory, "policy-state.json")
-	return os.WriteFile(statePath, stateData, 0600)
+	if err := os.WriteFile(statePath, stateData, 0600); err != nil {
+		return err
+	}
+	// The signed record lives in its own file. Older bapedge builds (and other components) rewrite
+	// policy-state.json with a struct that has no signature fields; keeping the signature there
+	// would make every mixed-version machine fail verification.
+	if state.SigAlg != "" {
+		return s.writeSignedRecord(state)
+	}
+	return nil
 }
 
+func (s *Store) signedPath() string { return filepath.Join(s.directory, "policy-signed.json") }
+
+func (s *Store) writeSignedRecord(st PolicyState) error {
+	data, err := json.MarshalIndent(st, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := s.signedPath() + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.signedPath())
+}
+
+// LoadState returns the cached policy state. When a signed record exists it is authoritative for
+// every enforcement field (the legacy policy-state.json is only consulted for LastSync), so a
+// rewrite of the legacy file by an older build can neither break nor change signed rules.
 func (s *Store) LoadState() (PolicyState, error) {
 	statePath := filepath.Join(s.directory, "policy-state.json")
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		return PolicyState{}, err
-	}
+	data, legacyErr := os.ReadFile(statePath)
 	var state PolicyState
-	if err := json.Unmarshal(data, &state); err != nil {
-		return PolicyState{}, err
+	if legacyErr == nil {
+		if err := json.Unmarshal(data, &state); err != nil {
+			legacyErr = err
+		}
+	}
+	if !s.Managed() {
+		// Unmanaged (no pinned key): legacy semantics, nothing is signed.
+		if legacyErr != nil {
+			return PolicyState{}, legacyErr
+		}
+		return state, nil
+	}
+	if sdata, err := os.ReadFile(s.signedPath()); err == nil {
+		var signed PolicyState
+		if json.Unmarshal(sdata, &signed) == nil {
+			if legacyErr == nil && state.LastSync.After(signed.LastSync) {
+				signed.LastSync = state.LastSync
+			}
+			return signed, nil
+		}
+		return PolicyState{}, fmt.Errorf("signed policy record is unreadable")
+	}
+	if legacyErr != nil {
+		return PolicyState{}, legacyErr
 	}
 	return state, nil
 }
@@ -364,6 +409,19 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 		timeout = 2 * time.Second
 	}
 
+	// This machine enrolled with one control plane. Any other server (a local test instance, a
+	// look-alike) is never consulted: the cached signed rules stay in force and a tampered cache
+	// still fails closed.
+	if s.foreignServer(serverURL) {
+		cedarPath, schemaPath, cur, err := s.Current()
+		if err != nil {
+			return Bundle{}, true, err
+		}
+		cedarData, _ := os.ReadFile(cedarPath)
+		schemaData, _ := os.ReadFile(schemaPath)
+		return Bundle{Version: cur.Version, Digest: cur.Digest, PolicyCedar: string(cedarData), SchemaJSON: string(schemaData), KillSwitch: cur.KillSwitch}, true, nil
+	}
+
 	client := httptransport.New(timeout)
 	state, _ := s.LoadState()
 	// (Managed only: on an unmanaged store Current() adopts local fallback policy files as a side
@@ -469,6 +527,7 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 		if err := s.Accept(*syncResp.Bundle); err != nil {
 			return Bundle{}, false, err
 		}
+		s.adoptServerURL(serverURL)
 		return *syncResp.Bundle, false, nil
 	}
 
@@ -478,6 +537,7 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 		return Bundle{}, false, err
 	}
 	s.touchLastSync() // freshness marker for RefreshIfStale; not part of the signed fields
+	s.adoptServerURL(serverURL)
 	cedarData, _ := os.ReadFile(cedarPath)
 	schemaData, _ := os.ReadFile(schemaPath)
 	return Bundle{
