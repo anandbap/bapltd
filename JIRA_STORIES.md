@@ -227,6 +227,15 @@ Legend: **Verified** = unit-tested here. **Spec only** = generated config is tes
 
 Still requiring implementation or full acceptance: BAP-1001/1002/1004, 1010..1015, 1020..1024, 1030, 1040..1049 as qualified above. BAP-1031's Windows AppContainer choice and proof already exist; it is not an unstarted decision. BAP-1048 remains optional. Do not close the full roadmap from package-level or rendering tests. See `docs/CAPABILITY_MODEL.md` and `docs/LEARNING_LOOP.md` for command behavior and remaining integrations.
 
+### Verification recorded 2026-11-13
+
+- Windows: full Go suites passed for edge, control plane, native hook, gateway and Copilot. The final affected capability/learning/command packages were rerun after their last changes.
+- All four dashboard Node suites passed, including policy administration and HITL state/payload/race coverage.
+- An isolated workspace with freshly built broker/hook/control-plane/gateway artifacts passed **all 300 Python tests, with no skips**, including the actual universal-wheel checks. `BAP_REQUIRE_WHEEL_TESTS=1` was enabled. Lifecycle fixtures never ran their destructive cleanup against the live checkout.
+- The official universal wheel built ten edge/hook clients for Windows amd64, Linux amd64/arm64 and macOS amd64/arm64. A real-compiler regression first reproduced developer override incorrectly enabled in packaged clients, then passed with the corrected release builder; compiler errors and newer development copies are also covered.
+- Linux/macOS edge command, sandbox, authz and native-hook test binaries cross-compiled successfully. This is **not native execution**, race verification or native escape-suite acceptance.
+- Capability-claim lint and `git diff --check` passed. Installed-copy developer confirmation, live browser-to-edge approval resume and the unfinished stories above remain open.
+
 **Risks.** Windows containment is the hardest piece (BAP-1031 first). Live filesystem approvals are limited by what each provider can remount. The agent vendors' own sandboxes may overlap; decide per agent whether BAP configures or replaces them.
 
 ## 8. Old work: what happened to it
