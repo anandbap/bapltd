@@ -30,7 +30,7 @@ func humanOnlyBAPCommand(command string) (string, bool) {
 			continue
 		}
 		switch toks[i+1] {
-		case "trust", "untrust", "dev-override":
+		case "trust", "untrust", "dev-override", "egress", "learn", "run":
 			return toks[i+1], true
 		case "zsp":
 			if i+2 < len(toks) && (toks[i+2] == "policy-sign" || toks[i+2] == "approve" || toks[i+2] == "deny") {

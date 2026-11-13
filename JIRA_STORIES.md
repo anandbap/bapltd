@@ -184,6 +184,25 @@ Size: S under 2 days, M under a week, L over a week. Each story ends with an acc
 - **Weeks 6-9:** BAP-1043 to 1049 (profile generator, proposals, inbox, safety rails, KPIs), which need the sandbox and proxy traces from Milestone 1.
 - **After:** Milestone 2.
 
+### Implementation status (honest)
+
+Legend: **Verified** = unit-tested here. **Spec only** = generated config is tested, real execution was not run here.
+
+| Story | Status | What exists | What is NOT proven |
+|---|---|---|---|
+| BAP-1010 capability model | Partial, verified | `internal/capability`: Profile (workspace rw, read-only, trusted writes, egress allowlist, env allowlist), validation, masked credential paths, immutable deny hosts (metadata/link-local), JSON store in the BAP state dir (not agent-writable workspace) | Conversion of an existing TaskGrant into a Profile |
+| BAP-1011 `bap run` | Spec only | `bap run --print` renders docker / bubblewrap / Seatbelt specs: read-only root, caps dropped, workspace-only write, credentials never mounted, env allowlist, network never shared. Refuses to run unsandboxed if the provider is missing | Actually executing under docker/bwrap/sandbox-exec; Windows (BAP-1031 undecided); an in-sandbox forwarder so a no-network sandbox can reach the proxy socket |
+| BAP-1012 egress proxy | Verified (proxy), not wired to sandbox | `internal/egress`: allowlist by destination (HTTP + CONNECT), cloud-metadata always blocked, private/loopback addresses refused at dial time (SSRF/DNS rebinding), live allowlist swap, every decision logged | It is only the sole path if the sandbox network is closed (needs the BAP-1011 plumbing). `bap egress serve` runs it standalone; no TLS inspection by design |
+| BAP-1013 denial-driven approval | Partial | Denials carry the exact next step (`bap egress allow HOST`); a live `Approve` hook exists and records human evidence | Wiring `Approve` to the HITL request queue |
+| BAP-1014 credentials by construction | Spec only | Masked paths + env allowlist (secret-looking names refused) in the rendered specs | Broker-side token injection |
+| BAP-1040 effect events | Partial, verified | `internal/learn` JSONL effect log, egress events emitted by the proxy | Events from the hook/ledger/HITL; fs and exec events from sandboxes |
+| BAP-1042 miner | Partial, verified | Mines blocked egress into ranked proposals | Friction miners over the existing ledger (quoted `&&`, lone `/`, etc.) |
+| BAP-1044 proposals + replay | Partial, verified | Replay of a proposal over history; refuses proposals that open immutable targets | Signed-policy diffs, auto-generated regression cases |
+| BAP-1045 inbox | Partial | `bap learn` lists, `bap learn apply HOST` applies (human-only: agents are blocked by the hook gate) | Cockpit UI, canary, rollback |
+| BAP-1046 safety rails | Partial, verified | Immutable deny tier; agent-only evidence needs 3 attempts across 2 sessions and is always "review"; raw IPs and metadata never proposed; forged proposals cannot apply | Per-agent caps, audited decisions |
+
+Not started: BAP-1001..1005, 1015, 1020..1024, 1030, 1031, 1041, 1043, 1047..1049.
+
 **Risks.** Windows containment is the hardest piece (BAP-1031 first). Live filesystem approvals are limited by what each provider can remount. The agent vendors' own sandboxes may overlap; decide per agent whether BAP configures or replaces them.
 
 ## 8. Old work: what happened to it

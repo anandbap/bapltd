@@ -271,6 +271,21 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error granting trust: %v\n", err)
 			os.Exit(1)
 		}
+	case "egress":
+		if err := cmd.RunEgress(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "learn":
+		if err := cmd.RunLearn(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "run":
+		if err := cmd.RunRun(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	case "untrust":
 		if err := cmd.RunUntrust(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error revoking trust: %v\n", err)
