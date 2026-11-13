@@ -328,6 +328,9 @@ func RunSandboxedCommandWithShell(cmdStr, shell string) ExecResult {
 		}
 	}
 
+	// The restricted child cannot read the developer's git config; give it the identity so `git commit` works (BAP-937).
+	env = withGitIdentity(env, cmdStr)
+
 	// Inject CORP_OBO_TOKEN and broker marker environment variables
 	cmd.Env = append(env, fmt.Sprintf("CORP_OBO_TOKEN=%s", InjectedOBOToken))
 	cmd.Env = append(cmd.Env, "BAP_IN_BROKER=1")
