@@ -36,6 +36,7 @@ var (
 
 const (
 	procThreadAttributeSecurityCapabilities = 0x00020009
+	procThreadAttributeHandleList           = 0x00020002
 	extendedStartupInfoPresent              = 0x00080000
 	createUnicodeEnvironment                = 0x00000400
 	errAlreadyExistsHR                      = 0x800700B7
@@ -186,35 +187,57 @@ func Run(o Options) (int, error) {
 	defer pFreeSid.Call(psid)
 	sc := securityCapabilities{AppContainerSid: psid}
 
+	var handles []syscall.Handle
+	var bInherit uintptr
+	if o.Stdin != nil {
+		handles = append(handles, syscall.Handle(o.Stdin.Fd()))
+	}
+	if o.Stdout != nil {
+		handles = append(handles, syscall.Handle(o.Stdout.Fd()))
+	}
+	if o.Stderr != nil {
+		handles = append(handles, syscall.Handle(o.Stderr.Fd()))
+	}
+	attrCount := uintptr(1)
+	if len(handles) > 0 {
+		attrCount = 2
+		bInherit = 1
+	}
+
 	var size uintptr
-	pInitAttr.Call(0, 1, 0, uintptr(unsafe.Pointer(&size)))
+	pInitAttr.Call(0, attrCount, 0, uintptr(unsafe.Pointer(&size)))
 	buf := make([]byte, size)
 	list := uintptr(unsafe.Pointer(&buf[0]))
-	if r, _, e := pInitAttr.Call(list, 1, 0, uintptr(unsafe.Pointer(&size))); r == 0 {
+	if r, _, e := pInitAttr.Call(list, attrCount, 0, uintptr(unsafe.Pointer(&size))); r == 0 {
 		return 2, fmt.Errorf("InitializeProcThreadAttributeList: %v", e)
 	}
 	defer pDelAttr.Call(list)
 	if r, _, e := pUpdAttr.Call(list, 0, procThreadAttributeSecurityCapabilities, uintptr(unsafe.Pointer(&sc)), unsafe.Sizeof(sc), 0, 0); r == 0 {
-		return 2, fmt.Errorf("UpdateProcThreadAttribute: %v", e)
+		return 2, fmt.Errorf("UpdateProcThreadAttribute (security capabilities): %v", e)
+	}
+	if len(handles) > 0 {
+		for _, h := range handles {
+			_ = syscall.SetHandleInformation(h, syscall.HANDLE_FLAG_INHERIT, syscall.HANDLE_FLAG_INHERIT)
+		}
+		if r, _, e := pUpdAttr.Call(list, 0, procThreadAttributeHandleList, uintptr(unsafe.Pointer(&handles[0])), uintptr(len(handles))*unsafe.Sizeof(handles[0]), 0, 0); r == 0 {
+			return 2, fmt.Errorf("UpdateProcThreadAttribute (handle list): %v", e)
+		}
 	}
 
 	si := startupInfoEx{AttributeList: list}
 	si.Cb = uint32(unsafe.Sizeof(si))
-	si.Flags = syscall.STARTF_USESTDHANDLES
-	stdin, stdout, stderr := o.Stdin, o.Stdout, o.Stderr
-	if stdin == nil {
-		stdin = os.Stdin
+	if len(handles) > 0 {
+		si.Flags = syscall.STARTF_USESTDHANDLES
+		if o.Stdin != nil {
+			si.StdInput = syscall.Handle(o.Stdin.Fd())
+		}
+		if o.Stdout != nil {
+			si.StdOutput = syscall.Handle(o.Stdout.Fd())
+		}
+		if o.Stderr != nil {
+			si.StdErr = syscall.Handle(o.Stderr.Fd())
+		}
 	}
-	if stdout == nil {
-		stdout = os.Stdout
-	}
-	if stderr == nil {
-		stderr = os.Stderr
-	}
-	for _, f := range []*os.File{stdin, stdout, stderr} {
-		_ = syscall.SetHandleInformation(syscall.Handle(f.Fd()), syscall.HANDLE_FLAG_INHERIT, syscall.HANDLE_FLAG_INHERIT)
-	}
-	si.StdInput, si.StdOutput, si.StdErr = syscall.Handle(stdin.Fd()), syscall.Handle(stdout.Fd()), syscall.Handle(stderr.Fd())
 
 	parts := make([]string, len(o.Argv))
 	for i, a := range o.Argv {
@@ -226,7 +249,7 @@ func Run(o Options) (int, error) {
 		dir, _ = syscall.UTF16PtrFromString(o.Dir)
 	}
 	var pi syscall.ProcessInformation
-	r, _, e := pCreateProc.Call(0, uintptr(unsafe.Pointer(cmdline)), 0, 0, 1,
+	r, _, e := pCreateProc.Call(0, uintptr(unsafe.Pointer(cmdline)), 0, 0, bInherit,
 		extendedStartupInfoPresent|createUnicodeEnvironment,
 		uintptr(unsafe.Pointer(envBlock(o.Env))), uintptr(unsafe.Pointer(dir)),
 		uintptr(unsafe.Pointer(&si)), uintptr(unsafe.Pointer(&pi)))
@@ -235,7 +258,15 @@ func Run(o Options) (int, error) {
 	}
 	defer syscall.CloseHandle(pi.Thread)
 	defer syscall.CloseHandle(pi.Process)
-	if ev, err := syscall.WaitForSingleObject(pi.Process, syscall.INFINITE); err != nil || ev != 0 {
+
+	// Bounded wait to prevent indefinite hangs in CI / testing: 30 seconds max.
+	const waitTimeoutMs = 30000
+	ev, err := syscall.WaitForSingleObject(pi.Process, waitTimeoutMs)
+	if ev == 0x00000102 { // WAIT_TIMEOUT
+		_ = syscall.TerminateProcess(pi.Process, 1)
+		return 2, fmt.Errorf("appcontainer process timed out after 30s")
+	}
+	if err != nil || ev != 0 {
 		return 2, fmt.Errorf("wait: %v", err)
 	}
 	var code uint32

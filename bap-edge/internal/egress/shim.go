@@ -58,7 +58,7 @@ func RunShim(socket string, argv []string) (int, error) {
 	if len(argv) == 0 {
 		return 2, fmt.Errorf("shim: no command")
 	}
-	l, err := Relay("127.0.0.1:3128", socket)
+	l, err := Relay("127.0.0.1:0", socket)
 	if err != nil {
 		return 2, err
 	}

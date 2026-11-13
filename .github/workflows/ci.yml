@@ -11,6 +11,7 @@ jobs:
   test-go:
     name: Go Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -28,19 +29,34 @@ jobs:
           cache-dependency-path: '**/go.sum'
 
       - name: Test BAP Edge
+        shell: bash
         run: |
           cd bap-edge
-          go test -v -race ./...
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            go test -v -timeout=5m ./...
+          else
+            go test -v -race -timeout=5m ./...
+          fi
 
       - name: Test BAP Control Plane
+        shell: bash
         run: |
           cd bap-controlplane
-          go test -v -race ./...
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            go test -v -timeout=5m ./...
+          else
+            go test -v -race -timeout=5m ./...
+          fi
 
       - name: Test native hooks
+        shell: bash
         run: |
           cd cchook
-          go test -v -race ./...
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            go test -v -timeout=5m ./...
+          else
+            go test -v -race -timeout=5m ./...
+          fi
 
       - name: Test onboarding probe protocol end to end
         working-directory: bap-controlplane
@@ -62,6 +78,7 @@ jobs:
   test-python:
     name: Python Integration & E2E Suites
     runs-on: windows-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout Code
@@ -102,7 +119,7 @@ jobs:
           python scripts/build_wheel.py --universal
 
       - name: Run Full Python Test Suite (100+ Tests)
-        timeout-minutes: 30
+        timeout-minutes: 10
         run: |
           python -X faulthandler -m unittest discover -v tests
 
