@@ -1102,7 +1102,7 @@ func RunExec(args []string) {
 				return
 			}
 
-			if isZSPRequiredForExec(ec) && authz.IsZSPEnforced() {
+			if isZSPRequiredForExec(ec) && taskGrantsEnforced() {
 				svid, grant, _, zspErr := authz.VerifyOrConsumeSessionZSP(
 					authz.ResolveZSPDir(), ec.sessionID, ec.source, action, res, ec.fullCommand, wsRoot, escapes, *consumeFlag, nil,
 				)
@@ -1326,7 +1326,8 @@ func RunExec(args []string) {
 	// Zero Standing Privileges (ZSP) enforcement for AI agent sessions (BAP-915, BAP-916, BAP-917, BAP-918):
 	// Agents start with ZERO standing permissions and must hold an active signed TaskGrant covering the action & resource,
 	// except when invoking atomic ZSP control commands (e.g. 'bapedge zsp authorize' / 'bapedge status').
-	if allowed && isZSPRequiredForExec(ec) && authz.IsZSPEnforced() && !authz.IsZSPControlCommand(fullCommand) {
+	// An active development-only override suspends the grant requirement for bootstrapping BAP itself.
+	if allowed && isZSPRequiredForExec(ec) && taskGrantsEnforced() && !authz.IsZSPControlCommand(fullCommand) {
 		zspChecks := authz.ResolveZSPCommandChecks(fullCommand, executable, cmdArguments, "", "", workspaceRoot)
 		svid, grant, _, zspErr := authz.VerifyOrConsumeSessionZSPChecks(
 			authz.ResolveZSPDir(),

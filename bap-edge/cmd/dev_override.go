@@ -10,11 +10,26 @@ import (
 	"strings"
 	"time"
 
+	"bap-edge/internal/authz"
 	"bap-edge/pkg/version"
 )
 
 const maxDevOverrideWindow = 12 * time.Hour
 const defaultDevOverrideWindow = 4 * time.Hour
+
+// taskGrantsEnforced keeps broker, native-tool, and plugin checks consistent.
+// The existing developer override gates (build, environment, and expiry) also
+// govern this bootstrap exemption; all other authorization checks still run.
+func taskGrantsEnforced() bool {
+	if !authz.IsZSPEnforced() {
+		return false
+	}
+	if active, banner := devOverrideActive(); active {
+		fmt.Fprintln(os.Stderr, banner)
+		return false
+	}
+	return true
+}
 
 type devOverrideFile struct {
 	Active       bool      `json:"active"`
@@ -150,7 +165,7 @@ func devOverrideActive() (bool, string) {
 		if until, ok := parseDevOverrideExpiry(raw); ok {
 			now := time.Now()
 			if until.After(now) {
-				return true, fmt.Sprintf("[BAP DEV OVERRIDE ACTIVE until %s] Anti-tampering checks on BAP files are suspended; credentials, revocation and policy still apply.", until.Format(time.RFC3339))
+				return true, fmt.Sprintf("[BAP DEV OVERRIDE ACTIVE until %s] Anti-tampering and task-grant checks are suspended; credentials, revocation and policy still apply.", until.Format(time.RFC3339))
 			}
 		}
 	}
@@ -168,7 +183,7 @@ func devOverrideActive() (bool, string) {
 			var d devOverrideFile
 			if json.Unmarshal(data, &d) == nil && d.Active {
 				if d.ExpiresAt.After(time.Now()) {
-					return true, fmt.Sprintf("[BAP DEV OVERRIDE ACTIVE until %s] Anti-tampering checks on BAP files are suspended; credentials, revocation and policy still apply.", d.ExpiresAt.Format(time.RFC3339))
+					return true, fmt.Sprintf("[BAP DEV OVERRIDE ACTIVE until %s] Anti-tampering and task-grant checks are suspended; credentials, revocation and policy still apply.", d.ExpiresAt.Format(time.RFC3339))
 				}
 			}
 		}
@@ -186,7 +201,7 @@ func devOverrideActive() (bool, string) {
 				DevOverride bool `json:"dev_override"`
 			}
 			if json.Unmarshal(data, &cfg) == nil && cfg.DevOverride {
-				return true, "[BAP DEV OVERRIDE ACTIVE via config] Anti-tampering checks on BAP files are suspended; credentials, revocation and policy still apply."
+				return true, "[BAP DEV OVERRIDE ACTIVE via config] Anti-tampering and task-grant checks are suspended; credentials, revocation and policy still apply."
 			}
 		}
 	}
@@ -293,7 +308,7 @@ func showDevOverrideStatus() error {
 	if active {
 		fmt.Println(banner)
 	} else {
-		fmt.Println("🔒 BAP Developer Override is INACTIVE. Full anti-tampering enforcement is active.")
+		fmt.Println("🔒 BAP Developer Override is INACTIVE. Anti-tampering and task-grant checks are not suspended.")
 		fmt.Printf("   Environment: %s [DEVELOPER MODE]\n", resolveEnvironment())
 		fmt.Println("   To enable for BAP development: bapedge dev-override on [--duration 4h]")
 		fmt.Println("   Or set environment variable:  $env:BAP_DEV_OVERRIDE=\"1\"")

@@ -110,6 +110,7 @@ func VerifyIntegrity(workspaceRoot string) (*IntegrityReport, error) {
 	if home != "" {
 		policyCandidates = append(policyCandidates,
 			filepath.Join(home, "bin", "policy.cedar"),
+			filepath.Join(home, "bin", ".bapstate", "policy", "policy.cedar"),
 			filepath.Join(home, ".local", "bin", "policy.cedar"),
 			filepath.Join(home, ".bapstate", "policy", "policy.cedar"),
 		)

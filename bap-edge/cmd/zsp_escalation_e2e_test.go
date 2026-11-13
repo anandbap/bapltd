@@ -240,6 +240,8 @@ func TestE2E_GitAddAndCommitWithHeredocMessageAreNotBlocked(t *testing.T) {
 // through the real hook decision path for the Read tool.
 func TestE2E_TrustedFolderIsReadableByTheAgent(t *testing.T) {
 	e2eEnv(t)
+	// Do not assume the runner's temp directory is outside the checkout.
+	t.Setenv("BAP_WORKSPACE_ROOT", t.TempDir())
 	sess := "sess-e2e-trust"
 	outside := t.TempDir()
 	report := filepath.Join(outside, "calls-report.json")

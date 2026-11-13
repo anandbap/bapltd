@@ -225,7 +225,10 @@ exit /b %ERRORLEVEL%
             env["PATH"] = shim_dir + os.pathsep + env.get("PATH", "")
             env["LTD_SOURCE"] = "antigravity"
             env["BAP_SESSION_ID"] = session_id
-            env["BAP_IN_BROKER"] = "0"
+            # BAP_IN_BROKER must be unset (not "0"): the edge treats any non-empty value as "inside a broker".
+            env.pop("BAP_IN_BROKER", None)
+            # Never let a HITL prompt block the suite waiting on a terminal nobody is watching.
+            env["BAP_NON_INTERACTIVE"] = "1"
 
             # Execute via shim in cmd
             res = subprocess.run(
@@ -233,7 +236,9 @@ exit /b %ERRORLEVEL%
                 capture_output=True,
                 text=True,
                 env=env,
-                cwd=self.workspace
+                cwd=self.workspace,
+                stdin=subprocess.DEVNULL,
+                timeout=60,
             )
             self.assertEqual(res.returncode, 0, f"Shim execution failed: {res.stderr}")
             self.assertIn("git version", res.stdout)

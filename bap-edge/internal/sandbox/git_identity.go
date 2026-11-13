@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -28,7 +29,15 @@ func envHas(env []string, name string) bool {
 func gitConfigValue(key string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "git", "config", "--get", key).Output()
+	cmd := exec.CommandContext(ctx, "git", "config", "--get", key)
+	// This lookup runs in the broker, before the sandbox child is constructed.
+	// A git shim on PATH must delegate to real git instead of starting another
+	// broker (which would recursively try to resolve the same identity).
+	cmd.Env = append(os.Environ(), "BAP_IN_BROKER=1")
+	// A timed-out shim can leave descendants holding stdout/stderr open. Bound
+	// the pipe drain as well as the direct process's lifetime.
+	cmd.WaitDelay = 250 * time.Millisecond
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}

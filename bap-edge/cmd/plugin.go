@@ -416,7 +416,7 @@ func runPluginAdapter(args []string) error {
 	if normEvent == "userpromptsubmit" || normEvent == "userprompt" {
 		_ = EnsureSessionStarted(sessionID, client, targetPID, promptText)
 		_ = SubmitUserPrompt(sessionID, client, promptText)
-		if sessionID != "" && normalizeClientAppID(client) == "claude-code" && authz.IsZSPEnforced() {
+		if sessionID != "" && normalizeClientAppID(client) == "claude-code" && taskGrantsEnforced() {
 			emitPluginUserPromptSuccessWithZSPContext(client, sessionID)
 			return nil
 		}
@@ -1990,7 +1990,7 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 	grantID := ""
 
 	// Zero Standing Privileges Enforcement for real agent sessions
-	if sessionID != "synthetic-probe-session" && authz.IsZSPEnforced() {
+	if sessionID != "synthetic-probe-session" && taskGrantsEnforced() {
 		if command == "" && filePath == "" && toolName == "" {
 			return types.ExecResponse{
 				Allowed:    false,
