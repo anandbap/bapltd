@@ -458,7 +458,7 @@ func runPluginAdapter(args []string) error {
 	recordDedupWithSuggestion(sessionID, cmdHash, decision, ecResp.Reason, ecResp.Suggestion, ecResp.Receipt)
 
 	// 8. Emit Vendor-Specific Response
-	emitPluginDecisionWithSuggestion(client, event, decision, ecResp.Reason, ecResp.Suggestion, ecResp.Receipt)
+	emitPluginDecisionHalt(client, event, decision, ecResp.Reason, ecResp.Suggestion, ecResp.Receipt, ecResp.Halt, ecResp.StopReason)
 	return nil
 }
 
@@ -1931,6 +1931,11 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 		}
 	}
 
+	// An agent re-submitting an authorize ask BAP already refused several times is halted, not served again.
+	if resp, halted := repeatedAuthorizeResponse(sessionID, command); halted {
+		return resp
+	}
+
 	// Allow atomic ZSP control commands (e.g. 'bapedge zsp authorize', 'bapedge status')
 	if command != "" && authz.IsZSPControlCommand(command) {
 		return types.ExecResponse{
@@ -2012,6 +2017,7 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 		}
 		if zspErr != nil {
 			suggestedActions := authz.SummarizeZSPActions(zspChecks)
+			brk := newDenialBreaker(sessionID, authz.DenialKey("zsp-deny", zspErr.Error(), command, toolName, filePath), "ZSP refusal")
 			goalTarget := command
 			if goalTarget == "" {
 				goalTarget = toolName
@@ -2023,7 +2029,9 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 				Allowed:    false,
 				ExitCode:   1,
 				Reason:     fmt.Sprintf("ZeroStandingPrivilegeViolation: %v", zspErr),
-				Suggestion: authz.ZSPDenialSuggestion(zspErr, principalIdentity, sessionID, goalTarget, suggestedActions, zspChecks, wsRoot),
+				Suggestion: brk.wrap(authz.ZSPDenialSuggestion(zspErr, principalIdentity, sessionID, goalTarget, suggestedActions, zspChecks, wsRoot)),
+				Halt:       brk.halt,
+				StopReason: brk.stop,
 			}
 		}
 		if grant != nil {
@@ -2094,6 +2102,12 @@ func emitPluginDecision(client, event, decision, reason string, receipt *types.E
 }
 
 func emitPluginDecisionWithSuggestion(client, event, decision, reason, suggestion string, receipt *types.ExecutionReceipt) {
+	emitPluginDecisionHalt(client, event, decision, reason, suggestion, receipt, false, "")
+}
+
+// emitPluginDecisionHalt emits the hook decision. With halt set, Claude Code is told to stop the turn
+// (continue:false + stopReason) so a refusal that only a human can resolve does not become a retry loop.
+func emitPluginDecisionHalt(client, event, decision, reason, suggestion string, receipt *types.ExecutionReceipt, halt bool, stopReason string) {
 	isInvariant := strings.Contains(reason, "Security Invariant Violation") ||
 		strings.Contains(reason, "sensitive credential") ||
 		strings.Contains(reason, "tampering")
@@ -2123,7 +2137,8 @@ func emitPluginDecisionWithSuggestion(client, event, decision, reason, suggestio
 		} else {
 			out := map[string]any{
 				"status":   "deny",
-				"continue": !isInvariant,
+				"continue":   !isInvariant && !halt,
+				"stopReason": stopReason,
 				"hookSpecificOutput": map[string]any{
 					"hookEventName":            event,
 					"permissionDecision":       "deny",

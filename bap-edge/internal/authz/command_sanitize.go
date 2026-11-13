@@ -93,6 +93,63 @@ func SanitizeCommandForAnalysis(cmd string) string {
 	return strings.Join(out, "\n")
 }
 
+// splitCommandSegments splits a command on chaining operators (&&, ||, ;, |, &) and newlines, but only
+// OUTSIDE quotes. A quoted commit message such as -m "fix a && b | c" is one argument, not three commands.
+func splitCommandSegments(cmd string) []string {
+	var segs []string
+	var cur strings.Builder
+	var quote rune
+	flush := func() {
+		segs = append(segs, cur.String())
+		cur.Reset()
+	}
+	for _, r := range cmd {
+		if quote != 0 {
+			cur.WriteRune(r)
+			if r == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch r {
+		case '\'', '"':
+			quote = r
+			cur.WriteRune(r)
+		case '\n', ';', '|', '&':
+			flush()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	flush()
+	return segs
+}
+
+// quoteArgForJoin re-quotes an argument that contains whitespace or shell operators so that re-joining
+// parsed arguments does not turn one quoted argument back into many tokens (and operators).
+func quoteArgForJoin(arg string) string {
+	if arg == "" || !strings.ContainsAny(arg, " \t&|;<>\n") {
+		return arg
+	}
+	if len(arg) >= 2 && ((arg[0] == '"' && arg[len(arg)-1] == '"') || (arg[0] == '\'' && arg[len(arg)-1] == '\'')) {
+		return arg
+	}
+	return `"` + strings.ReplaceAll(arg, `"`, `\"`) + `"`
+}
+
+// joinArgsQuoted joins parsed arguments back into a command string, re-quoting any that need it.
+func joinArgsQuoted(args []string) string {
+	parts := make([]string, len(args))
+	for i, a := range args {
+		if i == 0 {
+			parts[i] = a
+		} else {
+			parts[i] = quoteArgForJoin(a)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 // isGitExecutableToken reports whether a command's first token is git (bare name or a path to it).
 func isGitExecutableToken(tok string) bool {
 	tok = strings.Trim(tok, `"'`)

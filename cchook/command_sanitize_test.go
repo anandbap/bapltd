@@ -27,6 +27,24 @@ func TestBAP932Hook_CommitMessageIsNotAWorkspaceEscape(t *testing.T) {
 	}
 }
 
+func TestBAP932Hook_QuotedOperatorsAndSlashesAreOneArgument(t *testing.T) {
+	ws := t.TempDir()
+	for _, c := range []string{
+		`git commit --dry-run -m "docs / notes: BAP-922..931 and a && b"`,
+		`git commit -m "fix | pipe ; semi & amp / slash .. dots"`,
+		`git add a.txt && git commit -m "x / y && z"`,
+	} {
+		if checkCommandWorkspaceEscape(ws, c) {
+			t.Errorf("quoted message flagged as escape: %s", c)
+		}
+	}
+	for _, c := range []string{`git add "../secret file.txt"`, `cd "../.." && git commit -m x`} {
+		if !checkCommandWorkspaceEscape(ws, c) {
+			t.Errorf("real escape must still be detected: %s", c)
+		}
+	}
+}
+
 func TestBAP932Hook_RealEscapesAreStillCaught(t *testing.T) {
 	ws := t.TempDir()
 	for _, c := range []string{

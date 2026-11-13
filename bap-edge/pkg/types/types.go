@@ -55,6 +55,10 @@ type ExecResponse struct {
 	CanonicalAction   string            `json:"canonical_action,omitempty"`
 	CanonicalResource string            `json:"canonical_resource,omitempty"`
 	Receipt           *ExecutionReceipt `json:"receipt,omitempty"`
+	// Halt asks the agent harness to stop the turn (hook continue:false) instead of letting the agent
+	// keep retrying a refusal no automation can resolve (BAP-936).
+	Halt       bool   `json:"halt,omitempty"`
+	StopReason string `json:"stop_reason,omitempty"`
 }
 
 // PluginState represents the observable lifecycle state of an agent plugin (BAP-806).

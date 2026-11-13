@@ -3943,12 +3943,8 @@ func checkCommandWorkspaceEscape(workspaceRoot, fullCommand string) bool {
 	// Heredoc bodies fed to data consumers (git commit -F - <<EOF) are text, not paths (BAP-932).
 	fullCommand = sanitizeCommandForEscapeAnalysis(fullCommand)
 
-	cmdUnified := fullCommand
-	for _, sep := range []string{"&&", "||", ";", "|", "&"} {
-		cmdUnified = strings.ReplaceAll(cmdUnified, sep, "\n")
-	}
-
-	lines := strings.Split(cmdUnified, "\n")
+	// Quote-aware: operators inside a quoted argument (a commit message) do not split the command (BAP-932).
+	lines := splitCommandSegmentsHook(fullCommand)
 	for _, rawLine := range lines {
 		line := strings.TrimSpace(rawLine)
 		if line == "" {

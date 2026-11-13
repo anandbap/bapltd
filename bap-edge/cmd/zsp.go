@@ -261,6 +261,7 @@ func RunZSP(args []string) error {
 			}
 			delegationType = "human_interactive_oob"
 		}
+		var pendingReq *authz.PendingApproval
 		grant, env, err := authz.SubmitTaskEnvelopeWithDelegation(
 			authz.ResolveZSPDir(),
 			sessionID,
@@ -300,6 +301,16 @@ func RunZSP(args []string) error {
 			if concept := zspDenialConcept(err); concept != "" {
 				recordZSPAuditEvent(sessionID, clientType, actions, nil, false, "", "", "deny", err.Error(), concept)
 			}
+			// Anti-spin: count identical refusals; from the third, tell the agent plainly to stop (BAP-936).
+			if zspDenialConcept(err) != "" {
+				if n := authz.RecordDenial(authz.ResolveZSPDir(), sessionID, authz.AuthorizeDenialKey(actions, resources)); n >= authz.DenialWarnAfter {
+					fmt.Fprintln(os.Stderr, authz.RepeatedDenialNotice(n))
+				}
+			}
+			// An approve-tier refusal is not a dead end: raise a reviewable HITL request (BAP-936).
+			if errors.Is(err, authz.ErrHighRiskApprovalRequired) {
+				pendingReq = raiseHITLRequest(sessionID, clientType, *missionFlag, *goalFlag, actions, resources, maxUses, *ttlFlag, err)
+			}
 			if *jsonFlag {
 				data, _ := json.MarshalIndent(map[string]any{
 					"allowed": false,
@@ -310,7 +321,7 @@ func RunZSP(args []string) error {
 				fmt.Fprintf(os.Stderr, "[BAP ZERO-TRUST] High-Risk Escalation Blocked (Out-of-Band Interactive Human Approval Required)\n")
 				fmt.Fprintf(os.Stderr, "  Requested Actions: %v\n", actions)
 				fmt.Fprintf(os.Stderr, "  Reason:            %v\n", err)
-				fmt.Fprintf(os.Stderr, "  Human Operator:    Run out-of-band in your own terminal: bapedge zsp authorize --oob-approve --session-id %q --actions %q --resources %q\n", sessionID, *actionsFlag, *resourcesFlag)
+				printHITLNextStep(pendingReq, sessionID, *actionsFlag, *resourcesFlag)
 			}
 			return err
 		}
@@ -347,6 +358,15 @@ func RunZSP(args []string) error {
 		fmt.Printf("  Allowed Resources: %v\n", grant.AllowedResources)
 		fmt.Printf("  Max Uses / TTL:    %d uses | expires %s\n", grant.MaxUses, grant.ExpiresAt.Format(time.RFC3339))
 		return nil
+
+	case "approvals", "requests":
+		return runZSPApprovals()
+
+	case "approve":
+		return runZSPDecide(true, rest)
+
+	case "deny":
+		return runZSPDecide(false, rest)
 
 	case "policy-sign":
 		// BAP-925: install an administrator permission-policy override, HMAC-signed with the PEP secret.

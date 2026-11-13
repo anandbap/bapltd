@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -375,6 +376,124 @@ func TestE2E_BroadAskIsNarrowedAndAudited(t *testing.T) {
 		if err == nil || zspDenialConcept(err) != want {
 			t.Errorf("%s: want concept %s, got err=%v concept=%q", act, want, err, zspDenialConcept(err))
 		}
+	}
+}
+
+// BAP-936: a refused approve-tier ask raises a reviewable HITL request; the developer approves it and the
+// agent's retry then succeeds. Pushes are request-gated, never silently allowed or silently dead.
+func TestE2E_RefusedApproveTierAskRaisesAHITLRequestThatCanBeApproved(t *testing.T) {
+	zspDir := e2eEnv(t)
+	sess := "sess-e2e-hitl"
+
+	// 1. The agent asks for a script run and is refused, but a request is raised.
+	if err := authorize(sess, "--actions", "dev:python:exec", "--resources", "workspace://current", "--max-uses", "2"); !errors.Is(err, authz.ErrHighRiskApprovalRequired) {
+		t.Fatalf("interpreter ask must need approval, got %v", err)
+	}
+	if resp := evaluateWithBapedgeTool(sess, "claude-code", "PowerShell", "python a11.py", ""); resp.Allowed {
+		t.Fatal("the script must not run before approval")
+	}
+	// A retry does not create a duplicate request.
+	_ = authorize(sess, "--actions", "dev:python:exec", "--resources", "workspace://current", "--max-uses", "2")
+	list, _ := authz.ListPendingApprovals(zspDir)
+	if len(list) != 1 || list[0].Status != "pending" || list[0].SessionID != sess {
+		t.Fatalf("expected exactly one pending request for the session, got %+v", list)
+	}
+	id := list[0].ID
+	if err := RunZSP([]string{"approvals"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Approval is a human act: refused without a terminal and refused inside the agent broker.
+	if err := RunZSP([]string{"approve", id}); !errors.Is(err, authz.ErrHighRiskApprovalRequired) {
+		t.Fatalf("approve without a terminal must be refused, got %v", err)
+	}
+	t.Setenv("BAP_IN_BROKER", "1")
+	if err := RunZSP([]string{"approve", id}); !errors.Is(err, authz.ErrHighRiskApprovalRequired) {
+		t.Fatalf("approve inside the broker must be refused, got %v", err)
+	}
+	if err := RunZSP([]string{"deny", id}); !errors.Is(err, authz.ErrHighRiskApprovalRequired) {
+		t.Fatalf("deny inside the broker must be refused, got %v", err)
+	}
+	t.Setenv("BAP_IN_BROKER", "")
+	if resp := evaluateWithBapedgeTool(sess, "claude-code", "PowerShell", `bapedge zsp approve `+id, ""); resp.Allowed {
+		t.Fatal("an agent tool call must not be able to approve its own request")
+	}
+
+	// 3. The developer approves (the terminal challenge is covered by its own tests); the retry now works.
+	if _, _, err := authz.DecidePendingApproval(zspDir, id, true); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if resp := evaluateWithBapedgeTool(sess, "claude-code", "PowerShell", "python a11.py", ""); !resp.Allowed {
+		t.Fatalf("after approval the script must run, got reason=%q", resp.Reason)
+	}
+
+	// 4. Push: raises a request too (never allowed without a human).
+	if err := authorize(sess, "--actions", "git:push:write", "--max-uses", "1"); !errors.Is(err, authz.ErrHighRiskApprovalRequired) {
+		t.Fatalf("push must need approval, got %v", err)
+	}
+	if l, _ := authz.ListPendingApprovals(zspDir); len(l) != 2 {
+		t.Fatalf("push request should be raised, have %d requests", len(l))
+	}
+	// 5. Credentials never even raise a request: they are not approvable.
+	before, _ := authz.ListPendingApprovals(zspDir)
+	_ = authorize(sess, "--actions", "aws:secretsmanager:read")
+	if after, _ := authz.ListPendingApprovals(zspDir); len(after) != len(before) {
+		t.Fatal("a hard-denied ask must not raise an approval request")
+	}
+}
+
+// BAP-936: an agent that is refused must not spin. The first refusals answer immediately; repeats get an
+// unmistakable STOP; the same refusal recurring halts the agent turn (hook continue:false + stopReason).
+func TestE2E_RepeatedRefusalsAreStoppedNotSpun(t *testing.T) {
+	e2eEnv(t)
+	sess := "sess-e2e-spin"
+	cmd := `bapedge zsp authorize --session-id sess-e2e-spin --actions "dev:python:exec" --resources workspace://current`
+
+	// Hook-level: the same ungranted command refused again and again.
+	for i := 1; i <= authz.DenialHaltAfter; i++ {
+		resp := evaluateWithBapedgeTool(sess, "claude-code", "PowerShell", "python spin.py", "")
+		if resp.Allowed {
+			t.Fatal("must stay refused")
+		}
+		switch {
+		case i < authz.DenialWarnAfter:
+			if resp.Halt || strings.Contains(resp.Suggestion, "STOP") {
+				t.Fatalf("refusal %d should be a normal answer, got halt=%v suggestion=%q", i, resp.Halt, resp.Suggestion)
+			}
+		case i < authz.DenialHaltAfter:
+			if resp.Halt || !strings.Contains(resp.Suggestion, "STOP") {
+				t.Fatalf("refusal %d must carry the STOP notice without halting, got halt=%v", i, resp.Halt)
+			}
+		default:
+			if !resp.Halt || resp.StopReason == "" {
+				t.Fatalf("refusal %d must halt the agent, got halt=%v stop=%q", i, resp.Halt, resp.StopReason)
+			}
+		}
+	}
+
+	// The emitted hook JSON really tells Claude Code to stop.
+	origStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	emitPluginDecisionHalt("claude-code", "PreToolUse", "deny", "refused", "do not retry", nil, true, "BAP halted the agent")
+	_ = w.Close()
+	os.Stdout = origStdout
+	out, _ := io.ReadAll(r)
+	if !strings.Contains(string(out), `"continue":false`) || !strings.Contains(string(out), `"stopReason":"BAP halted the agent"`) {
+		t.Fatalf("halt must emit continue:false and a stopReason, got %s", out)
+	}
+
+	// CLI-level: re-submitting a refused authorize ask is counted, and past the limit the hook halts it.
+	for i := 0; i < authz.DenialHaltAfter; i++ {
+		_ = authorize(sess, "--actions", "dev:python:exec", "--resources", "workspace://current")
+	}
+	resp := evaluateWithBapedgeTool(sess, "claude-code", "PowerShell", cmd, "")
+	if resp.Allowed || !resp.Halt || !strings.Contains(resp.Suggestion, "bapedge zsp approvals") {
+		t.Fatalf("a refused authorize ask re-sent past the limit must halt, got allowed=%v halt=%v %q", resp.Allowed, resp.Halt, resp.Suggestion)
+	}
+	// A different, legitimate ask is unaffected.
+	if resp := evaluateWithBapedgeTool(sess, "claude-code", "PowerShell", `bapedge zsp authorize --session-id sess-e2e-spin --actions "git:status" --resources workspace://current`, ""); resp.Halt || !resp.Allowed {
+		t.Fatalf("an unrelated authorize ask must still work, got allowed=%v halt=%v", resp.Allowed, resp.Halt)
 	}
 }
 

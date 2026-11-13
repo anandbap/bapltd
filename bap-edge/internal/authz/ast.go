@@ -78,6 +78,13 @@ func ParseAST(fullCommand string) (*ASTPipeline, error) {
 			}
 			classification := ClassifyCommand(args[0], args, fullCmd, isQuoted)
 			exec = classification.CanonicalExec
+			// Re-join with quoting preserved so a quoted argument (a commit message) stays ONE argument for
+			// the path/escape analysis that re-parses this string (BAP-932).
+			// Limited to git on purpose: re-quoting PowerShell script blocks and control structures hides
+			// their contents from the nested-command analysis (verified by the control-block tests).
+			if isGitExecutableToken(args[0]) {
+				fullCmd = joinArgsQuoted(args)
+			}
 		}
 
 		// Rebuild full command including redirections if present

@@ -111,12 +111,8 @@ func CheckCommandWorkspaceEscape(workspaceRoot, fullCommand string) bool {
 
 	// Split compound commands by chaining operators: &&, ||, ;, |
 	// Replace operators with a uniform delimiter
-	cmdUnified := fullCommand
-	for _, sep := range []string{"&&", "||", ";", "|", "&"} {
-		cmdUnified = strings.ReplaceAll(cmdUnified, sep, "\n")
-	}
-
-	lines := strings.Split(cmdUnified, "\n")
+	// Quote-aware: operators inside a quoted argument (a commit message) do not split the command.
+	lines := splitCommandSegments(fullCommand)
 	for _, rawLine := range lines {
 		line := strings.TrimSpace(rawLine)
 		if line == "" {

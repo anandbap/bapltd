@@ -83,6 +83,38 @@ func sanitizeCommandForEscapeAnalysis(cmd string) string {
 	return strings.Join(out, "\n")
 }
 
+// splitCommandSegmentsHook splits on chaining operators and newlines only OUTSIDE quotes (mirror of
+// bap-edge/internal/authz splitCommandSegments).
+func splitCommandSegmentsHook(cmd string) []string {
+	var segs []string
+	var cur strings.Builder
+	var quote rune
+	flush := func() {
+		segs = append(segs, cur.String())
+		cur.Reset()
+	}
+	for _, r := range cmd {
+		if quote != 0 {
+			cur.WriteRune(r)
+			if r == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch r {
+		case '\'', '"':
+			quote = r
+			cur.WriteRune(r)
+		case '\n', ';', '|', '&':
+			flush()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	flush()
+	return segs
+}
+
 func isGitExecutableTokenHook(tok string) bool {
 	tok = strings.Trim(tok, `"'`)
 	base := strings.ToLower(filepath.Base(filepath.ToSlash(tok)))

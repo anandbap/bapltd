@@ -74,6 +74,43 @@ func TestBAP932_SanitizerOnlyDropsDataConsumerBodies(t *testing.T) {
 	}
 }
 
+// Found live: `git commit -m "docs / notes: BAP-922..931 and a && b"` was refused with "resource file://C:/ not in
+// granted boundaries" because (1) the escape scan split the command on the `&&` inside the quotes, and (2) parsed
+// arguments were re-joined without their quotes, turning one message argument back into many tokens.
+func TestBAP932_QuotedMessagesWithOperatorsAndSlashesAreOneArgument(t *testing.T) {
+	ws := t.TempDir()
+	msgs := []string{
+		`git commit --dry-run -m "docs / notes: BAP-922..931 and a && b"`,
+		`git commit -m "fix | pipe ; semi & amp / slash .. dots"`,
+		`git commit -am 'single quoted && / ..'`,
+		`git add a.txt && git commit -m "x / y && z"`,
+		`git commit --message="a && b / c"`,
+	}
+	for _, c := range msgs {
+		if CheckCommandWorkspaceEscape(ws, c) {
+			t.Errorf("escape wrongly detected: %s", c)
+		}
+		if HasFilesystemRootEscape(ws, c) {
+			t.Errorf("root escape wrongly detected: %s", c)
+		}
+		checks := ResolveZSPCommandChecks(c, "git", "", "Bash", "", ws)
+		if len(checks) == 0 {
+			t.Errorf("no checks for %s", c)
+		}
+		for _, ch := range checks {
+			if ch.EscapesWorkspace || ch.Action != "git:commit:write" {
+				t.Errorf("%s -> %+v (want git:commit:write inside the workspace)", c, ch)
+			}
+		}
+	}
+	// A quoted path argument is still a path: quoting must not hide a real escape.
+	for _, c := range []string{`git add "../secret file.txt"`, `git commit -m ok "../../x"`, `cd "../.." && git commit -m x`} {
+		if !CheckCommandWorkspaceEscape(ws, c) {
+			t.Errorf("real escape must still be detected: %s", c)
+		}
+	}
+}
+
 func TestBAP932_FilesystemRootScanIgnoresMessageTextButCatchesRealRoots(t *testing.T) {
 	ws := t.TempDir()
 	if HasFilesystemRootEscape(ws, realCommitCommand) {
