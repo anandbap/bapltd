@@ -19,6 +19,6 @@ type Options struct {
 	Stderr   *os.File
 }
 
-func SID(string) (string, error)  { return "", fmt.Errorf("AppContainer is Windows-only") }
-func Run(Options) (int, error)    { return 2, fmt.Errorf("AppContainer is Windows-only") }
-func Grant(_, _, _ string) error  { return fmt.Errorf("AppContainer is Windows-only") }
+func SID(string) (string, error) { return "", fmt.Errorf("AppContainer is Windows-only") }
+func Run(Options) (int, error)   { return 2, fmt.Errorf("AppContainer is Windows-only") }
+func Grant(_, _, _ string) error { return fmt.Errorf("AppContainer is Windows-only") }

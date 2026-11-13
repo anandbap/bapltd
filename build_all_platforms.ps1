@@ -7,7 +7,7 @@ param(
     [switch]$Archive = $true,
     [switch]$ForceRegenCerts = $false,
     [string]$Domain = "a.b.com",
-    [string]$Version = "v1.12.38",
+    [string]$Version = "v1.13.0",
     [string]$AllowDevOverrides = "true"
 )
 
