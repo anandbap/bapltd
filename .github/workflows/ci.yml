@@ -6,16 +6,23 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
+  workflow_call:
 
-# Least privilege by default; the publish job below grants itself what it needs.
+# Validation only. Publishing is exclusively in the gated release workflow.
 permissions:
   contents: read
 
-# Superseded pull-request runs are cancelled. Runs on main are never cancelled, so a publish
-# in progress is not interrupted by the next push.
+# Superseded pull-request runs are cancelled; release qualification is retained.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GOTOOLCHAIN: local
+  GOPROXY: ${{ vars.BAP_GO_PROXY || 'off' }}
+  GOSUMDB: ${{ vars.BAP_GO_SUMDB || 'off' }}
+  PIP_INDEX_URL: ${{ vars.BAP_PYPI_INDEX }}
+  PIP_EXTRA_INDEX_URL: ''
 
 jobs:
   test-go:
@@ -34,8 +41,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
-          check-latest: true
+          go-version-file: 'bap-controlplane/go.mod'
           cache-dependency-path: '**/go.sum'
 
       - name: Test BAP Edge
@@ -85,6 +91,15 @@ jobs:
           BAP_TELEMETRY_E2E: '1'
         run: go test ./internal/api -run '^TestOnboardingProbeWireEndToEnd$' -count=1 -timeout=90s
 
+      - name: Test recommendation transport and durable restart with matching binaries
+        shell: bash
+        run: |
+          EXT=""
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then EXT=".exe"; fi
+          CONTROLPLANE_BIN="$RUNNER_TEMP/bap-recommendation-controlplane$EXT"
+          go -C bap-controlplane build -o "$CONTROLPLANE_BIN" ./cmd/server
+          BAP_RECOMMENDATION_E2E=1 BAP_CONTROLPLANE_TEST_BIN="$CONTROLPLANE_BIN" go -C bap-edge test ./cmd -run '^TestRecommendationWireEndToEnd$' -count=1 -timeout=90s
+
       - name: Set up Node for dashboard contract tests
         uses: actions/setup-node@v4
         with:
@@ -109,7 +124,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version-file: 'bap-controlplane/go.mod'
           cache-dependency-path: '**/go.sum'
 
       - name: Set up Python
@@ -118,7 +133,9 @@ jobs:
           python-version: '3.11'
 
       - name: Install Python Dependencies
+        shell: pwsh
         run: |
+          if (-not $env:PIP_INDEX_URL) { throw 'Configure BAP_PYPI_INDEX with the approved corporate mirror' }
           python -m pip install --upgrade pip build setuptools wheel
           pip install -r requirements-test.txt
 
@@ -144,6 +161,9 @@ jobs:
         timeout-minutes: 10
         env:
           BAP_REQUIRE_WHEEL_TESTS: '1'
+          # Legacy integration fixtures explicitly qualify content-enabled capture. Default
+          # metadata privacy has separate Go transport, spool, replay and ingress regressions.
+          BAP_TELEMETRY_CONTENT: redacted
           # `unittest discover` does not load tests/conftest.py (only pytest does), so give the whole
           # suite its own state directory here. Without it the tests share one policy cache / pinned
           # key / audit log, and one test's enrollment fails the next test's bapedge closed.
@@ -170,62 +190,3 @@ jobs:
             dist/*.whl
             dist/*.tar.gz
           retention-days: 14
-
-  publish-pypi:
-    name: Publish to PyPI
-    needs: [test-go, test-python]
-    runs-on: ubuntu-latest
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
-    environment:
-      name: pypi
-      url: https://pypi.org/p/bap-ltd
-    permissions:
-      id-token: write
-      contents: read
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Download Built Python Packages
-        uses: actions/download-artifact@v4
-        with:
-          name: bap-windows-amd64-executables
-          path: download-dist
-
-      - name: Stage Universal Python Packages for PyPI
-        shell: bash
-        run: |
-          mkdir -p pypi-dist
-          echo "Scanning download-dist for universal multi-OS Python wheel and sdist..."
-          find download-dist -type f -name "*py3-none-any.whl" -exec cp -v {} pypi-dist/ \;
-          find download-dist -type f -name "*.tar.gz" -exec cp -v {} pypi-dist/ \;
-          
-          # If no universal wheel was found in the artifact, build fresh universal wheel
-          if ! ls pypi-dist/*py3-none-any.whl 1> /dev/null 2>&1; then
-            echo "[!] Universal multi-OS wheel not found in artifact. Building fresh universal distributions..."
-            python -m pip install --upgrade pip build setuptools wheel
-            python scripts/build_wheel.py --universal
-            find dist -type f -name "*py3-none-any.whl" -exec cp -v {} pypi-dist/ \;
-            find dist -type f -name "*.tar.gz" -exec cp -v {} pypi-dist/ \;
-          fi
-
-          echo "=== Ready for PyPI Deployment ==="
-          ls -lh pypi-dist/
-          if ! ls pypi-dist/*py3-none-any.whl 1> /dev/null 2>&1; then
-            echo "ERROR: Universal multi-OS wheel (*-py3-none-any.whl) not found in pypi-dist!"
-            exit 1
-          fi
-
-      - name: Publish Package to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
-          packages-dir: pypi-dist/
-          skip-existing: true
-          verbose: true

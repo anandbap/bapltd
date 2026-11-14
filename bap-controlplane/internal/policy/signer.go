@@ -252,6 +252,9 @@ func CanonicalBundlePayload(b Bundle, assetID string) []byte {
 	if len(b.ApprovedEffects) > 0 {
 		payload += "approved_effects=" + strings.Join(sortedUnique(b.ApprovedEffects), ",") + "\n"
 	}
+	if b.ValidUntil != "" {
+		payload += "valid_until=" + b.ValidUntil + "\n"
+	}
 	return []byte(payload)
 }
 

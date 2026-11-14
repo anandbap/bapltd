@@ -26,18 +26,25 @@ import (
 // policy sync. Nothing here changes local enforcement.
 //
 //	bap recommend                 list recent blocked calls, grouped by effect, then inspect one
-//	bap recommend --pick 2        inspect and recommend entry 2 non-interactively
+//	bap recommend --pick 2        inspect entry 2 and confirm in a human terminal
 //	bap recommend --status        show what you have recommended and what the administrator decided
 func RunRecommend(args []string) error {
 	fs := flag.NewFlagSet("recommend", flag.ContinueOnError)
 	pick := fs.Int("pick", 0, "number of the blocked call to inspect and recommend (see the list)")
 	justify := fs.String("justify", "", "why this is benign (shown to the administrator)")
-	yes := fs.Bool("yes", false, "submit without the confirmation prompt")
 	status := fs.Bool("status", false, "show the status of your recommendations")
 	limit := fs.Int("limit", 15, "how many blocked effects to list")
 	logPath := fs.String("audit-log", "", "audit log to read (defaults to this machine's BAP audit log)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *limit < 1 || *limit > 100 {
+		return fmt.Errorf("limit must be between 1 and 100")
+	}
+	// Inspection/status remain useful in automation; submission never is. Check before loading
+	// enrollment material or making a request, including when an agent has allocated a PTY.
+	if *pick != 0 && (!stdinIsInteractive() || recommendationAgentSession()) {
+		return fmt.Errorf("recommendation submission is human-only; inspect the blocked call in your own terminal")
 	}
 
 	creds, err := loadEnrolledCredentials()
@@ -67,7 +74,7 @@ func RunRecommend(args []string) error {
 
 	idx := *pick
 	if idx == 0 {
-		if !stdinIsInteractive() {
+		if !stdinIsInteractive() || recommendationAgentSession() {
 			fmt.Println("\nRe-run with --pick N to inspect and recommend one of these.")
 			return nil
 		}
@@ -104,10 +111,7 @@ func RunRecommend(args []string) error {
 		why, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 		why = strings.TrimSpace(why)
 	}
-	if !*yes {
-		if !stdinIsInteractive() {
-			return fmt.Errorf("refusing to submit without --yes in a non-interactive session")
-		}
+	{
 		fmt.Printf("\nSend a recommendation for %q to %s ? [y/N]: ", g.Action, creds.ServerURL)
 		ans, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(ans)), "y") {
@@ -116,6 +120,11 @@ func RunRecommend(args []string) error {
 		}
 	}
 	return submitRecommendation(creds, g, why)
+}
+
+func recommendationAgentSession() bool {
+	return os.Getenv("BAP_IN_BROKER") != "" || os.Getenv("BAP_SESSION_ID") != "" ||
+		os.Getenv("LTD_SESSION_ID") != "" || isAgentEnvironment(os.Getenv("LTD_SOURCE"))
 }
 
 type blockedEffect struct {

@@ -42,19 +42,20 @@ type ExecutionReceipt struct {
 
 // ExecResponse is output by the exec command.
 type ExecResponse struct {
-	Allowed           bool              `json:"allowed"`
-	Decision          string            `json:"decision,omitempty"`
-	Output            string            `json:"output,omitempty"`
-	ExitCode     int               `json:"exit_code"`
-	Reason       string            `json:"reason,omitempty"`
-	Suggestion   string            `json:"suggestion,omitempty"`
-	Warning      string            `json:"warning,omitempty"`
-	Mode         string            `json:"mode,omitempty"`
-	DecisionOnly      bool              `json:"decision_only,omitempty"`
-	StepUpDecision    string            `json:"step_up_decision,omitempty"`
-	CanonicalAction   string            `json:"canonical_action,omitempty"`
-	CanonicalResource string            `json:"canonical_resource,omitempty"`
-	Receipt           *ExecutionReceipt `json:"receipt,omitempty"`
+	TimingsMS         map[string]float64 `json:"timings_ms,omitempty"`
+	Allowed           bool               `json:"allowed"`
+	Decision          string             `json:"decision,omitempty"`
+	Output            string             `json:"output,omitempty"`
+	ExitCode          int                `json:"exit_code"`
+	Reason            string             `json:"reason,omitempty"`
+	Suggestion        string             `json:"suggestion,omitempty"`
+	Warning           string             `json:"warning,omitempty"`
+	Mode              string             `json:"mode,omitempty"`
+	DecisionOnly      bool               `json:"decision_only,omitempty"`
+	StepUpDecision    string             `json:"step_up_decision,omitempty"`
+	CanonicalAction   string             `json:"canonical_action,omitempty"`
+	CanonicalResource string             `json:"canonical_resource,omitempty"`
+	Receipt           *ExecutionReceipt  `json:"receipt,omitempty"`
 	// Halt asks the agent harness to stop the turn (hook continue:false) instead of letting the agent
 	// keep retrying a refusal no automation can resolve (BAP-936).
 	Halt       bool   `json:"halt,omitempty"`
@@ -76,10 +77,10 @@ const (
 
 // PluginHealthRecord captures observable evidence for an agent plugin.
 type PluginHealthRecord struct {
-	Client              string      `json:"client"`                 // "claude-code" or "copilot"
-	PluginName          string      `json:"plugin_name"`            // e.g. "bap-zero-trust"
-	PluginVersion       string      `json:"plugin_version"`         // e.g. "1.0.0"
-	State               PluginState `json:"state"`                  // Active, Installed, Degraded, etc.
+	Client              string      `json:"client"`         // "claude-code" or "copilot"
+	PluginName          string      `json:"plugin_name"`    // e.g. "bap-zero-trust"
+	PluginVersion       string      `json:"plugin_version"` // e.g. "1.0.0"
+	State               PluginState `json:"state"`          // Active, Installed, Degraded, etc.
 	ManifestPath        string      `json:"manifest_path,omitempty"`
 	AgentDiscovered     bool        `json:"agent_discovered"`
 	PluginInstalled     bool        `json:"plugin_installed"`
@@ -91,10 +92,10 @@ type PluginHealthRecord struct {
 
 // DefenseLayerStatus represents the status of a specific security layer in BAP's defense-in-depth model.
 type DefenseLayerStatus struct {
-	LayerID     string `json:"layer_id"`     // e.g. "Layer 1A", "Layer 1B", "Layer 2", etc.
-	Name        string `json:"name"`         // e.g. "Native Agent Plugin"
-	Description string `json:"description"`  // e.g. "Vendor plugin framework hook interception"
-	Status      string `json:"status"`       // "ACTIVE", "OPTIONAL", "DEGRADED", "DISABLED"
+	LayerID     string `json:"layer_id"`    // e.g. "Layer 1A", "Layer 1B", "Layer 2", etc.
+	Name        string `json:"name"`        // e.g. "Native Agent Plugin"
+	Description string `json:"description"` // e.g. "Vendor plugin framework hook interception"
+	Status      string `json:"status"`      // "ACTIVE", "OPTIONAL", "DEGRADED", "DISABLED"
 	Evidence    string `json:"evidence"`
 }
 
@@ -185,25 +186,25 @@ type LLMCallGovernance struct {
 
 // CryptographicAgentSVID represents a signed workload identity assertion bound to a human owner (BAP-915).
 type CryptographicAgentSVID struct {
-	Issuer         string    `json:"iss"`
-	Subject        string    `json:"sub"` // spiffe://bap.internal/.../principal/<principal_id>
-	HumanOwner     string    `json:"human_owner"`
-	HumanOIDCSUB   string    `json:"human_oidc_sub,omitempty"`
-	WorkstationID  string    `json:"workstation_id"`
-	SessionID      string    `json:"session_id"`
-	ClientType     string    `json:"client_type"` // claude-code, copilot, etc.
-	PublicKeyHex   string    `json:"public_key_hex"`
-	IssuedAt       time.Time `json:"iat"`
-	ExpiresAt      time.Time `json:"exp"`
-	IssuerSignature string   `json:"issuer_signature"`
+	Issuer          string    `json:"iss"`
+	Subject         string    `json:"sub"` // spiffe://bap.internal/.../principal/<principal_id>
+	HumanOwner      string    `json:"human_owner"`
+	HumanOIDCSUB    string    `json:"human_oidc_sub,omitempty"`
+	WorkstationID   string    `json:"workstation_id"`
+	SessionID       string    `json:"session_id"`
+	ClientType      string    `json:"client_type"` // claude-code, copilot, etc.
+	PublicKeyHex    string    `json:"public_key_hex"`
+	IssuedAt        time.Time `json:"iat"`
+	ExpiresAt       time.Time `json:"exp"`
+	IssuerSignature string    `json:"issuer_signature"`
 }
 
 // DelegationIdentity captures who authorized the task execution (BAP-916).
 type DelegationIdentity struct {
-	DelegationType          string `json:"delegation_type"` // "human_interactive_prompt", "automated_workflow", "step_up_approval"
-	HumanTokenOrSignature   string `json:"human_token_or_signature,omitempty"`
-	ApprovalTicketID        string `json:"approval_ticket_id,omitempty"`
-	ApproverEmail           string `json:"approver_email,omitempty"`
+	DelegationType        string `json:"delegation_type"` // "human_interactive_prompt", "automated_workflow", "step_up_approval"
+	HumanTokenOrSignature string `json:"human_token_or_signature,omitempty"`
+	ApprovalTicketID      string `json:"approval_ticket_id,omitempty"`
+	ApproverEmail         string `json:"approver_email,omitempty"`
 }
 
 // TaskIntent captures declared task mission and prompt hash (BAP-916).
@@ -234,11 +235,11 @@ type TaskAuthorizationEnvelope struct {
 
 // TaskGrant represents an ephemeral, task-scoped grant token with zero standing privilege (BAP-917).
 type TaskGrant struct {
-	GrantID           string    `json:"grant_id"`
-	EnvelopeID        string    `json:"envelope_id"`
-	SessionID         string    `json:"session_id"`
-	PrincipalSVID     string    `json:"principal_svid"`
-	HumanOwner        string    `json:"human_owner"`
+	GrantID            string    `json:"grant_id"`
+	EnvelopeID         string    `json:"envelope_id"`
+	SessionID          string    `json:"session_id"`
+	PrincipalSVID      string    `json:"principal_svid"`
+	HumanOwner         string    `json:"human_owner"`
 	AllowedActions     []string  `json:"allowed_actions"`
 	AllowedResources   []string  `json:"allowed_resources"`
 	RequestedActions   []string  `json:"requested_actions,omitempty"`
@@ -246,12 +247,12 @@ type TaskGrant struct {
 	NarrowingApplied   bool      `json:"narrowing_applied,omitempty"`
 	NarrowingReason    string    `json:"narrowing_reason,omitempty"`
 	MaxUses            int       `json:"max_uses"`
-	RemainingUses     int       `json:"remaining_uses"`
-	ExpiresAt         time.Time `json:"expires_at"`
-	IssuedAt          time.Time `json:"issued_at"`
-	IsBurned          bool      `json:"is_burned"`
-	BurnReason        string    `json:"burn_reason,omitempty"`
-	AuthoritySignature string   `json:"authority_signature"` // Signed by BAP Local PEP
+	RemainingUses      int       `json:"remaining_uses"`
+	ExpiresAt          time.Time `json:"expires_at"`
+	IssuedAt           time.Time `json:"issued_at"`
+	IsBurned           bool      `json:"is_burned"`
+	BurnReason         string    `json:"burn_reason,omitempty"`
+	AuthoritySignature string    `json:"authority_signature"` // Signed by BAP Local PEP
 }
 
 // AuditLineageProof provides mathematical non-repudiation linking the full execution chain (BAP-918).
@@ -269,6 +270,3 @@ type AuditLineageProof struct {
 	Timestamp          time.Time `json:"timestamp"`
 	LedgerSignature    string    `json:"ledger_signature"`
 }
-
-
-

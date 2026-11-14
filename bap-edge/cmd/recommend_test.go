@@ -111,3 +111,18 @@ func TestSubmitRecommendationExplainsRefusals(t *testing.T) {
 		}
 	}
 }
+
+func TestRecommendationCannotSubmitFromAgent(t *testing.T) {
+	t.Setenv("BAP_IN_BROKER", "1")
+	if err := RunRecommend([]string{"--pick", "1"}); err == nil || !strings.Contains(err.Error(), "human-only") {
+		t.Fatalf("agent submission: %v", err)
+	}
+	if err := RunRecommend([]string{"--yes"}); err == nil {
+		t.Fatal("noninteractive bypass flag remains available")
+	}
+	for _, command := range []string{"bap recommend --pick 1", "bapedge review recommend --pick 1"} {
+		if _, ok := humanOnlyBAPCommand(command); !ok {
+			t.Fatalf("hook did not block %s", command)
+		}
+	}
+}

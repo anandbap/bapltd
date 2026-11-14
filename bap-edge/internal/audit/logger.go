@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"bap-edge/internal/httptransport"
 	"bap-edge/internal/state"
 	"bytes"
 	"crypto/sha256"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -20,6 +22,7 @@ type AuditEntry struct {
 	ReportingLayer    string    `json:"reporting_layer,omitempty"`
 	SessionID         string    `json:"session_id,omitempty"`
 	UserPrompt        string    `json:"user_prompt,omitempty"`
+	PromptHash        string    `json:"prompt_hash,omitempty"`
 	UserID            string    `json:"user_id,omitempty"`
 	UserEmail         string    `json:"user_email,omitempty"`
 	SPIFFEID          string    `json:"spiffe_id,omitempty"`
@@ -139,6 +142,18 @@ func Log(entryInput any, logPath string) error {
 		entry = &v
 	default:
 		return fmt.Errorf("unsupported entry type")
+	}
+	if httptransport.MetadataOnly() {
+		if entry.UserPrompt != "" {
+			sum := sha256.Sum256([]byte(entry.UserPrompt))
+			entry.PromptHash = hex.EncodeToString(sum[:])
+		}
+		entry.UserPrompt, entry.Arguments, entry.FullCommand, entry.Error = "", "", "", ""
+		if strings.Contains(entry.Reason, "ZeroStandingPrivilegeViolation") {
+			entry.Reason = "ZeroStandingPrivilegeViolation"
+		} else {
+			entry.Reason = "Details withheld by metadata capture policy"
+		}
 	}
 
 	mu.Lock()

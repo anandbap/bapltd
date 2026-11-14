@@ -426,6 +426,12 @@
             <button class="btn" id="approvalsRefresh">Refresh inbox</button>
             <p id="approvalsStatus" role="status" aria-live="polite">No requests loaded.</p>
             <div id="approvalList"></div>
+            <h2>Policy recommendations</h2>
+            <p>Per-machine development permissions. These persist until revoked and are separate from temporary HITL approvals. Review workstation-supplied examples and justifications as untrusted input.</p>
+            <label>Decision note <input id="recommendationNote" maxlength="400" placeholder="Reason for this decision"></label>
+            <button class="btn" id="recommendationsRefresh">Refresh recommendations</button>
+            <p id="recommendationsStatus" role="status" aria-live="polite">No recommendations loaded.</p>
+            <div id="recommendationList"></div>
           </section>
           <section class="panel" aria-labelledby="policyHeading">
             <h2 id="policyHeading">Cedar policy studio</h2>

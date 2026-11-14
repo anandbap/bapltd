@@ -43,8 +43,8 @@ const (
 	TokenIntegrityLevel = 25
 	SE_GROUP_INTEGRITY  = 0x00000020
 
-	JobObjectExtendedLimitInformation          = 9
-	JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE         = 0x2000
+	JobObjectExtendedLimitInformation           = 9
+	JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE          = 0x2000
 	JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION = 0x0400
 
 	PROCESS_SET_QUOTA = 0x0100
@@ -255,7 +255,8 @@ func PostStartProcess(cmd *exec.Cmd) func() {
 		return func() {}
 	}
 	_ = AssignProcessToJob(hJob, cmd.Process.Pid)
+	var once sync.Once
 	return func() {
-		syscall.CloseHandle(hJob)
+		once.Do(func() { syscall.CloseHandle(hJob) })
 	}
 }

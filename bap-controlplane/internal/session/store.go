@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -59,10 +60,10 @@ type Session struct {
 	RootAgentID     string   `json:"root_agent_id,omitempty"`
 	GrantID         string   `json:"grant_id,omitempty"`
 	Lineage         []string `json:"lineage,omitempty"`
-	LineageTree         string        `json:"lineage_tree,omitempty"`
-	ReconciledTo        string        `json:"reconciled_to,omitempty"`
-	PrincipalID         string        `json:"principal_id,omitempty"`
-	PrincipalSVID       string        `json:"principal_svid,omitempty"`
+	LineageTree     string   `json:"lineage_tree,omitempty"`
+	ReconciledTo    string   `json:"reconciled_to,omitempty"`
+	PrincipalID     string   `json:"principal_id,omitempty"`
+	PrincipalSVID   string   `json:"principal_svid,omitempty"`
 }
 
 // IntentContext is mission context produced deterministically at BAP Edge.
@@ -190,6 +191,19 @@ func NewStoreWithDB(dbPath string) (*Store, error) {
 	if dbPath == "" || dbPath == ":memory:" || dbPath == "memory" {
 		return NewStore(), nil
 	}
+	// Authority checkpoints include enrollment codes and security state. Create the database
+	// owner-only before SQLite opens it; keep its directory on protected persistent storage.
+	file, err := os.OpenFile(dbPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err := file.Chmod(0600); err != nil {
+		file.Close()
+		return nil, err
+	}
+	if err := file.Close(); err != nil {
+		return nil, err
+	}
 
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -198,6 +212,10 @@ func NewStoreWithDB(dbPath string) (*Store, error) {
 
 	_, _ = db.Exec("PRAGMA journal_mode=WAL;")
 	_, _ = db.Exec("PRAGMA busy_timeout=5000;")
+	if _, err := db.Exec("PRAGMA synchronous=FULL;"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 
 	createTableSQL := `
 	CREATE TABLE IF NOT EXISTS sessions (
@@ -526,8 +544,18 @@ func (s *Store) Start(req SessionStartRequest) (*Session, error) {
 		LineageTree:         lineageTree,
 		HooksDisabled:       req.HooksDisabled || req.ReportingLayer == "unmonitored",
 		ReportingLayer:      req.ReportingLayer,
-		EnforcementTier:     func() string { if req.EnforcementTier != "" { return req.EnforcementTier }; return "tier_1_standard" }(),
-		PrincipalID:         func() string { if req.PrincipalID != "" { return req.PrincipalID }; return GeneratePrincipalID(appID) }(),
+		EnforcementTier: func() string {
+			if req.EnforcementTier != "" {
+				return req.EnforcementTier
+			}
+			return "tier_1_standard"
+		}(),
+		PrincipalID: func() string {
+			if req.PrincipalID != "" {
+				return req.PrincipalID
+			}
+			return GeneratePrincipalID(appID)
+		}(),
 	}
 	sess.PrincipalSVID = fmt.Sprintf("spiffe://bap.internal/principal/%s", sess.PrincipalID)
 

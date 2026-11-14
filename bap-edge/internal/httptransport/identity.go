@@ -79,6 +79,11 @@ func ControlPlaneEpoch(server string) string {
 }
 
 func (t *identityTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	var privacyErr error
+	req, privacyErr = minimizeTelemetryRequest(req)
+	if privacyErr != nil {
+		return nil, privacyErr
+	}
 	if lifecyclePath(req.URL.Path) && req.Header.Get("Authorization") == "" {
 		creds := currentCredential()
 		base, err := url.Parse(creds.ServerURL)

@@ -19,8 +19,8 @@ import urllib.request
 import urllib.error
 
 WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-CP_BIN = os.path.join(WORKSPACE_ROOT, "dist", "windows-amd64", "bapcontrolplane.exe")
-BAPEDGE_BIN = os.path.join(WORKSPACE_ROOT, "dist", "windows-amd64", "bapedge.exe")
+CP_BIN = os.environ.get("BAP_CONTROLPLANE_TEST_BIN", os.path.join(WORKSPACE_ROOT, "dist", "windows-amd64", "bapcontrolplane.exe"))
+BAPEDGE_BIN = os.environ.get("BAP_EDGE_TEST_BIN", os.path.join(WORKSPACE_ROOT, "dist", "windows-amd64", "bapedge.exe"))
 
 ADMIN_TOKEN = "test-adm-oidc-integration-token-12345"
 DEV_PORT = 18881
@@ -31,6 +31,10 @@ class TestEnterpriseIdPFederation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temp_dir = tempfile.mkdtemp(prefix="bap_oidc_test_")
+        cls.dev_proc = cls.prod_proc = None
+        cls.addClassCleanup(cls._cleanup_fixture)
+        for name in ("dev", "prod"):
+            os.makedirs(os.path.join(cls.temp_dir, name), mode=0o700)
 
         # 1. Start Control Plane in DEV mode
         dev_cmd = [
@@ -44,12 +48,24 @@ class TestEnterpriseIdPFederation(unittest.TestCase):
         ]
         dev_env = os.environ.copy()
         dev_env["BAP_ENVIRONMENT"] = "development"
+        dev_env["BAP_MODE"] = "dev"
+        dev_env["BAP_STATE_DIR"] = os.path.join(cls.temp_dir, "dev")
+        dev_env["HOME"] = dev_env["USERPROFILE"] = os.path.join(cls.temp_dir, "dev")
+        dev_env["BAP_SECRET_KEY"] = "oidc-fixture-stable-secret-32-characters"
+        dev_env["BAP_POLICY_SIGNING_SEED"] = "11" * 32
+        dev_env.pop("BAP_POLICY_SIGNING_SEED_PREVIOUS", None)
+        client_dir = os.path.join(cls.temp_dir, "client")
+        os.makedirs(client_dir, mode=0o700)
+        cls.client_env = dev_env.copy()
+        cls.client_env["BAP_STATE_DIR"] = cls.client_env["HOME"] = cls.client_env["USERPROFILE"] = client_dir
+        cls.client_env["BAP_CREDENTIALS"] = os.path.join(client_dir, "unused-fixture.json")
+        cls.client_env["BAP_ZSP_DIR"] = os.path.join(client_dir, "zsp")
         # Keep each control plane's output: when one fails to start, the reason must be in the report.
         cls.dev_log = os.path.join(cls.temp_dir, "dev_cp.log")
         cls.prod_log = os.path.join(cls.temp_dir, "prod_cp.log")
         cls._dev_log_fh = open(cls.dev_log, "wb")
         cls._prod_log_fh = open(cls.prod_log, "wb")
-        cls.dev_proc = subprocess.Popen(dev_cmd, stdout=cls._dev_log_fh, stderr=subprocess.STDOUT, env=dev_env)
+        cls.dev_proc = subprocess.Popen(dev_cmd, cwd=os.path.join(cls.temp_dir, "dev"), stdout=cls._dev_log_fh, stderr=subprocess.STDOUT, env=dev_env)
 
         # 2. Start Control Plane in PROD mode
         prod_cmd = [
@@ -59,23 +75,29 @@ class TestEnterpriseIdPFederation(unittest.TestCase):
             "-mode=prod",
             "-oidc-provider=okta",
             "-oidc-allowed-domains=corp.internal,enterprise.com",
-            "-db=:memory:",
+            "-db=" + os.path.join(cls.temp_dir, "prod", "authority.db"),
+            "--initialize-authority",
+            "--policy-max-age=1h",
         ]
         prod_env = os.environ.copy()
         prod_env["BAP_ENVIRONMENT"] = "production"
-        cls.prod_proc = subprocess.Popen(prod_cmd, stdout=cls._prod_log_fh, stderr=subprocess.STDOUT, env=prod_env)
+        prod_env["BAP_MODE"] = "prod"
+        prod_env["BAP_STATE_DIR"] = os.path.join(cls.temp_dir, "prod")
+        prod_env["HOME"] = prod_env["USERPROFILE"] = os.path.join(cls.temp_dir, "prod")
+        prod_env["BAP_SECRET_KEY"] = "oidc-fixture-stable-secret-32-characters"
+        prod_env["BAP_POLICY_SIGNING_SEED"] = "22" * 32
+        prod_env.pop("BAP_POLICY_SIGNING_SEED_PREVIOUS", None)
+        cls.prod_proc = subprocess.Popen(prod_cmd, cwd=os.path.join(cls.temp_dir, "prod"), stdout=cls._prod_log_fh, stderr=subprocess.STDOUT, env=prod_env)
 
         # Wait for both servers to be healthy
         cls._wait_for_health(f"http://127.0.0.1:{DEV_PORT}", cls.dev_proc, cls.dev_log)
         cls._wait_for_health(f"http://127.0.0.1:{PROD_PORT}", cls.prod_proc, cls.prod_log)
 
     @classmethod
-    def tearDownClass(cls):
-        try:
-            subprocess.run([BAPEDGE_BIN, "daemon", "stop"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
-        except Exception:
-            pass
+    def _cleanup_fixture(cls):
         for proc in [cls.dev_proc, cls.prod_proc]:
+            if proc is None:
+                continue
             try:
                 proc.terminate()
                 proc.wait(timeout=2)
@@ -196,7 +218,7 @@ class TestEnterpriseIdPFederation(unittest.TestCase):
             "--no-daemon",
             f"--config={creds_path}",
         ]
-        res = subprocess.run(login_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        res = subprocess.run(login_cmd, cwd=self.temp_dir, env=self.client_env, timeout=30, capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertEqual(res.returncode, 0, f"bapedge login failed: {res.stderr}\n{res.stdout}")
         self.assertIn("Corporate Identity Verified", res.stdout)
         self.assertIn("alice@corp.internal", res.stdout)
@@ -238,7 +260,7 @@ class TestEnterpriseIdPFederation(unittest.TestCase):
             "--no-daemon",
             f"--config={creds_path}",
         ]
-        res = subprocess.run(login_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        res = subprocess.run(login_cmd, cwd=self.temp_dir, env=self.client_env, timeout=30, capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertEqual(res.returncode, 0, f"Google login failed: {res.stderr}\n{res.stdout}")
         self.assertIn("Identity Verified", res.stdout)
         self.assertIn("tester@corp.internal", res.stdout)

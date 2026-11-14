@@ -1,13 +1,12 @@
 package sandbox
 
 import (
-	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -292,6 +291,23 @@ func RunSandboxedCommandWithDetails(cmdStr string) ExecResult {
 // RunSandboxedCommandWithShell executes the shell command in an isolated sandbox with the target shell,
 // capturing combined stdout/stderr, exit code, and complete process tree ancestry.
 func RunSandboxedCommandWithShell(cmdStr, shell string) ExecResult {
+	return RunSandboxedCommandWithOptions(cmdStr, shell, ExecOptions{})
+}
+
+func RunSandboxedCommandWithOptions(cmdStr, shell string, options ExecOptions) ExecResult {
+	timeout, err := executionTimeout(options.Timeout)
+	if err != nil {
+		return ExecResult{ExitCode: 1, Error: err}
+	}
+	ctx := options.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return ExecResult{ExitCode: 1, Error: err}
+	}
 	cmd := BuildExecCmdWithShell(cmdStr, shell)
 
 	// Apply platform-specific sandbox attributes
@@ -373,11 +389,14 @@ func RunSandboxedCommandWithShell(cmdStr, shell string) ExecResult {
 		}
 	}
 
-	var b bytes.Buffer
-	cmd.Stdout = &b
-	cmd.Stderr = &b
+	// Bound memory even for noisy builds. The buffer is synchronized because cancellation and
+	// child-pipe draining can overlap. Nothing is read until Wait completes.
+	b := &boundedOutput{limit: maxCapturedOutput}
+	cmd.Stdout = b
+	cmd.Stderr = b
+	cmd.WaitDelay = 2 * time.Second
 
-	err := cmd.Start()
+	err = cmd.Start()
 	if err != nil {
 		return ExecResult{
 			Output:   "",
@@ -400,26 +419,34 @@ func RunSandboxedCommandWithShell(cmdStr, shell string) ExecResult {
 		defer postCleanup()
 	}
 
-	timeoutSec := 120
-	if toStr := os.Getenv("BAP_EXEC_TIMEOUT_SEC"); toStr != "" {
-		if val, err := strconv.Atoi(toStr); err == nil && val > 0 {
-			timeoutSec = val
-		}
-	}
-
 	done := make(chan error, 1)
 	go func() {
 		done <- cmd.Wait()
 	}()
 
 	var waitErr error
-	select {
-	case waitErr = <-done:
-	case <-time.After(time.Duration(timeoutSec) * time.Second):
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
+	progress := time.NewTicker(10 * time.Second)
+	defer progress.Stop()
+	started := time.Now()
+	waiting := true
+	for waiting {
+		select {
+		case waitErr = <-done:
+			waiting = false
+		case <-progress.C:
+			if options.Progress != nil {
+				options.Progress(time.Since(started).Round(time.Second))
+			}
+		case <-ctx.Done():
+			// Close the Windows job / kill the POSIX process group before waiting for pipe drain.
+			if postCleanup != nil {
+				postCleanup()
+			}
+			terminateProcessTree(cmd)
+			<-done
+			waitErr = fmt.Errorf("execution stopped (%s; configured timeout %s)", ctx.Err(), timeout)
+			waiting = false
 		}
-		waitErr = fmt.Errorf("Execution timed out after %d seconds (Process Terminated by Resource Quota)", timeoutSec)
 	}
 	// Redact sensitive keys/tokens from stdout and stderr output (BAP-535)
 	cleaned := CleanOutput(RedactSecrets(b.String()))

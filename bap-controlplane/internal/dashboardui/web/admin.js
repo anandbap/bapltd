@@ -2,6 +2,7 @@
   'use strict';
   var deps, visible = false, epoch = 0, bundle = null, validated = '', simulated = '', busy = false;
   var requests = [], deciding = new Set();
+  var recommendations = [], recDeciding = new Set(), recLoad = 0;
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
   function authorized() { return !!(deps && deps.isAdmin() && deps.isLive()); }
@@ -12,7 +13,7 @@
     $('adminLocked').hidden = !!(deps && deps.isAdmin());
     $('adminModeNotice').hidden = !(deps && deps.isAdmin() && !deps.isLive());
     $('adminWorkspace').hidden = !allow;
-    ['policyValidate','policySimulate','policyReload','approvalsRefresh'].forEach(function (id) { $(id).disabled = !allow || busy; });
+    ['policyValidate','policySimulate','policyReload','approvalsRefresh','recommendationsRefresh'].forEach(function (id) { $(id).disabled = !allow || busy; });
     $('policyDeploy').disabled = !allow || busy || !bundle || validated !== draftKey() || simulated !== draftKey() || !$('policyReason').value.trim();
   }
   function post(url, data) {
@@ -20,6 +21,54 @@
     return deps.apiFetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)}).then(function (r) { return r.json(); });
   }
   function changeDraft() { validated = simulated = ''; showMessage('policyResult', 'Draft changed. Validate and simulate again before deployment.'); controls(); }
+  function renderRecommendations() {
+    $('recommendationList').innerHTML = recommendations.map(function (r) {
+      var id = String(r.id || ''), pending = r.status === 'pending', approved = r.status === 'approved';
+      var buttons = pending ? ['approve','reject'] : approved ? ['revoke'] : [];
+      return '<article class="panel"><h3>' + esc(r.action) + ' <span class="chip">' + esc(r.status) + '</span></h3>' +
+        '<dl><dt>Machine / asset</dt><dd>' + esc(r.instance_id) + ' / ' + esc(r.asset_id) + '</dd>' +
+        '<dt>Scope</dt><dd>Workspace only, this machine only; relaxes the grant requirement. Policy invariants remain enforced.</dd>' +
+        '<dt>Example (untrusted workstation report)</dt><dd>' + esc(r.command_hint) + '</dd>' +
+        '<dt>Justification (untrusted)</dt><dd>' + esc(r.justification) + '</dd>' +
+        '<dt>Reported occurrences</dt><dd>' + esc(r.occurrences) + '</dd>' +
+        '<dt>Decision</dt><dd>' + esc(r.decided_by || '') + ' ' + esc(r.decision_note || '') + '</dd></dl>' +
+        '<div class="btns">' + buttons.map(function (action) {
+          return '<button class="btn" data-rec-id="' + esc(id) + '" data-rec-action="' + action + '"' +
+            (recDeciding.has(id) ? ' disabled' : '') + '>' + esc(action) + '</button>';
+        }).join('') + '</div></article>';
+    }).join('');
+  }
+  function loadRecommendations() {
+    if (!authorized()) return Promise.resolve();
+    var run = epoch, serial = ++recLoad;
+    showMessage('recommendationsStatus', 'Loading recommendations…');
+    return deps.getJSON('/api/v1/admin/policy/recommendations').then(function (data) {
+      if (run !== epoch || serial !== recLoad || !authorized()) return;
+      recommendations = data.recommendations || []; renderRecommendations();
+      showMessage('recommendationsStatus', recommendations.length + ' recommendations. Decisions apply after signed policy sync. Shared admin authentication does not identify an individual reviewer.');
+    }).catch(function (err) { if (run === epoch && serial === recLoad) showMessage('recommendationsStatus', 'Could not load recommendations: ' + err.message); });
+  }
+  function decideRecommendation(id, action) {
+    if (!authorized() || recDeciding.has(id) || ['approve','reject','revoke'].indexOf(action) < 0) return Promise.resolve();
+    var rec = recommendations.find(function (r) { return r.id === id; });
+    if (!rec || (action === 'revoke' ? rec.status !== 'approved' : rec.status !== 'pending')) return Promise.resolve();
+    if (!root.confirm(action + ' ' + rec.action + ' for machine ' + rec.asset_id + '?')) return Promise.resolve();
+    var run = epoch;
+    recDeciding.add(id); renderRecommendations();
+    var request = action === 'revoke' ? deps.apiFetch('/api/v1/admin/policy/approvals?asset_id=' + encodeURIComponent(rec.asset_id) + '&action=' + encodeURIComponent(rec.action), {method:'DELETE'}).then(function (r) { return r.json(); }) :
+      post('/api/v1/admin/policy/recommendations/' + encodeURIComponent(id) + '/' + action, {note:$('recommendationNote').value.trim()});
+    return request.then(function (data) {
+      if (run !== epoch || !authorized()) return;
+      if (action !== 'revoke' && (data.id !== id || data.status !== (action === 'approve' ? 'approved' : 'rejected'))) throw new Error('Server did not confirm the decision.');
+      if (action === 'revoke' && (!data.approved_effects || (data.approved_effects[rec.asset_id] || []).indexOf(rec.action) >= 0)) throw new Error('Server did not confirm revocation.');
+      return loadRecommendations().then(function () {
+        if (run !== epoch || !authorized()) return;
+        showMessage('recommendationsStatus', 'Server recorded ' + action + ' for ' + id + '. Verify signed sync on the workstation.');
+        if (deps.onDecision) deps.onDecision();
+      });
+    }).catch(function (err) { if (run === epoch) showMessage('recommendationsStatus', 'Decision not confirmed: ' + err.message + '. Refresh before retrying.'); })
+      .finally(function () { if (run === epoch) { recDeciding.delete(id); renderRecommendations(); } });
+  }
   function renderRequests() {
     $('approvalList').innerHTML = requests.map(function (r) {
       var pending = String(r.status).toUpperCase() === 'PENDING';
@@ -129,10 +178,12 @@
   function authChanged() {
     if (!deps) return;
     epoch++; bundle = null; requests = []; validated = simulated = ''; busy = false; deciding.clear();
+    recommendations = []; recDeciding.clear(); recLoad++;
+    $('recommendationList').innerHTML = ''; $('recommendationNote').value = ''; showMessage('recommendationsStatus', 'No recommendations loaded.');
     ['policyDraft','policySchema','policyReason','approvalReviewer'].forEach(function (id) { $(id).value = ''; });
     $('approvalList').innerHTML = ''; showMessage('policyVersion', 'Current policy not loaded.'); showMessage('policyResult', '');
     showMessage('approvalsStatus', 'No requests loaded.'); controls();
-    if (visible && authorized()) { loadPolicy(); loadRequests(); }
+    if (visible && authorized()) { loadPolicy(); loadRequests(); loadRecommendations(); }
   }
   root.BAPAdmin = {
     init: function (options) {
@@ -140,6 +191,11 @@
       $('adminUnlock').addEventListener('click', deps.requireAdminLogin);
       $('policyReload').addEventListener('click', loadPolicy);
       $('approvalsRefresh').addEventListener('click', loadRequests);
+      $('recommendationsRefresh').addEventListener('click', loadRecommendations);
+      $('recommendationList').addEventListener('click', function (event) {
+        var button = event.target.closest('[data-rec-action]');
+        if (button && !button.disabled) decideRecommendation(button.getAttribute('data-rec-id'), button.getAttribute('data-rec-action'));
+      });
       $('policyValidate').addEventListener('click', validatePolicy);
       $('policySimulate').addEventListener('click', simulatePolicy);
       $('policyDeploy').addEventListener('click', deployPolicy);
@@ -152,8 +208,9 @@
       });
       controls();
     },
-    show: function () { visible = true; controls(); if (authorized()) { if (!bundle) loadPolicy(); loadRequests(); } },
+    show: function () { visible = true; controls(); if (authorized()) { if (!bundle) loadPolicy(); loadRequests(); loadRecommendations(); } },
     hide: function () { visible = false; }, authChanged: authChanged,
-    refresh: loadRequests, resolve: resolveRequest, validate: validatePolicy, simulate: simulatePolicy, deploy: deployPolicy
+    refresh: loadRequests, resolve: resolveRequest, validate: validatePolicy, simulate: simulatePolicy, deploy: deployPolicy,
+    refreshRecommendations: loadRecommendations, decideRecommendation: decideRecommendation
   };
 })(window);

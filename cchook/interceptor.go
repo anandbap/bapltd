@@ -735,6 +735,9 @@ func promptPathForSession(sessionID string) string {
 }
 
 func writeSessionPrompt(sessionID, prompt string) {
+	if MetadataOnly() {
+		return
+	}
 	if sessionID == "" || prompt == "" {
 		return
 	}
@@ -2787,6 +2790,12 @@ func ensureSessionAndWatcher(sessionID, serverURL string) {
 // spoolPrompt durably records a prompt event before delivery so a timeout or an
 // unregistered session cannot lose it. Returns the spool file path ("" on failure).
 func spoolPrompt(sessionID string, body []byte) string {
+	cleaned, err := MinimizeTelemetryJSON(body)
+	if err != nil {
+		hookLog("spoolPrompt: invalid JSON")
+		return ""
+	}
+	body = cleaned
 	dir := promptSpoolDir()
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		hookLog("spoolPrompt: %v", err)
@@ -3331,6 +3340,10 @@ func main() {
 
 	// 5. Process Command execution (Bash or generic command) vs Subagents & Inspection Tools
 	command := strings.TrimSpace(payload.ToolInput.Command)
+	if isHumanRecommendationCommand(command) {
+		outputDecision("deny", "Recommendation submission is a human-operator action", "Ask the developer to inspect and submit the recommendation in their own terminal.")
+		return
+	}
 	if command == "" {
 		toolLower := strings.ToLower(payload.ToolName)
 		if isSafeFileTool(toolLower) {

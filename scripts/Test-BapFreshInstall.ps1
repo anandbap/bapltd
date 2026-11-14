@@ -133,6 +133,8 @@ try {
         $report.broker = @{ session_id = $runID; allowed_receipt = $allowBody.receipt.receipt_id;
             denied_receipt = $denyBody.receipt.receipt_id; allowed_total_ms = $allowed.DurationMs;
             denied_total_ms = $denied.DurationMs; prompt_text_supplied = $false }
+        $report.broker.allowed_timings_ms = $allowBody.timings_ms
+        $report.broker.denied_timings_ms = $denyBody.timings_ms
 
         # The broker supplies proof internally. No token is read or passed here.
         # A 200/alive for this unique ID proves that its reporting session arrived.

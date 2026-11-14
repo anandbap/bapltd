@@ -32,6 +32,7 @@ import (
 	"bap-controlplane/internal/otc"
 	"bap-controlplane/internal/pilot"
 	"bap-controlplane/internal/policy"
+	"bap-controlplane/internal/privacy"
 	"bap-controlplane/internal/registry"
 	"bap-controlplane/internal/sandbox"
 	"bap-controlplane/internal/session"
@@ -53,6 +54,7 @@ type DemoActionRecord struct {
 const demoIntentClassifierVersion = "bap-intent-rules-v1"
 
 type Server struct {
+	durable             *durableState
 	pilotRoster         *pilot.Roster
 	pilotRosterRevision string
 	registry            *registry.Store
@@ -320,7 +322,15 @@ func (s *Server) Handler() http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		s.mux.ServeHTTP(w, r)
+		if s.IsProductionMode() {
+			filtered, err := privacy.MinimizeTelemetryRequest(r)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "Invalid telemetry payload")
+				return
+			}
+			r = filtered
+		}
+		s.serveDurably(w, r)
 	})
 }
 
@@ -636,8 +646,8 @@ func (s *Server) handleRegisterEdge(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Version compatibility gate
-	if s.minEdgeVersion != "" && req.AgentVersion != "" {
-		if version.Compare(req.AgentVersion, s.minEdgeVersion) < 0 {
+	if s.minEdgeVersion != "" {
+		if req.AgentVersion == "" || version.Compare(req.AgentVersion, s.minEdgeVersion) < 0 {
 			w.Header().Set("X-BAP-Min-Edge-Version", s.minEdgeVersion)
 			writeJSON(w, http.StatusUpgradeRequired, map[string]any{
 				"error":            "Upgrade required",
@@ -2427,10 +2437,14 @@ func (s *Server) handlePolicySync(w http.ResponseWriter, r *http.Request) {
 	if agentVer == "" {
 		agentVer = r.Header.Get("X-BAP-Agent-Version")
 	}
+	if s.policyStore.PolicyLeaseRequired() && !req.SupportsPolicyLease {
+		writeError(w, http.StatusUpgradeRequired, "Upgrade this edge client before enabling signed offline policy leases")
+		return
+	}
 
 	// Min-version evaluation
-	if s.minEdgeVersion != "" && agentVer != "" {
-		if version.Compare(agentVer, s.minEdgeVersion) < 0 {
+	if s.minEdgeVersion != "" {
+		if agentVer == "" || version.Compare(agentVer, s.minEdgeVersion) < 0 {
 			w.Header().Set("X-BAP-Min-Edge-Version", s.minEdgeVersion)
 			writeJSON(w, http.StatusOK, policy.SyncResponse{
 				Directive:      policy.DirectiveUpdateRequired,
@@ -2461,7 +2475,7 @@ func (s *Server) handlePolicySync(w http.ResponseWriter, r *http.Request) {
 		}
 		req.AssetID = asset
 	} else {
-		if os.Getenv("BAP_POLICY_SYNC_REQUIRE_AUTH") == "1" {
+		if s.IsProductionMode() || os.Getenv("BAP_POLICY_SYNC_REQUIRE_AUTH") == "1" {
 			writeError(w, http.StatusUnauthorized, "Enrollment credential required for policy sync")
 			return
 		}
@@ -2772,7 +2786,7 @@ func (s *Server) handleAuditIngest(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ingested":         len(accepted),
-		"durable":          false,
+		"durable":          s.durable != nil,
 		"server_epoch":     s.serverEpoch,
 		"received_at":      receivedAt.Format(time.RFC3339Nano),
 		"processing_ms":    time.Since(receivedAt).Milliseconds(),

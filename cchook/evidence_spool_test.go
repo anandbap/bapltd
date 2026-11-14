@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestFileHookEvidenceSurvivesWithoutNetworkOrPrompt(t *testing.T) {
+	t.Setenv("BAP_TELEMETRY_CONTENT", "")
 	t.Setenv("BAP_STATE_DIR", t.TempDir())
 	previous := fileHookEvidence
 	defer func() { fileHookEvidence = previous }()
@@ -15,7 +17,7 @@ func TestFileHookEvidenceSurvivesWithoutNetworkOrPrompt(t *testing.T) {
 	fileHookEvidence.AppID = "codex"
 	fileHookEvidence.Tool = "Read"
 	fileHookEvidence.Path = "workspace/source.go"
-	if err := spoolFileHookDecision("deny", "policy denied file read"); err != nil {
+	if err := spoolFileHookDecision("deny", "PRIVATE_REASON_MARKER"); err != nil {
 		t.Fatal(err)
 	}
 	files, err := os.ReadDir(hookEvidenceDir())
@@ -33,6 +35,9 @@ func TestFileHookEvidenceSurvivesWithoutNetworkOrPrompt(t *testing.T) {
 	}
 	if _, ok := ev["user_prompt"]; ok {
 		t.Fatal("file-hook record invented prompt text")
+	}
+	if strings.Contains(string(data), "PRIVATE_REASON_MARKER") || ev["canonical_action"] != "fs:file:read" || ev["canonical_resource"] != "workspace/source.go" {
+		t.Fatalf("privacy or effect metadata lost: %s", data)
 	}
 }
 

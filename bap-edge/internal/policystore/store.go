@@ -28,6 +28,7 @@ var (
 )
 
 type Bundle struct {
+	ValidUntil            string `json:"valid_until,omitempty"`
 	Version               uint64 `json:"version"`
 	Digest                string `json:"digest"`
 	Signature             string `json:"signature,omitempty"`
@@ -56,6 +57,7 @@ type Bundle struct {
 }
 
 type PolicyState struct {
+	ValidUntil            string    `json:"valid_until,omitempty"`
 	Version               uint64    `json:"version"`
 	Digest                string    `json:"digest"`
 	Signature             string    `json:"signature,omitempty"`
@@ -77,7 +79,8 @@ type PolicyState struct {
 // asBundle rebuilds the signed fields of a cached state for verification.
 func (st PolicyState) asBundle() Bundle {
 	return Bundle{
-		Version: st.Version, Digest: st.Digest, KillSwitch: st.KillSwitch,
+		ValidUntil: st.ValidUntil,
+		Version:    st.Version, Digest: st.Digest, KillSwitch: st.KillSwitch,
 		StrictToolEnforcement: st.StrictToolEnforcement, EnforcementTier: st.EnforcementTier,
 		UpdatedAt: st.UpdatedAt, ZSPReadExempt: st.ZSPReadExempt, ApprovedEffects: st.ApprovedEffects,
 		AssetID: st.AssetID, SigAlg: st.SigAlg, KeyID: st.KeyID, SignatureEd25519: st.SignatureEd25519,
@@ -232,6 +235,7 @@ func (s *Store) Accept(bundle Bundle) error {
 	}
 
 	state := PolicyState{
+		ValidUntil:            bundle.ValidUntil,
 		Version:               bundle.Version,
 		Digest:                computed,
 		Signature:             bundle.Signature,
@@ -362,6 +366,12 @@ func (s *Store) Current() (string, string, PolicyState, error) {
 		if state.KillSwitch {
 			return "", "", state, ErrKillSwitchActive
 		}
+		if managed && state.ValidUntil != "" {
+			expires, err := time.Parse(time.RFC3339, state.ValidUntil)
+			if err != nil || !time.Now().Before(expires) {
+				return "", "", state, ErrPolicyExpired
+			}
+		}
 
 		cedarPath := filepath.Join(s.directory, "policy.cedar")
 		if data, err := os.ReadFile(cedarPath); err == nil {
@@ -483,13 +493,14 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 	}
 
 	reqPayload := map[string]any{
-		"asset_id":           s.requestAssetID(),
-		"agent_id":           agentID,
-		"installed_version":  state.Version,
-		"installed_digest":   state.Digest,
-		"installed_key_id":   state.KeyID,
-		"installed_asset_id": state.AssetID,
-		"agent_version":      version.Version,
+		"supports_policy_lease": true,
+		"asset_id":              s.requestAssetID(),
+		"agent_id":              agentID,
+		"installed_version":     state.Version,
+		"installed_digest":      state.Digest,
+		"installed_key_id":      state.KeyID,
+		"installed_asset_id":    state.AssetID,
+		"agent_version":         version.Version,
 	}
 	body, _ := json.Marshal(reqPayload)
 

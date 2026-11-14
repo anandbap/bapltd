@@ -3,6 +3,7 @@ package cmd
 import (
 	"bap-edge/internal/httptransport"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -11,10 +12,12 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"bap-edge/internal/antibypass"
@@ -31,6 +34,8 @@ import (
 )
 
 type execContext struct {
+	authorizerMS    *float64
+	preExecutionMS  *float64
 	startTime       time.Time
 	source          string
 	sessionID       string
@@ -729,6 +734,13 @@ func generateExecutionReceipt(ec *execContext, result string, exitCode int) *typ
 }
 
 func (ec *execContext) exit(resp types.ExecResponse, code int) {
+	resp.TimingsMS = map[string]float64{"broker_before_reporting": float64(time.Since(ec.startTime).Microseconds()) / 1000}
+	if ec.authorizerMS != nil {
+		resp.TimingsMS["shell_authorizer"] = *ec.authorizerMS
+	}
+	if ec.preExecutionMS != nil {
+		resp.TimingsMS["pre_execution"] = *ec.preExecutionMS
+	}
 	resp.ExitCode = code
 
 	result := "ALLOWED_EXECUTED"
@@ -926,6 +938,8 @@ func RunExec(args []string) {
 	policyPath := fs.String("policy", defaultPolicy, "Path to policy.cedar file (defaults to ./policy.cedar)")
 	jsonFlag := fs.Bool("json", false, "Output in JSON format (default: auto-detect TTY)")
 	rawFlag := fs.Bool("raw", false, "Force output in raw text format")
+	timeoutFlag := fs.Duration("timeout", 0, "Execution timeout (default 30m or BAP_EXEC_TIMEOUT_SEC; maximum 24h)")
+	progressFlag := fs.Bool("progress", false, "Report elapsed execution time to stderr every 10s")
 
 	defaultSource := os.Getenv("LTD_SOURCE")
 	if defaultSource == "" {
@@ -1180,6 +1194,10 @@ func RunExec(args []string) {
 	}
 	fullCommand = sandbox.CleanCommandString(fullCommand)
 	ec.fullCommand = fullCommand
+	if verb, humanOnly := humanOnlyBAPCommand(fullCommand); humanOnly && (verb == "recommend" || verb == "review recommend") && isAgentEnvironment(ec.source) {
+		ec.exit(types.ExecResponse{Allowed: false, ExitCode: 1, Reason: "Recommendation submission is a human-operator action", Suggestion: "Ask the developer to inspect and submit this recommendation in their own terminal."}, 1)
+		return
+	}
 
 	// Pre-flight anti-tampering check:
 	// Verify if the agent attempts to modify, rename, delete, or overwrite BAP hooks, policies, or binaries
@@ -1323,7 +1341,10 @@ func RunExec(args []string) {
 	ec.cmdArguments = cmdArguments
 
 	// 3. Evaluate command against Cedar policies
+	authorizerStarted := time.Now()
 	allowed, reason, err := authorizer.Evaluate(executable, fullCommand, cmdArguments)
+	authorizerMS := float64(time.Since(authorizerStarted).Microseconds()) / 1000
+	ec.authorizerMS = &authorizerMS
 	if err != nil {
 		resp := types.ExecResponse{
 			Allowed: false,
@@ -1483,7 +1504,15 @@ func RunExec(args []string) {
 	if ec.source != "" {
 		_ = os.Setenv("LTD_SOURCE", ec.source)
 	}
-	execRes := sandbox.RunSandboxedCommandWithShell(fullCommand, ec.shell)
+	preExecutionMS := float64(time.Since(ec.startTime).Microseconds()) / 1000
+	ec.preExecutionMS = &preExecutionMS
+	execCtx, stopExec := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopExec()
+	options := sandbox.ExecOptions{Context: execCtx, Timeout: *timeoutFlag}
+	if *progressFlag {
+		options.Progress = func(elapsed time.Duration) { fmt.Fprintf(os.Stderr, "[BAP] Execution running: %s elapsed\n", elapsed) }
+	}
+	execRes := sandbox.RunSandboxedCommandWithOptions(fullCommand, ec.shell, options)
 	ec.parentPID = execRes.ParentPID
 	ec.processPID = execRes.ProcessPID
 	ec.processTree = execRes.ProcessTree

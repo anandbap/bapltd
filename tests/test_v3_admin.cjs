@@ -21,14 +21,21 @@ async function main() {
   const policy = {version:3, digest:'fixture-digest', policy_cedar:'permit(principal, action, resource);', schema_json:'', kill_switch:true};
   const pending = {escalation_id:'esc-fixture', status:'PENDING', action:'fs:write', resource:'/workspace/report', reason:'<script>unsafe</script>', ephemeral_grant:'MUST_NOT_RENDER', requested_at:'2026-11-13T10:00:00Z'};
   const fixture = {escalations:[pending]};
+  const recommendation = {id:'rec-fixture',asset_id:'asset/a',instance_id:'workstation',action:'dev:go:test',status:'pending',command_hint:'<img src=x onerror=alert(1)>',justification:'Run tests',occurrences:2};
   const ctx = vm.createContext({console, Promise, Set, Date, Number, JSON, Error, document:{getElementById:el}, confirm:()=>true});
   ctx.window = ctx;
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../bap-controlplane/internal/dashboardui/web/admin.js'), 'utf8'), ctx);
   const deps = {
     isAdmin:()=>admin, isLive:()=>live, requireAdminLogin() {}, onDecision(){changed++;},
-    async getJSON(url) { gets++; return url.includes('escalation') ? fixture : policy; },
+    async getJSON(url) { gets++; return url.includes('recommendations') ? {recommendations:[recommendation]} : url.includes('escalation') ? fixture : policy; },
     async apiFetch(url, options) {
-      const body = JSON.parse(options.body); calls.push({url, body});
+      const body = options.body ? JSON.parse(options.body) : null; calls.push({url, body});
+      if (url.includes('/policy/recommendations/')) {
+        if (failDecision) throw new Error('HTTP 403: unauthorized');
+        recommendation.status = url.endsWith('/approve') ? 'approved' : 'rejected';
+        return {json:async()=>({...recommendation})};
+      }
+      if (options.method === 'DELETE') { recommendation.status='revoked'; return {json:async()=>({approved_effects:{}})}; }
       if (url.endsWith('/resolve')) {
         if (failDecision) throw new Error('HTTP 403: unauthorized');
         pending.status = body.decision === 'approve' ? 'APPROVED' : 'DENIED';
@@ -66,6 +73,21 @@ async function main() {
   assert.equal(decision.reviewer_email, 'reviewer@example.test');
   assert.equal(decision.ttl_seconds, 300);
 
+  assert.match(el('recommendationList').innerHTML, /&lt;img/);
+  assert.doesNotMatch(el('recommendationList').innerHTML, /<img/);
+  failDecision = true;
+  await ctx.BAPAdmin.decideRecommendation('rec-fixture','approve');
+  assert.equal(recommendation.status, 'pending');
+  assert.match(el('recommendationsStatus').textContent, /Decision not confirmed/);
+  failDecision = false;
+  el('recommendationNote').value = 'Reviewed local tests';
+  await ctx.BAPAdmin.decideRecommendation('rec-fixture','approve');
+  assert.equal(recommendation.status, 'approved');
+  assert.equal(calls.filter(c=>c.url.endsWith('/rec-fixture/approve')).at(-1).body.note, 'Reviewed local tests');
+  await ctx.BAPAdmin.decideRecommendation('rec-fixture','revoke');
+  assert.equal(recommendation.status, 'revoked');
+  assert.ok(calls.some(c=>c.url.includes('asset_id=asset%2Fa&action=dev%3Ago%3Atest')));
+
   el('policyScenarios').value = '[]';
   el('policyReason').value = 'Reviewed narrower workspace policy';
   await ctx.BAPAdmin.validate();
@@ -83,6 +105,7 @@ async function main() {
   const beforeDemo = calls.length;
   live = false; ctx.BAPAdmin.authChanged();
   await ctx.BAPAdmin.validate(); await ctx.BAPAdmin.resolve('esc-fixture', 'deny');
+  await ctx.BAPAdmin.decideRecommendation('rec-fixture','approve');
   assert.equal(calls.length, beforeDemo, 'Demo mode cannot mutate the live backend');
   assert.equal(el('adminWorkspace').hidden, true);
 
@@ -94,6 +117,7 @@ async function main() {
   admin = false; ctx.BAPAdmin.authChanged(); release(policy); await flush();
   assert.equal(el('policyDraft').value, '');
   assert.equal(el('approvalList').innerHTML, '');
+  assert.equal(el('recommendationList').innerHTML, '');
   assert.equal(el('adminWorkspace').hidden, true);
   console.log('V3 admin policies and HITL approvals: passed');
 }

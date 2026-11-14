@@ -20,6 +20,7 @@ const (
 )
 
 type Bundle struct {
+	ValidUntil            string `json:"valid_until,omitempty"`
 	Version               uint64 `json:"version"`
 	Digest                string `json:"digest"`
 	Signature             string `json:"signature,omitempty"`
@@ -52,14 +53,15 @@ type Bundle struct {
 }
 
 type SyncRequest struct {
-	AssetID          string `json:"asset_id,omitempty"` // workstation anchor / device ID the rules apply to
-	AgentID          string `json:"agent_id"`
-	InstalledVersion uint64 `json:"installed_version"`
-	InstalledDigest  string `json:"installed_digest"`
-	InstalledKeyID   string `json:"installed_key_id,omitempty"`
-	InstalledAssetID string `json:"installed_asset_id,omitempty"`
-	AgentVersion     string `json:"agent_version,omitempty"`
-	RiskTier         string `json:"risk_tier,omitempty"`
+	SupportsPolicyLease bool   `json:"supports_policy_lease,omitempty"`
+	AssetID             string `json:"asset_id,omitempty"` // workstation anchor / device ID the rules apply to
+	AgentID             string `json:"agent_id"`
+	InstalledVersion    uint64 `json:"installed_version"`
+	InstalledDigest     string `json:"installed_digest"`
+	InstalledKeyID      string `json:"installed_key_id,omitempty"`
+	InstalledAssetID    string `json:"installed_asset_id,omitempty"`
+	AgentVersion        string `json:"agent_version,omitempty"`
+	RiskTier            string `json:"risk_tier,omitempty"`
 }
 
 type SyncResponse struct {
@@ -71,11 +73,12 @@ type SyncResponse struct {
 }
 
 type Store struct {
-	mu          sync.RWMutex
-	signingKey  []byte
-	signer      *Signer
-	bundle      Bundle
-	tierBundles map[types.RiskTier]Bundle
+	maxPolicyAge time.Duration
+	mu           sync.RWMutex
+	signingKey   []byte
+	signer       *Signer
+	bundle       Bundle
+	tierBundles  map[types.RiskTier]Bundle
 
 	assetOverrides map[string]AssetOverride
 	enrolledAssets map[string]string // enrolled workstation instance id -> asset id
@@ -107,6 +110,9 @@ func (s *Store) signedFor(b Bundle, assetID string) Bundle {
 	b.AssetID = assetID
 	b.SigAlg = SigAlgEd25519
 	b.KeyID = s.signer.KeyID()
+	if s.maxPolicyAge > 0 {
+		b.ValidUntil = time.Now().UTC().Add(s.maxPolicyAge).Format(time.RFC3339)
+	}
 	b.SignatureEd25519 = s.signer.Sign(CanonicalBundlePayload(b, assetID))
 	b.KeyChain = s.signer.Chain()
 	return b
@@ -324,7 +330,7 @@ func (s *Store) Sync(req SyncRequest) SyncResponse {
 
 	// A client is only "current" when it already holds this exact version, digest AND a
 	// signed copy for its own asset (a stored copy signed for another asset is not current).
-	if req.InstalledVersion == target.Version && req.InstalledDigest == target.Digest &&
+	if s.maxPolicyAge == 0 && req.InstalledVersion == target.Version && req.InstalledDigest == target.Digest &&
 		(s.signer == nil || (req.InstalledKeyID == s.signer.KeyID() && req.InstalledAssetID == req.AssetID)) {
 		return SyncResponse{
 			Directive: DirectiveCurrent,

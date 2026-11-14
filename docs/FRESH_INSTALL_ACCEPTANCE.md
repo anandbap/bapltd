@@ -244,7 +244,7 @@ Provision an isolated control plane at one stable origin with a stable signing k
 2. Operator stops only that isolated control plane. Keep edge and clients alive.
 3. Run an allowed cached local operation and an unapproved executable probe from the unfrozen session. Cached enforcement must remain applicable; already-cached freezes must remain restrictive. Online-only authority/consumption may fail closed.
 4. Capture diagnostics using `-SnapshotOnly` (below). Delivery failures/backlog should be visible. Do not assume a specific backlog count: batching/retention and other local agents affect it.
-5. Restart the server at the same origin with the same signing key and **fresh in-memory state**, simulating the current ephemeral deployment.
+5. For the production pilot, restart the server at the same origin with its **persistent database and stable signing configuration**. Verify acknowledged IDs, settings, enrollment and restrictions survive. A separate legacy compatibility fixture may test fresh in-memory recovery; that fixture does not qualify production durability. A missing durable checkpoint must refuse startup without explicit new-authority initialization.
 6. Confirm authenticated session recovery uses the original identity/session ID, and edge-originated event IDs replay without duplicate counts. The frozen session must not become authorized just because the new central snapshot is empty.
 7. Check audit chain integrity through the approved UI/operator tool. Ensure new live activity still arrives while history backfills. Reconstructed reporting-only registry entries must not automatically receive execution grants.
 8. Explicitly restore applicable restrictions through the administrator flow. Changed/expired/invalid identity is a remediation case, not a reason to permit anonymous recovery.
@@ -255,7 +255,7 @@ Provision an isolated control plane at one stable origin with a stable signing k
     -OutputDirectory "$AcceptanceRoot\reports\outage"
 ```
 
-The retained edge journal protects edge-originated evidence. It does not reconstruct lost central administrative history or revocations the edge never received. Central persistence is still deferred. Reboot/startup-service acceptance is also a separate deferred item; a successful interactive install/login is not proof of an installed persistent OS service.
+The retained edge journal protects edge-originated evidence. It does not reconstruct lost central administrative history or revocations the edge never received. The new production path commits single-node authority and canonical audit history to persistent SQLite before acknowledgement; actual volume continuity, backup restore and capacity still require acceptance. Reboot/startup-service acceptance remains separate; a successful interactive install/login is not proof of an installed persistent OS service. Follow [the confidence runbook](PILOT_RUNBOOK.md) for the complete evidence sequence.
 
 ## 10. Layer 5 and authentication negative cases
 

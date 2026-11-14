@@ -8,12 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -22,6 +22,8 @@ import (
 // pinned trust anchor) do not verify. The edge must not run on them: it fails closed until a
 // freshly signed bundle is accepted from the control plane.
 var ErrPolicyTampered = errors.New("policy integrity violation: cached rules failed signature verification; fail-closed until the control plane re-issues them")
+
+var ErrPolicyExpired = errors.New("signed policy offline budget expired; reconnect to the enrolled control plane and sync; cached authority cannot be extended locally")
 
 // TrustAnchor is the control plane's policy-signing public key, pinned at enrollment.
 type TrustAnchor struct {
@@ -272,7 +274,11 @@ func verifyBundleAgainstPin(pin TrustAnchor, assetID string, b Bundle, digest st
 	if b.AssetID != assetID {
 		return fmt.Errorf("%w: bundle was issued for asset %q, not this machine (%q); if the control plane was reinstalled or this machine's enrollment changed, run `bap login` to re-enroll", ErrPolicyTampered, b.AssetID, assetID)
 	}
-	if !verifyEd25519(pin, canonicalPayload(assetID, b.Version, digest, b.KillSwitch, b.StrictToolEnforcement, b.EnforcementTier, b.ZSPReadExempt, b.UpdatedAt, b.ApprovedEffects...), b.SignatureEd25519) {
+	payload := canonicalPayload(assetID, b.Version, digest, b.KillSwitch, b.StrictToolEnforcement, b.EnforcementTier, b.ZSPReadExempt, b.UpdatedAt, b.ApprovedEffects...)
+	if b.ValidUntil != "" {
+		payload = append(payload, []byte("valid_until="+b.ValidUntil+"\n")...)
+	}
+	if !verifyEd25519(pin, payload, b.SignatureEd25519) {
 		return fmt.Errorf("%w: signature does not match bundle contents", ErrPolicyTampered)
 	}
 	return nil

@@ -69,19 +69,19 @@ func probeEndpoint(url string, timeout time.Duration, skipTLS bool) bool {
 // BootstrapControlPlane executes the full cascading discovery and policy synchronization.
 //
 // Order of Resolution:
-// 1. Explicitly configured URL (via flag, env vars BAP_SERVER_URL/BAP_CONTROL_PLANE_URL, or local/global config files).
-// 2. If unconfigured (first-time start):
-//    a. "https://bap-controlplane.onrender.com" with a 30-second cold-start budget:
-//       - Try 1 (up to 12s timeout)
-//       - If failed, wait 15 seconds to allow the sleeping Render instance to spin up
-//       - Try 2 (up to 15s timeout)
-//    b. If onrender fails after 30s, probe local HTTPS: "https://localhost:8443" and "https://127.0.0.1:8443".
-//    c. If 8443 fails, probe local HTTP: "http://localhost:8080" and "http://127.0.0.1:8080".
-// 3. Once connected, sync policy.cedar from the control plane and store in the policy cache.
-// 4. Fail-closed invariant:
-//    - If ALL control planes are unreachable:
-//      - If a valid policy.cedar is available locally on disk: enter Degraded Mode.
-//      - If NO policy.cedar is available: FAIL CLOSED! bapedge cannot start.
+//  1. Explicitly configured URL (via flag, env vars BAP_SERVER_URL/BAP_CONTROL_PLANE_URL, or local/global config files).
+//  2. If unconfigured (first-time start):
+//     a. "https://bap-controlplane.onrender.com" with a 30-second cold-start budget:
+//     - Try 1 (up to 12s timeout)
+//     - If failed, wait 15 seconds to allow the sleeping Render instance to spin up
+//     - Try 2 (up to 15s timeout)
+//     b. If onrender fails after 30s, probe local HTTPS: "https://localhost:8443" and "https://127.0.0.1:8443".
+//     c. If 8443 fails, probe local HTTP: "http://localhost:8080" and "http://127.0.0.1:8080".
+//  3. Once connected, sync policy.cedar from the control plane and store in the policy cache.
+//  4. Fail-closed invariant:
+//     - If ALL control planes are unreachable:
+//     - If a valid policy.cedar is available locally on disk: enter Degraded Mode.
+//     - If NO policy.cedar is available: FAIL CLOSED! bapedge cannot start.
 func BootstrapControlPlane(serverOverride string) (BootstrapResult, error) {
 	endpoints := ResolveEndpoints()
 	serverURL := strings.TrimSpace(serverOverride)
@@ -128,7 +128,7 @@ func BootstrapControlPlane(serverOverride string) (BootstrapResult, error) {
 		serverURL = strings.TrimRight(serverURL, "/")
 		isLocal := strings.Contains(serverURL, "localhost") || strings.Contains(serverURL, "127.0.0.1") || strings.Contains(serverURL, "::1")
 		isRemote := !isLocal
-		
+
 		if isRemote {
 			// Remote explicit endpoint: allow 2 attempts with cold-start sleep for cloud wake-up
 			if probeEndpoint(serverURL, probeTimeout, false) {
@@ -215,6 +215,9 @@ func BootstrapControlPlane(serverOverride string) (BootstrapResult, error) {
 	// Control plane is offline / unreachable: check for local policy.cedar
 	cedarPath, _, stateRec, err := policyStore.Current()
 	if err != nil || cedarPath == "" {
+		if errors.Is(err, policystore.ErrPolicyExpired) {
+			return BootstrapResult{}, policystore.ErrPolicyExpired
+		}
 		integrityFailure := errors.Is(err, policystore.ErrPolicyTampered) || errors.Is(err, policystore.ErrDigestMismatch)
 		if integrityFailure && DevOverrideActive != nil && DevOverrideActive() {
 			// Developer override: a human is repairing BAP itself. Integrity failures must not lock

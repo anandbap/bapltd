@@ -38,6 +38,7 @@ func TestWatcherAliveUsesFreshness(t *testing.T) {
 }
 
 func TestSpoolPromptPersistsEnvelope(t *testing.T) {
+	t.Setenv("BAP_TELEMETRY_CONTENT", "")
 	withTempHome(t)
 	p := spoolPrompt("sess-x", []byte(`{"session_id":"sess-x"}`))
 	if p == "" {
@@ -47,7 +48,7 @@ func TestSpoolPromptPersistsEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != `{"body":{"session_id":"sess-x"},"session_id":"sess-x"}` {
+	if string(data) != `{"body":{"session_id":"sess-x","telemetry_content":"metadata"},"session_id":"sess-x"}` {
 		t.Fatalf("unexpected envelope: %s", data)
 	}
 }

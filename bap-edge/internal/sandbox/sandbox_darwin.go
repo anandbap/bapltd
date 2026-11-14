@@ -4,6 +4,7 @@ package sandbox
 
 import (
 	"os/exec"
+	"syscall"
 )
 
 func GetActiveProfile() string {
@@ -12,6 +13,7 @@ func GetActiveProfile() string {
 
 // ConfigureSandbox configures sandbox attributes for Darwin (macOS).
 func ConfigureSandbox(cmd *exec.Cmd) func() {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	return func() {}
 }
 

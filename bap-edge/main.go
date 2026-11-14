@@ -336,6 +336,7 @@ func main() {
 		}
 	case "doctor":
 		if err := cmd.RunDoctor(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Doctor: %v\n", err)
 			os.Exit(1)
 		}
 	case "dev-override", "dev":

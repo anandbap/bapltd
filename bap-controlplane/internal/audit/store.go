@@ -41,6 +41,7 @@ type Event struct {
 	ExitCode            int      `json:"exit_code"`
 	DestinationTenantID string   `json:"destination_tenant_id,omitempty"`
 	CanonicalResource   string   `json:"canonical_resource,omitempty"`
+	CanonicalAction     string   `json:"canonical_action,omitempty"`
 	GrantID             string   `json:"grant_id,omitempty"`
 	NarrowingApplied    bool     `json:"narrowing_applied,omitempty"`
 	NarrowingReason     string   `json:"narrowing_reason,omitempty"`

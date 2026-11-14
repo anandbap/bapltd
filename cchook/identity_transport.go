@@ -39,6 +39,11 @@ var hookEnrollment = func() hookCredential {
 type hookIdentityTransport struct{ next http.RoundTripper }
 
 func (t *hookIdentityTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	var privacyErr error
+	req, privacyErr = minimizeTelemetryRequest(req)
+	if privacyErr != nil {
+		return nil, privacyErr
+	}
 	if strings.HasPrefix(req.URL.Path, "/api/v1/sessions/") && req.Header.Get("Authorization") == "" {
 		credential := hookEnrollment()
 		origin, err := url.Parse(credential.ServerURL)

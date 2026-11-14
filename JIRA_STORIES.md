@@ -1,5 +1,23 @@
 # BAP Backlog: Course Correction (2026-11-13)
 
+## Pilot hardening implementation update (candidate work)
+
+See `docs/PILOT_RUNBOOK.md` for the new ordered confidence checks. These are source changes, not a completed external pilot or a blanket closure of the stories below.
+
+- **BAP-1077:** default execution lifetime raised to 30m, explicit bounded timeout, elapsed progress, cancellation/drain and bounded captured output. Native Windows 125-second execution proof added; interactive terminal streaming remains outside this slice.
+- **BAP-1078:** removed non-interactive `--yes`; agent/broker/known agent-session submission refused; broker/plugin/hook recommendation gates added. Terminal presence is not cryptographic human identity.
+- **BAP-1074 slice:** authenticated V3 per-machine recommendation review/revoke queue with error/demo/logout guards. Fleet approvals, company matrix and evasion analytics remain open.
+- **BAP-1072 CI slice:** matching-binary recommendation wire fixture covers signed sync, isolation, dangerous effects, restart and revocation. Manual browser/installed-client acceptance remains required.
+- **BAP-1070/1071/1079 compatibility slice:** one SQLite-backed server can atomically checkpoint authority plus new canonical audit links before releasing API responses. Registry, settings/versions, approvals, session/user restrictions and dedup IDs restore on restart. Production requires stable signing configuration, absolute persistent storage, explicit lease budget and explicit first initialization. Missing checkpoint/storage and failed commits refuse authority. This is not the PostgreSQL/multi-replica leadership persistence project; load, backup restore and deployment-volume qualification remain open.
+- **BAP-1080/1085 slice:** explicit hook-copy hash comparison, authenticated policy-cache repair preserving trust/identity, and stricter missing-version gates. Automatic enumeration of every vendor's hook configuration and full fleet rollback qualification remain open.
+- **BAP-1084 slice:** metadata-first Go edge/hook transport and local broker/prompt-spool minimization; production ingress filtering; capture scope documented in `docs/TELEMETRY_PRIVACY.md`. All-producer inventory and retention remain open.
+- **BAP-1087 slice:** opt-in deployment-controlled signed expiry, client capability gate and fail-closed expiry without trusting unsigned LastSync. Production requires an explicit budget; real disconnected-workstation acceptance remains open.
+- **BAP-1081 slice:** broker JSON phase timings and smoke-report propagation. Fleet friction denominators, p95 qualification and cockpit backlog health remain open.
+- **BAP-1086:** one release publication path, reusable CI qualification before packaging, module-matched Go toolchain and approved-mirror variables. External required-check configuration, action digest pinning, scanning and broader Python platform coverage remain open.
+- **New evidence slice:** `scripts/pilot_qualification.py` collects sanitized references/hashes and explicit operator attestations. Smoke alone cannot qualify a pilot; changed/missing evidence invalidates its case.
+
+Browser-to-edge temporary ZSP approval/resume (BAP-1022), complete native capability/credential enforcement, non-Windows native acceptance, individual admin SSO, device proof of possession and qualified leadership work reporting retain their existing open/deferred statuses. No external Jira records were created by these local edits.
+
 > The previous backlog (about 5,500 lines, then a pruned 490-line version) described a product that does not match the code. The full original is kept in `archive/docs/JIRA_STORIES_FULL_2026-11-13.md` and in git history. **This file replaces it.** It is short on purpose: one thesis, one architecture decision, a keep/demote/stop list, and about 20 stories in three milestones, each with an acceptance test that can fail.
 
 ## 1. Where the product honestly is

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version tag (e.g. 1.0.0)'
+        description: 'Release version tag (e.g. 1.13.6)'
         required: true
         default: '1.0.0'
 
@@ -15,8 +15,22 @@ permissions:
   contents: write
   packages: write
 
+env:
+  GOTOOLCHAIN: local
+  GOPROXY: ${{ vars.BAP_GO_PROXY || 'off' }}
+  GOSUMDB: ${{ vars.BAP_GO_SUMDB || 'off' }}
+  PIP_INDEX_URL: ${{ vars.BAP_PYPI_INDEX }}
+  PIP_EXTRA_INDEX_URL: ''
+
 jobs:
+  qualify:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
   build-and-package:
+    needs: qualify
     name: Build & Package (${{ matrix.target.os }}-${{ matrix.target.arch }})
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -70,18 +84,23 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
-          check-latest: true
+          go-version-file: 'bap-controlplane/go.mod'
           cache-dependency-path: '**/go.sum'
 
       - name: Set Release Version
         shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "RELEASE_VERSION=${{ github.event.inputs.version }}" >> $GITHUB_ENV
+            VERSION="$INPUT_VERSION"
           else
-            echo "RELEASE_VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
+            VERSION="${GITHUB_REF#refs/tags/v}"
           fi
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo 'Release version must be numeric MAJOR.MINOR.PATCH'; exit 1
+          fi
+          echo "RELEASE_VERSION=$VERSION" >> "$GITHUB_ENV"
 
       - name: Inject Private Root CA (Optional from Secret)
         shell: bash
@@ -184,7 +203,7 @@ jobs:
         run: |
           chmod +x packaging/jamf/build_pkg.sh
           ./packaging/jamf/build_pkg.sh "${{ matrix.target.arch }}" "${RELEASE_VERSION}"
-          
+
           # Copy Jamf profile to output
           cp packaging/jamf/com.bap.edge.mobileconfig "dist/bapedge-jamf-profile.mobileconfig"
 
@@ -196,7 +215,7 @@ jobs:
         shell: powershell
         run: |
           & packaging\intune\build_msi.ps1 -Version "${env:RELEASE_VERSION}" -DistDir "dist\windows-amd64" -OutputFile "dist\bapedge-windows-amd64-${env:RELEASE_VERSION}.msi"
-          
+
           # Create Intune Deployment Zip Bundle
           $intuneDir = "dist\bapedge-intune-package"
           New-Item -ItemType Directory -Path $intuneDir -Force | Out-Null
@@ -280,9 +299,11 @@ jobs:
 
       - name: Determine Release Tag
         shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "TAG_NAME=v${{ github.event.inputs.version }}" >> $GITHUB_ENV
+            echo "TAG_NAME=v$INPUT_VERSION" >> "$GITHUB_ENV"
           else
             echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
           fi
@@ -300,14 +321,15 @@ jobs:
             ## Bounded Authority Plane (BAP) Cross-Platform Release
 
             ### 📦 Supported Platforms & Packages
-            - **macOS Apple Silicon (`darwin-arm64`)**: Binary archive, signed `.pkg` installer, and Jamf Pro `.mobileconfig`.
+            - **macOS Apple Silicon (`darwin-arm64`)**: Binary archive, `.pkg` installer, and Jamf Pro `.mobileconfig`.
             - **macOS Intel (`darwin-amd64`)**: Binary archive & `.pkg`.
-            - **Windows AMD64 (`windows-amd64`)**: Binary zip archive, signed `.msi`, and Microsoft Intune CSP / Win32 package.
+            - **Windows AMD64 (`windows-amd64`)**: Binary zip archive, `.msi`, and Microsoft Intune CSP / Win32 package.
             - **Linux AMD64 (`linux-amd64`)**: Static binary archive, Debian `.deb`, and systemd unit.
             - **Linux ARM64 (`linux-arm64`)**: Static binary archive & `.deb`.
 
             ### 🔐 Cryptographic Integrity
             All binaries and packages are indexed in `SHA256SUMS.txt`.
+            Publisher signing depends on configured release certificates; verify the approved trust anchor separately from checksums. Cross-compilation and packaging do not establish native enforcement acceptance.
 
   # ---------------------------------------------------------------------------
   # PyPI Automated Publishing
@@ -335,6 +357,7 @@ jobs:
 
       - name: Install Build Tools
         run: |
+          test -n "$PIP_INDEX_URL" || { echo 'Configure BAP_PYPI_INDEX with the approved mirror'; exit 1; }
           python -m pip install --upgrade pip build setuptools wheel
 
       - name: Download Built Artifacts
@@ -350,14 +373,14 @@ jobs:
           echo "Scanning for existing universal wheels and sdist archives..."
           find . -type f -name "*py3-none-any.whl" -exec cp -v {} pypi-dist/ \;
           find . -type f -name "*.tar.gz" -path "*/dist/*" -exec cp -v {} pypi-dist/ \;
-          
+
           if ! ls pypi-dist/*py3-none-any.whl 1> /dev/null 2>&1; then
             echo "[!] Building universal Python distributions from source..."
             python scripts/build_wheel.py --universal
             find dist -type f -name "*py3-none-any.whl" -exec cp -v {} pypi-dist/ \;
             find dist -type f -name "*.tar.gz" -exec cp -v {} pypi-dist/ \;
           fi
-          
+
           echo "=== Ready for PyPI Deployment ==="
           ls -lh pypi-dist/
           if ! ls pypi-dist/*py3-none-any.whl 1> /dev/null 2>&1; then

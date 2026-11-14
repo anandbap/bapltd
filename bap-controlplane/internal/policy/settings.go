@@ -27,7 +27,7 @@ type SettingsSnapshot struct {
 	Version         uint64                   `json:"version"`
 	FleetReadExempt bool                     `json:"fleet_zsp_read_exempt"`
 	AssetOverrides  map[string]AssetOverride `json:"asset_overrides"`
-	EnrolledAssets  map[string]string        `json:"enrolled_assets"` // instance id -> asset id (find ids for overrides here)
+	EnrolledAssets  map[string]string        `json:"enrolled_assets"`  // instance id -> asset id (find ids for overrides here)
 	ApprovedEffects map[string][]string      `json:"approved_effects"` // asset id -> effects approved from recommendations
 }
 
@@ -129,11 +129,9 @@ func (s *Store) EnablePersistence(path string) error {
 	s.settingsPath = path
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		// First start: nothing to restore. Failing to write the initial file is not fatal (the
-		// settings simply stay in memory until a later write succeeds); only an unreadable or
-		// corrupt EXISTING file refuses to start, because enforcement settings would be unknown.
-		_ = s.saveSettingsLocked()
-		return nil
+		// First start must prove that persistence is writable; never silently announce success
+		// with settings that cannot survive a restart.
+		return s.saveSettingsLocked()
 	}
 	if err != nil {
 		return err

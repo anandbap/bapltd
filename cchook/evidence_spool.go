@@ -95,18 +95,33 @@ func spoolFileHookDecision(decision, reason string) error {
 	}
 	id := "hook-" + hex.EncodeToString(random[:])
 	nowISO := time.Now().UTC().Format(time.RFC3339Nano)
+	action := ""
+	switch strings.ToLower(e.Tool) {
+	case "read", "glob", "grep", "ls":
+		action = "fs:file:read"
+	case "write":
+		action = "fs:file:write"
+	case "edit", "notebookedit":
+		action = "fs:file:edit"
+	}
 	data, err := json.Marshal(map[string]any{
-		"event_id":        id,
-		"session_id":      e.SessionID,
-		"source":          e.AppID,
-		"client_pid":      e.PID,
-		"timestamp":       nowISO,
-		"reporting_layer": "hook",
-		"executable":      executable,
-		"full_command":    fullCommand,
-		"decision":        decision,
-		"reason":          reason,
+		"event_id":           id,
+		"session_id":         e.SessionID,
+		"source":             e.AppID,
+		"client_pid":         e.PID,
+		"timestamp":          nowISO,
+		"reporting_layer":    "hook",
+		"executable":         executable,
+		"full_command":       fullCommand,
+		"decision":           decision,
+		"reason":             reason,
+		"canonical_action":   action,
+		"canonical_resource": e.Path,
 	})
+	if err != nil {
+		return err
+	}
+	data, err = MinimizeTelemetryJSON(data)
 	if err != nil {
 		return err
 	}

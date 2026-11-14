@@ -20,6 +20,7 @@ const (
 	RecPending  = "pending"
 	RecApproved = "approved"
 	RecRejected = "rejected"
+	RecRevoked  = "revoked"
 
 	maxRecommendations       = 1000
 	maxPendingPerAsset       = 25
@@ -40,8 +41,8 @@ type Recommendation struct {
 	AssetID       string `json:"asset_id"`
 	InstanceID    string `json:"instance_id,omitempty"`
 	UserEmail     string `json:"user_email,omitempty"`
-	Action        string `json:"action"`   // canonical effect, e.g. dev:go:test
-	Zone          string `json:"zone"`     // always "workspace" in this version
+	Action        string `json:"action"` // canonical effect, e.g. dev:go:test
+	Zone          string `json:"zone"`   // always "workspace" in this version
 	Executable    string `json:"executable,omitempty"`
 	CommandHint   string `json:"command_hint,omitempty"` // redacted, truncated
 	DenyReason    string `json:"deny_reason,omitempty"`
@@ -242,6 +243,14 @@ func (s *Store) RevokeApprovedEffect(assetID, action string) (bool, error) {
 	list := s.approvedEffects[assetID]
 	for i, a := range list {
 		if a == action {
+			for j := range s.recommendations {
+				r := &s.recommendations[j]
+				if r.AssetID == assetID && r.Action == action && r.Status == RecApproved {
+					r.Status = RecRevoked
+					r.DecisionNote = "Approval revoked by administrator"
+					r.DecidedAt = time.Now().UTC().Format(time.RFC3339)
+				}
+			}
 			s.approvedEffects[assetID] = append(list[:i:i], list[i+1:]...)
 			if len(s.approvedEffects[assetID]) == 0 {
 				delete(s.approvedEffects, assetID)

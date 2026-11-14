@@ -92,7 +92,7 @@ func (s *Server) handleAdminRecommendations(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		status := strings.TrimSpace(r.URL.Query().Get("status"))
-		if status != "" && status != policy.RecPending && status != policy.RecApproved && status != policy.RecRejected {
+		if status != "" && status != policy.RecPending && status != policy.RecApproved && status != policy.RecRejected && status != policy.RecRevoked {
 			writeError(w, http.StatusBadRequest, "status must be pending, approved or rejected")
 			return
 		}

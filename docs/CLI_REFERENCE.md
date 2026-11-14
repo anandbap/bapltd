@@ -137,3 +137,18 @@ Tests must never touch a real state directory or a production control plane. Use
 | `scripts/bap_harness.py` | Multi-session harness for concurrency work. |
 | `scripts/supervise_controlplane.*`, `start_controlplane_supervisor.*` | Run a local control plane under a supervisor. |
 | `demo_*.py`, `run_*_demo.*`, `cio_demo.bat`, `tech_demo.bat` | Presenter demos. |
+# Pilot qualification additions
+
+`bapedge exec --timeout 30m --progress "<command>"` runs a bounded long job. Default: 30 minutes (or `BAP_EXEC_TIMEOUT_SEC`); maximum: 24 hours. Progress reports elapsed time on stderr. Output is captured and bounded to 4 MiB; this is not an interactive terminal stream. Ctrl+C requests cancellation and process-tree cleanup. Invalid timeout configuration fails explicitly.
+
+Broker JSON `timings_ms` separates the shell authorizer call, pre-execution work, and elapsed broker work before final reporting. Child execution, identity/bootstrap, grant checks and network delivery have different costs; do not describe total command time as local policy latency.
+
+`bapedge doctor --hook-copies-json --expected-hook-sha256 <approved-hash> --hook-copy <path> ...` compares explicitly supplied configured hook copies. It does not discover unknown vendor locations or verify publisher authenticity.
+
+`bapedge doctor --repair-policy` requests a fresh authenticated signed policy from the enrolled/locked origin. It preserves identity and trust; unavailable/rejected authority remains a failure.
+
+`bap recommend` submission requires a human terminal; agent/non-interactive submissions and the former `--yes` bypass are refused. V3 now exposes the per-machine recommendation review queue separately from temporary escalation approvals.
+
+The control plane accepts `--durable`, `--initialize-authority` (first start only), and `--policy-max-age <duration>`. Production requires durable single-node SQLite at an absolute persistent path, stable token/policy signing configuration and an explicit offline policy budget. Remove `--initialize-authority` from regular service configuration after first initialization. Missing checkpoints then fail closed. See [pilot runbook](PILOT_RUNBOOK.md).
+
+New Go edge/hook telemetry defaults to metadata mode; `BAP_TELEMETRY_CONTENT=redacted` explicitly opts into content and may transmit source code. This setting is not a complete DLP system. See [telemetry privacy](TELEMETRY_PRIVACY.md).

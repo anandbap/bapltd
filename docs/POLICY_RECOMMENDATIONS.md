@@ -18,6 +18,8 @@ call now runs without a grant
 
 ## What a developer does
 
+Submission is a human-terminal action. Agent/broker sessions and non-interactive submission are refused; the former `--yes` bypass is removed. An administrator must still review every recommendation.
+
 ```
 bap recommend                    # recent blocked calls grouped by effect; pick one to inspect
 bap recommend --pick 1 --justify "runs the project's unit tests"
@@ -51,8 +53,9 @@ See [CLI_REFERENCE.md](CLI_REFERENCE.md#administrators-control-plane). In short:
 ## Limits today
 
 - Per machine only. Fleet-wide approvals need a client-version gate, because an older client cannot verify a payload that includes approvals.
-- Approvals live in control plane storage. On an ephemeral disk they are lost at redeploy (BAP-1070).
-- The queue is reviewed through the API; there is no dashboard page for it yet.
+- V3 **Admin & approvals → Policy recommendations** supports approve, reject and revoke with server confirmation. Workstation-supplied examples/justifications are untrusted input. The shared admin credential does not establish an individual reviewer identity.
+- Production now requires durable authority on an absolute persistent SQLite path and stable signing configuration. One server replica is supported. Losing that storage is not a supported redeploy; a missing checkpoint refuses startup unless an operator explicitly initializes a new authority. PostgreSQL and multi-replica persistence remain open.
+- Recommendation transport, signed edge application, machine isolation, restart and revocation have an opt-in matching-binary CI fixture. Browser interaction and actual installed-client acceptance remain operator checks in [the pilot runbook](PILOT_RUNBOOK.md).
 
 ## Where this is going
 

@@ -42,6 +42,14 @@ func (d *doctorReport) report(name, status, details string) {
 
 // RunDoctor executes the pre-flight diagnostic health check natively in Go.
 func RunDoctor(args []string) error {
+	if handled, err := doctorHookCopies(args); handled {
+		return err
+	}
+	for _, arg := range args {
+		if arg == "--repair-policy" {
+			return repairManagedPolicy()
+		}
+	}
 	hasFix := false
 	for _, a := range args {
 		if a == "--fix" || a == "-Fix" || a == "-fix" {

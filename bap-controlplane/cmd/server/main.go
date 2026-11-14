@@ -160,6 +160,9 @@ func runStart(args []string) {
 	oidcAllowedDomains := fs.String("oidc-allowed-domains", "", "Comma-separated corporate email domains permitted (e.g. corp.com,internal.org)")
 	minEdgeVersion := fs.String("min-edge-version", os.Getenv("BAP_MIN_EDGE_VERSION"), "Minimum supported edge client version (e.g. 1.0.0)")
 	pilotRoster := fs.String("pilot-roster", os.Getenv("BAP_PILOT_ROSTER"), "Operator-assigned pilot roster JSON path (optional; invalid configured roster fails startup)")
+	durable := fs.Bool("durable", os.Getenv("BAP_DURABLE_STATE") == "1", "Commit authority and audit history before acknowledging API calls (requires persistent SQLite; mandatory in production)")
+	initializeAuthority := fs.Bool("initialize-authority", false, "Explicitly initialize a new durable authority (first start only; remove from service configuration afterward)")
+	policyMaxAge := fs.Duration("policy-max-age", 0, "Signed offline policy budget, e.g. 24h (mandatory in production; 1m to 168h)")
 
 	_ = fs.Parse(args)
 
@@ -281,6 +284,23 @@ func runStart(args []string) {
 	if envSecret := os.Getenv("BAP_SECRET_KEY"); envSecret != "" {
 		*secretKey = envSecret
 	}
+	production := strings.EqualFold(*mode, "prod") || strings.EqualFold(*mode, "production")
+	if raw := os.Getenv("BAP_POLICY_MAX_AGE"); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil {
+			log.Fatal("Invalid BAP_POLICY_MAX_AGE duration")
+		}
+		*policyMaxAge = parsed
+	}
+	if production {
+		*durable = true
+		if *policyMaxAge == 0 {
+			log.Fatal("Production requires an explicit --policy-max-age/BAP_POLICY_MAX_AGE offline budget")
+		}
+		if len(*secretKey) < 32 || len(os.Getenv("BAP_POLICY_SIGNING_SEED")) != 64 {
+			log.Fatal("Production requires stable BAP_SECRET_KEY (at least 32 characters) and BAP_POLICY_SIGNING_SEED (64 hex characters); refusing ephemeral authority")
+		}
+	}
 	if *secretKey == "ltd-service-bounded-authority-secret-key-32b!" {
 		log.Fatal("The published demo signing secret is not permitted; configure BAP_SECRET_KEY")
 	}
@@ -328,6 +348,9 @@ func runStart(args []string) {
 	}
 	schemaContent, _ := os.ReadFile(resolvedSchema)
 	policyStore := policy.NewStore(string(cedarContent), string(schemaContent))
+	if err := policyStore.SetMaxPolicyAge(*policyMaxAge); err != nil {
+		log.Fatal(err)
+	}
 	auditStore := audit.NewStore()
 
 	resolvedDB := *dbPath
@@ -336,6 +359,9 @@ func runStart(args []string) {
 	}
 	if resolvedDB == "" {
 		resolvedDB = "bap-controlplane.db"
+	}
+	if production && (!filepath.IsAbs(resolvedDB) || resolvedDB == ":memory:" || resolvedDB == "memory") {
+		log.Fatal("Production requires an absolute --db/BAP_DB_PATH on approved persistent storage; in-memory/relative authority is refused")
 	}
 
 	// Ed25519 policy signing: the key lives beside the state database and never leaves this host.
@@ -360,24 +386,28 @@ func runStart(args []string) {
 			log.Printf("[bapcontrolplane] WARNING: hosted environment detected without BAP_POLICY_SIGNING_SEED. If this disk is ephemeral the signing key is regenerated on redeploy and enrolled machines will refuse the new key until re-enrolled. Set BAP_POLICY_SIGNING_SEED (64 hex chars) as a secret or mount persistent storage at %s.", signerDir)
 		}
 	}
-	// Enforcement settings (fleet default + per-asset overrides) and the version counter survive restarts.
-	// On an ephemeral disk the file is lost on redeploy, so the version is also floored at the wall
-	// clock (seconds): clients refuse a lower version than they hold, and a counter that restarted at 1
-	// would strand every enrolled machine on old rules.
+	// Load the legacy settings file for compatibility/initial migration. With durable authority,
+	// its complete checkpoint is authoritative and restores both policy content and version.
 	if pErr := policyStore.EnablePersistence(filepath.Join(signerDir, "policy-settings.json")); pErr != nil {
 		log.Fatalf("[bapcontrolplane] policy settings unavailable (%v); refusing to start with unknown enforcement settings", pErr)
 	}
-	policyStore.EnsureVersionAtLeast(uint64(time.Now().Unix()))
+	// Never derive rollback-protection versions from wall time. The durable checkpoint owns
+	// the counter; a clock jump must not strand the fleet on an unreachable future version.
 
 	sessionStore, err := session.NewStoreWithDB(resolvedDB)
 	if err != nil {
-		log.Printf("[bapcontrolplane] Warning: Failed to open SQLite DB %q (%v), falling back to in-memory store", resolvedDB, err)
-		sessionStore = session.NewStore()
+		log.Fatalf("[bapcontrolplane] database unavailable (%v); refusing in-memory fallback", err)
 	} else if resolvedDB != ":memory:" && resolvedDB != "memory" {
 		log.Printf("[bapcontrolplane] SQLite state persistence active: %s", resolvedDB)
 	}
 
 	server := api.NewServer(regStore, otcStore, minter, policyStore, auditStore, sessionStore)
+	if *durable {
+		if err := server.EnableDurability(*initializeAuthority); err != nil {
+			log.Fatalf("Durable authority unavailable: %v", err)
+		}
+		log.Print("Durable single-node authority enabled; keep this database on persistent storage and run one replica")
+	}
 	server.SetPolicyKeyDir(signerDir)
 	if *pilotRoster != "" {
 		f, err := os.Open(*pilotRoster)

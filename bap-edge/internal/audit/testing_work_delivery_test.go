@@ -12,6 +12,9 @@ import (
 )
 
 func TestEngineeringTestCommandsDeliveredImmediatelyAndAfterOffline(t *testing.T) {
+	// This fixture qualifies explicitly enabled content capture. Metadata-only delivery is
+	// covered separately and must still preserve event identity and policy outcomes.
+	t.Setenv("BAP_TELEMETRY_CONTENT", "redacted")
 	for _, key := range []string{"BAP_TEST_MODE", "LTD_TEST", "BAP_ENV", "BAP_RETAIN_LOCAL"} {
 		t.Setenv(key, "")
 	}
