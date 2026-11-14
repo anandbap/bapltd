@@ -84,7 +84,7 @@ Re-announcing an existing live process after deployment restores reporting only.
 
 ### 5. Verification Matrix
 
-The matrix below records historical onboarding checks. Current authenticated lifecycle and restart coverage is documented in ADR-006 and `implementation_plan.md`; this historical matrix does not assert that the entire legacy Python integration suite was re-run after authentication enforcement.
+The matrix below records historical onboarding checks. Current authenticated lifecycle and restart coverage is documented in ADR-006 and `JIRA_STORIES.md`; this historical matrix does not assert that the entire legacy Python integration suite was re-run after authentication enforcement.
 
 | Verification Dimension | Test Target | Result | Evidence |
 |---|---|---|---|

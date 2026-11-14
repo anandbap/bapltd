@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -670,7 +671,68 @@ func cleanupStaleSessionMarkers() {
 	}
 }
 
+// watcherLockStale is how long a watcher lock may go untouched before another watcher may take it
+// over. A live watcher touches it every 2s, so this only matters after a crash or PID reuse.
+const watcherLockStale = 30 * time.Second
+
+// acquireWatcherLock guarantees one watcher per session. Without it, every hook that saw no fresh
+// liveness file started another watcher, and each duplicate removed the shared liveness file on
+// exit, which made the next hook start yet another. The lock holds the owner's PID and is touched
+// on every tick, so a dead or hung owner is replaced and PID reuse cannot pin a lock forever.
+func acquireWatcherLock(sessionID string) (release func(), ok bool) {
+	p := filepath.Join(bapUserDir(), "watchers", sanitizeInstanceID(sessionID)+".lock")
+	_ = os.MkdirAll(filepath.Dir(p), 0700)
+	me := strconv.Itoa(os.Getpid())
+	for attempt := 0; attempt < 2; attempt++ {
+		f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if err == nil {
+			_, _ = f.WriteString(me)
+			_ = f.Close()
+			return func() {
+				if cur, e := os.ReadFile(p); e == nil && strings.TrimSpace(string(cur)) == me {
+					_ = os.Remove(p)
+				}
+			}, true
+		}
+		info, statErr := os.Stat(p)
+		if statErr == nil && time.Since(info.ModTime()) < watcherLockStale {
+			data, _ := os.ReadFile(p)
+			pid, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+			// pid==0: another starter created the file but has not written its PID yet.
+			if pid == 0 || (pid != os.Getpid() && isProcessAlive(pid)) {
+				return nil, false
+			}
+		}
+		_ = os.Remove(p) // dead, stale or unreadable owner: take over
+	}
+	return nil, false
+}
+
+func touchWatcherLock(sessionID string) {
+	p := filepath.Join(bapUserDir(), "watchers", sanitizeInstanceID(sessionID)+".lock")
+	now := time.Now()
+	_ = os.Chtimes(p, now, now)
+}
+
+// sessionMarkerGone reports, after two consecutive misses, that this session's marker was removed
+// (SessionEnd, `bapedge sweep`, or cleanup). The watcher must stop: nothing is left to watch.
+func sessionMarkerGone(sessionFile string, misses *int) bool {
+	if _, err := os.Stat(sessionFile); os.IsNotExist(err) {
+		*misses++
+	} else {
+		*misses = 0
+	}
+	return *misses >= 2
+}
+
 func runWatchLoop(watchPID int, serverURL, sessionID, appID string, instanceIDOpt ...string) {
+	release, locked := acquireWatcherLock(sessionID)
+	if !locked {
+		fmt.Fprintf(os.Stderr, "[bapedge watch] a watcher is already running for session %s; exiting.\n", sessionID)
+		return
+	}
+	defer release()
+
 	instanceID := ""
 	if len(instanceIDOpt) > 0 {
 		instanceID = instanceIDOpt[0]
@@ -727,7 +789,15 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string, instanceIDOp
 	heartbeatCounter := 0
 	lastReportingStatus := "starting"
 
+	markerMisses := 0
 	for range ticker.C {
+		// The session ended (marker removed): stop instead of resurrecting the liveness file and
+		// outliving a long-lived parent such as the terminal or desktop app.
+		if watchPID > 0 && sessionMarkerGone(sessionFile, &markerMisses) {
+			_ = os.Remove(livenessPath)
+			return
+		}
+		touchWatcherLock(sessionID)
 		touchWatcherLiveness(livenessPath, watchPID)
 
 		// If watchPID was not specified at launch, look for it in local session marker

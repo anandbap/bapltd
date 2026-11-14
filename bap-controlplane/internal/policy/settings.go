@@ -28,6 +28,7 @@ type SettingsSnapshot struct {
 	FleetReadExempt bool                     `json:"fleet_zsp_read_exempt"`
 	AssetOverrides  map[string]AssetOverride `json:"asset_overrides"`
 	EnrolledAssets  map[string]string        `json:"enrolled_assets"` // instance id -> asset id (find ids for overrides here)
+	ApprovedEffects map[string][]string      `json:"approved_effects"` // asset id -> effects approved from recommendations
 }
 
 type persistedSettings struct {
@@ -35,6 +36,8 @@ type persistedSettings struct {
 	FleetReadExempt bool                     `json:"fleet_zsp_read_exempt"`
 	AssetOverrides  map[string]AssetOverride `json:"asset_overrides"`
 	EnrolledAssets  map[string]string        `json:"enrolled_assets,omitempty"`
+	ApprovedEffects map[string][]string      `json:"approved_effects,omitempty"`
+	Recommendations []Recommendation         `json:"recommendations,omitempty"`
 }
 
 // EnrolledAssetFor derives the asset id for an enrolled workstation: the hardware id it
@@ -146,6 +149,12 @@ func (s *Store) EnablePersistence(path string) error {
 	if ps.EnrolledAssets != nil {
 		s.enrolledAssets = ps.EnrolledAssets
 	}
+	if ps.ApprovedEffects != nil {
+		s.approvedEffects = ps.ApprovedEffects
+	}
+	if ps.Recommendations != nil {
+		s.recommendations = ps.Recommendations
+	}
 	if ps.Version >= s.bundle.Version {
 		s.bundle.Version = ps.Version + 1
 	}
@@ -157,7 +166,8 @@ func (s *Store) saveSettingsLocked() error {
 	if s.settingsPath == "" {
 		return nil
 	}
-	ps := persistedSettings{Version: s.bundle.Version, FleetReadExempt: s.bundle.ZSPReadExempt, AssetOverrides: s.assetOverrides, EnrolledAssets: s.enrolledAssets}
+	ps := persistedSettings{Version: s.bundle.Version, FleetReadExempt: s.bundle.ZSPReadExempt, AssetOverrides: s.assetOverrides, EnrolledAssets: s.enrolledAssets,
+		ApprovedEffects: s.approvedEffects, Recommendations: s.recommendations}
 	data, err := json.MarshalIndent(ps, "", "  ")
 	if err != nil {
 		return err
@@ -235,7 +245,10 @@ func (s *Store) ClearAssetOverride(assetID string) (bool, error) {
 func (s *Store) Settings() SettingsSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := SettingsSnapshot{Version: s.bundle.Version, FleetReadExempt: s.bundle.ZSPReadExempt, AssetOverrides: map[string]AssetOverride{}, EnrolledAssets: map[string]string{}}
+	out := SettingsSnapshot{Version: s.bundle.Version, FleetReadExempt: s.bundle.ZSPReadExempt, AssetOverrides: map[string]AssetOverride{}, EnrolledAssets: map[string]string{}, ApprovedEffects: map[string][]string{}}
+	for asset, effects := range s.approvedEffects {
+		out.ApprovedEffects[asset] = append([]string(nil), effects...)
+	}
 	for inst, a := range s.enrolledAssets {
 		out.EnrolledAssets[inst] = a
 	}
@@ -254,6 +267,10 @@ func (s *Store) Settings() SettingsSnapshot {
 func (s *Store) applyAssetOverride(b Bundle, assetID string) Bundle {
 	if ov, ok := s.assetOverrides[assetID]; ok && assetID != "" && ov.ZSPReadExempt != nil {
 		b.ZSPReadExempt = *ov.ZSPReadExempt
+	}
+	b.ApprovedEffects = nil
+	if assetID != "" && len(s.approvedEffects[assetID]) > 0 {
+		b.ApprovedEffects = append([]string(nil), s.approvedEffects[assetID]...)
 	}
 	return b
 }

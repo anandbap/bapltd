@@ -53,7 +53,7 @@ The dashboard displays **Discovered**, **Evidence received** or **Coverage unkno
 
 Authorization continues to evaluate locally. Discovery and delivery run outside command execution and do not hold session locks during network calls. Named process discovery runs initially and every ten seconds; newly discovered evidence is queued immediately. Session heartbeats retain the four-second cadence. Direct file-hook promotion and offline retries use the five-second spool cadence. These are observation/retry intervals, not a claim of millisecond end-to-end freshness or a Render latency guarantee.
 
-Remaining work is explicit in [the implementation plan](../implementation_plan.md): persistent authoritative central state; actual OS-wide enforcement/attestation; native macOS process discovery and generic hosted-agent integrations; durable service startup after reboot; backlog/retention management and representative p95/p99 load measurements. Installing hooks, setting PATH, or elevating a process alone cannot supply those guarantees.
+Remaining work is explicit in [the backlog](../JIRA_STORIES.md): persistent authoritative central state; actual OS-wide enforcement/attestation; native macOS process discovery and generic hosted-agent integrations; durable service startup after reboot; backlog/retention management and representative p95/p99 load measurements. Installing hooks, setting PATH, or elevating a process alone cannot supply those guarantees.
 
 ## Verification and deployment
 

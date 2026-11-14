@@ -650,6 +650,24 @@ graph TD
 * **Layer 4 (OS Kernel Boundary Sandbox & Local Broker):** Hard OS containment denying unauthorized process spawns, hidden subshells (`npm` lifecycle scripts), access to standing secrets (`.env`, `id_rsa`), backed by Windows Job Objects / Restricted Tokens, Landlock (not implemented), and Seatbelt (native execution unverified).
 * **Layer 5 (Authoritative Network Gateway PEP & Perimeter Backstop):** Centralized perimeter enforcement through `bapgateway` (Envoy `ext_authz`), requiring single-use cryptographic Zero-Trust Session Protocol (ZSP) grant burning and tenant egress pinning before any packet leaves the perimeter.
 
+### Defense layers: what each one does and does not guarantee
+
+The five layers are defense in depth **against an AI agent that is mistaken, manipulated by prompt injection, or over-eager**. They are not a defense against a malicious local administrator or malware that never goes through the agent's tools. Read the layers with that threat model:
+
+| Layer | What it really is | Holds when | Does not hold when |
+|---|---|---|---|
+| 1. Native hooks | The agent client calls a hook before each tool call (`interceptor`, plugin adapter). | The client honors hooks and the hook binaries are current. | A client without hooks, a disabled hook, or a stale hook binary. |
+| 2. BAP MCP | Governed tools served by `bapmcp`. | The agent uses those tools. | The agent uses its own built-in tools instead (Layer 1 covers that). |
+| 3. Terminal shims | Per-session `PATH` shims that route `git`, `python`, `curl`… to `bapedge exec`. | The command is resolved through `PATH`. | An absolute path, a different shell, or a process that ignores `PATH`. |
+| 4. Broker and OS sandbox | `bapedge exec` evaluates policy; on Windows it runs children under a restricted token and Job Object. | Windows, for commands that go through the broker. | Landlock (not implemented), eBPF (simulation only) and Seatbelt (native execution unverified) are not enforcement today. |
+| 5. Gateway PEP | `bapgateway` authorizes calls to protected resources and burns single-use grants. | Traffic is actually routed through the gateway. | Traffic that never reaches the gateway; network egress control on the endpoint is not implemented. |
+
+What changed in how the layers are reported and operated:
+
+- **Status is observed, not assumed.** `bapedge status` prints `NOT_OBSERVED` for a layer until real events from it have been seen, and says outright that Layer 4 is "available" but OS-wide enforcement is not attested. An all-green "COMPLIANT" screen would have claimed more than the code can prove.
+- **Layers are separate binaries and can disagree.** A user-level hook, a project-level hook and the plugin adapter all run on every tool call, and the most restrictive answer wins. A stale copy of one of them once denied what the current build allowed. Keep their hashes aligned after every rebuild (see [CLI_REFERENCE.md](docs/CLI_REFERENCE.md#build-and-package)).
+- **A cross-cutting spine, not a sixth layer.** What each layer enforces comes from one signed, per-machine policy owned by the control plane (section 17). Layers differ in where they intercept; they share one source of rules.
+
 ---
 
 ### 8.2. Platform Primitive Matrix
@@ -1761,3 +1779,53 @@ A foundational requirement for enterprise AI adoption is that governance must no
 
 
 
+
+
+---
+
+## 17. Control-Plane-Owned Signed Policy, Per-Machine Settings and Recommendations
+
+This section records the architecture changes that sit under every layer in section 8.
+
+### 17.1. One signed policy per machine
+
+The control plane owns enforcement settings. Each **machine** (a hardware-derived asset id, not a registered client, so re-registering does not shed anything) receives its own bundle:
+
+- **Signed with Ed25519.** The signature covers the asset id, version, rules digest, kill switch, strictness, tier, `zsp_read_exempt`, the update time and, when present, the machine's approved effects. A bundle cannot be edited locally or replayed to another machine.
+- **Key pinned at enrollment.** OTC and OIDC enrollment return the control plane's public key and the machine's asset id over the authenticated channel; the edge pins both. Users never handle keys. Key rotation is a chain of links, each signed by the previous key, that enrolled machines follow automatically.
+- **Seconds, not minutes.** Short-lived commands (hooks, `bapedge check`) refresh a stale cache themselves, and the watcher syncs on an interval, so an administrator change reaches a machine within seconds.
+- **Offline behavior.** If the control plane is unreachable, the last verified signed rules stay in force. If the cached rules fail verification (edited, deleted, wrong machine) **and** the control plane is unreachable, `bapedge` refuses to start and waits to reconnect and be re-issued signed rules. The one exception is the developer override (17.4).
+- **Version rules.** A client rejects any bundle older than the one it holds. A control plane on an ephemeral disk seeds its version counter from the clock so a redeploy cannot strand the fleet.
+
+### 17.2. Settings an administrator controls
+
+| Setting | Scope | Effect |
+|---|---|---|
+| `zsp_read_exempt` | fleet default, per machine | Plain reads inside the workspace (Read, Glob, Grep, `git status`, `dir`…) need no task grant. Credentials and anything outside the workspace never qualify. |
+| Approved effects | per machine | Specific local-development effects (for example `dev:go:test`) run without a task grant. |
+| Kill switch, tier, strictness | fleet | As before. |
+
+Overrides and approvals can only target a machine the control plane has enrolled, and every change is audited.
+
+### 17.3. Recommendation and approval loop
+
+A registered machine can report a blocked call it believes is benign (`bap recommend`, details in [docs/POLICY_RECOMMENDATIONS.md](docs/POLICY_RECOMMENDATIONS.md)). It is not an open API: the submit route requires a valid enrolled-workstation credential. An administrator reviews the queue on the control plane; approving adds the effect to that machine's signed bundle and advances the version, and the machine picks it up on its next sync.
+
+Approvals are deliberately narrow:
+
+- They relax **only the task-grant requirement**. Cedar invariants (credentials, exfiltration, tamper protection) are evaluated separately and are never relaxed.
+- Only the local development loop is approvable. Network, deletion, publishing, package installs, databases, arbitrary interpreters and credentials never are. The control plane refuses them, and the edge ignores them even if a list contained them.
+- They cover work **inside the workspace** only, on that machine only, and a command that mixes an approved effect with an unapproved one still needs a grant.
+
+### 17.4. Developer override
+
+The override exists so BAP can be repaired under BAP. It is a human-activated, time-boxed window that exists only in builds compiled with `AllowDevOverrides=true` and only in a development environment. While it is active an integrity failure no longer locks the developer out: the edge runs on the unverified local policy, labelled `DEV OVERRIDE` and degraded, and never accepts or caches it. Credentials, revocation and Cedar rules still apply. Release builds compile the override out.
+
+### 17.5. Process lifecycle
+
+`bapedge watch` is one process per session, guarded by a lock. It exits when the session ends, when the watched process exits, or when the control plane closes or revokes the session; a duplicate exits immediately. An end-to-end test starts real watchers and fails if any process is left running (`tests/test_bapedge_process_lifecycle.py`).
+
+### 17.6. Known limits
+
+- A control plane on an ephemeral disk (Render, containers) loses its enrolled-machine registry, settings, recommendations and approvals on redeploy unless it uses persistent storage (BAP-1070). Set `BAP_POLICY_SIGNING_SEED` so the signing key survives redeploys, and `BAP_POLICY_SYNC_REQUIRE_AUTH=1` so policy is only served to enrolled machines. Machines re-bind on their next authenticated sync, but approvals are lost.
+- Per-machine approvals only. Fleet-wide approvals and a company policy matrix (BAP-1067) are not built; they need a client-version gate because older clients cannot verify a payload with approvals.

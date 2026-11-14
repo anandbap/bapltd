@@ -1122,7 +1122,8 @@ func RunExec(args []string) {
 				return
 			}
 
-			if isZSPRequiredForExec(ec) && taskGrantsEnforced() && !authz.IsWorkspaceReadOnlyToolCall(*toolNameFlag, *targetFlag, wsRoot) {
+			if isZSPRequiredForExec(ec) && taskGrantsEnforced() && !authz.IsWorkspaceReadOnlyToolCall(*toolNameFlag, *targetFlag, wsRoot) &&
+				!authz.IsApprovedToolCall(*toolNameFlag, *targetFlag, wsRoot) {
 				svid, grant, _, zspErr := authz.VerifyOrConsumeSessionZSP(
 					authz.ResolveZSPDir(), ec.sessionID, ec.source, action, res, ec.fullCommand, wsRoot, escapes, *consumeFlag, nil,
 				)
@@ -1348,7 +1349,8 @@ func RunExec(args []string) {
 	// except when invoking atomic ZSP control commands (e.g. 'bapedge zsp authorize' / 'bapedge status').
 	// An active development-only override suspends the grant requirement for bootstrapping BAP itself.
 	if allowed && isZSPRequiredForExec(ec) && taskGrantsEnforced() && !authz.IsZSPControlCommand(fullCommand) &&
-		!authz.IsLocalReadOnlyCommand(fullCommand, executable, cmdArguments, workspaceRoot) {
+		!authz.IsLocalReadOnlyCommand(fullCommand, executable, cmdArguments, workspaceRoot) &&
+		!authz.IsApprovedLocalCommand(fullCommand, executable, cmdArguments, workspaceRoot) {
 		zspChecks := authz.ResolveZSPCommandChecks(fullCommand, executable, cmdArguments, "", "", workspaceRoot)
 		svid, grant, _, zspErr := authz.VerifyOrConsumeSessionZSPChecks(
 			authz.ResolveZSPDir(),

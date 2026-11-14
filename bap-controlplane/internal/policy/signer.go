@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -242,8 +243,26 @@ func VerifyEd25519(pubB64 string, payload []byte, sigB64 string) bool {
 // to a different workstation. The client rebuilds this string byte-for-byte; keep in sync with
 // bap-edge/internal/policystore.
 func CanonicalBundlePayload(b Bundle, assetID string) []byte {
-	return []byte(fmt.Sprintf(
+	payload := fmt.Sprintf(
 		"bap-policy-v2\nasset=%s\nversion=%d\ndigest=%s\nkill=%t\nstrict=%t\ntier=%s\nzsp_read_exempt=%t\nupdated_at=%s\n",
 		assetID, b.Version, b.Digest, b.KillSwitch, b.StrictToolEnforcement, b.EnforcementTier, b.ZSPReadExempt, b.UpdatedAt,
-	))
+	)
+	// Only machines with approvals get this line, so every other machine's signed bytes are
+	// identical to before and older clients keep verifying.
+	if len(b.ApprovedEffects) > 0 {
+		payload += "approved_effects=" + strings.Join(sortedUnique(b.ApprovedEffects), ",") + "\n"
+	}
+	return []byte(payload)
+}
+
+func sortedUnique(in []string) []string {
+	out := append([]string(nil), in...)
+	sort.Strings(out)
+	uniq := out[:0]
+	for i, v := range out {
+		if i == 0 || v != out[i-1] {
+			uniq = append(uniq, v)
+		}
+	}
+	return uniq
 }

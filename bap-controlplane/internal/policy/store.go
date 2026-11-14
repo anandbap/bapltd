@@ -35,6 +35,11 @@ type Bundle struct {
 	// grant. Credentials, outside-workspace targets and mutations are never covered.
 	ZSPReadExempt bool `json:"zsp_read_exempt"`
 
+	// ApprovedEffects are canonical effects (for example dev:go:test) an administrator approved for
+	// THIS machine from a recommendation: they run in the workspace without a task grant. Part of the
+	// signed payload; empty (omitted) for machines with no approvals, so their signature is unchanged.
+	ApprovedEffects []string `json:"approved_effects,omitempty"`
+
 	// Asset-scoped Ed25519 signature (see CanonicalBundlePayload). Filled per sync response.
 	AssetID          string `json:"asset_id,omitempty"`
 	SigAlg           string `json:"sig_alg,omitempty"`
@@ -75,6 +80,9 @@ type Store struct {
 	assetOverrides map[string]AssetOverride
 	enrolledAssets map[string]string // enrolled workstation instance id -> asset id
 	settingsPath   string
+
+	approvedEffects map[string][]string // asset id -> admin-approved effects
+	recommendations []Recommendation
 }
 
 // SetSigner enables asset-scoped Ed25519 signing of every sync response.

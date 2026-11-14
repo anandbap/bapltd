@@ -10,7 +10,9 @@ BAP is an open reference architecture and implementation for governing AI agents
 - [📄 Technical Whitepaper: Zero Standing Privileges for AI Agents (`docs/WHITEPAPER_ZERO_TRUST_AI.md`)](docs/WHITEPAPER_ZERO_TRUST_AI.md) — Mathematical containment model, 4-tuple task authorization envelopes, monotonic scope attenuation (`ALLOWED-LIMITED`), and semantic action decomposition.
 - [🎮 Claude Code & Codex Zero-Trust Showcase Runbook (`DEMO_CLAUDE_CODEX_ZERO_TRUST.md`)](DEMO_CLAUDE_CODEX_ZERO_TRUST.md) — Step-by-step developer guide with HITL step-up approvals, RFC 8693 STS OBO exchanges, and V3 Cockpit inspection.
 - [🚀 5-Minute Developer Onboarding Guide (`docs/ONBOARDING.md`)](docs/ONBOARDING.md) — Single-click user-mode setup for Claude Code, Antigravity, Copilot, Cursor & Python.
-- [🔌 Native Agent Plugin Architecture (`PLUGIN_ARCHITECTURE.md`)](PLUGIN_ARCHITECTURE.md) — Native Claude Code, GitHub Copilot, Google Antigravity, OpenCode & OpenAI Codex plugin specifications & 5-layer Defense-in-Depth hierarchy.
+- [⌨️ Command Reference (`docs/CLI_REFERENCE.md`)](docs/CLI_REFERENCE.md) — Every user and administrator command, plus the **internal-only** build/test/maintenance tooling (clearly separated, never packaged).
+- [🔁 Policy Recommendations (`docs/POLICY_RECOMMENDATIONS.md`)](docs/POLICY_RECOMMENDATIONS.md) — How a registered developer machine reports a blocked-but-benign call and an administrator approves it into that machine's signed policy.
+- [🔌 Native Agent Plugin Architecture (`docs/PLUGIN_ARCHITECTURE.md`)](docs/PLUGIN_ARCHITECTURE.md) — Native Claude Code, GitHub Copilot, Google Antigravity, OpenCode & OpenAI Codex plugin specifications and where each enforcement layer sits.
 - [📰 Launch Blog & Announcement (`docs/BLOG_LAUNCH_ANNOUNCEMENT.md`)](docs/BLOG_LAUNCH_ANNOUNCEMENT.md) — Why Autonomous AI Coding Agents Demand a Bounded Authority Plane.
 - [📋 Enterprise Pilot Runbook & Evaluation Protocol (`docs/PILOT_RUNBOOK.md`)](docs/PILOT_RUNBOOK.md) — 30-Day implementation guide for CISOs, Platform Engineering & DevLeads.
 - [🛡️ Security Assurance & Enterprise FAQ (`docs/FAQ_AND_SECURITY_ASSURANCE.md`)](docs/FAQ_AND_SECURITY_ASSURANCE.md) — Privacy, zero code exfiltration, compliance, and threat mitigation.
@@ -422,7 +424,7 @@ Inspects active local sessions, cached Cedar policy version, 5-layer defense com
 ```powershell
 .\dist\windows-amd64\bapedge.exe status
 ```
-**Output:**
+**Output** (layer lines report what has been *observed* on this machine, not what is assumed; a layer shows `NOT_OBSERVED` until real events from it have been seen, see [ARCHITECTURE.md](ARCHITECTURE.md#defense-layers-what-each-one-does-and-does-not-guarantee)):
 ```text
   Host:             DESKTOP (windows/amd64)
   Control Plane:    http://localhost:8080 [CONNECTED / ONLINE (1ms)]
@@ -432,11 +434,11 @@ Inspects active local sessions, cached Cedar policy version, 5-layer defense com
     • Rules Digest:   d70701d094...
     • Kill Switch:    false
   5-LAYER DEFENSE-IN-DEPTH COMPLIANCE STATUS:
-    • Layer 1 (Process Interception Hooks):       COMPLIANT (bapedge exec PreToolUse hook wired)
-    • Layer 2 (Model Context Protocol MCP):       COMPLIANT (bapmcp server mounted with Cedar policy gate)
-    • Layer 3 (Terminal Interceptor Shims):       COMPLIANT (PATH shims active for unmediated subshells)
-    • Layer 4 (OS Kernel Boundary Sandbox):       COMPLIANT (Windows Job Objects & Restricted Tokens + Gateway PEP perimeter backstop active)
-    • Layer 5 (Network Perimeter Gateway PEP):    COMPLIANT (Authoritative Gateway PEP perimeter backstop active)
+    Layer 1 (Native Hooks): NOT_OBSERVED - verify approval and received callbacks
+    Layer 2 (BAP MCP): NOT_OBSERVED - verify calls routed through BAP tools
+    Layer 3 (Terminal Shims): NOT_OBSERVED - verify actual shim-routed commands
+    Layer 4 (Broker): AVAILABLE - OS-wide enforcement is not attested here
+    Layer 5 (Gateway PEP): NOT_OBSERVED - verify protected resource events
   TELEMETRY & OFFLINE RESILIENCE:
     • Auto-Sync:      ⚡ Auto-triggered sweep: 0 pending audit record(s) synced to Control Plane
     • Spool Backlog:  0 pending entries (All audit logs ingested by Control Plane)

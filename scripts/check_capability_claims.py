@@ -6,7 +6,7 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DOCS = ["README.md", "ARCHITECTURE.md", "docs/PILOT_RUNBOOK.md",
-                "DEMO_CLAUDE.md", "DEMO_CLAUDE_CODEX_ZERO_TRUST.md"]
+                "DEMO_CLAUDE_CODEX_ZERO_TRUST.md", "docs/CLI_REFERENCE.md", "docs/POLICY_RECOMMENDATIONS.md"]
 
 
 def check_text(text, matrix):

@@ -1,7 +1,7 @@
 # Introducing Bounded Authority Plane (BAP)
 ## Identity, Zero Standing Privilege, and Runtime Authorization for Autonomous AI Agents
 
-*Published: October 2026*  
+*Published: October 2026 · Updated: November 2026*  
 *Author: BAP Architecture & Security Engineering Team*
 
 ---
@@ -60,7 +60,7 @@ BAP operates on five non-negotiable architectural invariants:
 
 #### The Five Invariants
 1. **I1 — Intent is context, never authority.** An agent declaring intent never receives executable permission purely from that declaration.
-2. **I2 — Broker-Owned Execution.** The AI agent is never permitted to execute privileged host commands directly. Every protected action is rewritten and executed through `bapedge` within OS-level sandboxes (Windows Restricted Tokens, Job Objects, Linux Namespaces).
+2. **I2 — Broker-Owned Execution.** The AI agent is never permitted to execute privileged host commands directly. Every protected action is rewritten and executed through `bapedge`. On Windows the child runs under a Restricted Token and Job Object; Linux and macOS kernel-level sandboxing are still being built, and BAP's status output says so rather than claiming coverage it cannot prove.
 3. **I3 — Resource-side PEP with Single-Use Grants.** Outbound API and microservice calls are protected by a gateway Policy Enforcement Point (PEP) that cryptographically verifies and **burns grants atomically upon first use**, preventing token replay attacks.
 4. **I4 — Offline-First High Velocity.** Master policies are distributed centrally, but local authorization decisions evaluate against cached Cedar policies in **sub-2ms**. Disconnected developers on airplanes or during server maintenance continue working without friction.
 5. **I5 — Cryptographic Lineage & Merkle Audit Trail.** Every execution generates an immutable, tamper-evident cryptographic receipt chained into an immutable SHA-256 Merkle audit log. Operating the governance system is itself governed (Rule R4: BAP governs BAP).
@@ -99,8 +99,12 @@ Rather than giving agents long-lived API keys or ambient workstation rights, age
 #### 4. Monotonic Scope Attenuation: The First-Class `ALLOWED-LIMITED` State
 When an agent requests broad wildcard access (e.g. `repo:*`), a binary `ALLOW`/`DENY` system either blocks the agent entirely (breaking developer flow) or over-privileges it. BAP introduces **Monotonic Scope Attenuation**: Cedar deterministically attenuates the grant to the minimum required actions (`repo:read`, `repo:push`). The decision is logged and visualized across the V3 Dashboard and CLI as **`ALLOWED-LIMITED`** with an eye-catching burnt-orange / amber chip (`#d97706`), ensuring zero friction for developers while maintaining ironclad least-privilege boundaries.
 
-#### 5. Tamper-Proof Cryptographic Cedar Policy Bundles
-To prevent developers or compromised processes from modifying local policy files, the Control Plane cryptographically signs all policy bundles with HMAC-SHA256 / Ed25519. The local edge daemon verifies signatures before loading or executing commands; any unauthorized local modification to `policy.cedar` causes an immediate fail-closed halt. Security administrators manage and simulate policies directly in the embedded **Cedar Policy Studio** (`/#policies`) with instant "What-If" sandbox testing.
+#### 5. Signed, Per-Machine Policy That Follows the Hardware
+The Control Plane owns policy, and it signs a bundle **for each machine** with Ed25519. The signature covers the rules and every enforcement setting (kill switch, tier, read exemption, approved effects) plus the machine's identity, so a bundle cannot be edited locally or replayed onto another laptop. Because rules attach to the hardware rather than to a registered client, re-registering never sheds them.
+
+Nothing for a developer to configure: the public key is pinned automatically during `bap login` (OIDC) or OTC enrollment, and key rotation is followed automatically.
+
+An administrator change reaches a machine within seconds. If the control plane is unreachable, the **last signed rules stay in force**. If the cached rules were tampered with *and* the control plane is unreachable, BAP refuses to run until it can reconnect and be re-issued signed rules. Security administrators manage and simulate policies in the embedded **Cedar Policy Studio** (`/#policies`) with instant "What-If" sandbox testing.
 
 #### 6. Semantic Action Classification: The Airport TSA Mental Model
 Developers run over 5,000 distinct CLI binaries. Writing AST parsers for 5,000 tools is fragile and unmaintainable. Instead, BAP operates like an Airport TSA checkpoint: commands are categorized into five canonical security archetypes based on real-world impact: `inspect:read`, `workspace:mutate`, `credential:access`, `network:egress`, and `system:recon`. Local execution occurs in sub-2ms with zero additional LLM token overhead (<1% turn impact).
@@ -120,8 +124,19 @@ A security system that slows developers down is a security system that gets bypa
 - **Zero Admin Privileges Required**: Installs directly into user space (`%LOCALAPPDATA%` or `~/.local/bin`) without requiring root, UAC elevation, or kernel drivers.
 - **1-Click Agent Integration**: Automatically configures hooks for Claude Code, Google Antigravity, GitHub Copilot, and Cursor in seconds.
 - **Pre-Flight Diagnostic Health Check (`bap doctor`)**: An instant 5-point environment check verifying binaries, policy validity, control plane reachability, and sub-millisecond evaluation speed.
-- **Contextual Step-Up Approvals**: Read-only cross-folder navigation (`cat`, `git status`) is permitted transparently. Mutating operations outside the workspace prompt an interactive approval: `[O] Once | [S] Session | [P] Project | [G] Global | [D] Deny`.
+- **Reads inside your project are free**: Reading and searching your own code (`Read`, `Grep`, `git status`, `git diff`, `dir`) never asks for a grant. Credentials, anything outside the workspace and anything that mutates still do. An administrator can switch this off per machine or for the whole fleet.
+- **Contextual Step-Up Approvals**: Mutating operations outside the workspace prompt an interactive approval: `[O] Once | [S] Session | [P] Project | [G] Global | [D] Deny`.
 - **"Why Was It Blocked?" (`bapedge why`)**: If a command is denied, developers don't face a cryptic error. BAP prints the exact Cedar rule, the reason, and approved remediation steps in plain English.
+- **Tell your admin it was fine (`bap recommend`)**: When BAP blocks something that is plainly normal work, such as running the project's tests, a developer inspects the blocked call and recommends it from the terminal. Only a registered machine can; an administrator approves it for that machine; the signed policy carries it back within seconds. See [Policy Recommendations](POLICY_RECOMMENDATIONS.md).
+- **No leftover processes**: BAP's background watcher exits when the session ends, never duplicates, and an end-to-end test fails the build if any process is left running.
+
+---
+
+### Friction Is a Measurement, Not a Feeling
+
+BAP does not keep a list of allowed commands, and it could not: developers run thousands of distinct tools. Every command is reduced to a canonical **effect** (`dev:go:test`, `fs:file:write`, `network:egress`…) in a **zone** (workspace, outside the workspace, credentials, network), and policy is written against that small vocabulary.
+
+That also makes failure measurable. A blocked call that many developers hit, that an administrator approves, and that never leads to an incident is friction to remove. A blocked call that is never approved, that touches credentials, or that is retried through a different route is a signal worth investigating. Approvals stay deliberately narrow: only the local development loop can be approved, never network, deletion, publishing or credentials, and an approval relaxes the task-grant requirement only, never the security invariants.
 
 ---
 

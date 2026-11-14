@@ -7,6 +7,16 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+# Least privilege by default; the publish job below grants itself what it needs.
+permissions:
+  contents: read
+
+# Superseded pull-request runs are cancelled. Runs on main are never cancelled, so a publish
+# in progress is not interrupted by the next push.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test-go:
     name: Go Tests (${{ matrix.os }})

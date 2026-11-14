@@ -29,6 +29,8 @@ type fakeCP struct {
 	kill    bool
 	srv     *httptest.Server
 
+	approved []string // administrator-approved effects delivered to enrolled machines
+
 	// Authenticated-enrollment behaviour: when enrolledAsset is set, a request carrying
 	// "Bearer <token>" is issued a bundle for enrolledAsset (the body is ignored); anyone else
 	// gets the fleet bundle signed for no asset.
@@ -103,7 +105,10 @@ func (cp *fakeCP) bundleFor(asset string) Bundle {
 		UpdatedAt: "2026-11-13T00:00:00Z", AssetID: asset, SigAlg: "ed25519", KeyID: cp.keyID,
 	}
 	b.Digest = ComputeDigest(b.PolicyCedar, "")
-	payload := canonicalPayload(asset, b.Version, b.Digest, b.KillSwitch, b.StrictToolEnforcement, b.EnforcementTier, b.ZSPReadExempt, b.UpdatedAt)
+	if asset != "" {
+		b.ApprovedEffects = cp.approved
+	}
+	payload := canonicalPayload(asset, b.Version, b.Digest, b.KillSwitch, b.StrictToolEnforcement, b.EnforcementTier, b.ZSPReadExempt, b.UpdatedAt, b.ApprovedEffects...)
 	b.SignatureEd25519 = base64.StdEncoding.EncodeToString(ed25519.Sign(cp.priv, payload))
 	b.KeyChain = cp.chain
 	return b
@@ -151,6 +156,9 @@ func TestEditingAnyEnforcementFlagLocallyIsDetected(t *testing.T) {
 		"tier":            func(p *PolicyState) { p.EnforcementTier = "tier_2_strict" },
 		"kill_switch":     func(p *PolicyState) { p.KillSwitch = !p.KillSwitch },
 		"version":         func(p *PolicyState) { p.Version += 5 },
+		"approved_effects": func(p *PolicyState) {
+			p.ApprovedEffects = append(append([]string(nil), p.ApprovedEffects...), "dev:go:build")
+		},
 	} {
 		cp := newFakeCP(t)
 		s := newManagedStore(t, cp, "asset-A")

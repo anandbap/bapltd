@@ -39,6 +39,7 @@ Commands:
   learn report  Show project-scoped effect metrics and recommendations as JSON
   learn profile Recommend an exact capability profile from observed sessions
   check <cmd>   Evaluate command against policy in decision-only mode
+  recommend     Recommend a blocked, benign call to your administrator (--status shows decisions)
   pin <subcmd>  Manage cryptographic content pins (scan, list, verify)
   version       Display current BAP version
 

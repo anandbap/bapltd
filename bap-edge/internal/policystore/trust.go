@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"io"
 	"net/http"
 	"net/url"
@@ -225,11 +226,26 @@ func (s *Store) pinFromServer(client *http.Client, serverURL, expectKeyID, asset
 }
 
 // canonicalPayload must match bap-controlplane/internal/policy.CanonicalBundlePayload byte for byte.
-func canonicalPayload(assetID string, version uint64, digest string, kill, strict bool, tier string, readExempt bool, updatedAt string) []byte {
-	return []byte(fmt.Sprintf(
+//
+// approved lists the machine's administrator-approved effects; the line is only emitted when the
+// list is non-empty, so machines without approvals sign and verify exactly as before.
+func canonicalPayload(assetID string, version uint64, digest string, kill, strict bool, tier string, readExempt bool, updatedAt string, approved ...string) []byte {
+	payload := fmt.Sprintf(
 		"bap-policy-v2\nasset=%s\nversion=%d\ndigest=%s\nkill=%t\nstrict=%t\ntier=%s\nzsp_read_exempt=%t\nupdated_at=%s\n",
 		assetID, version, digest, kill, strict, tier, readExempt, updatedAt,
-	))
+	)
+	if len(approved) > 0 {
+		list := append([]string(nil), approved...)
+		sort.Strings(list)
+		uniq := list[:0]
+		for i, v := range list {
+			if i == 0 || v != list[i-1] {
+				uniq = append(uniq, v)
+			}
+		}
+		payload += "approved_effects=" + strings.Join(uniq, ",") + "\n"
+	}
+	return []byte(payload)
 }
 
 func verifyEd25519(pin TrustAnchor, payload []byte, sigB64 string) bool {
@@ -256,7 +272,7 @@ func verifyBundleAgainstPin(pin TrustAnchor, assetID string, b Bundle, digest st
 	if b.AssetID != assetID {
 		return fmt.Errorf("%w: bundle was issued for asset %q, not this machine (%q); if the control plane was reinstalled or this machine's enrollment changed, run `bap login` to re-enroll", ErrPolicyTampered, b.AssetID, assetID)
 	}
-	if !verifyEd25519(pin, canonicalPayload(assetID, b.Version, digest, b.KillSwitch, b.StrictToolEnforcement, b.EnforcementTier, b.ZSPReadExempt, b.UpdatedAt), b.SignatureEd25519) {
+	if !verifyEd25519(pin, canonicalPayload(assetID, b.Version, digest, b.KillSwitch, b.StrictToolEnforcement, b.EnforcementTier, b.ZSPReadExempt, b.UpdatedAt, b.ApprovedEffects...), b.SignatureEd25519) {
 		return fmt.Errorf("%w: signature does not match bundle contents", ErrPolicyTampered)
 	}
 	return nil

@@ -42,6 +42,9 @@ type Bundle struct {
 	// the workspace needs no task grant.
 	ZSPReadExempt bool `json:"zsp_read_exempt"`
 
+	// Canonical effects an administrator approved for THIS machine from a recommendation (signed).
+	ApprovedEffects []string `json:"approved_effects,omitempty"`
+
 	// Asset-scoped Ed25519 signature over all of the above (see trust.go).
 	AssetID          string `json:"asset_id,omitempty"`
 	SigAlg           string `json:"sig_alg,omitempty"`
@@ -67,6 +70,8 @@ type PolicyState struct {
 	SigAlg           string `json:"sig_alg,omitempty"`
 	KeyID            string `json:"key_id,omitempty"`
 	SignatureEd25519 string `json:"signature_ed25519,omitempty"`
+
+	ApprovedEffects []string `json:"approved_effects,omitempty"`
 }
 
 // asBundle rebuilds the signed fields of a cached state for verification.
@@ -74,7 +79,7 @@ func (st PolicyState) asBundle() Bundle {
 	return Bundle{
 		Version: st.Version, Digest: st.Digest, KillSwitch: st.KillSwitch,
 		StrictToolEnforcement: st.StrictToolEnforcement, EnforcementTier: st.EnforcementTier,
-		UpdatedAt: st.UpdatedAt, ZSPReadExempt: st.ZSPReadExempt,
+		UpdatedAt: st.UpdatedAt, ZSPReadExempt: st.ZSPReadExempt, ApprovedEffects: st.ApprovedEffects,
 		AssetID: st.AssetID, SigAlg: st.SigAlg, KeyID: st.KeyID, SignatureEd25519: st.SignatureEd25519,
 	}
 }
@@ -236,6 +241,7 @@ func (s *Store) Accept(bundle Bundle) error {
 		LastSync:              time.Now().UTC(),
 		UpdatedAt:             bundle.UpdatedAt,
 		ZSPReadExempt:         bundle.ZSPReadExempt,
+		ApprovedEffects:       bundle.ApprovedEffects,
 		AssetID:               bundle.AssetID,
 		SigAlg:                bundle.SigAlg,
 		KeyID:                 bundle.KeyID,

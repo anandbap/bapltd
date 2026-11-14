@@ -14,6 +14,7 @@ import (
 
 func init() {
 	authz.ReadExemptProvider = managedReadExempt
+	authz.ApprovedEffectsProvider = managedApprovedEffects
 	// Policy sync is authenticated with the enrolled workstation credential (OTC or OIDC).
 	policystore.CredentialProvider = func() string {
 		data, err := os.ReadFile(DefaultCredentialsPath())
@@ -56,6 +57,23 @@ func pinPolicyEnrollment(keyID, publicKey, assetID, serverURL, token string) {
 		}
 		fmt.Fprintf(os.Stderr, "[BAP] warning: enrolled, but the first signed policy sync failed (%v); policy pinning will be retried at the next sync\n", err)
 	}
+}
+
+// managedApprovedEffects returns the effects an administrator approved for this machine, only from
+// a verified, signed state of an enrolled machine. Anything else (unenrolled, tampered, unverifiable,
+// no approvals) means nothing is approved, so this can only ever narrow friction, never widen trust.
+func managedApprovedEffects() []string {
+	store := policystore.New(policystore.DefaultPolicyDir())
+	if !store.Managed() {
+		return nil
+	}
+	// Same freshness rule as the read exemption: an approval reaches this machine within seconds.
+	store.RefreshIfStale(config.ResolveEndpoints().ControlPlaneURL, policystore.DefaultMaxStaleness, 800*time.Millisecond)
+	_, _, st, err := store.Current()
+	if err != nil || st.SigAlg == "" {
+		return nil
+	}
+	return st.ApprovedEffects
 }
 
 // managedReadExempt resolves the control-plane-owned zsp_read_exempt setting from the

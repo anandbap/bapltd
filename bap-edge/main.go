@@ -36,6 +36,7 @@ Zero-Trust Governance & HITL Authorization:
   antibypass   Multi-tier anti-bypass inspection and egress isolation engine (BAP-560)
   shield       Ambient credential shielding, disk token virtualization, and canary traps (BAP-562)
   stepup       Task-scoped HITL step-up escalation with approval fatigue throttling (BAP-565)
+  recommend    Inspect a blocked call and recommend it to the control plane as benign for administrator approval (--status shows outcomes)
 
 Execution & Protocol Integration:
   claude       Launch Claude Code CLI in active zero-trust transactional sandbox
@@ -196,7 +197,20 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error running Codex: %v\n", err)
 			os.Exit(1)
 		}
+	case "recommend":
+		if err := cmd.RunRecommend(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	case "review", "review-session", "review-sessions", "sessions":
+		// `bap review recommend` reaches the same inspect-and-recommend flow from the session reviewer.
+		if len(args) > 0 && strings.EqualFold(args[0], "recommend") {
+			if err := cmd.RunRecommend(args[1:]); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
 		if err := cmd.RunReview(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error running review: %v\n", err)
 			os.Exit(1)

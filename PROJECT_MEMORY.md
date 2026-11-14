@@ -105,7 +105,6 @@ BAP (Bounded Authority Plane) is a Zero-Trust governance and least-privilege pol
   - Option 2: 5 Real Claude Code Sessions
   - Option 3: Mixed Squad (Python + Claude)
   - Interactive pauses (`[ENTER]`) between Stage 1 (5 live), Stage 2 (drop 2 $\rightarrow$ 3 left), and Stage 3 (add 1 $\rightarrow$ 4 live) for visual confirmation on Dashboard and Cockpit.
-- `scratch/test_claude_fleet.py`: Automated headless test verifying the full multi-instance lifecycle.
 
 ---
 
