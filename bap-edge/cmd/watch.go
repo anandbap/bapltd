@@ -558,11 +558,13 @@ func cleanupSessionMarker(sessionID string, watchPID int) {
 		_ = os.Remove(watcherLivenessPath(sessionID))
 	}
 	if watchPID > 0 {
-		_ = os.Remove(sessionPIDMarkerPath(watchPID))
-		_ = os.Remove(filepath.Join(".bap", "sessions", fmt.Sprintf("pid-%d.json", watchPID)))
+		// The pid marker and session.json are shared by every session on this agent process and are
+		// overwritten by the newest one: only remove a marker that still names the ending session.
+		removeOwnedMarker(sessionPIDMarkerPath(watchPID), sessionID)
+		removeOwnedMarker(filepath.Join(".bap", "sessions", fmt.Sprintf("pid-%d.json", watchPID)), sessionID)
 	}
-	_ = os.Remove(state.WorkspaceSessionPath())
-	_ = os.Remove(filepath.Join(".bap", "session.json"))
+	removeOwnedMarker(state.WorkspaceSessionPath(), sessionID)
+	removeOwnedMarker(filepath.Join(".bap", "session.json"), sessionID)
 
 	// Clean up legacy .bap-session.json if present
 	for _, cand := range []string{".bap-session.json", "../.bap-session.json"} {

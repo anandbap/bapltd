@@ -41,16 +41,13 @@ func (s *Store) ReserveReportingSessions(events []audit.Event, svid func(string)
 		closeReason := ""
 		reconciledTo := ""
 		if ev.ClientPID > 0 && len(ev.SessionID) > 9 && ev.SessionID[:9] == "observed-" {
-			for _, managed := range s.sessions {
-				if (len(managed.SessionID) <= 9 || managed.SessionID[:9] != "observed-") && managed.ClientPID == ev.ClientPID && (managed.Status == "active" || managed.Status == "closed") {
-					sameInst := managed.InstanceID == "" || ev.InstanceID == "" || managed.InstanceID == ev.InstanceID
-					if sameInst {
-						reconciledTo = managed.SessionID
-						status = "reconciled"
-						closeReason = fmt.Sprintf("Reconciled with bapedge: matched PID %d -> %s", ev.ClientPID, reconciledTo)
-						break
-					}
-				}
+			// PID is the join key between a discovered (shadow) process and the hook-reported session.
+			// Several sessions can share one agent PID over time, so pick the live, most recent one
+			// deterministically instead of whichever the map iteration reaches first.
+			if managed := s.managedSessionForPIDLocked(ev.ClientPID, ev.InstanceID); managed != nil {
+				reconciledTo = managed.SessionID
+				status = "reconciled"
+				closeReason = fmt.Sprintf("Reconciled with bapedge: matched PID %d -> %s", ev.ClientPID, reconciledTo)
 			}
 		}
 		sess := &Session{SessionID: ev.SessionID, AppID: app, InstanceID: ev.InstanceID, ResourceID: ev.InstanceID,

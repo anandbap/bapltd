@@ -2527,24 +2527,26 @@ func cleanupSessionMarkers(sessionID string, pid int) {
 	}
 	if pid > 0 {
 		pidName := fmt.Sprintf("pid-%d.json", pid)
-		_ = os.Remove(sessionMarkerPathForPID(pid))
-		_ = os.Remove(filepath.Join(".bap", "sessions", pidName))
-		_ = os.Remove(filepath.Join(ws, ".bap", "sessions", pidName))
-		_ = os.Remove(filepath.Join(".bapstate", "sessions", pidName))
-		_ = os.Remove(filepath.Join(ws, ".bapstate", "sessions", pidName))
+		// pid-<PID>.json and session.json are shared by every session on this agent process and are
+		// overwritten by the newest one, so only remove a marker that still names the ending session.
+		removeOwnedMarker(sessionMarkerPathForPID(pid), sessionID)
+		removeOwnedMarker(filepath.Join(".bap", "sessions", pidName), sessionID)
+		removeOwnedMarker(filepath.Join(ws, ".bap", "sessions", pidName), sessionID)
+		removeOwnedMarker(filepath.Join(".bapstate", "sessions", pidName), sessionID)
+		removeOwnedMarker(filepath.Join(ws, ".bapstate", "sessions", pidName), sessionID)
 		if home, err := os.UserHomeDir(); err == nil && home != "" {
-			_ = os.Remove(filepath.Join(home, "bin", ".bapstate", "sessions", pidName))
-			_ = os.Remove(filepath.Join(home, ".bapstate", "sessions", pidName))
+			removeOwnedMarker(filepath.Join(home, "bin", ".bapstate", "sessions", pidName), sessionID)
+			removeOwnedMarker(filepath.Join(home, ".bapstate", "sessions", pidName), sessionID)
 		}
 	}
-	_ = os.Remove(filepath.Join(sDir, "session.json"))
-	_ = os.Remove(filepath.Join(".bap", "session.json"))
-	_ = os.Remove(filepath.Join(ws, ".bap", "session.json"))
-	_ = os.Remove(filepath.Join(".bapstate", "session.json"))
-	_ = os.Remove(filepath.Join(ws, ".bapstate", "session.json"))
-	_ = os.Remove(".bap-session.json")
-	_ = os.Remove(filepath.Join(ws, ".bap-session.json"))
-	_ = os.Remove("../.bap-session.json")
+	removeOwnedMarker(filepath.Join(sDir, "session.json"), sessionID)
+	removeOwnedMarker(filepath.Join(".bap", "session.json"), sessionID)
+	removeOwnedMarker(filepath.Join(ws, ".bap", "session.json"), sessionID)
+	removeOwnedMarker(filepath.Join(".bapstate", "session.json"), sessionID)
+	removeOwnedMarker(filepath.Join(ws, ".bapstate", "session.json"), sessionID)
+	removeOwnedMarker(".bap-session.json", sessionID)
+	removeOwnedMarker(filepath.Join(ws, ".bap-session.json"), sessionID)
+	removeOwnedMarker("../.bap-session.json", sessionID)
 	for _, emptyDir := range []string{
 		filepath.Join(".bap", "sessions"),
 		filepath.Join(".bap", "prompts"),
