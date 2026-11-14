@@ -13,6 +13,10 @@ func TestOnboardingProbeWireEndToEnd(t *testing.T) {
 	if os.Getenv("BAP_TELEMETRY_E2E") != "1" {
 		t.Skip("set BAP_TELEMETRY_E2E=1 for real edge/CP protocol validation")
 	}
+	// This fixture correlates captured prompt text and the git status command.
+	// Opt in explicitly on both the server and inherited edge subprocess; the
+	// default metadata policy intentionally removes those content fields.
+	t.Setenv("BAP_TELEMETRY_CONTENT", "redacted")
 	s := setupTestServer()
 	server := httptest.NewServer(s.Handler())
 	defer server.Close()
