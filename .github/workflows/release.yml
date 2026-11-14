@@ -27,7 +27,10 @@ jobs:
   qualify:
     permissions:
       contents: read
+      id-token: write
     uses: ./.github/workflows/ci.yml
+    with:
+      validation_only: true
     secrets: inherit
 
   build-and-package:
