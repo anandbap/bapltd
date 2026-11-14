@@ -444,7 +444,11 @@ func RunSandboxedCommandWithOptions(cmdStr, shell string, options ExecOptions) E
 			}
 			terminateProcessTree(cmd)
 			<-done
-			waitErr = fmt.Errorf("execution stopped (%s; configured timeout %s)", ctx.Err(), timeout)
+			if ctx.Err() == context.DeadlineExceeded {
+				waitErr = fmt.Errorf("execution stopped: command timed out (configured timeout %s): %w", timeout, ctx.Err())
+			} else {
+				waitErr = fmt.Errorf("execution stopped: %w", ctx.Err())
+			}
 			waiting = false
 		}
 	}
