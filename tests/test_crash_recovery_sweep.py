@@ -155,6 +155,12 @@ class TestCrashRecoverySweep(unittest.TestCase):
 
     def test_bap_472_status_inspection(self):
         """BAP-472: Test in-terminal status inspection reports sessions, bundle, and layers."""
+        # Layer observation reads the real local audit spool and hook heartbeats
+        # (last 24h / 15m). Point BAP_STATE_DIR at an empty directory so the result
+        # does not depend on this machine's recent broker activity.
+        isolated_state = os.path.join(self.temp_dir, "status_state")
+        os.makedirs(isolated_state, exist_ok=True)
+        status_env = {**os.environ, "BAP_STATE_DIR": isolated_state}
         res = subprocess.run(
             [BAPEDGE_BIN, "status", "--server", CP_URL],
             cwd=WORKSPACE_ROOT,
@@ -162,6 +168,7 @@ class TestCrashRecoverySweep(unittest.TestCase):
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=status_env,
         )
         self.assertEqual(res.returncode, 0, f"Status failed: {res.stderr}")
         out = res.stdout
@@ -185,7 +192,7 @@ class TestCrashRecoverySweep(unittest.TestCase):
         res_json = subprocess.run(
             [BAPEDGE_BIN, "status", "--server", CP_URL, "--json"],
             cwd=WORKSPACE_ROOT, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=15,
+            encoding="utf-8", errors="replace", timeout=15, env=status_env,
         )
         self.assertEqual(res_json.returncode, 0, res_json.stderr)
         layers = json.loads(res_json.stdout)["defense_layers"]["layers"]
