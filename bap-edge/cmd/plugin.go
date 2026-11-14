@@ -1910,9 +1910,8 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 	// Secret Protection
 	normPath := strings.ToLower(filepath.ToSlash(filePath))
 	normCmd := strings.ToLower(filepath.ToSlash(command))
-	if strings.Contains(normPath, ".env") || strings.Contains(normPath, ".ssh") || strings.Contains(normPath, ".aws") ||
-		strings.Contains(normCmd, ".env") || strings.Contains(normCmd, ".ssh") || strings.Contains(normCmd, ".aws") ||
-		strings.Contains(normPath, "id_rsa") || strings.Contains(normCmd, "id_rsa") {
+	_ = normCmd
+	if authz.LooksLikeCredentialPath(normPath) || authz.CommandReferencesCredential(command) {
 		return types.ExecResponse{
 			Allowed:    false,
 			ExitCode:   1,

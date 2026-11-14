@@ -3209,8 +3209,8 @@ func main() {
 		lowerCmd := strings.ToLower(filepath.ToSlash(cmdText))
 
 		// Invariant 1: Block credential access across all file tools and commands
-		if strings.Contains(normTarget, ".env") || strings.Contains(normTarget, ".aws") || strings.Contains(normTarget, ".ssh") || strings.Contains(normTarget, "id_rsa") || strings.Contains(normTarget, "id_ed25519") ||
-			strings.Contains(lowerCmd, ".env") || strings.Contains(lowerCmd, ".aws") || strings.Contains(lowerCmd, ".ssh") || strings.Contains(lowerCmd, "id_rsa") || strings.Contains(lowerCmd, "id_ed25519") {
+		_ = lowerCmd
+		if looksLikeCredentialPath(normTarget) || commandReferencesCredential(cmdText) {
 			outputDecision("deny", fmt.Sprintf("Security Invariant Violation: Direct access to sensitive credential store %q is strictly forbidden by policy", targetPath), "Sensitive credential file access blocked by BAP invariant policy")
 			return
 		}
@@ -3262,7 +3262,7 @@ func main() {
 		}
 
 		// Secret protection applies to all files inside or outside workspace
-		if strings.Contains(normPath, ".env") || strings.Contains(normPath, ".aws") || strings.Contains(normPath, ".ssh") || strings.Contains(normPath, "id_rsa") || strings.Contains(normPath, "id_ed25519") {
+		if looksLikeCredentialPath(normPath) {
 			outputDecision("deny", fmt.Sprintf("Access to sensitive credential file %q is strictly forbidden by policy", targetFile), "Sensitive credential file access blocked")
 			return
 		}
@@ -3432,7 +3432,8 @@ func main() {
 
 	// Invariant 1: Block credential access in commands
 	lowerCmd := strings.ToLower(filepath.ToSlash(command))
-	if strings.Contains(lowerCmd, ".env") || strings.Contains(lowerCmd, ".aws") || strings.Contains(lowerCmd, ".ssh") || strings.Contains(lowerCmd, "id_rsa") || strings.Contains(lowerCmd, "id_ed25519") {
+	_ = lowerCmd
+	if commandReferencesCredential(command) {
 		outputDecision("deny", fmt.Sprintf("Security Invariant Violation: Direct access to sensitive credential store is strictly forbidden by policy in command: %s", command), "Sensitive credential file access blocked by BAP invariant policy")
 		return
 	}
