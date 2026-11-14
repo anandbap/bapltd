@@ -1034,7 +1034,7 @@ func (s *Store) Get(sessionID string) (*Session, error) {
 	cp := *sess
 	eventsCopy := make([]audit.Event, len(sess.Events))
 	copy(eventsCopy, sess.Events)
-	cp.Events = eventsCopy
+	cp.Events = Arbitrate(eventsCopy)
 	if cp.Status == "active" && time.Since(cp.LastActiveAt) > 45*time.Second {
 		cp.Status = "offline"
 	}

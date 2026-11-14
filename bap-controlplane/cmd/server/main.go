@@ -218,6 +218,11 @@ func runStart(args []string) {
 	if envMode := strings.TrimSpace(os.Getenv("BAP_ENVIRONMENT")); envMode != "" && *mode == "dev" {
 		*mode = envMode
 	}
+	// First line a deploy prints, before any startup check can exit: lets an operator confirm from the
+	// logs which build is actually running and whether the opt-in settings reached the process.
+	log.Printf("[bapcontrolplane] BUILD INFO: %s | mode=%s | ephemeral_authority_opt_in=%t | policy_max_age_set=%t",
+		version.Get("bapcontrolplane"), *mode,
+		os.Getenv("BAP_EPHEMERAL_AUTHORITY") == "acknowledged", os.Getenv("BAP_POLICY_MAX_AGE") != "")
 	if envProvider := strings.TrimSpace(os.Getenv("BAP_OIDC_PROVIDER")); envProvider != "" {
 		*oidcProvider = envProvider
 	}

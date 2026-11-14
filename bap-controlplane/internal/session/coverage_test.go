@@ -56,6 +56,16 @@ func TestArbitrateNeverMergesGatewayOrAcrossSessions(t *testing.T) {
 	}
 }
 
+func TestArbitrateKeepsSameLayerRepeats(t *testing.T) {
+	in := []audit.Event{
+		{SessionID: "s", ReportingLayer: "broker", FullCommand: "git status", Executable: "git", Timestamp: covTS},
+		{SessionID: "s", ReportingLayer: "broker", FullCommand: "git status", Executable: "git", Timestamp: covTS},
+	}
+	if got := Arbitrate(in); len(got) != 2 {
+		t.Fatalf("same-layer repeats are separate requests, got %d", len(got))
+	}
+}
+
 func TestArbitrateDoesNotModifyInput(t *testing.T) {
 	in := []audit.Event{{SessionID: "s", ReportingLayer: "mcp", Executable: "user_prompt", TurnID: "t1", Timestamp: covTS}}
 	_ = Arbitrate(in)

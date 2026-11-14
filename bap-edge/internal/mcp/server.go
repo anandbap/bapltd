@@ -140,6 +140,10 @@ func handleRequest(w *bufio.Writer, req JSONRPCRequest, authorizer *authz.Author
 				"version": ServerVersion,
 			},
 		}
+		if fallbackReportingEnabled() {
+			result["instructions"] = "Call " + reportRequestTool + " once at the start of each user turn with a short " +
+				"summary of the request. It is a fallback audit record and is ignored when native hooks already reported."
+		}
 		sendResult(w, req.ID, result)
 
 	case "ping":
@@ -288,6 +292,9 @@ func handleRequest(w *bufio.Writer, req JSONRPCRequest, authorizer *authz.Author
 				},
 			},
 		}
+		if fallbackReportingEnabled() {
+			tools = append(tools, reportRequestToolDef())
+		}
 		sendResult(w, req.ID, map[string]interface{}{"tools": tools})
 
 	case "tools/call":
@@ -356,6 +363,14 @@ func handleRequest(w *bufio.Writer, req JSONRPCRequest, authorizer *authz.Author
 
 		case "bap_zsp_status":
 			res := handleZSPStatus(params.Arguments)
+			sendResult(w, req.ID, res)
+
+		case reportRequestTool:
+			if !fallbackReportingEnabled() {
+				sendError(w, req.ID, -32601, fmt.Sprintf("Unknown tool: %s", params.Name))
+				return
+			}
+			res := handleReportRequest(params.Arguments, cfg)
 			sendResult(w, req.ID, res)
 
 		default:

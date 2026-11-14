@@ -533,6 +533,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status":  "ok",
 		"service": "ltd-service-control-plane",
 		"version": version.Version,
+		// Short commit baked in at build time, so an operator can tell which build is serving traffic.
+		"git_commit": version.GitCommit,
 	}
 	if s.minEdgeVersion != "" {
 		resp["min_edge_version"] = s.minEdgeVersion

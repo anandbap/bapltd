@@ -20,6 +20,8 @@ import (
 type AuditEntry struct {
 	EventID           string    `json:"event_id,omitempty"`
 	ReportingLayer    string    `json:"reporting_layer,omitempty"`
+	EvidenceGrade     string    `json:"evidence_grade,omitempty"` // set by fallback reporters, e.g. self_reported
+	TurnID            string    `json:"turn_id,omitempty"`        // per-turn id so the control plane can dedupe prompts
 	SessionID         string    `json:"session_id,omitempty"`
 	UserPrompt        string    `json:"user_prompt,omitempty"`
 	PromptHash        string    `json:"prompt_hash,omitempty"`

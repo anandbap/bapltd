@@ -121,6 +121,11 @@ func Arbitrate(events []audit.Event) []audit.Event {
 			out = append(out, ev)
 			continue
 		}
+		if ev.ReportingLayer == s.layer {
+			// A repeat from the same layer is a separate request, not corroboration.
+			out = append(out, ev)
+			continue
+		}
 		if precedence(ev.ReportingLayer) < precedence(s.layer) {
 			// New event outranks the current primary: swap, keep old layer as support.
 			prev := out[s.index]

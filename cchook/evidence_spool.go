@@ -37,6 +37,40 @@ func prepareHookEvidence(payload HookPayload, sessionID, appID string) {
 	}
 	fileHookEvidence.UserPrompt = payload.UserPrompt
 	fileHookEvidence.PID = os.Getppid()
+	touchHookHeartbeat(sessionID)
+}
+
+// hookHeartbeatName maps a session id to a safe file name. The MCP fallback reporter
+// (bap-edge/internal/mcp) applies the same mapping to find this marker.
+func hookHeartbeatName(sessionID string) string {
+	var b strings.Builder
+	for _, r := range sessionID {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	name := b.String()
+	if len(name) > 120 {
+		name = name[:120]
+	}
+	return name
+}
+
+// touchHookHeartbeat records that a hook ran for this session just now. It is liveness
+// evidence only (no content), used so lower layers know whether Layer 1 is reporting.
+// Failure is ignored: a heartbeat must never block or fail a hook decision.
+func touchHookHeartbeat(sessionID string) {
+	name := hookHeartbeatName(sessionID)
+	if name == "" || name == "." || name == ".." {
+		return
+	}
+	dir := filepath.Join(hookStateDir(), "hook-heartbeat")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(dir, name), []byte(time.Now().UTC().Format(time.RFC3339Nano)), 0600)
 }
 
 func hookStateDir() string {
