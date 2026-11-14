@@ -8,11 +8,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"bap-edge/internal/httptransport"
 )
 
 func TestMetadataAuditSpoolAndRetryContainNoCommandOrPrompt(t *testing.T) {
 	t.Setenv("BAP_TELEMETRY_CONTENT", "")
 	t.Setenv("BAP_TEST_MODE", "")
+	prev := httptransport.PromptContentProvider
+	httptransport.PromptContentProvider = func() bool { return false } // admin turned prompt reporting off
+	defer func() { httptransport.PromptContentProvider = prev }()
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	entry := AuditEntry{EventID: "metadata-event", FullCommand: "echo PRIVATE_CODE", UserPrompt: "PRIVATE_PROMPT", Arguments: "--token=PRIVATE_TOKEN", Reason: "PRIVATE_REASON", CanonicalAction: "dev:go:test", Decision: "allow"}
 	if err := Log(&entry, path); err != nil {

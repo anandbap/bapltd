@@ -5,16 +5,80 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"bap-edge/internal/authz"
 	"bap-edge/internal/config"
+	"bap-edge/internal/httptransport"
 	"bap-edge/internal/policystore"
 )
+
+// Prompt capture modes, owned by the control plane administrator.
+const (
+	PromptCaptureRequired       = "required"        // default: prompts are always reported
+	PromptCaptureUserControlled = "user_controlled" // admin allows users to opt out locally
+	PromptCaptureOff            = "off"             // admin withholds prompt text fleet-wide
+)
+
+// managedPromptCaptureMode resolves the administrator's prompt-capture mode from the verified,
+// signed policy of this machine. It never reads an editable file: anything unenrolled, unsigned,
+// tampered or unverifiable yields the default (required), so a local edit can never turn prompt
+// reporting off, and only an Ed25519-signed bundle can change the answer.
+func managedPromptCaptureMode() string {
+	store := policystore.New(policystore.DefaultPolicyDir())
+	if store.Managed() {
+		store.RefreshIfStale(config.ResolveEndpoints().ControlPlaneURL, policystore.DefaultMaxStaleness, 800*time.Millisecond)
+	}
+	_, _, st, err := store.Current()
+	if err != nil || st.SigAlg == "" {
+		return PromptCaptureRequired
+	}
+	switch strings.ToLower(strings.TrimSpace(st.PromptCapture)) {
+	case PromptCaptureUserControlled:
+		return PromptCaptureUserControlled
+	case PromptCaptureOff:
+		return PromptCaptureOff
+	}
+	return PromptCaptureRequired
+}
+
+var (
+	promptModeMu   sync.Mutex
+	promptModeAt   time.Time
+	promptModeLast string
+)
+
+// cachedPromptCaptureMode bounds how often the signed state is re-verified inside one process.
+func cachedPromptCaptureMode() string {
+	promptModeMu.Lock()
+	defer promptModeMu.Unlock()
+	if promptModeLast == "" || time.Since(promptModeAt) > 30*time.Second {
+		promptModeLast = managedPromptCaptureMode()
+		promptModeAt = time.Now()
+	}
+	return promptModeLast
+}
+
+// RunPolicySetting prints one control-plane-managed setting, resolved from the verified signed
+// policy. Used by the Claude hook, which is a separate module and carries no copy of the policy.
+func RunPolicySetting(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: policy-setting prompt-capture")
+	}
+	switch args[0] {
+	case "prompt-capture":
+		fmt.Println(managedPromptCaptureMode())
+		return nil
+	}
+	return fmt.Errorf("unknown setting %q", args[0])
+}
 
 func init() {
 	authz.ReadExemptProvider = managedReadExempt
 	authz.ApprovedEffectsProvider = managedApprovedEffects
+	httptransport.PromptContentProvider = func() bool { return cachedPromptCaptureMode() != PromptCaptureOff }
 	// Policy sync is authenticated with the enrolled workstation credential (OTC or OIDC).
 	policystore.CredentialProvider = func() string {
 		data, err := os.ReadFile(DefaultCredentialsPath())

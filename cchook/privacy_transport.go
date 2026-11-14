@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,8 +10,11 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 )
 
 var telemetrySecret = regexp.MustCompile(`(?i)((?:token|secret|password|api[_-]?key|authorization|bearer)\s*[=: ]\s*)[^\s"']+`)
@@ -18,6 +22,60 @@ var telemetrySecret = regexp.MustCompile(`(?i)((?:token|secret|password|api[_-]?
 // Metadata is the default. Redacted content requires explicit operator opt-in; it may contain
 // source code and is not a DLP guarantee. Apply on every retry, including old spooled records.
 func MetadataOnly() bool { return os.Getenv("BAP_TELEMETRY_CONTENT") != "redacted" }
+
+// Prompt capture modes, owned by the control plane administrator.
+const (
+	promptCaptureRequired       = "required"        // default: always reported, no local override
+	promptCaptureUserControlled = "user_controlled" // admin lets users opt out via env / config
+	promptCaptureOff            = "off"             // admin withholds prompt text
+)
+
+var (
+	adminPromptModeOnce sync.Once
+	adminPromptModeVal  string
+	// adminPromptCaptureModeFn is replaceable in tests.
+	adminPromptCaptureModeFn = queryAdminPromptCaptureMode
+)
+
+// adminPromptCaptureMode returns the administrator's prompt-capture mode. It comes only from the
+// bapedge broker, which resolves it from the Ed25519-verified policy bundle; the hook never reads
+// an editable file for it. Anything unavailable or unexpected yields the default (required), so a
+// local edit or a missing binary can never switch prompt reporting off.
+func adminPromptCaptureMode() string {
+	adminPromptModeOnce.Do(func() { adminPromptModeVal = adminPromptCaptureModeFn() })
+	return adminPromptModeVal
+}
+
+func queryAdminPromptCaptureMode() string {
+	bin := findBinary("bapedge.exe")
+	if _, err := os.Stat(bin); err != nil {
+		bin = findBinary("bapedge")
+	}
+	if _, err := os.Stat(bin); err != nil {
+		if p, lerr := exec.LookPath("bapedge"); lerr == nil {
+			bin = p
+		} else {
+			return promptCaptureRequired
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, "policy-setting", "prompt-capture").Output()
+	if err != nil {
+		return promptCaptureRequired
+	}
+	switch strings.TrimSpace(string(out)) {
+	case promptCaptureOff:
+		return promptCaptureOff
+	case promptCaptureUserControlled:
+		return promptCaptureUserControlled
+	}
+	return promptCaptureRequired
+}
+
+// PromptContentAllowed reports whether prompt text may leave this machine: always, unless the
+// administrator turned prompt reporting off, or allowed users to opt out and this user did.
+func PromptContentAllowed() bool { return shouldCaptureUserPrompt() }
 
 func telemetryContentPath(path string) bool {
 	switch path {
@@ -47,12 +105,24 @@ func MinimizeTelemetryJSON(raw []byte) ([]byte, error) {
 			}
 			for key, child := range node {
 				switch strings.ToLower(key) {
-				case "user_prompt", "prompt", "prompt_text", "agent_response", "response", "full_command", "arguments", "command", "text", "content", "evidence", "description", "task_description", "error":
+				case "user_prompt", "prompt", "prompt_text":
+					// Prompt text follows the administrator's prompt-capture mode, not the generic
+					// content setting below.
+					if !PromptContentAllowed() {
+						delete(node, key)
+						continue
+					}
+				case "agent_response", "response", "full_command", "arguments", "command", "text", "content", "evidence", "description", "task_description", "error":
 					if MetadataOnly() {
 						delete(node, key)
 						continue
 					}
-				case "prompt_captured", "prompt_capture_enabled", "captured":
+				case "prompt_captured", "prompt_capture_enabled":
+					if !PromptContentAllowed() {
+						node[key] = false
+						continue
+					}
+				case "captured":
 					if MetadataOnly() {
 						node[key] = false
 						continue

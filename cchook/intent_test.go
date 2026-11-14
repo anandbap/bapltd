@@ -55,7 +55,9 @@ func TestClassifyIntentDeterministic(t *testing.T) {
 	}
 }
 
+// The local override only applies when the administrator delegated the choice to users.
 func TestPromptCaptureEnvironmentOverride(t *testing.T) {
+	setAdminPromptMode(t, promptCaptureUserControlled)
 	t.Setenv("BAP_CAPTURE_USER_PROMPT", "false")
 	if shouldCaptureUserPrompt() {
 		t.Fatal("prompt capture remained enabled after explicit endpoint override")

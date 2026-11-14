@@ -15,10 +15,45 @@
     $('adminWorkspace').hidden = !allow;
     ['policyValidate','policySimulate','policyReload','approvalsRefresh','recommendationsRefresh'].forEach(function (id) { $(id).disabled = !allow || busy; });
     $('policyDeploy').disabled = !allow || busy || !bundle || validated !== draftKey() || simulated !== draftKey() || !$('policyReason').value.trim();
+    promptControls();
   }
   function post(url, data) {
     if (!authorized()) return Promise.reject(new Error('Verify your admin token and switch to Live mode.'));
     return deps.apiFetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)}).then(function (r) { return r.json(); });
+  }
+  var promptMode = null, promptBusy = false;
+  function promptRadios() { return Array.prototype.slice.call(document.querySelectorAll('input[name="promptMode"]')); }
+  function promptSelected() { var r = promptRadios().filter(function (x) { return x.checked; })[0]; return r ? r.value : 'required'; }
+  function promptControls() {
+    var allow = authorized() && !promptBusy;
+    promptRadios().forEach(function (r) { r.disabled = !allow; });
+    $('promptSave').disabled = !allow || promptSelected() === promptMode;
+  }
+  function renderPromptMode(mode) {
+    promptMode = mode;
+    promptRadios().forEach(function (r) { r.checked = r.value === mode; });
+    var label = {required: 'On for everyone', user_controlled: 'User controlled', off: 'Off'}[mode] || mode;
+    showMessage('promptStatus', 'Current setting: ' + label + '.');
+    promptControls();
+  }
+  function loadPromptMode() {
+    if (!authorized()) return Promise.resolve();
+    var run = epoch;
+    return deps.getJSON('/api/v1/admin/policy/settings').then(function (data) {
+      if (run === epoch) renderPromptMode(data.prompt_capture || 'required');
+    }).catch(function (err) { if (run === epoch) showMessage('promptStatus', 'Could not load prompt reporting setting: ' + err.message); });
+  }
+  function savePromptMode() {
+    if (!authorized() || promptBusy) return Promise.resolve();
+    var run = epoch, want = promptSelected();
+    promptBusy = true; promptControls(); showMessage('promptStatus', 'Saving...');
+    return post('/api/v1/admin/policy/settings', {prompt_capture: want}).then(function (data) {
+      if (run !== epoch) return;
+      if (!data || data.prompt_capture !== want) throw new Error((data && (data.error || data.message)) || 'the control plane did not confirm the change');
+      renderPromptMode(data.prompt_capture);
+      showMessage('promptStatus', $('promptStatus').textContent + ' Saved; machines pick it up on their next policy sync.');
+    }).catch(function (err) { if (run === epoch) { showMessage('promptStatus', 'Not saved: ' + err.message); } })
+      .finally(function () { if (run === epoch) { promptBusy = false; promptControls(); } });
   }
   function changeDraft() { validated = simulated = ''; showMessage('policyResult', 'Draft changed. Validate and simulate again before deployment.'); controls(); }
   function renderRecommendations() {
@@ -178,18 +213,21 @@
   function authChanged() {
     if (!deps) return;
     epoch++; bundle = null; requests = []; validated = simulated = ''; busy = false; deciding.clear();
+    promptMode = null; promptBusy = false; showMessage('promptStatus', 'Not loaded.');
     recommendations = []; recDeciding.clear(); recLoad++;
     $('recommendationList').innerHTML = ''; $('recommendationNote').value = ''; showMessage('recommendationsStatus', 'No recommendations loaded.');
     ['policyDraft','policySchema','policyReason','approvalReviewer'].forEach(function (id) { $(id).value = ''; });
     $('approvalList').innerHTML = ''; showMessage('policyVersion', 'Current policy not loaded.'); showMessage('policyResult', '');
     showMessage('approvalsStatus', 'No requests loaded.'); controls();
-    if (visible && authorized()) { loadPolicy(); loadRequests(); loadRecommendations(); }
+    if (visible && authorized()) { loadPolicy(); loadRequests(); loadRecommendations(); loadPromptMode(); }
   }
   root.BAPAdmin = {
     init: function (options) {
       deps = options;
       $('adminUnlock').addEventListener('click', deps.requireAdminLogin);
       $('policyReload').addEventListener('click', loadPolicy);
+      $('promptSave').addEventListener('click', savePromptMode);
+      promptRadios().forEach(function (r) { r.addEventListener('change', promptControls); });
       $('approvalsRefresh').addEventListener('click', loadRequests);
       $('recommendationsRefresh').addEventListener('click', loadRecommendations);
       $('recommendationList').addEventListener('click', function (event) {
@@ -208,7 +246,7 @@
       });
       controls();
     },
-    show: function () { visible = true; controls(); if (authorized()) { if (!bundle) loadPolicy(); loadRequests(); loadRecommendations(); } },
+    show: function () { visible = true; controls(); if (authorized()) { if (!bundle) loadPolicy(); loadRequests(); loadRecommendations(); loadPromptMode(); } },
     hide: function () { visible = false; }, authChanged: authChanged,
     refresh: loadRequests, resolve: resolveRequest, validate: validatePolicy, simulate: simulatePolicy, deploy: deployPolicy,
     refreshRecommendations: loadRecommendations, decideRecommendation: decideRecommendation

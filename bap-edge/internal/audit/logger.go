@@ -146,11 +146,16 @@ func Log(entryInput any, logPath string) error {
 		return fmt.Errorf("unsupported entry type")
 	}
 	if httptransport.MetadataOnly() {
+		keepPrompt := entry.UserPrompt
 		if entry.UserPrompt != "" {
 			sum := sha256.Sum256([]byte(entry.UserPrompt))
 			entry.PromptHash = hex.EncodeToString(sum[:])
 		}
 		entry.UserPrompt, entry.Arguments, entry.FullCommand, entry.Error = "", "", "", ""
+		// Prompt text is governed by the administrator's prompt-capture mode, not this setting.
+		if httptransport.PromptContentAllowed() {
+			entry.UserPrompt = keepPrompt
+		}
 		if strings.Contains(entry.Reason, "ZeroStandingPrivilegeViolation") {
 			entry.Reason = "ZeroStandingPrivilegeViolation"
 		} else {

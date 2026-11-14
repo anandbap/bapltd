@@ -19,6 +19,19 @@ var telemetrySecret = regexp.MustCompile(`(?i)((?:token|secret|password|api[_-]?
 // source code and is not a DLP guarantee. Apply on every retry, including old spooled records.
 func MetadataOnly() bool { return os.Getenv("BAP_TELEMETRY_CONTENT") != "redacted" }
 
+// PromptContentProvider resolves the administrator-owned prompt-capture decision from the verified,
+// signed policy (set by package cmd). Nil means no managed policy is available: prompts are
+// reported, which is the default. It is deliberately not an environment variable.
+var PromptContentProvider func() bool
+
+// PromptContentAllowed reports whether prompt text may leave this machine.
+func PromptContentAllowed() bool {
+	if PromptContentProvider == nil {
+		return true
+	}
+	return PromptContentProvider()
+}
+
 func telemetryContentPath(path string) bool {
 	switch path {
 	case "/api/v1/audit/ingest", "/api/v1/sessions/start", "/api/v1/sessions/resume",
@@ -47,12 +60,24 @@ func MinimizeTelemetryJSON(raw []byte) ([]byte, error) {
 			}
 			for key, child := range node {
 				switch strings.ToLower(key) {
-				case "user_prompt", "prompt", "prompt_text", "agent_response", "response", "full_command", "arguments", "command", "text", "content", "evidence", "description", "task_description", "error":
+				case "user_prompt", "prompt", "prompt_text":
+					// Prompt text follows the administrator's prompt-capture mode, not the generic
+					// content setting below.
+					if !PromptContentAllowed() {
+						delete(node, key)
+						continue
+					}
+				case "agent_response", "response", "full_command", "arguments", "command", "text", "content", "evidence", "description", "task_description", "error":
 					if MetadataOnly() {
 						delete(node, key)
 						continue
 					}
-				case "prompt_captured", "prompt_capture_enabled", "captured":
+				case "prompt_captured", "prompt_capture_enabled":
+					if !PromptContentAllowed() {
+						node[key] = false
+						continue
+					}
+				case "captured":
 					if MetadataOnly() {
 						node[key] = false
 						continue

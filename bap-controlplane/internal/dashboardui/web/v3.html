@@ -34,7 +34,21 @@
   .wrap { max-width: 1180px; margin: 0 auto; padding: 0 28px; }
 
   /* top bar */
-  .top { display: flex; align-items: center; justify-content: space-between; padding: 18px 0; gap: 16px; }
+  /* Two-row header: brand + utilities on row 1, the view tabs on their own full-width row 2, so
+     nothing can be pushed off-screen however many controls are added. */
+  .top { display: flex; flex-wrap: wrap; align-items: center; padding: 14px 0 12px; gap: 10px 16px; }
+  .top .brand { order: 1; }
+  .top .top-right { order: 2; margin-left: auto; min-width: 0; }
+  .top .view-nav { order: 3; flex: 1 0 100%; max-width: 100%; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; justify-content: flex-start; }
+  .top .view-nav::-webkit-scrollbar { display: none; }
+  .menu-more { position: relative; }
+  .menu-more > summary { list-style: none; cursor: pointer; background: #ebe9e2; border-radius: 999px; padding: 5px 12px; font-size: 12.5px; font-weight: 600; color: var(--ink-2); user-select: none; }
+  .menu-more > summary::-webkit-details-marker { display: none; }
+  .menu-more > summary:hover, .menu-more[open] > summary { background: #e0ded6; color: var(--ink); }
+  .menu-more-pop { position: absolute; right: 0; top: calc(100% + 8px); z-index: 100; min-width: 220px; background: var(--surface); border: 1.5px solid var(--line); border-radius: 12px; padding: 8px; box-shadow: 0 10px 25px -5px rgba(0,0,0,.15), 0 4px 6px -2px rgba(0,0,0,.05); display: flex; flex-direction: column; gap: 2px; }
+  .menu-more-pop a, .menu-more-pop button { display: block; width: 100%; text-align: left; background: none; border: 0; border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 13px; color: var(--ink-2); text-decoration: none; cursor: pointer; }
+  .menu-more-pop a:hover, .menu-more-pop button:hover { background: #f1efe8; color: var(--ink); }
+  .menu-more-pop .menu-ver { padding: 8px 10px 4px; margin-top: 4px; border-top: 1px solid var(--line); }
   .brand { font-weight: 700; letter-spacing: .01em; display: flex; align-items: center; gap: 10px; }
   .brand i { width: 10px; height: 10px; border-radius: 50%; background: var(--verdict); display: inline-block; }
   .top-right { display: flex; align-items: center; gap: 16px; }
@@ -371,7 +385,6 @@
       <button id="navAdmin" role="tab" aria-selected="false" type="button">Admin &amp; approvals</button>
     </div>
     <div class="top-right">
-      <span class="conn" id="buildVer" title="Build version and git commit" style="font-family:var(--mono);font-size:12px;color:var(--ink-3)"></span>
       <span class="conn" id="conn" title="Connection to the central control plane">Control plane connected</span>
       <div class="admin-ctl" id="adminCtl">
         <button class="admin-toggle" id="adminToggle" type="button" aria-pressed="false" title="Toggle Admin Mode to view raw prompts and execute actions">
@@ -395,13 +408,19 @@
           </form>
         </div>
       </div>
-      <button class="link printbtn" id="printBtn" type="button">Print summary</button>
       <div class="seg" role="group" aria-label="Data source">
         <button id="modeLive" aria-pressed="true">Live</button>
         <button id="modeDemo" aria-pressed="false">Demo</button>
       </div>
-      <a class="link" href="#admin" title="Open policy administration and approvals">Policies &amp; approvals</a>
-      <a class="link" href="/dashboard/v2/">Operator console</a>
+      <details class="menu-more" id="menuMore">
+        <summary aria-label="More options">More &#9662;</summary>
+        <div class="menu-more-pop">
+          <a href="#admin" title="Open policy administration and approvals">Policies &amp; approvals</a>
+          <a href="/dashboard/v2/">Operator console</a>
+          <button class="printbtn" id="printBtn" type="button">Print summary</button>
+          <span class="menu-ver" id="buildVer" title="Build version and git commit" style="font-family:var(--mono);font-size:12px;color:var(--ink-3)"></span>
+        </div>
+      </details>
     </div>
   </header>
 
@@ -418,6 +437,18 @@
         <div id="adminLocked"><p>Verify your admin token to manage policies and review requests.</p><button class="btn" id="adminUnlock">Sign in as admin</button></div>
         <p id="adminModeNotice" role="status" hidden>Administration is available in Live mode. Switch to Live to continue.</p>
         <div id="adminWorkspace" hidden>
+          <section class="panel" aria-labelledby="promptHeading">
+            <h2 id="promptHeading">Prompt reporting</h2>
+            <p>Controls whether the text of user prompts is reported to this control plane. It applies to the whole fleet, is signed with the policy bundle, and reaches machines on their next policy sync. It cannot be changed from a workstation.</p>
+            <fieldset id="promptModeSet" style="border:0;padding:0;margin:0">
+              <legend class="sr-only" style="position:absolute;left:-9999px">Prompt reporting mode</legend>
+              <label style="display:block;margin:6px 0"><input type="radio" name="promptMode" value="required" checked> <b>On for everyone</b> (default) &mdash; prompts are always reported; no local setting can turn it off.</label>
+              <label style="display:block;margin:6px 0"><input type="radio" name="promptMode" value="user_controlled"> <b>User controlled</b> &mdash; reported by default; users may opt out on their own machine.</label>
+              <label style="display:block;margin:6px 0"><input type="radio" name="promptMode" value="off"> <b>Off</b> &mdash; prompt text is withheld everywhere; only a hash and the classified intent are kept.</label>
+            </fieldset>
+            <button class="btn" id="promptSave">Save prompt reporting</button>
+            <p id="promptStatus" role="status" aria-live="polite">Not loaded.</p>
+          </section>
           <section class="panel" aria-labelledby="approvalsHeading">
             <h2 id="approvalsHeading">HITL approval inbox</h2>
             <p>Control-plane step-up requests. Workstation-local ZSP requests are not synchronized to this inbox yet.</p>
@@ -2334,7 +2365,9 @@
     if (regP) regP.scrollIntoView({ behavior: 'smooth' });
   };
 
-  $('printBtn').addEventListener('click', function () { window.print(); });
+  $('printBtn').addEventListener('click', function () { $('menuMore').open = false; window.print(); });
+  document.addEventListener('click', function (e) { var m = $('menuMore'); if (m && m.open && !m.contains(e.target)) m.open = false; });
+  document.addEventListener('keydown', function (e) { var m = $('menuMore'); if (e.key === 'Escape' && m && m.open) { m.open = false; m.querySelector('summary').focus(); } });
   // Live mode lists every agent that reported; the demo walkthrough only has its feed.
   function allRows() { return S.mode === 'demo' || !S.rows ? S.feed : S.rows; }
   [['sAgents', function () { var cov = $('covH'); if (cov) cov.scrollIntoView({ behavior: 'smooth' }); }],

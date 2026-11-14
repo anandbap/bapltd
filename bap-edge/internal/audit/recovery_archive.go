@@ -44,7 +44,11 @@ func archiveAcknowledged(server, log string, entries []AuditEntry, epoch string)
 	defer f.Close()
 	for _, entry := range entries {
 		if httptransport.MetadataOnly() {
+			keepPrompt := entry.UserPrompt
 			entry.UserPrompt, entry.Arguments, entry.FullCommand, entry.Error = "", "", "", ""
+			if httptransport.PromptContentAllowed() {
+				entry.UserPrompt = keepPrompt
+			}
 			entry.Reason = "Details withheld by metadata capture policy"
 		}
 		body, err := json.Marshal(recoveryRecord{Epoch: epoch, Entry: entry})

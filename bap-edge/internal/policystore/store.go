@@ -43,6 +43,9 @@ type Bundle struct {
 	// the workspace needs no task grant.
 	ZSPReadExempt bool `json:"zsp_read_exempt"`
 
+	// Administrator-owned prompt-reporting mode (signed): "" = required (default), "user_controlled", "off".
+	PromptCapture string `json:"prompt_capture,omitempty"`
+
 	// Canonical effects an administrator approved for THIS machine from a recommendation (signed).
 	ApprovedEffects []string `json:"approved_effects,omitempty"`
 
@@ -68,6 +71,7 @@ type PolicyState struct {
 
 	UpdatedAt        string `json:"updated_at,omitempty"`
 	ZSPReadExempt    bool   `json:"zsp_read_exempt"`
+	PromptCapture    string `json:"prompt_capture,omitempty"`
 	AssetID          string `json:"asset_id,omitempty"`
 	SigAlg           string `json:"sig_alg,omitempty"`
 	KeyID            string `json:"key_id,omitempty"`
@@ -82,7 +86,7 @@ func (st PolicyState) asBundle() Bundle {
 		ValidUntil: st.ValidUntil,
 		Version:    st.Version, Digest: st.Digest, KillSwitch: st.KillSwitch,
 		StrictToolEnforcement: st.StrictToolEnforcement, EnforcementTier: st.EnforcementTier,
-		UpdatedAt: st.UpdatedAt, ZSPReadExempt: st.ZSPReadExempt, ApprovedEffects: st.ApprovedEffects,
+		UpdatedAt: st.UpdatedAt, ZSPReadExempt: st.ZSPReadExempt, PromptCapture: st.PromptCapture, ApprovedEffects: st.ApprovedEffects,
 		AssetID: st.AssetID, SigAlg: st.SigAlg, KeyID: st.KeyID, SignatureEd25519: st.SignatureEd25519,
 	}
 }
@@ -245,6 +249,7 @@ func (s *Store) Accept(bundle Bundle) error {
 		LastSync:              time.Now().UTC(),
 		UpdatedAt:             bundle.UpdatedAt,
 		ZSPReadExempt:         bundle.ZSPReadExempt,
+		PromptCapture:         bundle.PromptCapture,
 		ApprovedEffects:       bundle.ApprovedEffects,
 		AssetID:               bundle.AssetID,
 		SigAlg:                bundle.SigAlg,

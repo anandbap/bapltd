@@ -137,6 +137,30 @@ func TestCanonicalPayloadGolden(t *testing.T) {
 	}
 }
 
+// The administrator's prompt-capture mode is signed: editing it, or stripping it so the default
+// applies, must fail verification. A machine's cached state cannot be edited to switch it.
+func TestPromptCaptureIsCoveredBySignature(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := TrustAnchor{KeyID: "k1", PublicKey: base64.StdEncoding.EncodeToString(pub)}
+	b := Bundle{Version: 1, UpdatedAt: "u", AssetID: "a", SigAlg: "ed25519", KeyID: "k1", PromptCapture: "user_controlled"}
+	digest := "d"
+	payload := append(canonicalPayload("a", 1, digest, false, false, "", false, "u"), []byte("prompt_capture=user_controlled\n")...)
+	b.SignatureEd25519 = base64.StdEncoding.EncodeToString(ed25519.Sign(priv, payload))
+	if err := verifyBundleAgainstPin(pin, "a", b, digest); err != nil {
+		t.Fatalf("correctly signed bundle must verify: %v", err)
+	}
+	for _, tampered := range []string{"off", "required", ""} {
+		c := b
+		c.PromptCapture = tampered
+		if err := verifyBundleAgainstPin(pin, "a", c, digest); err == nil {
+			t.Fatalf("changing prompt_capture to %q must break the signature", tampered)
+		}
+	}
+}
+
 func TestFirstSyncPinsKeyAndStoresSignedState(t *testing.T) {
 	cp := newFakeCP(t)
 	s := newManagedStore(t, cp, "asset-A")

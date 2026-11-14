@@ -131,6 +131,10 @@ func NewServer(reg *registry.Store, otcStore *otc.Store, minter *authz.TokenMint
 	if policyStore == nil {
 		policyStore = policy.NewStore("", "")
 	}
+	// Prompt text is reported unless the administrator turned it off fleet-wide.
+	privacy.PromptContentAllowed = func() bool {
+		return policyStore.PromptCaptureMode() != policy.PromptCaptureOff
+	}
 	if auditStore == nil {
 		auditStore = audit.NewStore()
 	}
@@ -2591,15 +2595,33 @@ func (s *Server) handlePolicySettings(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.policyStore.Settings())
 	case http.MethodPost:
 		var req struct {
-			AssetID       string `json:"asset_id"`
-			ZSPReadExempt *bool  `json:"zsp_read_exempt"`
+			AssetID       string  `json:"asset_id"`
+			ZSPReadExempt *bool   `json:"zsp_read_exempt"`
+			PromptCapture *string `json:"prompt_capture"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
 			return
 		}
+		if req.PromptCapture != nil {
+			// Fleet-wide, administrator-owned: prompt reporting is on unless an admin says otherwise.
+			if !policy.ValidPromptCapture(*req.PromptCapture) {
+				writeError(w, http.StatusBadRequest, "prompt_capture must be one of: required, user_controlled, off")
+				return
+			}
+			if _, err := s.policyStore.SetPromptCapture(*req.PromptCapture); err != nil {
+				writeError(w, http.StatusInternalServerError, "Failed to persist policy settings: "+err.Error())
+				return
+			}
+			record(fmt.Sprintf("policy-settings --prompt_capture=%s", policy.NormalizePromptCapture(*req.PromptCapture)),
+				fmt.Sprintf("Prompt capture mode set to %s", s.policyStore.PromptCaptureMode()))
+			if req.ZSPReadExempt == nil {
+				writeJSON(w, http.StatusOK, s.policyStore.Settings())
+				return
+			}
+		}
 		if req.ZSPReadExempt == nil {
-			writeError(w, http.StatusBadRequest, "zsp_read_exempt is required")
+			writeError(w, http.StatusBadRequest, "zsp_read_exempt or prompt_capture is required")
 			return
 		}
 		asset := strings.TrimSpace(req.AssetID)

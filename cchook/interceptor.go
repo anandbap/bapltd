@@ -444,6 +444,17 @@ func classifyIntent(prompt string) IntentClassification {
 }
 
 func shouldCaptureUserPrompt() bool {
+	// Prompt reporting is administrator-owned and on by default. The environment variable and
+	// config file below are honoured only when the administrator explicitly delegated the choice
+	// to users ("user_controlled"); otherwise they have no effect.
+	switch adminPromptCaptureMode() {
+	case promptCaptureOff:
+		return false
+	case promptCaptureUserControlled:
+		// fall through to the user's own setting
+	default:
+		return true
+	}
 	if value := strings.TrimSpace(os.Getenv("BAP_CAPTURE_USER_PROMPT")); value != "" {
 		if enabled, err := strconv.ParseBool(value); err == nil {
 			return enabled
@@ -735,9 +746,7 @@ func promptPathForSession(sessionID string) string {
 }
 
 func writeSessionPrompt(sessionID, prompt string) {
-	if MetadataOnly() {
-		return
-	}
+	// Callers gate on shouldCaptureUserPrompt(); the generic content setting does not apply here.
 	if sessionID == "" || prompt == "" {
 		return
 	}

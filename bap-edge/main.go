@@ -354,6 +354,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error starting session: %v\n", err)
 			os.Exit(1)
 		}
+	case "policy-setting":
+		if err := cmd.RunPolicySetting(args); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	case "session-telemetry":
 		if err := cmd.RunSessionTelemetry(args); err != nil {
 			fmt.Fprintln(os.Stderr, err)

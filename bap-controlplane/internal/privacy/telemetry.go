@@ -19,6 +19,11 @@ var telemetrySecret = regexp.MustCompile(`(?i)((?:token|secret|password|api[_-]?
 // source code and is not a DLP guarantee. Apply on every retry, including old spooled records.
 func MetadataOnly() bool { return os.Getenv("BAP_TELEMETRY_CONTENT") != "redacted" }
 
+// PromptContentAllowed reports whether prompt text may be retained. Prompt reporting is on by
+// default and is owned by the administrator (prompt_capture policy setting); the server wires this
+// to the policy store at startup. It is deliberately not controlled by a process environment variable.
+var PromptContentAllowed = func() bool { return true }
+
 func telemetryContentPath(path string) bool {
 	switch path {
 	case "/api/v1/audit/ingest", "/api/v1/sessions/start", "/api/v1/sessions/resume",
@@ -47,12 +52,24 @@ func MinimizeTelemetryJSON(raw []byte) ([]byte, error) {
 			}
 			for key, child := range node {
 				switch strings.ToLower(key) {
-				case "user_prompt", "prompt", "prompt_text", "agent_response", "response", "full_command", "arguments", "command", "text", "content", "evidence", "description", "task_description", "error":
+				case "user_prompt", "prompt", "prompt_text":
+					// Prompt text follows the administrator's prompt-capture mode, not the generic
+					// content setting below.
+					if !PromptContentAllowed() {
+						delete(node, key)
+						continue
+					}
+				case "agent_response", "response", "full_command", "arguments", "command", "text", "content", "evidence", "description", "task_description", "error":
 					if MetadataOnly() {
 						delete(node, key)
 						continue
 					}
-				case "prompt_captured", "prompt_capture_enabled", "captured":
+				case "prompt_captured", "prompt_capture_enabled":
+					if !PromptContentAllowed() {
+						node[key] = false
+						continue
+					}
+				case "captured":
 					if MetadataOnly() {
 						node[key] = false
 						continue

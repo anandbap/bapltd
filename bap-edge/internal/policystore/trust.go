@@ -275,6 +275,10 @@ func verifyBundleAgainstPin(pin TrustAnchor, assetID string, b Bundle, digest st
 		return fmt.Errorf("%w: bundle was issued for asset %q, not this machine (%q); if the control plane was reinstalled or this machine's enrollment changed, run `bap login` to re-enroll", ErrPolicyTampered, b.AssetID, assetID)
 	}
 	payload := canonicalPayload(assetID, b.Version, digest, b.KillSwitch, b.StrictToolEnforcement, b.EnforcementTier, b.ZSPReadExempt, b.UpdatedAt, b.ApprovedEffects...)
+	// Same position as the control plane: after approved_effects, before valid_until, and only when set.
+	if b.PromptCapture != "" {
+		payload = append(payload, []byte("prompt_capture="+b.PromptCapture+"\n")...)
+	}
 	if b.ValidUntil != "" {
 		payload = append(payload, []byte("valid_until="+b.ValidUntil+"\n")...)
 	}

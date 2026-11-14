@@ -26,6 +26,7 @@ type AssetOverride struct {
 type SettingsSnapshot struct {
 	Version         uint64                   `json:"version"`
 	FleetReadExempt bool                     `json:"fleet_zsp_read_exempt"`
+	PromptCapture   string                   `json:"prompt_capture"` // required (default) | user_controlled | off
 	AssetOverrides  map[string]AssetOverride `json:"asset_overrides"`
 	EnrolledAssets  map[string]string        `json:"enrolled_assets"`  // instance id -> asset id (find ids for overrides here)
 	ApprovedEffects map[string][]string      `json:"approved_effects"` // asset id -> effects approved from recommendations
@@ -34,6 +35,7 @@ type SettingsSnapshot struct {
 type persistedSettings struct {
 	Version         uint64                   `json:"version"`
 	FleetReadExempt bool                     `json:"fleet_zsp_read_exempt"`
+	PromptCapture   string                   `json:"prompt_capture,omitempty"`
 	AssetOverrides  map[string]AssetOverride `json:"asset_overrides"`
 	EnrolledAssets  map[string]string        `json:"enrolled_assets,omitempty"`
 	ApprovedEffects map[string][]string      `json:"approved_effects,omitempty"`
@@ -141,6 +143,7 @@ func (s *Store) EnablePersistence(path string) error {
 		return fmt.Errorf("corrupt policy settings %s: %w", path, err)
 	}
 	s.bundle.ZSPReadExempt = ps.FleetReadExempt
+	s.bundle.PromptCapture = NormalizePromptCapture(ps.PromptCapture)
 	if ps.AssetOverrides != nil {
 		s.assetOverrides = ps.AssetOverrides
 	}
@@ -164,7 +167,7 @@ func (s *Store) saveSettingsLocked() error {
 	if s.settingsPath == "" {
 		return nil
 	}
-	ps := persistedSettings{Version: s.bundle.Version, FleetReadExempt: s.bundle.ZSPReadExempt, AssetOverrides: s.assetOverrides, EnrolledAssets: s.enrolledAssets,
+	ps := persistedSettings{Version: s.bundle.Version, FleetReadExempt: s.bundle.ZSPReadExempt, PromptCapture: s.bundle.PromptCapture, AssetOverrides: s.assetOverrides, EnrolledAssets: s.enrolledAssets,
 		ApprovedEffects: s.approvedEffects, Recommendations: s.recommendations}
 	data, err := json.MarshalIndent(ps, "", "  ")
 	if err != nil {
@@ -227,6 +230,55 @@ func (s *Store) SetReadExempt(assetID string, exempt bool, by string) (Bundle, e
 	return s.bundle, s.saveSettingsLocked()
 }
 
+// Prompt capture modes. The default (stored as "") is PromptCaptureRequired: prompts are always
+// reported and no local setting can turn that off.
+const (
+	PromptCaptureRequired       = "required"
+	PromptCaptureUserControlled = "user_controlled"
+	PromptCaptureOff            = "off"
+)
+
+// ValidPromptCapture reports whether mode is a recognised prompt-capture mode.
+func ValidPromptCapture(mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case PromptCaptureRequired, PromptCaptureUserControlled, PromptCaptureOff:
+		return true
+	}
+	return false
+}
+
+// NormalizePromptCapture maps a mode to its stored form: "" for the default (required), so the
+// signed payload of an untouched fleet is unchanged. Unknown values fall back to the default.
+func NormalizePromptCapture(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case PromptCaptureUserControlled:
+		return PromptCaptureUserControlled
+	case PromptCaptureOff:
+		return PromptCaptureOff
+	}
+	return ""
+}
+
+// PromptCaptureMode returns the effective fleet mode (never empty).
+func (s *Store) PromptCaptureMode() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.bundle.PromptCapture == "" {
+		return PromptCaptureRequired
+	}
+	return s.bundle.PromptCapture
+}
+
+// SetPromptCapture sets the fleet-wide prompt-capture mode and advances the policy version so
+// every client picks it up on its next sync.
+func (s *Store) SetPromptCapture(mode string) (Bundle, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bundle.PromptCapture = NormalizePromptCapture(mode)
+	s.bumpLocked()
+	return s.bundle, s.saveSettingsLocked()
+}
+
 // ClearAssetOverride removes a machine's override so it follows the fleet default again.
 func (s *Store) ClearAssetOverride(assetID string) (bool, error) {
 	s.mu.Lock()
@@ -243,7 +295,11 @@ func (s *Store) ClearAssetOverride(assetID string) (bool, error) {
 func (s *Store) Settings() SettingsSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := SettingsSnapshot{Version: s.bundle.Version, FleetReadExempt: s.bundle.ZSPReadExempt, AssetOverrides: map[string]AssetOverride{}, EnrolledAssets: map[string]string{}, ApprovedEffects: map[string][]string{}}
+	pc := s.bundle.PromptCapture
+	if pc == "" {
+		pc = PromptCaptureRequired
+	}
+	out := SettingsSnapshot{Version: s.bundle.Version, FleetReadExempt: s.bundle.ZSPReadExempt, PromptCapture: pc, AssetOverrides: map[string]AssetOverride{}, EnrolledAssets: map[string]string{}, ApprovedEffects: map[string][]string{}}
 	for asset, effects := range s.approvedEffects {
 		out.ApprovedEffects[asset] = append([]string(nil), effects...)
 	}

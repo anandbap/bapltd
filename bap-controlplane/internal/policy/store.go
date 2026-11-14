@@ -36,6 +36,12 @@ type Bundle struct {
 	// grant. Credentials, outside-workspace targets and mutations are never covered.
 	ZSPReadExempt bool `json:"zsp_read_exempt"`
 
+	// PromptCapture is the administrator's prompt-reporting policy for the fleet. Empty means
+	// PromptCaptureRequired (the default: prompts are always reported). Only "user_controlled" lets a
+	// user opt out locally; "off" withholds prompt text everywhere. Part of the signed payload, and
+	// omitted from it when empty so existing signatures keep verifying.
+	PromptCapture string `json:"prompt_capture,omitempty"`
+
 	// ApprovedEffects are canonical effects (for example dev:go:test) an administrator approved for
 	// THIS machine from a recommendation: they run in the workspace without a task grant. Part of the
 	// signed payload; empty (omitted) for machines with no approvals, so their signature is unchanged.
@@ -213,6 +219,7 @@ func (s *Store) updateLocked(cedarCode, schema string, killSwitch bool) Bundle {
 
 	s.bundle = Bundle{
 		ZSPReadExempt:         readExempt,
+		PromptCapture:         s.bundle.PromptCapture,
 		Version:               newVersion,
 		Digest:                digest,
 		Signature:             sig,
@@ -322,6 +329,7 @@ func (s *Store) Sync(req SyncRequest) SyncResponse {
 			tb.StrictToolEnforcement = s.bundle.StrictToolEnforcement
 			tb.EnforcementTier = s.bundle.EnforcementTier
 			tb.ZSPReadExempt = s.bundle.ZSPReadExempt
+			tb.PromptCapture = s.bundle.PromptCapture
 			target = tb
 		}
 	}
