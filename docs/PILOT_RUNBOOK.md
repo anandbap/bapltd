@@ -68,7 +68,7 @@ The long-job fixture deliberately takes over two minutes. It must finish rather 
 
 **Pass:** every required suite succeeds, the opt-in fixtures actually execute, and the CI run for this exact candidate succeeds on the advertised platforms. Missing dependencies, skipped native cases and unrun Python integration/wheel checks remain gaps. Run the full existing Python/wheel job through release CI in its isolated fixture; do not point integration cleanup at your live installation.
 
-The release workflow now calls the reusable CI workflow before packaging. Configure repository variables `BAP_GO_PROXY`, optional approved `BAP_GO_SUMDB`, and `BAP_PYPI_INDEX` for approved mirrors. Configure required branch checks and the protected publication environment in GitHub. Those external settings are operator work; source workflow edits do not prove they are enabled.
+The release workflow calls the reusable CI workflow before packaging. Public CI defaults to `https://proxy.golang.org,direct`, `sum.golang.org` checksum verification, and `https://pypi.org/simple`; no repository variables are required. Enterprise operators override `BAP_GO_PROXY`, `BAP_GO_SUMDB` and `BAP_PYPI_INDEX` with their approved sources. An explicit corporate proxy/index replaces the default; the workflow does not append public fallback sources. `PIP_EXTRA_INDEX_URL` stays empty. Configure required branch checks and the protected publication environment in GitHub separately; source workflow edits do not prove those settings are enabled.
 
 ## 3. Prepare the isolated service
 

@@ -17,9 +17,10 @@ permissions:
 
 env:
   GOTOOLCHAIN: local
-  GOPROXY: ${{ vars.BAP_GO_PROXY || 'off' }}
-  GOSUMDB: ${{ vars.BAP_GO_SUMDB || 'off' }}
-  PIP_INDEX_URL: ${{ vars.BAP_PYPI_INDEX }}
+  # Same defaults and enterprise overrides as the reusable CI qualification job.
+  GOPROXY: ${{ vars.BAP_GO_PROXY || 'https://proxy.golang.org,direct' }}
+  GOSUMDB: ${{ vars.BAP_GO_SUMDB || 'sum.golang.org' }}
+  PIP_INDEX_URL: ${{ vars.BAP_PYPI_INDEX || 'https://pypi.org/simple' }}
   PIP_EXTRA_INDEX_URL: ''
 
 jobs:
