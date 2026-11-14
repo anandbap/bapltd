@@ -8,6 +8,7 @@ import (
 
 // Checkpoint excludes signing material. Execution-grant epochs intentionally change on restart.
 type checkpointState struct {
+	PromptIndexes     map[string]*promptIndex
 	Sessions          map[string]*Session
 	Order             []string
 	RevokedUsers      map[string]bool
@@ -28,6 +29,7 @@ func (s *Store) MarshalCheckpoint() ([]byte, error) {
 		sessions[id] = &copy
 	}
 	return json.Marshal(checkpointState{
+		PromptIndexes:     s.promptIndexes,
 		Sessions:          sessions,
 		Order:             s.order,
 		RevokedUsers:      s.revokedUsers,
@@ -62,6 +64,7 @@ func (s *Store) RestoreCheckpoint(raw []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sessions = state.Sessions
+	s.promptIndexes = state.PromptIndexes
 	s.order = state.Order
 	s.revokedUsers = state.RevokedUsers
 	s.intentCounts = state.IntentCounts

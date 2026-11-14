@@ -954,7 +954,12 @@ func RunStatus(args []string) error {
 				"digest":                  policyDigest,
 				"kill_switch":             killSwitch,
 				"strict_tool_enforcement": strictTools,
-				"enforcement_tier":        func() string { if strictTools { return "tier_2_strict" }; return "tier_1_standard" }(),
+				"enforcement_tier": func() string {
+					if strictTools {
+						return "tier_2_strict"
+					}
+					return "tier_1_standard"
+				}(),
 			},
 			"telemetry": map[string]any{
 				"total_logged":            totalLogged,
@@ -1800,18 +1805,21 @@ func loadFirstValidCredentials() (StoredCredentials, bool) {
 		DefaultCredentialsPath(),
 		state.CredentialsPath(),
 	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
+	includeLegacy := state.UseLegacyCredentialLocations("")
+	if home, err := os.UserHomeDir(); includeLegacy && err == nil && home != "" {
 		paths = append(paths,
 			filepath.Join(home, ".bapstate", "credentials.json"),
 			filepath.Join(home, ".ltd", "credentials.json"),
 			filepath.Join(home, ".bap", "credentials.json"),
 		)
 	}
-	paths = append(paths,
-		filepath.Join(".bapstate", "credentials.json"),
-		filepath.Join(".ltd", "credentials.json"),
-		filepath.Join(".bap", "credentials.json"),
-	)
+	if includeLegacy {
+		paths = append(paths,
+			filepath.Join(".bapstate", "credentials.json"),
+			filepath.Join(".ltd", "credentials.json"),
+			filepath.Join(".bap", "credentials.json"),
+		)
+	}
 	if envCreds := os.Getenv("BAP_CREDENTIALS"); envCreds != "" {
 		paths = append(paths, envCreds)
 	}

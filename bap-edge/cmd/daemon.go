@@ -26,6 +26,7 @@ import (
 	"bap-edge/internal/config"
 	discoverymeta "bap-edge/internal/discovery"
 	"bap-edge/internal/httptransport"
+	"bap-edge/internal/policystore"
 	"bap-edge/internal/state"
 	"bap-edge/pkg/version"
 )
@@ -205,6 +206,7 @@ func (s *DaemonServer) Start() error {
 
 	// Start background workers
 	ctx, cancel := context.WithCancel(context.Background())
+	go s.runPolicySyncWorker(ctx)
 	go s.runHeartbeatWorker(ctx)
 	go s.runSessionHeartbeatWorker(ctx)
 	go s.runSpoolWorker(ctx)
@@ -224,6 +226,10 @@ func (s *DaemonServer) Start() error {
 	}()
 
 	return s.httpServer.Serve(ln)
+}
+
+func (s *DaemonServer) runPolicySyncWorker(ctx context.Context) {
+	policystore.New(policystore.DefaultPolicyDir()).RunSyncLoop(ctx, s.state.ServerURL, policystore.DefaultSyncInterval)
 }
 
 func (s *DaemonServer) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -303,6 +309,7 @@ func (s *DaemonServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"capabilities":   s.state.Capabilities,
 		},
 		"control_plane": map[string]any{
+			"login_required":                  authStatus == "login_required" || authStatus == "authentication_failed",
 			"last_authenticated_heartbeat_at": authAt, "authenticated_heartbeat_status": authStatus,
 			"url":        s.state.ServerURL,
 			"connected":  connected,
@@ -445,9 +452,11 @@ func (s *DaemonServer) runHeartbeatWorker(ctx context.Context) {
 			}
 
 			// Pulse registered agent identity & sync revocations
+			identityLoaded := false
 			if credsData, err := os.ReadFile(state.CredentialsPath()); err == nil {
 				var creds StoredCredentials
 				if json.Unmarshal(credsData, &creds) == nil && creds.AgentID != "" {
+					identityLoaded = true
 					agentHeartbeat := map[string]any{
 						"id":          creds.AgentID,
 						"agent_id":    creds.AgentID,
@@ -456,19 +465,24 @@ func (s *DaemonServer) runHeartbeatWorker(ctx context.Context) {
 					body, _ := json.Marshal(agentHeartbeat)
 					if response, err := client.Post(strings.TrimRight(s.state.ServerURL, "/")+"/api/v1/control/heartbeat", "application/json", bytes.NewReader(body)); err == nil {
 						var directive struct {
-							Epoch int64 `json:"scan_epoch"`
+							Epoch              int64 `json:"scan_epoch"`
+							EnrollmentRequired bool  `json:"enrollment_required"`
 						}
+						valid := response.StatusCode == http.StatusOK && json.NewDecoder(response.Body).Decode(&directive) == nil
 						s.mu.Lock()
 						s.authHeartbeatStatus = "rejected"
 						if response.StatusCode == 401 || response.StatusCode == 403 {
 							s.authHeartbeatStatus = "authentication_failed"
 						}
-						if response.StatusCode == 200 {
+						if valid {
 							s.authHeartbeatAt = time.Now().UTC()
 							s.authHeartbeatStatus = "acknowledged"
+							if directive.EnrollmentRequired {
+								s.authHeartbeatStatus = "login_required"
+							}
 						}
 						s.mu.Unlock()
-						if response.StatusCode == 200 && json.NewDecoder(response.Body).Decode(&directive) == nil {
+						if valid {
 							s.requestDiscovery(directive.Epoch)
 						}
 						closeHeartbeatResponse(response)
@@ -505,6 +519,11 @@ func (s *DaemonServer) runHeartbeatWorker(ctx context.Context) {
 						closeHeartbeatResponse(rResp)
 					}
 				}
+			}
+			if !identityLoaded {
+				s.mu.Lock()
+				s.authHeartbeatStatus = "login_required"
+				s.mu.Unlock()
 			}
 		}
 	}
@@ -635,9 +654,19 @@ func runDaemonStart(args []string) error {
 		if !daemonResponsive(existing) {
 			return fmt.Errorf("daemon process exists but readiness failed; inspect 'daemon status' before restarting")
 		}
-		fmt.Printf("⚠️  BAP Daemon is already running (PID: %d, Mode: %s, URL: %s)\n",
-			existing.PID, existing.OperatingMode, existing.URL)
-		return nil
+		if !*fgFlag && existing.Version != "" && existing.Version != version.Version {
+			fmt.Printf("[BAP] Replacing stale daemon %s with %s; active workloads remain running.\n", existing.Version, version.Version)
+			if err := runDaemonStop(nil); err != nil {
+				return err
+			}
+			if err := os.Remove(daemonPausePath()); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		} else {
+			fmt.Printf("⚠️  BAP Daemon is already running (PID: %d, Mode: %s, URL: %s)\n",
+				existing.PID, existing.OperatingMode, existing.URL)
+			return nil
+		}
 	}
 
 	serverURL := *serverFlag
@@ -754,6 +783,7 @@ func runDaemonStatus(args []string) error {
 
 	var statusData struct {
 		Daemon struct {
+			Version       string             `json:"version"`
 			PID           int                `json:"pid"`
 			Port          int                `json:"port"`
 			URL           string             `json:"url"`
@@ -764,9 +794,11 @@ func runDaemonStatus(args []string) error {
 			Capabilities  DaemonCapabilities `json:"capabilities"`
 		} `json:"daemon"`
 		ControlPlane struct {
-			URL       string `json:"url"`
-			Connected bool   `json:"connected"`
-			LatencyMs int64  `json:"latency_ms"`
+			AuthStatus    string `json:"authenticated_heartbeat_status"`
+			LoginRequired bool   `json:"login_required"`
+			URL           string `json:"url"`
+			Connected     bool   `json:"connected"`
+			LatencyMs     int64  `json:"latency_ms"`
 		} `json:"control_plane"`
 		AgentsAttached struct {
 			Count    int      `json:"count"`
@@ -799,6 +831,10 @@ func runDaemonStatus(args []string) error {
 	fmt.Println("  [BAP DAEMON] 🛡️  Daemon Subsystem Status & Capability Inspection")
 	fmt.Println("================================================================================")
 	fmt.Printf("  Daemon PID:       %d (Uptime: %s)\n", statusData.Daemon.PID, uptime)
+	fmt.Printf("  Daemon Version:   %s (CLI: %s)\n", statusData.Daemon.Version, version.Version)
+	if statusData.Daemon.Version != "" && statusData.Daemon.Version != version.Version {
+		fmt.Println("  Upgrade Pending:  Run 'bap daemon start' to replace the stale daemon without stopping agent workloads.")
+	}
 	fmt.Printf("  Privilege Level:  %s\n", statusData.Daemon.Privilege)
 	fmt.Printf("  Operating Mode:   %s\n", modeDesc)
 	fmt.Printf("  IPC Endpoint:     %s\n", statusData.Daemon.URL)
@@ -813,6 +849,10 @@ func runDaemonStatus(args []string) error {
 	fmt.Println("\n  CONTROL PLANE CONNECTION:")
 	fmt.Printf("    • Target URL:                       %s\n", statusData.ControlPlane.URL)
 	fmt.Printf("    • Status:                           %s\n", cpStatus)
+	fmt.Printf("    • Authenticated reporting:          %s\n", statusData.ControlPlane.AuthStatus)
+	if statusData.ControlPlane.LoginRequired {
+		fmt.Println("    • Enrollment repair:                Run 'bap login --force'; reporting recovery does not restore execution authority.")
+	}
 
 	fmt.Println("\n  ATTACHED AGENTS & IPC CLIENTS:")
 	fmt.Printf("    • Connected Sessions:               %d active\n", statusData.AgentsAttached.Count)

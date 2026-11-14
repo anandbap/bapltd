@@ -54,6 +54,13 @@ func precedence(layer string) int {
 	return 99
 }
 
+func promptSourceRank(layer string) int {
+	if layer == "hook" {
+		return -1
+	}
+	return precedence(layer)
+}
+
 // GradeFor returns the explicit grade when set, otherwise a default derived
 // from the reporting layer. A model-reported MCP record must carry the
 // explicit self_reported grade; the default for mcp is mediated.
@@ -80,6 +87,16 @@ func DedupKeyFor(ev audit.Event) string {
 	}
 	if ev.Executable == "user_prompt" && ev.TurnID != "" {
 		return "prompt:" + ev.TurnID
+	}
+	if ev.Executable == "user_prompt" {
+		hash := ev.PromptHash
+		if hash == "" && ev.UserPrompt != "" {
+			sum := sha256.Sum256([]byte(CleanUserPrompt(ev.UserPrompt)))
+			hash = hex.EncodeToString(sum[:])
+		}
+		if hash != "" {
+			return "prompt-hash:" + hash
+		}
 	}
 	cmd := strings.Join(strings.Fields(strings.ToLower(ev.FullCommand)), " ")
 	if cmd == "" || ev.Executable == "user_prompt" {
@@ -121,12 +138,16 @@ func Arbitrate(events []audit.Event) []audit.Event {
 			out = append(out, ev)
 			continue
 		}
-		if ev.ReportingLayer == s.layer {
+		if ev.ReportingLayer == s.layer && ev.Executable != "user_prompt" {
 			// A repeat from the same layer is a separate request, not corroboration.
 			out = append(out, ev)
 			continue
 		}
-		if precedence(ev.ReportingLayer) < precedence(s.layer) {
+		rank, previousRank := precedence(ev.ReportingLayer), precedence(s.layer)
+		if ev.Executable == "user_prompt" {
+			rank, previousRank = promptSourceRank(ev.ReportingLayer), promptSourceRank(s.layer)
+		}
+		if rank < previousRank {
 			// New event outranks the current primary: swap, keep old layer as support.
 			prev := out[s.index]
 			s.seen[prev.ReportingLayer] = struct{}{}

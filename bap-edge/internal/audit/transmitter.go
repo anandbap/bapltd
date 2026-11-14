@@ -223,14 +223,8 @@ func FlushOfflineAudit(serverURL string, logPath string) (int, error) {
 	ingestURL := serverURL + "/api/v1/audit/ingest"
 
 	totalFlushed := 0
-	batchSize := 50
-
-	for i := 0; i < len(toSend); i += batchSize {
-		end := i + batchSize
-		if end > len(toSend) {
-			end = len(toSend)
-		}
-		batch := toSend[i:end]
+	var refused error
+	for _, batch := range sessionUploadBatches(toSend, 50) {
 
 		var payload []map[string]any
 		batchIDs := make(map[string]struct{}, len(batch))
@@ -310,10 +304,40 @@ func FlushOfflineAudit(serverURL string, logPath string) (int, error) {
 			}
 		} else {
 			resp.Body.Close()
+			if resp.StatusCode == http.StatusForbidden {
+				// A session owned by an earlier enrollment must remain attributed
+				// to that identity. Retain it, but do not block unrelated live sessions.
+				refused = fmt.Errorf("audit session batch refused (HTTP 403); retained for identity reconciliation")
+				continue
+			}
 			return totalFlushed, fmt.Errorf("ingest endpoint returned HTTP %d", resp.StatusCode)
 		}
+	}
+	if refused != nil {
+		return totalFlushed, refused
 	}
 
 	replayed, err := replayRecoveryArchive(serverURL, logPath)
 	return totalFlushed + replayed, err
+}
+
+func sessionUploadBatches(entries []AuditEntry, size int) [][]AuditEntry {
+	groups := map[string][]AuditEntry{}
+	var order []string
+	for _, entry := range entries {
+		if _, exists := groups[entry.SessionID]; !exists {
+			order = append(order, entry.SessionID)
+		}
+		groups[entry.SessionID] = append(groups[entry.SessionID], entry)
+	}
+	var batches [][]AuditEntry
+	for _, id := range order {
+		group := groups[id]
+		for len(group) > 0 {
+			n := min(size, len(group))
+			batches = append(batches, group[:n])
+			group = group[n:]
+		}
+	}
+	return batches
 }

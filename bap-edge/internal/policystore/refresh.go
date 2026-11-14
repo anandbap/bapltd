@@ -3,7 +3,6 @@ package policystore
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"time"
 )
@@ -38,10 +37,7 @@ func (s *Store) touchLastSync() {
 	if err != nil {
 		return
 	}
-	tmp := filepath.Join(s.directory, "policy-state.json.tmp")
-	if os.WriteFile(tmp, data, 0600) == nil {
-		_ = os.Rename(tmp, filepath.Join(s.directory, "policy-state.json"))
-	}
+	_ = writeCacheFile(filepath.Join(s.directory, "policy-state.json"), data)
 	if st.SigAlg != "" {
 		_ = s.writeSignedRecord(st) // keep LastSync in step; it is not part of the signed payload
 	}

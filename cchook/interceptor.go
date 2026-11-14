@@ -821,6 +821,7 @@ type AntigravityToolCall struct {
 
 // HookPayload represents the Claude Code, Antigravity, Codex, Copilot, and generic lifecycle event payload.
 type HookPayload struct {
+	TurnID             string                 `json:"turn_id,omitempty"`
 	HookEventName      string                 `json:"hook_event_name"`
 	EventName          string                 `json:"event_name,omitempty"`
 	Event              string                 `json:"event,omitempty"`
@@ -2895,6 +2896,7 @@ func handleUserPromptHook(payload HookPayload) {
 
 		if sessionID != "" && serverURL != "" {
 			request := map[string]any{
+				"turn_id":                payload.TurnID,
 				"session_id":             sessionID,
 				"producer":               producer,
 				"intent":                 intent,

@@ -41,7 +41,8 @@ func RunLogout(args []string) error {
 		credsFile,
 		state.CredentialsPath(),
 	}
-	if home, hErr := os.UserHomeDir(); hErr == nil && home != "" {
+	includeLegacy := state.UseLegacyCredentialLocations(credsFile)
+	if home, hErr := os.UserHomeDir(); includeLegacy && hErr == nil && home != "" {
 		candidatePaths = append(candidatePaths,
 			filepath.Join(home, "bin", ".bapstate", "credentials.json"),
 			filepath.Join(home, ".bapstate", "credentials.json"),
@@ -49,11 +50,13 @@ func RunLogout(args []string) error {
 			filepath.Join(home, ".bap", "credentials.json"),
 		)
 	}
-	candidatePaths = append(candidatePaths,
-		filepath.Join(".bapstate", "credentials.json"),
-		filepath.Join(".ltd", "credentials.json"),
-		filepath.Join(".bap", "credentials.json"),
-	)
+	if includeLegacy {
+		candidatePaths = append(candidatePaths,
+			filepath.Join(".bapstate", "credentials.json"),
+			filepath.Join(".ltd", "credentials.json"),
+			filepath.Join(".bap", "credentials.json"),
+		)
+	}
 	if envCreds := os.Getenv("BAP_CREDENTIALS"); envCreds != "" {
 		candidatePaths = append(candidatePaths, envCreds)
 	}
@@ -136,7 +139,7 @@ func RunLogout(args []string) error {
 		}
 	}
 
-	// 4. Exhaustively purge all local credentials and session tokens across all candidate locations
+	// 4. Clear the selected installation; isolated runtimes never discover or purge another identity.
 	state.PurgeAllCredentials(foundPath)
 	state.PurgeAllCredentials(credsFile)
 

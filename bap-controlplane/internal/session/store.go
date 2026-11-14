@@ -173,6 +173,7 @@ type Store struct {
 	principals        map[string]*types.AgentPrincipal
 	sessionPrincipals map[string]string
 	db                *sql.DB // persistent SQLite storage
+	promptIndexes     map[string]*promptIndex
 }
 
 // NewStore creates an in-memory Store (for tests or backward compatibility).
@@ -942,15 +943,10 @@ func (s *Store) RecordEvent(sessionID string, ev audit.Event) {
 		sess.SPIFFEID = ev.SPIFFEID
 	}
 	if ev.UserPrompt != "" {
-		if sess.UserPrompt == "" {
-			sess.UserPrompt = ev.UserPrompt
-		}
-		if sess.Intent.Primary == "" || sess.Intent.Primary == "UNKNOWN" {
-			sess.Intent = normalizeIntent(sess.Intent, ev.UserPrompt)
-			sess.IntentHistory = append(sess.IntentHistory, sess.Intent.Primary)
-			sess.PromptCount++
-			s.recordIntentLocked(sess.SessionID, sess.Intent.Primary, time.Now().UTC())
-		}
+		intent := IntentContext{Primary: ev.PrimaryIntent, Source: ev.Source, ClassifierVersion: ev.IntentClassifier, PromptHash: ev.PromptHash, PromptCaptured: true}
+		s.observePromptLocked(sess, ev.UserPrompt, intent, ev.TurnID, ev.ReportingLayer)
+	} else if ev.Executable == "user_prompt" && ev.PromptHash != "" {
+		s.observePromptLocked(sess, "", IntentContext{Primary: ev.PrimaryIntent, PromptHash: ev.PromptHash, Source: ev.Source}, ev.TurnID, ev.ReportingLayer)
 	}
 
 	if eventTime.After(sess.LastActiveAt) {
@@ -1076,48 +1072,22 @@ func (s *Store) Heartbeat(sessionID string) (*Session, error) {
 // SetPromptAndIntent updates the optional raw prompt and mandatory normalized
 // mission intent for a session, and increments cumulative category counts.
 func (s *Store) SetPromptAndIntent(sessionID, prompt string, intent IntentContext) (*Session, error) {
+	sess, _, err := s.ObservePrompt(sessionID, prompt, intent, "", "sdk")
+	return sess, err
+}
+
+// ObservePrompt arbitrates all producers under the session lock. The bool reports
+// a new logical turn, not another layer corroborating an existing turn.
+func (s *Store) ObservePrompt(sessionID, prompt string, intent IntentContext, turnID, layer string) (*Session, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	sess, exists := s.sessions[sessionID]
 	if !exists {
-		return nil, fmt.Errorf("session %q not found", sessionID)
+		return nil, false, fmt.Errorf("session %q not found", sessionID)
 	}
-
-	prompt = CleanUserPrompt(prompt)
-	now := time.Now().UTC()
-	normalized := normalizeIntent(intent, prompt)
-	if normalized.PromptHash == "" && intent.PromptHash != "" {
-		normalized.PromptHash = intent.PromptHash
-	}
-
-	// Cryptographic idempotency check: If prompt_hash matches the active prompt for this session,
-	// do not duplicate intent history, category counts, or prompt count.
-	if normalized.PromptHash != "" && sess.Intent.PromptHash == normalized.PromptHash {
-		if sess.UserPrompt == "" && prompt != "" {
-			sess.UserPrompt = prompt
-		}
-		sess.LastActiveAt = now
-		if sess.Status == "closed" && sess.CloseReason == "idle_timeout" {
-			sess.Status = "active"
-			sess.EndedAt = nil
-			sess.CloseReason = ""
-		}
-		s.saveSessionToDB(sess)
-		cp := *sess
-		return &cp, nil
-	}
-
-	sess.UserPrompt = prompt
-	sess.Intent = normalized
-	sess.PromptRiskScore = sess.Intent.PromptRiskScore
-	sess.PromptRiskLevel = sess.Intent.PromptRiskLevel
-	sess.InjectionSignals = sess.Intent.InjectionSignals
-	sess.IsHighRisk = sess.Intent.IsHighRisk
-	sess.IntentHistory = append(sess.IntentHistory, sess.Intent.Primary)
-	sess.PromptCount++
-	s.recordIntentLocked(sessionID, sess.Intent.Primary, now)
-	sess.LastActiveAt = now
+	isNew := s.observePromptLocked(sess, prompt, intent, turnID, layer)
+	sess.LastActiveAt = time.Now().UTC()
 	if sess.Status == "closed" && sess.CloseReason == "idle_timeout" {
 		sess.Status = "active"
 		sess.EndedAt = nil
@@ -1125,7 +1095,7 @@ func (s *Store) SetPromptAndIntent(sessionID, prompt string, intent IntentContex
 	}
 	s.saveSessionToDB(sess)
 	cp := *sess
-	return &cp, nil
+	return &cp, isNew, nil
 }
 
 func (s *Store) recordIntentLocked(sessionID, category string, ts time.Time) {
@@ -1418,6 +1388,10 @@ func (s *Store) loadFromDB() error {
 					Category:  strings.ToUpper(strings.TrimSpace(cat)),
 					Timestamp: ts,
 				})
+				if sess := s.sessions[sessID]; sess != nil {
+					sess.PromptCount++
+					sess.IntentHistory = append(sess.IntentHistory, strings.ToUpper(strings.TrimSpace(cat)))
+				}
 			}
 		}
 	}

@@ -87,6 +87,11 @@ func (s *DaemonServer) pulseAttachedSessions(ctx context.Context, client *http.C
 					atomic.AddInt64(&s.heartbeatFailed, 1)
 				}
 				closeHeartbeatResponse(resp)
+				if valid && (ack.Status == "alive" || ack.Status == "ok" || ack.Status == "active") {
+					// Discovery/broker sessions may have no per-session watcher. They must
+					// still replay prompts retained during an outage or enrollment repair.
+					flushPromptSpool(s.state.ServerURL, sess.SessionID)
+				}
 			}
 		}()
 	}

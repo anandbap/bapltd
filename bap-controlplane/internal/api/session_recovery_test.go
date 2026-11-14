@@ -53,6 +53,20 @@ func TestResumeAfterControlPlaneStateLoss(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("heartbeat after resume: %s", w.Body.String())
 	}
+	station := after.registry.EnsureSessionAgent("bapedge", "machine", "", "operator@example.test", "")
+	if station == nil || !station.RecoveryOnly {
+		t.Fatal("expected reporting-only recovered workstation")
+	}
+	r = httptest.NewRequest("POST", "/api/v1/control/heartbeat", strings.NewReader(`{"agent_id":"`+station.AgentID+`"}`))
+	r.Header.Set("Authorization", "Bearer "+proof)
+	w = httptest.NewRecorder()
+	after.Handler().ServeHTTP(w, r)
+	var heartbeat struct {
+		EnrollmentRequired bool `json:"enrollment_required"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &heartbeat) != nil || !heartbeat.EnrollmentRequired {
+		t.Fatalf("recovered reporting heartbeat must request login: %d %s", w.Code, w.Body.String())
+	}
 }
 
 func TestResumeCannotBypassAuthenticationOrAdministrativeState(t *testing.T) {

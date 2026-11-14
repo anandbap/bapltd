@@ -17,7 +17,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 )
 
@@ -234,14 +237,14 @@ func (s *Store) accept(bundle Bundle, liveAuthority bool) error {
 
 	// Write policy.cedar
 	cedarPath := filepath.Join(s.directory, "policy.cedar")
-	if err := os.WriteFile(cedarPath, []byte(bundle.PolicyCedar), 0600); err != nil {
+	if err := writeCacheFile(cedarPath, []byte(bundle.PolicyCedar)); err != nil {
 		return fmt.Errorf("failed to write cached policy.cedar: %w", err)
 	}
 
 	// Write schema.json if present
 	schemaPath := filepath.Join(s.directory, "schema.json")
 	if bundle.SchemaJSON != "" {
-		if err := os.WriteFile(schemaPath, []byte(bundle.SchemaJSON), 0600); err != nil {
+		if err := writeCacheFile(schemaPath, []byte(bundle.SchemaJSON)); err != nil {
 			return fmt.Errorf("failed to write cached schema.json: %w", err)
 		}
 	}
@@ -270,7 +273,7 @@ func (s *Store) accept(bundle Bundle, liveAuthority bool) error {
 		return err
 	}
 	statePath := filepath.Join(s.directory, "policy-state.json")
-	if err := os.WriteFile(statePath, stateData, 0600); err != nil {
+	if err := writeCacheFile(statePath, stateData); err != nil {
 		return err
 	}
 	// The signed record lives in its own file. Older bapedge builds (and other components) rewrite
@@ -289,11 +292,55 @@ func (s *Store) writeSignedRecord(st PolicyState) error {
 	if err != nil {
 		return err
 	}
-	tmp := s.signedPath() + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
+	return writeCacheFile(s.signedPath(), data)
+}
+
+// Publish complete files and use unique staging names: a daemon, watcher and
+// short-lived broker may sync concurrently. Never truncate a live policy file.
+var cachePublishMu sync.Mutex
+
+func writeCacheFile(path string, data []byte) error {
+	cachePublishMu.Lock()
+	defer cachePublishMu.Unlock()
+	f, err := os.CreateTemp(filepath.Dir(path), ".policy-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.signedPath())
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if err = f.Chmod(0600); err != nil {
+		f.Close()
+		return err
+	}
+	_, err = f.Write(data)
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	for attempt := 0; attempt < 40; attempt++ {
+		if err = os.Rename(tmp, path); err == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(attempt+1) * time.Millisecond)
+	}
+	return err
+}
+
+// Windows may deny an open briefly while a completed file is being replaced.
+// Retry sharing/lock violations only; absent files and actual access denials
+// retain their normal fail-closed behavior without adding latency.
+func readCacheFile(path string) ([]byte, error) {
+	for attempt := 0; ; attempt++ {
+		data, err := os.ReadFile(path)
+		if err == nil || attempt >= 9 || runtime.GOOS != "windows" ||
+			(!errors.Is(err, syscall.Errno(32)) && !errors.Is(err, syscall.Errno(33))) {
+			return data, err
+		}
+		time.Sleep(time.Duration(attempt+1) * time.Millisecond)
+	}
 }
 
 // LoadState returns the cached policy state. When a signed record exists it is authoritative for
@@ -301,7 +348,7 @@ func (s *Store) writeSignedRecord(st PolicyState) error {
 // rewrite of the legacy file by an older build can neither break nor change signed rules.
 func (s *Store) LoadState() (PolicyState, error) {
 	statePath := filepath.Join(s.directory, "policy-state.json")
-	data, legacyErr := os.ReadFile(statePath)
+	data, legacyErr := readCacheFile(statePath)
 	var state PolicyState
 	if legacyErr == nil {
 		if err := json.Unmarshal(data, &state); err != nil {
@@ -315,7 +362,7 @@ func (s *Store) LoadState() (PolicyState, error) {
 		}
 		return state, nil
 	}
-	if sdata, err := os.ReadFile(s.signedPath()); err == nil {
+	if sdata, err := readCacheFile(s.signedPath()); err == nil {
 		var signed PolicyState
 		if json.Unmarshal(sdata, &signed) == nil {
 			if legacyErr == nil && state.LastSync.After(signed.LastSync) {
@@ -387,10 +434,10 @@ func (s *Store) Current() (string, string, PolicyState, error) {
 		}
 
 		cedarPath := filepath.Join(s.directory, "policy.cedar")
-		if data, err := os.ReadFile(cedarPath); err == nil {
+		if data, err := readCacheFile(cedarPath); err == nil {
 			schemaPath := filepath.Join(s.directory, "schema.json")
 			var schemaData []byte
-			if sData, sErr := os.ReadFile(schemaPath); sErr == nil {
+			if sData, sErr := readCacheFile(schemaPath); sErr == nil {
 				schemaData = sData
 			} else {
 				schemaPath = ""

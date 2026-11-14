@@ -19,8 +19,8 @@ import (
 // When Layer 1 hooks are not reporting (unapproved, disabled or stale), the agent can
 // call bap_report_request once per user turn. The record is graded self_reported: it is
 // the model's own account, never verified, and is never used for policy decisions.
-// If a hook ran for the session recently the call is dropped so nothing is double counted.
-// The tool is only exposed when BAP_FALLBACK_REPORTING=1.
+// All available observations are submitted. The control plane prefers a hook
+// for the same turn; unrelated hook heartbeats must never suppress a prompt.
 
 const (
 	hookGraceWindow    = 30 * time.Second
@@ -30,7 +30,7 @@ const (
 )
 
 func fallbackReportingEnabled() bool {
-	return os.Getenv(fallbackFlagEnvVar) == "1"
+	return os.Getenv(fallbackFlagEnvVar) != "0"
 }
 
 var (
@@ -39,9 +39,12 @@ var (
 )
 
 // emitReport is replaced in tests.
-var emitReport = func(entry audit.AuditEntry, cfg ServerConfig) {
-	_ = audit.Log(&entry, cfg.AuditLogPath)
+var emitReport = func(entry audit.AuditEntry, cfg ServerConfig) error {
+	if err := audit.Log(&entry, cfg.AuditLogPath); err != nil {
+		return err
+	}
 	_, _, _ = audit.Transmit(entry, cfg.ServerURL, cfg.AuditLogPath)
+	return nil // A network failure leaves the durable local record available for replay.
 }
 
 func reportRequestToolDef() Tool {
@@ -49,7 +52,7 @@ func reportRequestToolDef() Tool {
 		Name: reportRequestTool,
 		Description: "Report, once per user turn, a short summary of what the user just asked you to do. " +
 			"This is a fallback audit record used only when the host's native hooks are not reporting. " +
-			"It is self-reported and is ignored if hooks already recorded the turn.",
+			"It is self-reported; the control plane deduplicates it against native hook evidence for the same turn. Reuse the host's native turn id across every reporting layer.",
 		InputSchema: InputSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
@@ -57,7 +60,7 @@ func reportRequestToolDef() Tool {
 				"turn_id":         map[string]string{"type": "string", "description": "Identifier for this user turn; reuse the same value if you report the same turn again"},
 				"session_id":      map[string]string{"type": "string", "description": "Optional agent session id"},
 			},
-			Required: []string{"request_summary"},
+			Required: []string{"request_summary", "turn_id"},
 		},
 	}
 }
@@ -143,10 +146,8 @@ func reportRequest(args map[string]interface{}, cfg ServerConfig, stateDir strin
 		sessionID = "sess-mcp-" + strconv.Itoa(os.Getpid())
 	}
 
-	// Layer 1 is reporting for this session: do not duplicate its record.
-	if hookRecentlyActive(stateDir, sessionID, hookGraceWindow, now) {
-		return reportResult(false, "hook_active")
-	}
+	// A tool hook heartbeat proves no prompt callback was delivered. Submit
+	// corroborating evidence and let session/turn arbitration choose the source.
 
 	turnID, _ := args["turn_id"].(string)
 	turnID = strings.TrimSpace(turnID)
@@ -184,6 +185,13 @@ func reportRequest(args map[string]interface{}, cfg ServerConfig, stateDir strin
 		UserPrompt:     summary,
 		Decision:       "observed",
 	}
-	emitReport(entry, cfg)
+	if err := emitReport(entry, cfg); err != nil {
+		reportedTurnsMu.Lock()
+		delete(reportedTurns, key)
+		reportedTurnsMu.Unlock()
+		result := reportResult(false, "local_persistence_failed")
+		result.IsError = true
+		return result
+	}
 	return reportResult(true, "recorded")
 }

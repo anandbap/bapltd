@@ -807,6 +807,7 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 		ReportingLayer:    "broker",
 		SessionID:         ec.sessionID,
 		UserPrompt:        uPrompt,
+		TurnID:            os.Getenv("BAP_TURN_ID"),
 		UserID:            uID,
 		UserEmail:         uEmail,
 		SPIFFEID:          spiffeID,

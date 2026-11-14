@@ -3029,14 +3029,21 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	enrollmentRequired := false
+	if s.registry != nil {
+		if agent, err := s.registry.Get(id); err == nil {
+			enrollmentRequired = agent.RecoveryOnly
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id":         id,
-		"agent_id":   id,
-		"status":     "alive",
-		"scan_epoch": s.discoveryEpoch(r, id),
-		"time":       time.Now().UTC(),
-		"session":    sessionFound,
-		"agent":      agentFound,
+		"enrollment_required": enrollmentRequired,
+		"id":                  id,
+		"agent_id":            id,
+		"status":              "alive",
+		"scan_epoch":          s.discoveryEpoch(r, id),
+		"time":                time.Now().UTC(),
+		"session":             sessionFound,
+		"agent":               agentFound,
 	})
 }
 
@@ -3447,6 +3454,7 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 		Producer             string                `json:"producer"`
 		Intent               session.IntentContext `json:"intent"`
 		PromptHash           string                `json:"prompt_hash"`
+		TurnID               string                `json:"turn_id"`
 		PromptCaptureEnabled bool                  `json:"prompt_capture_enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -3468,6 +3476,14 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 		"native-plugin-hook":    true,
 		"opencode-hook":         true,
 		"copilot-hook":          true,
+		"bap-mcp":               true,
+		"bap-broker":            true,
+		"bap-shim":              true,
+	}
+	req.TurnID = strings.TrimSpace(req.TurnID)
+	if len(req.TurnID) > 256 {
+		writeError(w, http.StatusBadRequest, "turn_id exceeds 256 bytes")
+		return
 	}
 	if !validProducers[req.Producer] {
 		writeError(w, http.StatusBadRequest, "prompt telemetry must come from an authorized agent producer")
@@ -3568,14 +3584,23 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "Session authority has been revoked by administrator. Prompts are blocked.")
 		return
 	}
-	prevHash := ""
-	if cur, err := s.sessionStore.Get(req.SessionID); err == nil && cur != nil {
-		prevHash = cur.Intent.PromptHash
+	layer := "sdk"
+	switch req.Producer {
+	case "bap-mcp":
+		layer = "mcp"
+	case "bap-broker":
+		layer = "broker"
+	case "bap-shim":
+		layer = "shim"
+	default:
+		if strings.HasSuffix(req.Producer, "hook") {
+			layer = "hook"
+		}
 	}
 	if req.Intent.PromptHash == "" && req.PromptHash != "" {
 		req.Intent.PromptHash = req.PromptHash
 	}
-	sess, err := s.sessionStore.SetPromptAndIntent(req.SessionID, req.UserPrompt, req.Intent)
+	sess, newPrompt, err := s.sessionStore.ObservePrompt(req.SessionID, req.UserPrompt, req.Intent, req.TurnID, layer)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "Failed to update prompt: "+err.Error())
 		return
@@ -3593,16 +3618,19 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = s.registry.HeartbeatInstance(sess.AppID, instanceID)
 	}
-	isDuplicatePrompt := prevHash != "" && req.PromptHash != "" && prevHash == req.PromptHash
-	layer := "sdk"
-	if strings.HasSuffix(req.Producer, "hook") {
-		layer = "hook"
-	}
+	isDuplicatePrompt := !newPrompt
 	s.sessionStore.RecordReportingLayer(req.SessionID, layer)
 	// Always log the normalized intent for newly observed prompts. Skip duplicate audit event if identical prompt was already ingested.
-	if s.auditStore != nil && !isDuplicatePrompt {
+	if s.auditStore != nil {
+		eventKey := sha256.Sum256([]byte(req.SessionID + "\x00" + req.TurnID + "\x00" + req.PromptHash + "\x00" + layer))
+		grade := ""
+		if layer == "mcp" {
+			grade = session.GradeSelfReported
+		}
 		_, _ = s.auditStore.Ingest([]audit.Event{{
-			EventID:          fmt.Sprintf("ev-prompt-%d", time.Now().UnixNano()),
+			EvidenceGrade:    grade,
+			EventID:          "ev-prompt-" + hex.EncodeToString(eventKey[:]),
+			TurnID:           req.TurnID,
 			SessionID:        req.SessionID,
 			Source:           sess.AppID,
 			ReportingLayer:   layer,
@@ -3632,6 +3660,7 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":            "updated",
+		"duplicate":         isDuplicatePrompt,
 		"intent":            sess.Intent,
 		"is_high_risk":      sess.IsHighRisk,
 		"prompt_risk_level": sess.PromptRiskLevel,
@@ -3782,7 +3811,7 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 	}
 	items := make([]item, 0)
 	sessionEvents := s.auditStore.ListBySession(sessionID)
-	for _, ev := range sessionEvents {
+	for _, ev := range session.CanonicalPromptEvents(sessionEvents) {
 		it := item{
 			Timestamp:        ev.Timestamp,
 			Decision:         ev.Decision,

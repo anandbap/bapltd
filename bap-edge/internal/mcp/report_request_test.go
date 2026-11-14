@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,9 +18,25 @@ func resetReportState(t *testing.T) *[]audit.AuditEntry {
 	reportedTurnsMu.Unlock()
 	var got []audit.AuditEntry
 	orig := emitReport
-	emitReport = func(e audit.AuditEntry, _ ServerConfig) { got = append(got, e) }
+	emitReport = func(e audit.AuditEntry, _ ServerConfig) error { got = append(got, e); return nil }
 	t.Cleanup(func() { emitReport = orig })
 	return &got
+}
+
+func TestReportPersistenceFailureDoesNotSuppressRetry(t *testing.T) {
+	got := resetReportState(t)
+	t.Setenv(fallbackFlagEnvVar, "1")
+	working := emitReport
+	emitReport = func(audit.AuditEntry, ServerConfig) error { return fmt.Errorf("spool unavailable") }
+	args := map[string]interface{}{"request_summary": "Fix the parser", "turn_id": "retryable-turn"}
+	if result := reportRequest(args, ServerConfig{SessionID: "s"}, t.TempDir(), time.Now()); !result.IsError {
+		t.Fatal("persistence failure was acknowledged")
+	}
+	emitReport = working
+	result := reportRequest(args, ServerConfig{SessionID: "s"}, t.TempDir(), time.Now())
+	if result.IsError || len(*got) != 1 {
+		t.Fatal("failed persistence suppressed retry")
+	}
 }
 
 func touchHeartbeat(t *testing.T, stateDir, sessionID string, modTime time.Time) {
@@ -37,9 +54,9 @@ func touchHeartbeat(t *testing.T, stateDir, sessionID string, modTime time.Time)
 	}
 }
 
-func TestReportRequestDisabledByDefault(t *testing.T) {
+func TestReportRequestCanBeExplicitlyDisabled(t *testing.T) {
 	got := resetReportState(t)
-	t.Setenv(fallbackFlagEnvVar, "")
+	t.Setenv(fallbackFlagEnvVar, "0")
 	res := reportRequest(map[string]interface{}{"request_summary": "fix bug"}, ServerConfig{SessionID: "s1"}, t.TempDir(), time.Now())
 	if len(*got) != 0 || !strings.Contains(res.Content[0].Text, "fallback_reporting_disabled") {
 		t.Fatalf("must not record when disabled: %+v %+v", *got, res)
@@ -55,15 +72,15 @@ func TestReportRequestRequiresSummary(t *testing.T) {
 	}
 }
 
-func TestReportRequestDroppedWhenHookActive(t *testing.T) {
+func TestToolHookHeartbeatCannotSuppressPromptFallback(t *testing.T) {
 	got := resetReportState(t)
 	t.Setenv(fallbackFlagEnvVar, "1")
 	dir := t.TempDir()
 	now := time.Now()
 	touchHeartbeat(t, dir, "s1", now.Add(-5*time.Second))
 	res := reportRequest(map[string]interface{}{"request_summary": "fix bug", "turn_id": "t1"}, ServerConfig{SessionID: "s1"}, dir, now)
-	if len(*got) != 0 || !strings.Contains(res.Content[0].Text, "hook_active") {
-		t.Fatalf("hook-active session must not be double reported: %+v %+v", *got, res)
+	if len(*got) != 1 || !strings.Contains(res.Content[0].Text, "recorded") {
+		t.Fatalf("hook heartbeat must not suppress an unobserved prompt: %+v %+v", *got, res)
 	}
 }
 

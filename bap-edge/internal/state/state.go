@@ -92,9 +92,9 @@ func CredentialsPath() string {
 	return filepath.Join(Dir(), "credentials.json")
 }
 
-// PurgeAllCredentials exhaustively removes all local credentials and session state across
-// .bapstate, legacy .ltd, .bap, and working directory targets to guarantee clean logout.
-func PurgeAllCredentials(explicitPath string) {
+// An explicit installation/configuration is an isolation boundary. A test runtime,
+// second installation or --config logout must never erase another installation.
+func credentialPurgePaths(explicitPath string) []string {
 	candidates := []string{
 		explicitPath,
 		CredentialsPath(),
@@ -103,7 +103,8 @@ func PurgeAllCredentials(explicitPath string) {
 		filepath.Join(Dir(), "token.json"),
 	}
 
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
+	includeLegacy := UseLegacyCredentialLocations(explicitPath)
+	if home, err := os.UserHomeDir(); includeLegacy && err == nil && home != "" {
 		candidates = append(candidates,
 			filepath.Join(home, "bin", ".bapstate", "credentials.json"),
 			filepath.Join(home, "bin", ".bapstate", "session.json"),
@@ -117,17 +118,33 @@ func PurgeAllCredentials(explicitPath string) {
 		)
 	}
 
-	candidates = append(candidates,
-		filepath.Join(".bapstate", "credentials.json"),
-		filepath.Join(".bapstate", "session.json"),
-		filepath.Join(".bapstate", "token.json"),
-		filepath.Join(".ltd", "credentials.json"),
-		filepath.Join(".bap", "credentials.json"),
-	)
+	if includeLegacy {
+		candidates = append(candidates,
+			filepath.Join(".bapstate", "credentials.json"),
+			filepath.Join(".bapstate", "session.json"),
+			filepath.Join(".bapstate", "token.json"),
+			filepath.Join(".ltd", "credentials.json"),
+			filepath.Join(".bap", "credentials.json"),
+		)
+	}
 
 	if envCreds := os.Getenv("BAP_CREDENTIALS"); envCreds != "" {
 		candidates = append(candidates, envCreds)
 	}
+	return candidates
+}
+
+// UseLegacyCredentialLocations is false when an installation or credential path
+// was explicitly selected. Discovery and deletion must share this boundary.
+func UseLegacyCredentialLocations(explicitPath string) bool {
+	return os.Getenv("BAP_STATE_DIR") == "" && os.Getenv("BAP_CREDENTIALS") == "" &&
+		(explicitPath == "" || filepath.Clean(explicitPath) == filepath.Clean(CredentialsPath()))
+}
+
+// PurgeAllCredentials clears the selected installation and its session markers.
+// Legacy user-wide discovery is only used by the default installation.
+func PurgeAllCredentials(explicitPath string) {
+	candidates := credentialPurgePaths(explicitPath)
 
 	seen := make(map[string]bool)
 	for _, c := range candidates {
@@ -225,6 +242,9 @@ func RiskStatePath() string {
 // MigrateLegacy migrates historical credentials, policy caches, and logs into .bapstate.
 func MigrateLegacy() {
 	migrateOnce.Do(func() {
+		if os.Getenv("BAP_STATE_DIR") != "" {
+			return // Explicit installations never import another installation's identity.
+		}
 		stateDir := resolvedDir
 		if stateDir == "" {
 			return

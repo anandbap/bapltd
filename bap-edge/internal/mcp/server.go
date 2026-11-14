@@ -142,7 +142,7 @@ func handleRequest(w *bufio.Writer, req JSONRPCRequest, authorizer *authz.Author
 		}
 		if fallbackReportingEnabled() {
 			result["instructions"] = "Call " + reportRequestTool + " once at the start of each user turn with a short " +
-				"summary of the request. It is a fallback audit record and is ignored when native hooks already reported."
+				"summary of the request and the host's native turn_id (reuse it across layers/retries). The control plane prefers hook evidence and counts each turn once."
 		}
 		sendResult(w, req.ID, result)
 
@@ -215,7 +215,7 @@ func handleRequest(w *bufio.Writer, req JSONRPCRequest, authorizer *authz.Author
 				},
 			},
 			{
-				Name: "bap_read_file",
+				Name:        "bap_read_file",
 				Description: "Reads file contents under active BAP Zero-Trust credential shielding (.env, .ssh, .aws forbidden).",
 				InputSchema: InputSchema{
 					Type: "object",
@@ -229,7 +229,7 @@ func handleRequest(w *bufio.Writer, req JSONRPCRequest, authorizer *authz.Author
 				},
 			},
 			{
-				Name: "bap_edit_file",
+				Name:        "bap_edit_file",
 				Description: "Performs exact string replacement in a file under active BAP Zero-Trust governance.",
 				InputSchema: InputSchema{
 					Type: "object",
@@ -251,7 +251,7 @@ func handleRequest(w *bufio.Writer, req JSONRPCRequest, authorizer *authz.Author
 				},
 			},
 			{
-				Name: "bap_list_dir",
+				Name:        "bap_list_dir",
 				Description: "Lists files and directories under active BAP Zero-Trust governance.",
 				InputSchema: InputSchema{
 					Type: "object",

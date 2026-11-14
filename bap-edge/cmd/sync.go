@@ -47,6 +47,9 @@ func RunSync(args []string) error {
 	if !isFallback && *serverURL != "" {
 		if flushed, flushErr := audit.FlushOfflineAudit(*serverURL, auditLogPath); flushErr == nil {
 			flushedCount = flushed
+		} else {
+			flushedCount = flushed
+			fmt.Fprintf(os.Stderr, "[bapedge sync] Telemetry retained for retry: %v\n", flushErr)
 		}
 	}
 
@@ -83,7 +86,11 @@ func RunSync(args []string) error {
 	if isFallback {
 		fmt.Printf("Telemetry Spool:  Offline (%d event(s) buffered in %s)\n", pendingSpoolCount, auditLogPath)
 	} else {
-		fmt.Printf("Telemetry Spool:  Synchronized (%d flushed, %d remaining)\n", flushedCount, pendingSpoolCount)
+		if pendingSpoolCount > 0 {
+			fmt.Printf("Telemetry Spool:  Pending (%d flushed, %d retained)\n", flushedCount, pendingSpoolCount)
+		} else {
+			fmt.Printf("Telemetry Spool:  Synchronized (%d flushed, 0 remaining)\n", flushedCount)
+		}
 	}
 	fmt.Println("==================================================")
 
