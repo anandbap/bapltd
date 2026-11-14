@@ -11,20 +11,20 @@ import (
 
 // SIEMEvent represents a security event normalized for SOC ingestion (BAP-722).
 type SIEMEvent struct {
-	EventID     string    `json:"event_id"`
-	Timestamp   time.Time `json:"timestamp"`
-	Severity    string    `json:"severity"` // "LOW", "MEDIUM", "HIGH", "CRITICAL"
-	EventType   string    `json:"event_type"` // e.g. "POLICY_DENIAL", "CANARY_TRIPPED", "BYPASS_ATTEMPT", "STEPUP_ESCALATION"
-	AgentID     string    `json:"agent_id"`
-	SessionID   string    `json:"session_id"`
-	TaskID      string    `json:"task_id,omitempty"`
-	Principal   string    `json:"principal,omitempty"`
-	Action      string    `json:"action"`
-	Resource    string    `json:"resource"`
-	Decision    string    `json:"decision"` // "ALLOW", "DENY", "STEPUP"
-	Reason      string    `json:"reason"`
-	PolicyVer   string    `json:"policy_version"`
-	TraceID     string    `json:"trace_id,omitempty"`
+	EventID   string    `json:"event_id"`
+	Timestamp time.Time `json:"timestamp"`
+	Severity  string    `json:"severity"`   // "LOW", "MEDIUM", "HIGH", "CRITICAL"
+	EventType string    `json:"event_type"` // e.g. "POLICY_DENIAL", "CANARY_TRIPPED", "BYPASS_ATTEMPT", "STEPUP_ESCALATION"
+	AgentID   string    `json:"agent_id"`
+	SessionID string    `json:"session_id"`
+	TaskID    string    `json:"task_id,omitempty"`
+	Principal string    `json:"principal,omitempty"`
+	Action    string    `json:"action"`
+	Resource  string    `json:"resource"`
+	Decision  string    `json:"decision"` // "ALLOW", "DENY", "STEPUP"
+	Reason    string    `json:"reason"`
+	PolicyVer string    `json:"policy_version"`
+	TraceID   string    `json:"trace_id,omitempty"`
 }
 
 // SIEMExporter manages event formatting into CEF/Syslog and webhook dispatching.

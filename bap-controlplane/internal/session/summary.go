@@ -19,5 +19,6 @@ func (s *Store) GetSummary(id string) (*Session, error) {
 	if cp.Status == "active" && time.Since(cp.LastActiveAt) > 45*time.Second {
 		cp.Status = "offline"
 	}
+	applyCoverage(&cp)
 	return &cp, nil
 }

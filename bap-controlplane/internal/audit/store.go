@@ -13,6 +13,10 @@ import (
 type Event struct {
 	HashVersion         int      `json:"hash_version,omitempty"`
 	ReportingLayer      string   `json:"reporting_layer,omitempty"`
+	EvidenceGrade       string   `json:"evidence_grade,omitempty"`       // verified | mediated | self_reported | presence (hash v4)
+	TurnID              string   `json:"turn_id,omitempty"`              // per-turn id for prompt deduplication (hash v4)
+	DedupKey            string   `json:"dedup_key,omitempty"`            // explicit arbitration key (hash v4)
+	CorroboratingLayers []string `json:"corroborating_layers,omitempty"` // derived by the arbiter; not hashed
 	InstanceID          string   `json:"instance_id,omitempty"`
 	EventID             string   `json:"event_id"`
 	AgentID             string   `json:"agent_id,omitempty"`
@@ -144,6 +148,9 @@ func (s *Store) IngestAccepted(incoming []Event) ([]Event, error) {
 		if ev.ReportingLayer != "" {
 			ev.HashVersion = 3
 		}
+		if ev.EvidenceGrade != "" || ev.TurnID != "" || ev.DedupKey != "" {
+			ev.HashVersion = 4
+		}
 
 		h := sha256.New()
 		h.Write([]byte(ev.PreviousHash))
@@ -250,5 +257,10 @@ func writeEventIdentity(h hash.Hash, ev Event) {
 		layer, _ := json.Marshal(ev.ReportingLayer)
 		h.Write([]byte("\x00bap-reporting-layer-v3\x00"))
 		h.Write(layer)
+	}
+	if ev.HashVersion >= 4 {
+		fallback, _ := json.Marshal([]string{ev.EvidenceGrade, ev.TurnID, ev.DedupKey})
+		h.Write([]byte("\x00bap-evidence-grade-v4\x00"))
+		h.Write(fallback)
 	}
 }

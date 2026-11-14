@@ -8,13 +8,13 @@ BAP is an open reference architecture and implementation for governing AI agents
 
 📖 **Core Documentation Links:**
 - [📄 Technical Whitepaper: Zero Standing Privileges for AI Agents (`docs/WHITEPAPER_ZERO_TRUST_AI.md`)](docs/WHITEPAPER_ZERO_TRUST_AI.md) — Mathematical containment model, 4-tuple task authorization envelopes, monotonic scope attenuation (`ALLOWED-LIMITED`), and semantic action decomposition.
-- [🎮 Claude Code & Codex Zero-Trust Showcase Runbook (`DEMO_CLAUDE_CODEX_ZERO_TRUST.md`)](DEMO_CLAUDE_CODEX_ZERO_TRUST.md) — Step-by-step developer guide with HITL step-up approvals, RFC 8693 STS OBO exchanges, and V3 Cockpit inspection.
+- [Claude Code & Codex installed-product demo](DEMO_CLAUDE_CODEX_ZERO_TRUST.md) — Start with pip install, then demonstrate useful work, ZSP grants, human approvals, trust/revocation, and pilot acceptance. Includes `python -m bap.pilot_demo` for repeatable local checks.
 - [🚀 5-Minute Developer Onboarding Guide (`docs/ONBOARDING.md`)](docs/ONBOARDING.md) — Single-click user-mode setup for Claude Code, Antigravity, Copilot, Cursor & Python.
 - [⌨️ Command Reference (`docs/CLI_REFERENCE.md`)](docs/CLI_REFERENCE.md) — Every user and administrator command, plus the **internal-only** build/test/maintenance tooling (clearly separated, never packaged).
 - [🔁 Policy Recommendations (`docs/POLICY_RECOMMENDATIONS.md`)](docs/POLICY_RECOMMENDATIONS.md) — How a registered developer machine reports a blocked-but-benign call and an administrator approves it into that machine's signed policy.
 - [🔌 Native Agent Plugin Architecture (`docs/PLUGIN_ARCHITECTURE.md`)](docs/PLUGIN_ARCHITECTURE.md) — Native Claude Code, GitHub Copilot, Google Antigravity, OpenCode & OpenAI Codex plugin specifications and where each enforcement layer sits.
 - [📰 Launch Blog & Announcement (`docs/BLOG_LAUNCH_ANNOUNCEMENT.md`)](docs/BLOG_LAUNCH_ANNOUNCEMENT.md) — Why Autonomous AI Coding Agents Demand a Bounded Authority Plane.
-- [📋 Enterprise Pilot Runbook & Evaluation Protocol (`docs/PILOT_RUNBOOK.md`)](docs/PILOT_RUNBOOK.md) — 30-Day implementation guide for CISOs, Platform Engineering & DevLeads.
+- [Pilot runbook](docs/PILOT_RUNBOOK.md) — End-user walkthrough and acceptance evidence; [maintainer qualification](docs/MAINTAINER_PILOT_QUALIFICATION.md) keeps build and service checks separate.
 - [🛡️ Security Assurance & Enterprise FAQ (`docs/FAQ_AND_SECURITY_ASSURANCE.md`)](docs/FAQ_AND_SECURITY_ASSURANCE.md) — Privacy, zero code exfiltration, compliance, and threat mitigation.
 - [🏢 Enterprise Fleet Deployment (`docs/ENTERPRISE_DEPLOYMENT.md`)](docs/ENTERPRISE_DEPLOYMENT.md) — IT Admin guide for Intune, Jamf, GPO, and Ansible rollouts.
 - [🐍 Python Agent SDK Guide (`docs/PYTHON_SDK_GUIDE.md`)](docs/PYTHON_SDK_GUIDE.md) — Zero-dependency governance client for custom Python autonomous agents.

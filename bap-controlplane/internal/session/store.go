@@ -20,39 +20,41 @@ import (
 
 // Session represents an active or historical agent execution session (e.g., a Claude Code or Copilot run).
 type Session struct {
-	ReportingLayers     []string      `json:"reporting_layers,omitempty"`
-	ReportingLayer      string        `json:"reporting_layer,omitempty"`
-	HooksDisabled       bool          `json:"hooks_disabled,omitempty"`
-	EnforcementTier     string        `json:"enforcement_tier,omitempty"`
-	SessionID           string        `json:"session_id"`
-	AppID               string        `json:"app_id"`
-	InstanceID          string        `json:"instance_id,omitempty"`
-	ResourceID          string        `json:"resource_id,omitempty"`
-	WorkstationSPIFFEID string        `json:"workstation_spiffe_id,omitempty"`
-	SessionSVID         string        `json:"session_svid,omitempty"`
-	AgentName           string        `json:"agent_name,omitempty"`
-	UserID              string        `json:"user_id,omitempty"`
-	UserEmail           string        `json:"user_email,omitempty"`
-	SPIFFEID            string        `json:"spiffe_id,omitempty"`
-	Status              string        `json:"status"` // "active", "closed", or "revoked"
-	StartedAt           time.Time     `json:"started_at"`
-	EndedAt             *time.Time    `json:"ended_at,omitempty"`
-	LastActiveAt        time.Time     `json:"last_active_at"`
-	ClientPID           int           `json:"client_pid,omitempty"`
-	Hostname            string        `json:"hostname,omitempty"`
-	TotalEvents         int           `json:"total_events"`
-	AllowedCount        int           `json:"allowed_count"`
-	DeniedCount         int           `json:"denied_count"`
-	CloseReason         string        `json:"close_reason,omitempty"`
-	UserPrompt          string        `json:"user_prompt,omitempty"`
-	PromptRiskScore     float64       `json:"prompt_risk_score,omitempty"`
-	PromptRiskLevel     string        `json:"prompt_risk_level,omitempty"`
-	InjectionSignals    []string      `json:"injection_signals,omitempty"`
-	IsHighRisk          bool          `json:"is_high_risk,omitempty"`
-	Intent              IntentContext `json:"intent"`
-	IntentHistory       []string      `json:"intent_history,omitempty"`
-	PromptCount         int           `json:"prompt_count,omitempty"`
-	Events              []audit.Event `json:"events,omitempty"`
+	ReportingLayers     []string          `json:"reporting_layers,omitempty"`
+	ReportingLayer      string            `json:"reporting_layer,omitempty"`
+	HooksDisabled       bool              `json:"hooks_disabled,omitempty"`
+	Coverage            map[string]string `json:"coverage,omitempty"`        // derived per-layer state, see coverage.go
+	DegradedReason      string            `json:"degraded_reason,omitempty"` // derived, see coverage.go
+	EnforcementTier     string            `json:"enforcement_tier,omitempty"`
+	SessionID           string            `json:"session_id"`
+	AppID               string            `json:"app_id"`
+	InstanceID          string            `json:"instance_id,omitempty"`
+	ResourceID          string            `json:"resource_id,omitempty"`
+	WorkstationSPIFFEID string            `json:"workstation_spiffe_id,omitempty"`
+	SessionSVID         string            `json:"session_svid,omitempty"`
+	AgentName           string            `json:"agent_name,omitempty"`
+	UserID              string            `json:"user_id,omitempty"`
+	UserEmail           string            `json:"user_email,omitempty"`
+	SPIFFEID            string            `json:"spiffe_id,omitempty"`
+	Status              string            `json:"status"` // "active", "closed", or "revoked"
+	StartedAt           time.Time         `json:"started_at"`
+	EndedAt             *time.Time        `json:"ended_at,omitempty"`
+	LastActiveAt        time.Time         `json:"last_active_at"`
+	ClientPID           int               `json:"client_pid,omitempty"`
+	Hostname            string            `json:"hostname,omitempty"`
+	TotalEvents         int               `json:"total_events"`
+	AllowedCount        int               `json:"allowed_count"`
+	DeniedCount         int               `json:"denied_count"`
+	CloseReason         string            `json:"close_reason,omitempty"`
+	UserPrompt          string            `json:"user_prompt,omitempty"`
+	PromptRiskScore     float64           `json:"prompt_risk_score,omitempty"`
+	PromptRiskLevel     string            `json:"prompt_risk_level,omitempty"`
+	InjectionSignals    []string          `json:"injection_signals,omitempty"`
+	IsHighRisk          bool              `json:"is_high_risk,omitempty"`
+	Intent              IntentContext     `json:"intent"`
+	IntentHistory       []string          `json:"intent_history,omitempty"`
+	PromptCount         int               `json:"prompt_count,omitempty"`
+	Events              []audit.Event     `json:"events,omitempty"`
 	// Delegation Lineage (BAP-532)
 	ParentSessionID string   `json:"parent_session_id,omitempty"`
 	ParentAgentID   string   `json:"parent_agent_id,omitempty"`
@@ -981,6 +983,7 @@ func (s *Store) List(limit int) []*Session {
 			if cp.Status == "active" && now.Sub(cp.LastActiveAt) > 45*time.Second {
 				cp.Status = "offline"
 			}
+			applyCoverage(&cp)
 			result = append(result, &cp)
 		}
 	}
@@ -1012,6 +1015,7 @@ func (s *Store) ListVisible(limit int, maxAge time.Duration) []*Session {
 			if cp.Status == "active" && now.Sub(cp.LastActiveAt) > 45*time.Second {
 				cp.Status = "offline"
 			}
+			applyCoverage(&cp)
 			result = append(result, &cp)
 		}
 	}
@@ -1034,6 +1038,7 @@ func (s *Store) Get(sessionID string) (*Session, error) {
 	if cp.Status == "active" && time.Since(cp.LastActiveAt) > 45*time.Second {
 		cp.Status = "offline"
 	}
+	applyCoverage(&cp)
 	return &cp, nil
 }
 
