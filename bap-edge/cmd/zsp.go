@@ -261,7 +261,16 @@ func RunZSP(args []string) error {
 			}
 			delegationType = "human_interactive_oob"
 		}
-		var pendingReq *authz.PendingApproval
+		if delegationType == "human_interactive_prompt" {
+				// A human opened a developer override window: policy-tier approvals are paused for its
+				// duration. Governance escalations (policy:, grant:, admin:, ...) are still refused by the
+				// engine, and the grant carries a distinct delegation type so the audit trail shows it.
+				if active, banner := devOverrideActive(); active {
+					fmt.Fprintln(os.Stderr, banner)
+					delegationType = authz.DelegationDevOverride
+				}
+			}
+			var pendingReq *authz.PendingApproval
 		grant, _, err := authz.SubmitTaskEnvelopeWithDelegation(
 			authz.ResolveZSPDir(),
 			sessionID,
@@ -335,6 +344,9 @@ func RunZSP(args []string) error {
 		}
 		decision := "allow"
 		zspConcept := "ZSP_GRANT_MINTED"
+			if delegationType == authz.DelegationDevOverride {
+				zspConcept = "ZSP_DEV_OVERRIDE_GRANT"
+			}
 		if reusedApprovedGrant {
 			zspConcept = "ZSP_APPROVED_GRANT_REUSED"
 		}

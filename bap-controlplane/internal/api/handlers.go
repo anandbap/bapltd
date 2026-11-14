@@ -2920,7 +2920,9 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
-			if sess.Status == "closed" {
+			// A session reaped by the idle timer that is still heartbeating is alive, not finished: let it
+			// fall through to Heartbeat(), which resurrects it. Any other close reason is final.
+			if sess.Status == "closed" && sess.CloseReason != "idle_timeout" {
 				writeJSON(w, http.StatusOK, map[string]any{
 					"id":         id,
 					"session_id": id,
@@ -3559,6 +3561,15 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 	if sess.Status == "revoked" || s.sessionStore.IsUserRevoked(sess.UserID) || s.sessionStore.IsUserRevoked(sess.UserEmail) {
 		writeError(w, http.StatusForbidden, "User access has been revoked by administrator. Prompts are blocked.")
 		return
+	}
+	// A prompt is proof of life for the session's agent presence: keep the registry entry fresh so an
+	// older session on the same instance timing out cannot leave this one looking stopped.
+	if s.registry != nil {
+		instanceID := sess.InstanceID
+		if instanceID == "" {
+			instanceID = sess.SessionID
+		}
+		_ = s.registry.HeartbeatInstance(sess.AppID, instanceID)
 	}
 	isDuplicatePrompt := prevHash != "" && req.PromptHash != "" && prevHash == req.PromptHash
 	layer := "sdk"

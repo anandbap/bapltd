@@ -36,7 +36,21 @@ func InstallSignedPermissionPolicy(zspDir, srcPath string) error {
 	return SignPermissionPolicyFile(zspDir, secret, srcPath)
 }
 
-// isOutOfBandApproved reports whether the envelope carries the human out-of-band delegation.
+// DelegationDevOverride marks an envelope minted while a human-activated developer override
+// window is open. It satisfies the policy-tier "needs approval" gate only; it never satisfies the
+// governance-escalation gate (policy:, grant:, admin:, bap:override, ...), which always needs a
+// real out-of-band human approval.
+const DelegationDevOverride = "dev_override"
+
+// isOutOfBandApproved reports whether the envelope clears the policy-tier approval gate: either the
+// human out-of-band delegation, or a dev-override delegation while the override window is still
+// active (re-checked here, so a stale or replayed envelope cannot outlive the window).
 func isOutOfBandApproved(env *types.TaskAuthorizationEnvelope) bool {
-	return env.AuthorizedBy.DelegationType == "human_interactive_oob"
+	switch env.AuthorizedBy.DelegationType {
+	case "human_interactive_oob":
+		return true
+	case DelegationDevOverride:
+		return DevOverrideActive != nil && DevOverrideActive()
+	}
+	return false
 }

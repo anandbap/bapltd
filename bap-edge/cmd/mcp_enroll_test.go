@@ -10,6 +10,7 @@ func clearDevEnv(t *testing.T) {
 }
 
 func TestMCPDevOverrideActive(t *testing.T) {
+	requireDevOverrideBuild(t)
 	cases := []struct {
 		value string
 		want  bool
@@ -24,6 +25,7 @@ func TestMCPDevOverrideActive(t *testing.T) {
 }
 
 func TestMCPDevOverrideNeedsMatchingAdminToken(t *testing.T) {
+	requireDevOverrideBuild(t)
 	clearDevEnv(t)
 	t.Setenv("BAP_CISO_TOKEN", "s3cret")
 	t.Setenv("BAP_DEV_OVERRIDE", "30m")

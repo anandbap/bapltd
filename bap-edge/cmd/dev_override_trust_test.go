@@ -10,6 +10,7 @@ import (
 // With an active human override, cross-folder step-up is pre-approved, but credential
 // stores stay unauthorizable.
 func TestDevOverride_PreapprovesCrossFolderButNeverCredentials(t *testing.T) {
+	requireDevOverrideBuild(t)
 	t.Setenv("BAP_ENVIRONMENT", "development")
 	t.Setenv("BAP_DEV_OVERRIDE", "1h")
 	t.Setenv("BAP_STATE_DIR", t.TempDir())
