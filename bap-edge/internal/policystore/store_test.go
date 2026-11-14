@@ -6,10 +6,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -74,9 +76,13 @@ func TestPolicyStore_AcceptAndCurrent(t *testing.T) {
 		Version:     0,
 		Digest:      digest,
 		PolicyCedar: cedar,
+		SchemaJSON:  schema,
 	}
-	if err := store.Accept(olderBundle); err == nil {
-		t.Fatalf("expected rollback error, got nil")
+	if err := store.Accept(olderBundle); !errors.Is(err, ErrRollbackRejected) || !strings.Contains(err.Error(), "incoming=0, cached=1") {
+		t.Fatalf("expected rollback error with both versions, got %v", err)
+	}
+	if _, _, retained, err := store.Current(); err != nil || retained.Version != bundle.Version {
+		t.Fatalf("rollback rejection must preserve the accepted cache: state=%+v err=%v", retained, err)
 	}
 
 	// On-disk tamper detection: modify policy.cedar directly on disk

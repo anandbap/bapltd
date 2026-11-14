@@ -38,6 +38,8 @@ type fakeCP struct {
 	enrolledAsset string
 	chain         []rotationLink
 	lastAuth      string
+	liveProof     bool
+	replayProof   string
 }
 
 func keyIDOf(pub ed25519.PublicKey) string {
@@ -68,6 +70,7 @@ func newFakeCP(t *testing.T) *fakeCP {
 	})
 	mux.HandleFunc("/api/v1/policy/sync", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
+			SyncNonce        string `json:"sync_nonce"`
 			AssetID          string `json:"asset_id"`
 			InstalledVersion uint64 `json:"installed_version"`
 			InstalledKeyID   string `json:"installed_key_id"`
@@ -91,7 +94,11 @@ func newFakeCP(t *testing.T) *fakeCP {
 			_ = json.NewEncoder(w).Encode(map[string]any{"directive": "CURRENT"})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"directive": directive, "bundle": b})
+		proof := cp.replayProof
+		if cp.liveProof && proof == "" {
+			proof = base64.StdEncoding.EncodeToString(ed25519.Sign(cp.priv, syncProofPayload(req.SyncNonce, directive, b.SignatureEd25519)))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"directive": directive, "bundle": b, "sync_signature": proof})
 	})
 	cp.srv = httptest.NewServer(mux)
 	t.Cleanup(cp.srv.Close)

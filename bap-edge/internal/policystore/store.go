@@ -7,6 +7,7 @@ import (
 	"bap-edge/pkg/version"
 	"bytes"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -92,6 +93,7 @@ func (st PolicyState) asBundle() Bundle {
 }
 
 type SyncResponse struct {
+	SyncSignature  string  `json:"sync_signature,omitempty"`
 	Directive      string  `json:"directive"`
 	Bundle         *Bundle `json:"bundle,omitempty"`
 	ServerVersion  string  `json:"server_version,omitempty"`
@@ -186,6 +188,12 @@ func ComputeDigest(cedarCode, schemaJSON string) string {
 
 // Accept stores and atomically updates the local policy cache
 func (s *Store) Accept(bundle Bundle) error {
+	return s.accept(bundle, false)
+}
+
+// Only live sync can supply fresh server authority. Local/cache callers always retain
+// rollback protection, even when they possess an old, legitimately signed bundle.
+func (s *Store) accept(bundle Bundle, liveAuthority bool) error {
 	computed := ComputeDigest(bundle.PolicyCedar, bundle.SchemaJSON)
 	if bundle.Digest != "" && bundle.Digest != computed {
 		return fmt.Errorf("%w: expected %s, got %s", ErrDigestMismatch, bundle.Digest, computed)
@@ -219,8 +227,8 @@ func (s *Store) Accept(bundle Bundle) error {
 	// the control plane's signed correction.
 	current, err := s.LoadState()
 	if err == nil && current.Version > 0 && s.cachedStateVerifies(current) {
-		if bundle.Version < current.Version {
-			return ErrRollbackRejected
+		if bundle.Version < current.Version && !liveAuthority {
+			return fmt.Errorf("%w (incoming=%d, cached=%d); cached policy was not replaced. Server-directed downgrades require a fresh signed sync proof: upgrade the control plane and client, then retry sync; do not delete the cache or trust pin", ErrRollbackRejected, bundle.Version, current.Version)
 		}
 	}
 
@@ -486,6 +494,11 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 	}
 
 	client := httptransport.New(timeout)
+	var nonceBytes [32]byte
+	if _, err := rand.Read(nonceBytes[:]); err != nil {
+		return Bundle{}, false, fmt.Errorf("generate policy sync challenge: %w", err)
+	}
+	nonce := hex.EncodeToString(nonceBytes[:])
 	state, _ := s.LoadState()
 	// (Managed only: on an unmanaged store Current() adopts local fallback policy files as a side
 	// effect, which must not happen as part of building a sync request.)
@@ -498,6 +511,7 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 	}
 
 	reqPayload := map[string]any{
+		"sync_nonce":            nonce,
 		"supports_policy_lease": true,
 		"asset_id":              s.requestAssetID(),
 		"agent_id":              agentID,
@@ -571,6 +585,23 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 			_ = os.Remove(s.pinPath())
 		}
 	}
+	// A nonce proof allows the trusted control plane to move policy versions either way.
+	// Never infer freshness from TLS alone or from a replayable cached bundle signature.
+	liveAuthority := false
+	if syncResp.Bundle != nil && syncResp.SyncSignature != "" {
+		pin, managed := s.LoadPin()
+		if managed {
+			if next, moved := s.followRotation(pin, *syncResp.Bundle); moved {
+				pin = next
+			}
+			payload := syncProofPayload(nonce, syncResp.Directive, syncResp.Bundle.SignatureEd25519)
+			liveAuthority = verifyEd25519(pin, payload, syncResp.SyncSignature)
+		}
+		if !liveAuthority {
+			undoFreshPin()
+			return Bundle{}, false, fmt.Errorf("%w: invalid live policy sync proof", ErrPolicyTampered)
+		}
+	}
 
 	if syncResp.Directive == "KILL_SWITCH" || (syncResp.Bundle != nil && syncResp.Bundle.KillSwitch) {
 		// Persist kill-switch so it remains locked even offline. On a managed machine the
@@ -582,7 +613,7 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 				kb.KillSwitch = true // legacy/unsigned: the directive itself is the instruction
 			}
 			if kb.KillSwitch {
-				if err := s.Accept(kb); err == nil {
+				if err := s.accept(kb, liveAuthority); err == nil {
 					return Bundle{}, false, ErrKillSwitchActive
 				}
 				undoFreshPin()
@@ -613,7 +644,7 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 			fmt.Fprintln(os.Stderr, "[BAP] policy sync was anonymous (no enrollment credential found); keeping the verified cached rules. Run `bap login` or pass the credentials this machine enrolled with.")
 			return Bundle{Version: cur.Version, Digest: cur.Digest, PolicyCedar: string(cedarData), SchemaJSON: string(schemaData), KillSwitch: cur.KillSwitch}, true, nil
 		}
-		if err := s.Accept(*syncResp.Bundle); err != nil {
+		if err := s.accept(*syncResp.Bundle, liveAuthority); err != nil {
 			undoFreshPin()
 			return Bundle{}, false, err
 		}
@@ -636,4 +667,9 @@ func (s *Store) SyncWithServer(serverURL, agentID string, timeout time.Duration)
 		PolicyCedar: string(cedarData),
 		SchemaJSON:  string(schemaData),
 	}, false, nil
+}
+
+func syncProofPayload(nonce, directive, bundleSignature string) []byte {
+	data, _ := json.Marshal([]string{"bap-policy-sync-v1", nonce, directive, bundleSignature})
+	return data
 }

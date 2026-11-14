@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -59,6 +60,7 @@ type Bundle struct {
 }
 
 type SyncRequest struct {
+	SyncNonce           string `json:"sync_nonce,omitempty"`
 	SupportsPolicyLease bool   `json:"supports_policy_lease,omitempty"`
 	AssetID             string `json:"asset_id,omitempty"` // workstation anchor / device ID the rules apply to
 	AgentID             string `json:"agent_id"`
@@ -71,6 +73,7 @@ type SyncRequest struct {
 }
 
 type SyncResponse struct {
+	SyncSignature  string        `json:"sync_signature,omitempty"`
 	Directive      SyncDirective `json:"directive"`
 	Bundle         *Bundle       `json:"bundle,omitempty"`
 	ServerVersion  string        `json:"server_version,omitempty"`
@@ -310,9 +313,14 @@ func (s *Store) GetBundle() Bundle {
 	return s.bundle
 }
 
-func (s *Store) Sync(req SyncRequest) SyncResponse {
+func (s *Store) Sync(req SyncRequest) (response SyncResponse) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	defer func() {
+		if s.signer != nil && req.SyncNonce != "" && response.Bundle != nil {
+			response.SyncSignature = s.signer.Sign(SyncProofPayload(req.SyncNonce, string(response.Directive), response.Bundle.SignatureEd25519))
+		}
+	}()
 
 	if s.bundle.KillSwitch {
 		signed := s.signedFor(s.applyAssetOverride(s.bundle, req.AssetID), req.AssetID)
@@ -350,4 +358,11 @@ func (s *Store) Sync(req SyncRequest) SyncResponse {
 		Directive: DirectiveUpdateRequired,
 		Bundle:    &signed,
 	}
+}
+
+// SyncProofPayload binds this freshly requested response to its exact signed bundle.
+// A stored bundle signature alone proves origin, not that the server still wants it applied.
+func SyncProofPayload(nonce, directive, bundleSignature string) []byte {
+	data, _ := json.Marshal([]string{"bap-policy-sync-v1", nonce, directive, bundleSignature})
+	return data
 }

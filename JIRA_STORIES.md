@@ -2,6 +2,8 @@
 
 ## Pilot hardening implementation update (candidate work)
 
+- **BAP-1089 proposed, live policy authority slice (2026-11-14):** a fresh nonce-bound Ed25519 sync proof lets the trusted control plane issue policy versions up or down without deleting local trust or raising the server counter to match a client. Local/cache acceptance and old servers without freshness proofs retain rollback rejection. Added coverage for server downgrade, replay rejection, restart persistence and lower-version kill-switch/recovery. Both server and edge require deployment; installed-client and hosted qualification remain open. See `docs/PRODUCT_REVIEW_2026-11-14.md`.
+
 See `docs/PILOT_RUNBOOK.md` for the new ordered confidence checks. These are source changes, not a completed external pilot or a blanket closure of the stories below.
 
 - **BAP-1077:** default execution lifetime raised to 30m, explicit bounded timeout, elapsed progress, cancellation/drain and bounded captured output. Native Windows 125-second execution proof added; interactive terminal streaming remains outside this slice.
