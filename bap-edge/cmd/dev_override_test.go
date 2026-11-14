@@ -41,6 +41,7 @@ func TestDevOverride_ProductionStrictlyBlocked(t *testing.T) {
 }
 
 func TestDevOverride_DevelopmentModeAllowedWithoutAdminToken(t *testing.T) {
+	requireDevOverrideBuild(t)
 	tmpDir := t.TempDir()
 	origWd, _ := os.Getwd()
 	_ = os.Chdir(tmpDir)

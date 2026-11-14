@@ -68,7 +68,10 @@ func TestDevOverrideExecWithoutGrants(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			marker, _ := json.Marshal(devOverrideFile{Active: tc.active, ExpiresAt: time.Now().Add(time.Hour)})
+			if tc.active && tc.environment == "development" && tc.buildFlag == "true" {
+					requireDevOverrideBuild(t) // only the cases that need a live override; the lockdown cases still run in CI
+				}
+				marker, _ := json.Marshal(devOverrideFile{Active: tc.active, ExpiresAt: time.Now().Add(time.Hour)})
 			markerDir := root
 			if tc.name == "active-bin-state" {
 				markerDir = filepath.Join(root, "bin", ".bapstate")
@@ -161,6 +164,9 @@ func TestDevOverrideTaskGrantEnforcement(t *testing.T) {
 		{"release", "development", "false", true, time.Now().Add(time.Hour), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if !tc.wantEnforce {
+				requireDevOverrideBuild(t) // only the case that needs a live override; the lockdown cases still run in CI
+			}
 			t.Setenv("BAP_ENVIRONMENT", tc.environment)
 			version.AllowDevOverrides = tc.buildFlag
 			marker, err := json.Marshal(devOverrideFile{Active: tc.active, ExpiresAt: tc.expiry})

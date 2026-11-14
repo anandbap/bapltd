@@ -8,6 +8,7 @@ import (
 )
 
 func TestParseLauncherArgs_StripsBAPFlags(t *testing.T) {
+	requireDevOverrideBuild(t) // hook-bypass flags only parse in developer-override builds
 	input := []string{"--no-hooks", "-p", "investigate bug", "--verbose"}
 	downstream, hooksDisabled, forceFix, _, err := parseLauncherArgs(input)
 	if err != nil {
@@ -31,6 +32,7 @@ func TestParseLauncherArgs_StripsBAPFlags(t *testing.T) {
 }
 
 func TestParseLauncherArgs_VariousHookFlags(t *testing.T) {
+	requireDevOverrideBuild(t)
 	variants := []string{"--no-hooks", "--disable-hooks", "--hooks-disabled", "--unmonitored", "--bap-hooks=false", "--prompt-only"}
 	for _, v := range variants {
 		t.Run(v, func(t *testing.T) {

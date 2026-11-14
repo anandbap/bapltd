@@ -743,6 +743,11 @@ func (s *Store) IsRevoked(sessionID string) bool {
 	return false
 }
 
+// InstanceLivenessWindow is how recently a session must have been active to keep its instance's
+// agent presence alive when a sibling session on the same instance ends. It matches the control
+// sweep's default idle timeout.
+const InstanceLivenessWindow = 5 * time.Minute
+
 // HasActiveSessionsForInstance checks if any session attached to the given instanceID is currently active and alive.
 func (s *Store) HasActiveSessionsForInstance(instanceID string) bool {
 	s.mu.RLock()
@@ -754,7 +759,10 @@ func (s *Store) HasActiveSessionsForInstance(instanceID string) bool {
 	now := time.Now().UTC()
 	for _, sess := range s.sessions {
 		if (sess.InstanceID == instanceID || sess.SessionID == instanceID) && sess.Status == "active" {
-			if now.Sub(sess.LastActiveAt) <= 45*time.Second {
+			// A prompt-driven session can be quiet for longer than the 45s dashboard "offline" cutoff
+			// while still being the live one. Use the sweep's idle window so an older session ending on
+			// the same instance does not deregister it; PurgeStale still reaps genuinely dead ones.
+			if now.Sub(sess.LastActiveAt) <= InstanceLivenessWindow {
 				return true
 			}
 		}

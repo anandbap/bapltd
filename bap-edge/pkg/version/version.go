@@ -11,7 +11,7 @@ import (
 var (
 	// Version is the semantic release version (e.g. "v1.0.0").
 	// Injected at compile-time via -ldflags "-X 'bap-edge/pkg/version.Version=...'"
-	Version = "v1.13.11"
+	Version = "v1.13.12"
 
 	// GitCommit is the git SHA hash.
 	GitCommit = "dev"
@@ -20,14 +20,17 @@ var (
 	BuildDate = "unknown"
 
 	// AllowDevOverrides controls whether developer override features (e.g., 'bapedge dev-override')
-	// are permitted. Defaults to "true" for local developer builds.
+	// are permitted. This is only the runtime half of the gate: the override is also compiled out
+	// unless the binary is built with `-tags devoverride`, which only a local developer build uses.
 	// CI and official release builds inject: -X 'bap-edge/pkg/version.AllowDevOverrides=false'
 	AllowDevOverrides = "true"
 )
 
 // DevOverridesAllowed reports whether developer override features are permitted in this binary.
 func DevOverridesAllowed() bool {
-	return strings.EqualFold(strings.TrimSpace(AllowDevOverrides), "true")
+	// Two independent gates: the code must be compiled in (-tags devoverride, never set for CI or
+	// release builds) AND the runtime flag must be "true". Default builds are fail-closed.
+	return devOverridesCompiledIn && strings.EqualFold(strings.TrimSpace(AllowDevOverrides), "true")
 }
 
 type Info struct {

@@ -30,7 +30,10 @@ Push-Location "bap-edge"
 try {
     $ldflags = "-s -w -X bap-edge/pkg/version.Version=$Version -X bap-edge/pkg/version.GitCommit=$gitCommit -X bap-edge/pkg/version.BuildDate=$buildDate -X bap-edge/pkg/version.AllowDevOverrides=$AllowDevOverrides"
     Remove-Item -Force "bapedge.exe" -ErrorAction SilentlyContinue
-    go build -ldflags $ldflags -o bapedge.exe .
+    # Developer override is compiled in only with -tags devoverride (local developer machine). CI passes "false".
+    $tagArgs = @()
+    if ($AllowDevOverrides -eq "true") { $tagArgs = @("-tags", "devoverride") }
+    go build @tagArgs -ldflags $ldflags -o bapedge.exe .
 } finally {
     Pop-Location
 }

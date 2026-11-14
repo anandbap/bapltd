@@ -7,8 +7,8 @@ param(
     [switch]$Archive = $true,
     [switch]$ForceRegenCerts = $false,
     [string]$Domain = "a.b.com",
-    [string]$Version = "v1.13.11",
-    [string]$AllowDevOverrides = "true"
+    [string]$Version = "v1.13.12",
+    [string]$AllowDevOverrides = "false"  # distributions never include dev-override; pass "true" explicitly for a local developer build
 )
 
 $ErrorActionPreference = "Stop"
@@ -139,7 +139,10 @@ foreach ($p in $platforms) {
             if ($versionPkg) {
                 $extraFlags = if ($c.Dir -eq 'bap-edge') { " -X '$versionPkg.AllowDevOverrides=$AllowDevOverrides'" } else { "" }; $ldflags = "-s -w -X '$versionPkg.Version=$Version' -X '$versionPkg.GitCommit=$gitCommit' -X '$versionPkg.BuildDate=$buildDate'$extraFlags"
             }
-            go build -trimpath -ldflags $ldflags -o $outFile $c.Pkg
+            # Developer override is compiled in only with -tags devoverride, and only for bap-edge when explicitly requested.
+            $tagArgs = @()
+            if ($c.Dir -eq 'bap-edge' -and $AllowDevOverrides -eq "true") { $tagArgs = @("-tags", "devoverride") }
+            go build -trimpath @tagArgs -ldflags $ldflags -o $outFile $c.Pkg
             if ($LASTEXITCODE -ne 0) {
                 throw "Compilation failed for $($c.Name) on $($p.Name)"
             }
