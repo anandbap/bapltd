@@ -1,8 +1,10 @@
 # Zero Standing Privileges for Autonomous AI Agents
 ## The Bounded Authority Plane (BAP) Reference Architecture & Mathematical Containment Model
 
+> **Historical conceptual model, not current release assurance.** Reviewed 2026-11-14: implementation, native-platform limits, plaintext storage, polling, identity and persistence boundaries are specified in [the current architecture](../ARCHITECTURE.md). Formal containment goals and examples below must not be represented as delivered or deployment-qualified guarantees.
+
 **Document Classification:** Technical Whitepaper — Enterprise Distribution  
-**Version:** 2.0.0 (Production Architecture Baseline)  
+**Version:** 2.0.0 (historical conceptual baseline; not production acceptance)
 **Date:** November 2026  
 **Authors:** BAP Security Architecture, Cryptography & Systems Engineering Group  
 

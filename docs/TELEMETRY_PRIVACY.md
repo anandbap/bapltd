@@ -2,12 +2,15 @@
 
 New Go edge and standalone hook transports default to metadata mode. This applies to audit ingestion, session start/resume/prompt/response and activity ingestion. The production control plane applies the same filter on these ingress routes. Immediate sends, offline flushes and retained-event replay all pass through the filter.
 
+Reviewed 2026-11-14. Prompt capture follows the signed administrator setting (`required`, `user_controlled`, `off`); its default is `required`. Generic metadata mode does not promise prompt confidentiality. Prompt text can contain code or secrets. The inspected policy cache and retry/recovery files are plaintext; integrity checks are not encryption. See [architecture](../ARCHITECTURE.md) and [prompt arbitration](LAYERED_FALLBACK_REPORTING_DESIGN.md).
+
 | Data | Default metadata mode |
 |---|---|
 | Workstation, session, event, source and reporting-layer IDs | Retained; these can identify people/devices |
 | Timestamps, outcomes, durations, exit status and canonical effect/resource metadata | Retained; resource paths may identify projects or files |
 | Prompt hash and intent classification where produced | Retained; a hash is not anonymization or proof of complete observation |
-| Command bodies/arguments, prompt/response text, evidence excerpts and free-form reasons | Withheld at the listed transport boundaries |
+| Command bodies/arguments, response text, evidence excerpts and free-form reasons | Withheld at the listed transport boundaries |
+| Prompt text | Separate signed administrator policy; `required` permits reporting even in metadata mode, while `off` withholds content |
 | Broker local audit spool | Minimized before hashing/storage; preserves a grant-denial reason code |
 | Native hook prompt spool | Minimized before storing the retry envelope |
 | Existing archives and vendor-owned transcripts | Not retroactively rewritten or deleted |

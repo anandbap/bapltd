@@ -1,6 +1,6 @@
 # 🌟 Bounded Authority Plane (BAP) — Vision & Strategic Architecture
 
-> **"The human requested the work. The agent performed the action. The enterprise must be able to independently prove both, bound the blast radius to zero, and guarantee that intent is never mistaken for authority."**
+> **Vision and target state, not current release assurance.** BAP aims to bound agent authority and preserve evidence of delegation and execution. Current enforcement, evidence gaps and deployment requirements are specified in [ARCHITECTURE.md](ARCHITECTURE.md); this strategy document is not proof of zero blast radius or complete observation.
 
 ---
 

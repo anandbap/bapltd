@@ -41,7 +41,7 @@ In scope: an agent that is mistaken, manipulated by prompt injection, or over-ea
 acting through the tools it legitimately has (shell, file tools, MCP tools, code it
 writes and runs).
 
-Out of scope, per [ARCHITECTURE.md](../ARCHITECTURE.md#defense-layers-what-each-one-does-and-does-not-guarantee):
+Out of scope, per [architecture boundaries](../ARCHITECTURE.md#4-execution-paths):
 a malicious local administrator, malware that never goes through an agent, and
 platforms whose sandbox is not enforcing yet. Record those as known limits, not as
 failures.

@@ -1,64 +1,59 @@
-# Workstation enrollment and independent layer reporting
+# Independent layer reporting
 
-Updated October 31, 2026. This extends [authenticated lifecycle and recovery](SESSION_IDENTITY_AND_RECOVERY.md).
+Reviewed 2026-11-14. See [architecture](../ARCHITECTURE.md), [prompt arbitration](LAYERED_FALLBACK_REPORTING_DESIGN.md) and [privacy](TELEMETRY_PRIVACY.md). This contract describes evidence a boundary actually receives, not a serial chain of guaranteed fallback interception.
 
-## Master setting
+## Identity and destination
 
-`bap install` provisions the workstation components and starts the user-space daemon. `bap login` establishes the enrolled workstation identity and its control-plane destination. Enrollment is shared by edge reporting and hook lifecycle requests; an agent does not need a separate login or an approved hook before the workstation can report available evidence.
+Installation provisions components; enrollment establishes workstation proof and its control-plane origin. Hooks are not a prerequisite for the daemon to report received evidence. Protected reporting requests use enrolled proof, and the server binds session ownership to that proof.
 
-For enrolled edge clients, the enrollment destination takes precedence over repository files, shell endpoint variables and per-command reporting overrides. An administrator-locked endpoint remains authoritative. When that endpoint conflicts with enrollment, evidence stays queued and transmission reports an identity/configuration error; it must not be sent anonymously to another server. Login restarts an existing daemon when it points to the previous server. `--no-daemon` remains an explicit diagnostic/test opt-out.
+A hostname, email, session ID or source label in a body is not ownership proof. Gateway ingestion uses a separate service identity. Source checkout changes must be built and deployed before an installed runtime implements them.
 
-The workstation proof is used only with its enrolled origin; server-side verification derives owner identity from proof. A hostname, PID, source label, prompt or session ID cannot establish ownership or confer execution authority. Gateway PEP runs under its separate ingestion-only service identity; laptop login does not turn it into a workstation lifecycle client.
+## Boundaries
 
-First audit reports reserve previously unknown session ownership atomically before ledger admission. Concurrent reports from different workstation proofs cannot claim the same session. Recovery derives a workstation/SVID identifier when a valid legacy proof lacks its explicit SPIFFE field, then reconstructs the registry master from enrollment claims before adding producer labels as subagent observations.
+| Boundary | Available evidence | Missing evidence / limit |
+|---|---|---|
+| Native plugin/configuration hook | Supported lifecycle, prompt and tool callbacks | Installed files do not prove approval, invocation or complete callbacks. Decision-only hooks do not contain execution. |
+| MCP | BAP tool calls and cooperative request reports | Built-in tools/other servers do not automatically pass through BAP. A model summary is self-reported. |
+| Terminal shim | Commands actually resolving through the shim | Absolute paths and other process routes can bypass PATH. |
+| Broker | Received command/context, decision, result and selected process lineage | No chat text unless supplied. Legacy containment and parser limits remain. |
+| Gateway | Requests reaching its protected resources and their verdicts | Not universal desktop egress or backend completion proof. |
+| Passive discovery | Recognized process/PID/birth metadata and presence | Does not read agent memory, environments or arbitrary transcripts; never an execution grant. |
 
-## Independent evidence paths
+Native plugins and configuration hooks are two integration surfaces within the callback layer, not proof that two independent enforcement boundaries ran. A short-lived callback cache is not a general exactly-once execution protocol.
 
-These boundaries operate independently. They are not a serial chain in which a skipped hook automatically intercepts a different tool. Each boundary must actually receive an operation before it can enforce or report it.
+## Prompt selection
 
-| Boundary | Evidence it can report | Missing hooks/prompts | Enforcement scope |
-| --- | --- | --- | --- |
-| Layer 1A: approved native agent plugin | In-harness tool invocations, lifecycle callbacks (`SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, `SessionEnd`), normalized prompt classification | Unapproved or uninstalled plugins do not execute. Standalone hooks provide fallback Layer 1B coverage. | In-harness vendor manifest/extension callbacks (`.claude-plugin/plugin.json`, Copilot `plugin.json`). |
-| Layer 1B: approved configuration hook | Session lifecycle, classified prompt/hash when available, shell policy verdict, direct file-hook verdict | Unapproved hooks do not execute. Deduplicated against Layer 1A (5-second cache) if both are active. | Supported native hook callbacks (`.claude/settings.json`, wrapper shims); workspace files remain cooperative. |
-| Layer 2: BAP MCP | Tool name/command, policy decision and execution result | Reports independently; prompt text is optional. | Calls routed through BAP's MCP tools. |
-| Layer 3: terminal shim | Command, stable session identity and broker result, tagged `shim` | Reports independently through edge. | Commands resolving through the installed shim. Absolute paths and unmediated IDE tools need another boundary. |
-| Layer 4: local broker/OS containment | Broker command, decision, result and process lineage, tagged `broker` | Reports even with no hook or prompt. Local cached policy remains applicable offline. | Brokered execution (`bapedge exec`) and kernel containment primitives (Windows Job Objects / Linux Landlock). |
-| Layer 5: gateway PEP | Actual protected resource operation and gateway verdict, tagged `gateway` | Reports independently through its service credential. | Traffic reaching that protected resource boundary. Collector correlation cannot create/refresh workstation sessions. |
-| Passive workstation observation | Recognized agent executable, PID, process birth and reporting presence, tagged `discovery` | Finds named agent processes even when their hooks/plugins are not approved. Does not read transcripts or envs. | Observation only. Does not grant authority or prove interception. |
+All producers submit the prompt evidence they receive. The control plane correlates by session/turn, prefers hooks, and keeps fallback evidence while native prompt callbacks are absent. A later hook report can upgrade the canonical prompt without another logical prompt count. Raw corroborating audit records are retained.
 
-### Sub-Layer Deduplication (Layer 1A vs Layer 1B)
-When both native agent plugins (Layer 1A) and standalone configuration hooks (Layer 1B) are present on the same workstation, `bapedge` employs an in-memory 5-second TTL deduplication cache keyed by `(session_id, command_hash)`. If Layer 1A executes a policy check and tool execution, a near-instantaneous secondary call from Layer 1B returns the cached decision receipt immediately, preventing dual developer prompts and duplicate audit records.
+MCP `bap_report_request` is exposed by default in current source; explicit `BAP_FALLBACK_REPORTING=0` disables it. Initialization instructions ask the client to call it per turn. BAP cannot force a host/model to call a tool it ignores. A recent tool-hook heartbeat does not establish delivery of a prompt callback.
 
-Operators can inspect active layers and observable states at any time via:
-```bash
-bapedge plugin status
-bapedge plugin layers
-```
+Exact deduplication needs the same native turn ID in each source. Broker context can carry `BAP_TURN_ID`; hook/prompt payloads accept `turn_id`. Hash-only legacy reports cannot reliably distinguish identical repeated turns or differently worded summaries. Reporting does not override the signed administrator prompt-capture setting.
 
-Native hook and plugin trust remains under user/administrator control. BAP does not approve or silently trust hooks. Codex/Claude PreToolUse responses use their supported envelope; legacy fields must not invalidate a denial. The control plane accepts prompt producers under authenticated session ownership, including hash-only capture-disabled submissions.
+## Delivery, storage and recovery
 
-## Identity, persistence and recovery
+Received events are persisted before bounded live delivery. The daemon has a bounded queue and eight delivery workers. A full queue relies on the spool rather than claiming successful upload. Prompt retry envelopes and audit/recovery journals are different stores.
 
-Without an explicit native/launcher session ID, edge attributes a command through a bounded parent-process traversal to a recognized agent executable. Its fallback session ID includes installation identity, PID and process birth. Repeated broker invocations therefore share a workload ID; PID reuse produces a different ID. Explicit native session IDs remain unchanged.
+Immediate send, retry and recovery replay preserve the source label. Central hash versions bind the supported identity/reporting fields while preserving legacy verification. A hash chain is retained-record tamper evidence, not completeness or a device attestation.
 
-The daemon observes exact recognized executable names using Windows process metadata or Linux `/proc`. It reuses a matching native watcher marker only when PID, process birth and server destination match. Unknown helpers such as arbitrary `node` processes are not labeled as agent sessions. Process-only observations enter the same authenticated audit ingestion path, with `decision: observed`; they do not increment allowed/denied operation counters, mint grants or clear a freeze. Dead or replaced processes stop receiving local heartbeats. Existing sessions age Offline under the established lifecycle timeout.
+Current-source session-separated uploads keep an identity refusal for an old session from blocking unrelated live sessions. Refused evidence remains attributed to its original identity and retained for reconciliation. An acknowledged non-durable upload has a retained recovery copy; `durable:true` is a separate server/storage contract.
 
-Every broker/MCP/shim audit event retains its producer layer through immediate send, retry and retained-journal replay. Direct file-hook decisions are written atomically to a private local spool without a network wait. The daemon promotes a bounded batch into the shared journal and synchronizes it before deleting the producer record. Failed handoff preserves the source file. Prompt spooling and prompt-capture policy remain separate.
+Reporting-only recovery does not clear administrative restrictions or reissue execution authority. Enrollment renewal requires a valid authentication flow, not an agent asserting an owner.
 
-Live daemon delivery uses eight workers and a bounded 256-event queue. An event is persisted before enqueue; queue saturation falls back to the existing spool. There is no goroutine per live upload. Hash version 3 binds reporting-layer metadata into new central audit links while preserving version 1/2 verification. Sessions retain a bounded set of received layer labels in memory and, when configured, their existing SQLite store.
+## Coverage and timing
 
-The dashboard displays **Discovered**, **Evidence received** or **Coverage unknown**, separately from Live/Offline/Frozen. It states whether prompt text was reported or capture was disabled. These labels describe evidence received during the session, not proof that the layer is currently active or that every workstation operation was intercepted. Absence of a callback cannot distinguish pending approval, disabled hooks, an unsupported client or a stopped component.
+Coverage describes received layer evidence; liveness describes recent check-ins. Neither proves every action was intercepted. An absent callback cannot uniquely identify disabled hooks, pending approval, an unsupported client or a stopped integration.
 
-## Latency and limits
+| Mechanism | Default interval |
+|---|---|
+| Policy poller in watchers/current-source daemon | 3 seconds |
+| Daemon session/workstation heartbeat | 4 seconds |
+| Named-process observation | 10 seconds |
+| Prompt/audit retry scheduling | Watcher/daemon path dependent; daemon spool worker uses 5 seconds |
 
-Authorization continues to evaluate locally. Discovery and delivery run outside command execution and do not hold session locks during network calls. Named process discovery runs initially and every ten seconds; newly discovered evidence is queued immediately. Session heartbeats retain the four-second cadence. Direct file-hook promotion and offline retries use the five-second spool cadence. These are observation/retry intervals, not a claim of millisecond end-to-end freshness or a Render latency guarantee.
+Network delays, authentication, server state and backlog affect delivery. These intervals are not a freshness SLA. Native macOS discovery/integration acceptance and complete fleet capture are not established here.
 
-Remaining work is explicit in [the backlog](../JIRA_STORIES.md): persistent authoritative central state; actual OS-wide enforcement/attestation; native macOS process discovery and generic hosted-agent integrations; durable service startup after reboot; backlog/retention management and representative p95/p99 load measurements. Installing hooks, setting PATH, or elevating a process alone cannot supply those guarantees.
+## Acceptance
 
-## Verification and deployment
+Verify the actual installed versions, real IdP login, current daemon readiness, authenticated heartbeat and central upload acknowledgment. Then exercise approved native callbacks and an unapproved-hook session separately. A lower layer should report only what it receives; prompts require supplied context or an actual prompt callback.
 
-Automated coverage includes authenticated process-only ingestion, no-prompt commands, Codex prompt acceptance with capture disabled, cross-workstation rejection, duplicate event retries, frozen-session preservation, SQLite coverage restoration, audit metadata tamper detection, PID reuse, native-marker correlation, file-hook journal handoff and UI coverage labels. The real edge-to-control-plane delivery harness covers rejection/retry, server-state loss and retained replay without a user prompt.
-
-Local verification passed for both complete Go modules, the interceptor suite, both cross-module E2E harnesses, UI tests, five Python launcher/identity-transport tests and parsing/equality of the three launcher-engine copies. Latest authenticated local SQLite benchmark means were 0.30–0.35 ms for heartbeat and 1.27–2.13 ms for single-event ingestion; see the implementation plan for fixture sizes and batch timings. These tests did not deploy Render or approve this laptop's pending hooks.
-
-Deploy the matching control-plane, edge, interceptor and all distributed launcher engine copies. Existing installed binaries are not changed by editing this repository. Upgrade/restart the installed daemon, then verify with an unapproved-hook Codex session: process presence should appear first; a broker/MCP/shim operation should add that layer's evidence; no prompt is expected until a supported approved hook submits one. Verify freeze and outage/reconnect independently. Keep the server signing key stable across deploys.
+Confirm retries do not inflate counts, late hook evidence wins, a distinct turn with identical text remains distinct, and ownership refusals preserve evidence. Test outage/reconnect, signed-policy expiry and freeze behavior independently. Full native/client acceptance remains distinct from source fixtures.

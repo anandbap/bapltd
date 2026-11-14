@@ -1,136 +1,48 @@
-# Complete Network and Control Channel Architecture (BAP-912)
+# Network and control-channel contracts
 
-This document formalizes the complete network, communication, and control channel architecture across all subsystems of the **Bounded Authority Plane (BAP)**. It addresses security review requirements by providing verifiable channel topologies, dataflow paths, encryption mechanisms, authentication invariants, failure modes, revocation procedures, and restart semantics.
+Reviewed 2026-11-14 against source. [Architecture](../ARCHITECTURE.md) owns the component model; [control_channels.json](control_channels.json) is the matching channel inventory. A channel's existence does not establish it is configured, reachable or qualified in a deployment.
 
----
+## Actual channels
 
-## 1. System Architecture Topology
+| ID | Path | Transport / identity | Failure and scope |
+|---|---|---|---|
+| CH-01 | Agent callback or MCP host to local adapter | Client-specific process/stdin/stdout or MCP stdio | Host must invoke/approve the integration. Process ancestry/source labels are not independent device attestation. |
+| CH-02 | Edge lifecycle, audit and heartbeat to control plane | HTTPS and enrolled bearer proof for protected routes | Missing/invalid identity blocks protected uploads; evidence is retained for supported retry paths. Public health success does not prove authentication. |
+| CH-03 | Edge policy sync to control plane | POST `/api/v1/policy/sync`; pinned Ed25519 bundle plus current-source nonce proof | Polling, not an implemented SSE/JWS push channel. Offline behavior depends on signed-cache validity and lease. |
+| CH-04 | Gateway to central grant consumption | Configured control-plane API and bounded grant | Single-use enforcement depends on central consumption being enabled and reachable. Do not assume every deployment uses it. |
+| CH-05 | Workstation/browser/control plane and configured IdP | OTC or device/browser login flow | Real IdP configuration and account-owner authentication require acceptance; simulated/development flows are not equivalent. |
+| CH-06 | Resource gateway to configured backend | Backend HTTP(S) and adapter-specific credentials | Only resources protected by the gateway are governed. Generic production SaaS credential exchange is not established. |
+| CH-07 | Broker/native provider to child process | OS process APIs; optional native-runner egress relay | Local containment is not encryption. Legacy and native-provider guarantees differ by OS. |
+| CH-08 | Browser administrator to control plane | Configured HTTPS, administrator credential/cookie and applicable origin checks | Shared pilot administrator identity is not individual admin SSO or separation of duties. |
 
-```mermaid
-flowchart TB
-    subgraph Workstation["Customer Workstation / Edge Perimeter"]
-        subgraph InHarness["Layer 1: Execution Surface"]
-            CC["Claude Code / Copilot / Antigravity / Codex"]
-            HW["HookWatch / Native Plugins\n(plugins/claude, plugins/copilot)"]
-        end
+## Transport protection
 
-        subgraph LocalRuntime["Layer 2: Edge Runtime & Sandbox"]
-            BE["bapedge.exe\n(Agent Runtime Daemon)"]
-            PEP1["Local Cedar PEP\n(In-Memory Evaluation)"]
-            BRK["bapedge exec\n(Execution Broker)"]
-            SBX["Kernel Sandbox\n(Windows Job Object / Landlock LSM)"]
-            WATCH["bapedge watch\n(Heartbeat & Anomaly Watchdog)"]
-        end
-    end
+The Go edge transport requires verified HTTPS for authenticated non-loopback traffic and refuses authenticated cross-origin redirects. It uses system/configured certificate trust; its TLS minimum is 1.2, not a guarantee that every connection negotiates TLS 1.3 or one particular cipher.
 
-    subgraph ControlPlane["BAP Central Control Plane (Decision Plane)"]
-        CP_API["Control Plane API\n(bapcontrolplane)"]
-        STS["RFC 8693 STS Engine\n(/api/v1/sts/token)"]
-        AUDIT["Immutable Audit Ledger\n(Cryptographic Hash Chaining)"]
-        POL_STORE["Central Policy Store\n(Signed JWS Distribution)"]
-    end
+The code contains loopback/development certificate exceptions and separate client implementations. Do not infer universal certificate pinning or mTLS from the public-key policy pin. The latter authenticates policy signatures, not every transport certificate or device.
 
-    subgraph EnterpriseInfra["Enterprise Trust & Identity Infrastructure"]
-        IDP["Enterprise IdP\n(Entra ID / Okta / GitHub OIDC)"]
-        SPIFFE["SPIFFE Workload CA\n(Hierarchical SVID Minting)"]
-    end
+Sources: [edge transport](../bap-edge/internal/httptransport/client.go), [identity attachment/redirects](../bap-edge/internal/httptransport/identity.go), [reporting endpoint policy](../bap-edge/internal/config/).
 
-    subgraph TargetSystems["Downstream Target Systems (Resource Side)"]
-        GW["BAP Gateway PEP\n(bapgateway.exe)"]
-        SAAS["Target SaaS APIs\n(GitHub, AWS, Jira, Salesforce)"]
-        TARGET_DB["Protected Production Resources"]
-    end
+## Policy direction and freshness
 
-    subgraph AdminPlane["Administrative Observability Plane"]
-        COCKPIT["Agent Watch V3 Cockpit\n(v3.html / Dashboard UI)"]
-        SIEM["Enterprise SOC / SIEM\n(ArcSight CEF / RFC 5424)"]
-    end
+The edge initiates polling. Watchers and the current-source daemon poll immediately and every three seconds; short-lived decisions can refresh a cache older than five seconds. These are intervals, not delivery deadlines.
 
-    %% Communication Channels
-    CC -->|CH-01: Local IPC| HW
-    HW -->|CH-01: stdio / Pipe| BE
-    BE <-->|In-Memory| PEP1
-    BE -->|CH-07: Broker Fork| BRK
-    BRK -->|Process Sandbox| SBX
-    
-    BE <-->|CH-02: HTTPS REST / TLS 1.3| CP_API
-    POL_STORE -->|CH-03: HTTPS SSE / JWS| BE
-    BE <-->|CH-04: RFC 8693 STS / TLS 1.3| STS
-    WATCH -->|CH-02: Telemetry Spool| CP_API
-    
-    CP_API <-->|CH-05: RFC 8628 Device Flow| IDP
-    CP_API <-->|SPIFFE Workload Attestation| SPIFFE
-    
-    STS -->|CH-06: ID-JAG / Ephemeral Token| SAAS
-    BRK -->|CH-06: Governed Egress via PEP| GW
-    GW -->|Authorized Target Invocation| TARGET_DB
+An upgraded server signs a response bound to a random request nonce, directive and bundle signature. This authorizes a live policy version moving up or down without permitting a local replayed bundle to downgrade authority. Bundle signature, asset and key validation remain required.
 
-    COCKPIT <-->|CH-08: Admin HTTPS / TLS 1.3| CP_API
-    AUDIT -->|RFC 5424 Syslog Export| SIEM
-```
+Disconnected, stopped or unauthenticated devices cannot receive immediate freezes. Production requires an explicit signed offline budget. A valid cached policy is not proof that an additional central grant or approval can be obtained offline.
 
----
+## Reporting ownership and recovery
 
-## 2. Channel Communication Sequence Matrix
+The enrolled origin controls credential attachment. A repository setting must not redirect enrolled evidence to an unrelated server. Origin/configuration conflicts queue reporting for correction.
 
-The following sequence details an agent task execution from declared prompt to target resource access:
+Session IDs and owner identity are checked against workstation proof. A new login must not relabel old evidence owned by another identity. Current-source uploads separate session batches: an HTTP 403 preserves the refused session while allowing other sessions to continue. A 401 or network/server failure retains unsent evidence.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Dev as Developer / Human Owner
-    participant Agent as Claude Code / Copilot
-    participant HW as HookWatch / Native Plugin
-    participant Edge as bapedge (Agent Runtime)
-    participant CP as Control Plane (Decision Plane)
-    participant STS as RFC 8693 STS Broker
-    participant Target as Target SaaS / Resource
+Reporting-only recovery restores presence/correlation when permitted; it does not reactivate ended/revoked authority or issue execution grants. A durable checkpoint can restore administrative state. A lost ephemeral authority and a production restart from intact persistent storage are different failure cases.
 
-    Dev->>Agent: "Create PR for authentication fix"
-    Agent->>HW: Prompt / Tool Hook (PreToolUse)
-    HW->>Edge: CH-01: Intercept tool request (Local IPC)
-    
-    alt Session Not Enrolled
-        Edge->>CP: CH-02: EnsureSessionStarted (HTTPS REST)
-        CP-->>Edge: Issue Session SVID & Agent Principal (BAP-911)
-    end
+## Two different proxy boundaries
 
-    Edge->>Edge: Evaluate Local Cedar PEP (Inviolable Invariants)
-    
-    opt Target SaaS Credential Required
-        Edge->>STS: CH-04: RFC 8693 Token Exchange (Session SVID)
-        STS->>CP: Verify Session Liveness & Monotonic Attenuation
-        STS->>Target: CH-06: Exchange Brokered JIT Grant (5-min TTL)
-        Target-->>STS: Ephemeral Access Token (saas-github-*)
-        STS-->>Edge: Bound Saas Token (never exposed to Agent LLM)
-    end
+The native runner's egress proxy allows destinations and records decisions; network closure by the selected OS provider is what makes that proxy the exclusive path. A standalone proxy setting alone is advisory for processes that can open sockets elsewhere.
 
-    Edge->>Edge: CH-07: bapedge exec spawns isolated child process
-    Edge-->>HW: Allow Execution Receipt
-    HW-->>Agent: Permitted Tool Output
-    Edge->>CP: CH-02: Stream Tamper-Proof Audit Receipt
-```
+The resource gateway verifies operations at protected backend routes. It is not automatically a forward proxy for all desktop traffic. Raw sockets, direct backends, other network routes and unmediated tools need separately deployed boundaries.
 
----
-
-## 3. Machine-Readable Channel Inventory Summary
-
-| Channel ID | Subsystem Path | Protocol & Auth | Encryption | Failure Mode | Revocation & Restart |
-|---|---|---|---|---|---|
-| **CH-01** | HookWatch $\rightarrow$ Edge Runtime | Local IPC / Parent PID Verification | OS Memory Isolation | Fail-Closed | Immediate tool denial; re-attest on next lifecycle event. |
-| **CH-02** | Edge Runtime $\rightarrow$ Control Plane API | HTTPS REST / Session Token | TLS 1.3 Pinning | Fail-Safe Cached (15-min TTL) | SSE disconnect freezes endpoint; re-verify enrollment. |
-| **CH-03** | Control Plane $\rightarrow$ Edge Runtime | Server-Sent Events / JWS Signing | TLS 1.3 + RFC 7515 JWS | Fail-Safe Cached | Instant sub-second kill switch; exponential backoff reconnect. |
-| **CH-04** | Edge Runtime $\rightarrow$ STS Token Service | RFC 8693 Token Exchange / SVID | TLS 1.3 | Fail-Closed | Atomic grant burn (`BurnGrantOnce`); re-attest session. |
-| **CH-05** | Control Plane $\rightarrow$ Enterprise IdP | RFC 8628 Device Flow / OIDC | TLS 1.3 | Fail-Closed | Central IdP logout propagates kill; re-prompt device flow. |
-| **CH-06** | Control Plane STS $\rightarrow$ Target SaaS | HTTPS REST / ID-JAG Exchanged Token | TLS 1.3 | Fail-Closed | Ephemeral grant expires in 300s; target token revoked. |
-| **CH-07** | Broker $\rightarrow$ Local Sandbox Process | Windows Job Object / Landlock LSM | Kernel Virtualization | Fail-Closed | SIGKILL process tree; re-evaluate policy on next attempt. |
-| **CH-08** | Cockpit UI $\rightarrow$ Control Plane API | HTTPS WebSockets / Admin Token | TLS 1.3 + CORS Origin Guard | Fail-Closed | Immediate session freeze; re-authenticate admin token. |
-
----
-
-## 4. Architectural Invariants for Security Reviewers
-
-1. **Separation of Decision and Execution**: The Control Plane makes policy decisions and notarizes audit events. It **never** executes commands directly on developer workstations and **never** retains raw customer target secrets.
-2. **Zero Standing Privileges (ZSP)**: No long-lived downstream API keys are stored on developer endpoints. Target tokens are minted just-in-time with a maximum 5-minute lifespan and bound strictly to the specific `AgentPrincipal` and `SessionID`.
-3. **Fail-Closed by Design**: If an agent attempts an action during a network partition that requires central elevation or approval, execution is strictly halted. Low-risk in-workspace developer actions continue under valid cached local Cedar bundles.
-4. **Machine-Readable Audit Trail**: The full inventory is validated against `docs/control_channels.json`.
+No current architecture guarantee includes host-wide WFP (not implemented), NetworkExtension (not implemented), or eBPF (simulation only) packet enforcement. See [execution design](EXECUTION_MODEL.md).

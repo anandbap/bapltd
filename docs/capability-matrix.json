@@ -1,5 +1,7 @@
 {
   "schema_version": 1,
+  "reviewed_at": "2026-11-14",
+  "scope": "Current working-tree contracts; source tests do not attest installed or hosted releases",
   "features": [
     {"name": "Landlock", "pattern": "Landlock(?: LSM)?", "status": "not implemented", "qualifier": "not implemented"},
     {"name": "eBPF", "pattern": "eBPF", "status": "simulation only", "qualifier": "simulation only"},
@@ -9,5 +11,16 @@
     {"name": "Seatbelt", "pattern": "Seatbelt", "status": "native execution unverified", "qualifier": "native execution unverified"}
   ],
   "verified": ["Windows AppContainer boundary tests", "egress proxy and unix-socket relay", "task-grant enforcement", "control-plane policy administration"],
-  "native_execution_pending": ["Linux bubblewrap", "macOS Seatbelt"]
+  "native_execution_pending": ["Linux bubblewrap", "macOS Seatbelt"],
+  "verified_scope": "The verified list names bounded fixtures, not complete platform/client or production acceptance.",
+  "runtime_contracts": [
+    {"name": "Policy cache", "status": "Ed25519-signed plaintext", "limit": "Not encrypted or hardware-rooted; same-user trust-pin/state tampering remains a limitation", "source": "bap-edge/internal/policystore"},
+    {"name": "Policy freshness", "status": "Three-second polling in watcher and current-source daemon", "limit": "Not an end-to-end SLA; offline or unauthenticated clients cannot receive immediate revocation", "source": "bap-edge/internal/policystore/refresh.go"},
+    {"name": "Prompt fallback", "status": "Hooks-first session/turn arbitration implemented in working tree", "limit": "MCP reports are cooperative/self-reported; exact cross-source correlation needs shared native turn IDs; matching rollout required", "source": "bap-controlplane/internal/session/prompt_observation.go"},
+    {"name": "Legacy execution", "status": "Parser-based checks and platform-specific child execution", "limit": "Not host-wide interception or the same boundary as native run", "source": "bap-edge/cmd/exec.go"},
+    {"name": "Native capability authority", "status": "Grant converter and runner profiles implemented separately", "limit": "Effect-level Set is not the active grant-to-runner authority path", "source": "bap-edge/internal/capability/grants.go"},
+    {"name": "Persistence", "status": "Single-server SQLite authority checkpoint path", "limit": "Requires qualified persistent deployment storage; multi-replica authority and distributed consumption unqualified", "source": "bap-controlplane/internal/api/durability.go"},
+    {"name": "Audit evidence", "status": "Retained sequential hash chain", "limit": "Not proof of completeness, independent notarization, productivity or compliance certification", "source": "bap-controlplane/internal/audit/store.go"},
+    {"name": "Privacy", "status": "Generic metadata minimization with a separate signed prompt-capture setting", "limit": "Prompt capture defaults to required; no zero-code-exfiltration or all-producer DLP guarantee", "source": "bap-edge/internal/httptransport/privacy.go"}
+  ]
 }

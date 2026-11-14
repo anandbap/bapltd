@@ -12,24 +12,45 @@ async function main() {
   new vm.Script(html.match(/<script>([\s\S]*?)<\/script>/)[1]);
   const elements = new Map();
   const el = id => {
-    if (!elements.has(id)) elements.set(id, {value:'', textContent:'', innerHTML:'', disabled:false, hidden:false, events:{},
+    if (!elements.has(id)) elements.set(id, {value:'', textContent:'', innerHTML:'', disabled:false, hidden:false, checked:false, events:{},
       addEventListener(name, fn) { this.events[name] = fn; }});
     return elements.get(id);
   };
+  const promptRadios = [...html.matchAll(/<input\b(?=[^>]*\bname="promptMode")[^>]*>/g)].map(([markup]) => {
+    const value = markup.match(/\bvalue="([^"]+)"/)[1];
+    const radio = el('prompt-radio-' + value);
+    radio.value = value; radio.checked = /\bchecked\b/.test(markup);
+    return radio;
+  });
+  assert.deepEqual(promptRadios.map(r => r.value), ['required', 'user_controlled', 'off']);
+  const selectPromptMode = value => {
+    promptRadios.forEach(r => { r.checked = r.value === value; });
+    promptRadios.find(r => r.checked).events.change();
+  };
   let admin = false, live = true, gets = 0, changed = 0, failDecision = false;
+  let promptMode = 'required', failPromptSave = false, unconfirmedPromptSave = false;
   const calls = [];
   const policy = {version:3, digest:'fixture-digest', policy_cedar:'permit(principal, action, resource);', schema_json:'', kill_switch:true};
   const pending = {escalation_id:'esc-fixture', status:'PENDING', action:'fs:write', resource:'/workspace/report', reason:'<script>unsafe</script>', ephemeral_grant:'MUST_NOT_RENDER', requested_at:'2026-11-13T10:00:00Z'};
   const fixture = {escalations:[pending]};
   const recommendation = {id:'rec-fixture',asset_id:'asset/a',instance_id:'workstation',action:'dev:go:test',status:'pending',command_hint:'<img src=x onerror=alert(1)>',justification:'Run tests',occurrences:2};
-  const ctx = vm.createContext({console, Promise, Set, Date, Number, JSON, Error, document:{getElementById:el}, confirm:()=>true});
+  const ctx = vm.createContext({console, Promise, Set, Date, Number, JSON, Error, document:{getElementById:el,
+    querySelectorAll(selector) {
+      assert.equal(selector, 'input[name="promptMode"]', 'Add an explicit fixture for new DOM queries');
+      return promptRadios;
+    }}, confirm:()=>true});
   ctx.window = ctx;
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../bap-controlplane/internal/dashboardui/web/admin.js'), 'utf8'), ctx);
   const deps = {
     isAdmin:()=>admin, isLive:()=>live, requireAdminLogin() {}, onDecision(){changed++;},
-    async getJSON(url) { gets++; return url.includes('recommendations') ? {recommendations:[recommendation]} : url.includes('escalation') ? fixture : policy; },
+    async getJSON(url) { gets++; return url.endsWith('/policy/settings') ? {prompt_capture:promptMode} : url.includes('recommendations') ? {recommendations:[recommendation]} : url.includes('escalation') ? fixture : policy; },
     async apiFetch(url, options) {
       const body = options.body ? JSON.parse(options.body) : null; calls.push({url, body});
+      if (url.endsWith('/policy/settings')) {
+        if (failPromptSave) throw new Error('HTTP 403: unauthorized');
+        if (!unconfirmedPromptSave) promptMode = body.prompt_capture;
+        return {json:async()=>({prompt_capture:promptMode})};
+      }
       if (url.includes('/policy/recommendations/')) {
         if (failDecision) throw new Error('HTTP 403: unauthorized');
         recommendation.status = url.endsWith('/approve') ? 'approved' : 'rejected';
@@ -51,11 +72,31 @@ async function main() {
   ctx.BAPAdmin.show(); await flush();
   assert.equal(gets, 0, 'Locked admin view must not load private requests');
   assert.equal(el('adminWorkspace').hidden, true);
+  assert.ok(promptRadios.every(r => r.disabled));
+  await el('promptSave').events.click();
   await ctx.BAPAdmin.resolve('esc-fixture', 'approve');
   assert.equal(calls.length, 0);
 
   admin = true; ctx.BAPAdmin.authChanged(); await flush();
   assert.equal(el('adminWorkspace').hidden, false);
+  assert.equal(promptRadios.find(r => r.checked).value, 'required');
+  assert.ok(promptRadios.every(r => !r.disabled));
+  assert.equal(el('promptSave').disabled, true, 'Loaded unchanged setting cannot be saved');
+  selectPromptMode('off');
+  assert.equal(el('promptSave').disabled, false);
+  failPromptSave = true;
+  await el('promptSave').events.click();
+  assert.equal(promptMode, 'required');
+  assert.match(el('promptStatus').textContent, /Not saved/);
+  failPromptSave = false; unconfirmedPromptSave = true;
+  await el('promptSave').events.click();
+  assert.match(el('promptStatus').textContent, /did not confirm/);
+  unconfirmedPromptSave = false;
+  await el('promptSave').events.click();
+  assert.equal(promptMode, 'off');
+  assert.equal(calls.filter(c=>c.url.endsWith('/policy/settings')).at(-1).body.prompt_capture, 'off');
+  assert.match(el('promptStatus').textContent, /Saved/);
+  assert.equal(el('promptSave').disabled, true);
   assert.match(el('approvalList').innerHTML, /&lt;script&gt;/);
   assert.doesNotMatch(el('approvalList').innerHTML, /MUST_NOT_RENDER/);
   el('approvalReviewer').value = 'reviewer@example.test'; el('approvalTTL').value = '300';
@@ -107,7 +148,11 @@ async function main() {
   await ctx.BAPAdmin.validate(); await ctx.BAPAdmin.resolve('esc-fixture', 'deny');
   await ctx.BAPAdmin.decideRecommendation('rec-fixture','approve');
   assert.equal(calls.length, beforeDemo, 'Demo mode cannot mutate the live backend');
+  await el('promptSave').events.click();
+  assert.equal(calls.length, beforeDemo, 'Demo mode cannot change prompt reporting');
   assert.equal(el('adminWorkspace').hidden, true);
+  assert.ok(promptRadios.every(r => r.disabled));
+  assert.equal(el('promptStatus').textContent, 'Not loaded.');
 
   // Responses issued under an old admin session cannot repopulate a logged-out view.
   live = true; admin = true;

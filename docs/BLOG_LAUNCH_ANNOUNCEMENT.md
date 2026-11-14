@@ -1,6 +1,8 @@
 # Introducing Bounded Authority Plane (BAP)
 ## Identity, Zero Standing Privilege, and Runtime Authorization for Autonomous AI Agents
 
+> **Historical launch narrative.** This article includes target-state claims and is not a current capability or assurance specification. Use [the source-backed architecture](../ARCHITECTURE.md) and [security limitations](FAQ_AND_SECURITY_ASSURANCE.md) for present behavior. Do not republish its historical guarantees as release acceptance.
+
 *Published: October 2026 · Updated: November 2026*  
 *Author: BAP Architecture & Security Engineering Team*
 

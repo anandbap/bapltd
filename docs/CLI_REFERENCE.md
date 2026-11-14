@@ -26,7 +26,7 @@ Two audiences, kept apart on purpose:
 
 | Command | What it does |
 |---|---|
-| `bapedge status` | Daemon state, policy version and digest, sessions, audit spool. The *defense-layer* section reports what was **observed**, not what is assumed (see [ARCHITECTURE.md](../ARCHITECTURE.md#defense-layers-what-each-one-does-and-does-not-guarantee)). |
+| `bapedge status` | Daemon state, policy version and digest, sessions, audit spool. The *defense-layer* section reports what was **observed**, not what is assumed (see [architecture boundaries](../ARCHITECTURE.md#4-execution-paths)). |
 | `bapedge why "<command>"` | Explain why a command would be allowed or blocked. |
 | `bapedge sync` | Fetch the latest signed rules now. Machines also sync on their own within seconds; if the control plane is unreachable the last signed rules stay in force. |
 | `bapedge check "<command>"` | Decision only: evaluate a command without running it. |

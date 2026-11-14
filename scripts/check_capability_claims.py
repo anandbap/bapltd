@@ -6,7 +6,11 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DOCS = ["README.md", "ARCHITECTURE.md", "docs/PILOT_RUNBOOK.md",
-                "DEMO_CLAUDE_CODEX_ZERO_TRUST.md", "docs/CLI_REFERENCE.md", "docs/POLICY_RECOMMENDATIONS.md"]
+                "DEMO_CLAUDE_CODEX_ZERO_TRUST.md", "docs/CLI_REFERENCE.md", "docs/POLICY_RECOMMENDATIONS.md",
+                "docs/EXECUTION_MODEL.md", "docs/NETWORK_ARCHITECTURE.md",
+                "docs/INDEPENDENT_LAYER_REPORTING.md", "docs/LAYERED_FALLBACK_REPORTING_DESIGN.md",
+                "docs/PLUGIN_ARCHITECTURE.md", "docs/FAQ_AND_SECURITY_ASSURANCE.md",
+                "docs/TELEMETRY_PRIVACY.md"]
 
 
 def check_text(text, matrix):
