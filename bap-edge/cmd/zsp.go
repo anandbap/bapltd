@@ -262,7 +262,7 @@ func RunZSP(args []string) error {
 			delegationType = "human_interactive_oob"
 		}
 		var pendingReq *authz.PendingApproval
-		grant, env, err := authz.SubmitTaskEnvelopeWithDelegation(
+		grant, _, err := authz.SubmitTaskEnvelopeWithDelegation(
 			authz.ResolveZSPDir(),
 			sessionID,
 			clientType,
@@ -279,7 +279,7 @@ func RunZSP(args []string) error {
 		if err != nil && errors.Is(err, authz.ErrHighRiskApprovalRequired) && !inBroker && isTerminal(os.Stdin) {
 			fmt.Fprintf(os.Stderr, "\n[BAP HITL ESCALATION] %v\n", err)
 			if humanApprovalChallenge(sessionID, actions, resources, *goalFlag) {
-				grant, env, err = authz.SubmitTaskEnvelopeWithDelegation(
+				grant, _, err = authz.SubmitTaskEnvelopeWithDelegation(
 					authz.ResolveZSPDir(),
 					sessionID,
 					clientType,
@@ -293,6 +293,14 @@ func RunZSP(args []string) error {
 					maxUses,
 					*ttlFlag,
 				)
+			}
+		}
+		// A human already approved an earlier request and its grant is still live and covers this ask:
+		// hand that grant back instead of raising a second request for the same thing.
+		reusedApprovedGrant := false
+		if err != nil && errors.Is(err, authz.ErrHighRiskApprovalRequired) {
+			if g, _ := authz.FindLiveApprovedGrant(authz.ResolveZSPDir(), sessionID, clientType, actions, resources, time.Now()); g != nil {
+				grant, err, reusedApprovedGrant = g, nil, true
 			}
 		}
 		if err != nil {
@@ -327,6 +335,9 @@ func RunZSP(args []string) error {
 		}
 		decision := "allow"
 		zspConcept := "ZSP_GRANT_MINTED"
+		if reusedApprovedGrant {
+			zspConcept = "ZSP_APPROVED_GRANT_REUSED"
+		}
 		if grant.NarrowingApplied {
 			decision = "ALLOWED-LIMITED"
 			zspConcept = "ZSP_SCOPE_NARROWED"
@@ -337,7 +348,8 @@ func RunZSP(args []string) error {
 				"allowed":           true,
 				"decision":          decision,
 				"grant":             grant,
-				"envelope_id":       env.EnvelopeID,
+				"envelope_id":       grant.EnvelopeID,
+				"reused_approved":   reusedApprovedGrant,
 				"narrowing_applied": grant.NarrowingApplied,
 				"narrowing_reason":  grant.NarrowingReason,
 			}, "", "  ")
@@ -349,9 +361,14 @@ func RunZSP(args []string) error {
 			fmt.Printf("  Requested Actions: %v -> Attenuated: %v\n", grant.RequestedActions, grant.AllowedActions)
 			fmt.Printf("  Reason:            %s\n", grant.NarrowingReason)
 		}
-		fmt.Printf("[BAP ZERO-TRUST] 4-Tuple Task Envelope Authorized -> JIT TaskGrant Minted\n")
+		if reusedApprovedGrant {
+			fmt.Printf("[BAP ZERO-TRUST] Human-approved grant is still live and covers this request; reusing it (no new request raised)\n")
+			fmt.Printf("  Run your command now. The grant expires soon and has limited uses.\n")
+		} else {
+			fmt.Printf("[BAP ZERO-TRUST] 4-Tuple Task Envelope Authorized -> JIT TaskGrant Minted\n")
+		}
 		fmt.Printf("  Grant ID:          %s\n", grant.GrantID)
-		fmt.Printf("  Envelope ID:       %s\n", env.EnvelopeID)
+		fmt.Printf("  Envelope ID:       %s\n", grant.EnvelopeID)
 		fmt.Printf("  Principal SVID:    %s\n", grant.PrincipalSVID)
 		fmt.Printf("  Human Owner:       %s\n", grant.HumanOwner)
 		fmt.Printf("  Allowed Actions:   %v\n", grant.AllowedActions)
