@@ -89,6 +89,8 @@ Use your real approved paths and origin. Production refuses ephemeral signing co
 
 On the first start of a genuinely new isolated authority, add `--initialize-authority` once. Remove it from the normal service configuration afterward. Without that explicit initialization, a missing checkpoint refuses startup instead of silently treating a lost volume as a new fleet. Existing deployments require an operator-reviewed migration/backup and canary; do not initialize over a missing production database as a recovery shortcut.
 
+**Ephemeral storage (demos and free-tier hosts only).** For a host with no persistent disk, set `BAP_EPHEMERAL_AUTHORITY=acknowledged`. Production security settings (strict OTC, OIDC, signing configuration) stay in force. The control plane then creates a new authority whenever no checkpoint exists, logs an `EPHEMERAL AUTHORITY` warning at startup, and still refuses a corrupt or mismatched checkpoint. Every wipe starts a new, empty authority, so enrollments, sessions and decisions are lost. Never use it for a real fleet.
+
 The policy counter is restored from durable state rather than seeded from wall time. Pending recommendations, decisions, enrolled assets, registry restrictions, session/user restrictions, canonical audit IDs and explicit restorations survive restart. Execution grants from a prior process retain their established fail-closed epoch behavior; do not expect old execution authority to revive.
 
 **Pass:** health works; unauthenticated production policy sync is rejected; the actual database volume survives service replacement; a backup restores on a separate isolated service. Document measured recovery objectives. Never deliberately remove a live service's signing key to test failure.

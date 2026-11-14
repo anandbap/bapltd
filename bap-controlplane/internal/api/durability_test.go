@@ -127,6 +127,19 @@ func TestDurableCheckpointRejectsCorruption(t *testing.T) {
 	}
 }
 
+// The ephemeral-authority opt-in passes allowInitialize=true; it must only create a new authority when
+// no checkpoint exists and must never accept a corrupt one.
+func TestInitializeAllowanceStillRejectsCorruptCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	s := durableFixture(t, dir)
+	if _, err := s.durable.db.Exec(`UPDATE authority_checkpoint SET payload=? WHERE id=1`, json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnableDurability(true); err == nil {
+		t.Fatal("corrupt checkpoint accepted when initialization was allowed")
+	}
+}
+
 func TestMissingCheckpointRequiresExplicitInitialization(t *testing.T) {
 	sessions, err := session.NewStoreWithDB(filepath.Join(t.TempDir(), "new.db"))
 	if err != nil {

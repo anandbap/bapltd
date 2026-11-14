@@ -22,7 +22,7 @@ if os.path.isdir(bap_plugins_dir):
 
 setup(
     name="bap-ltd",
-    version="1.13.8",
+    version="1.13.9",
     description="Bounded Authority Plane (BAP) - Zero-Trust Local Trusted Daemon & Governance for AI Developer Agents",
     long_description=long_description,
     long_description_content_type="text/markdown",

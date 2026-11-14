@@ -403,10 +403,19 @@ func runStart(args []string) {
 
 	server := api.NewServer(regStore, otcStore, minter, policyStore, auditStore, sessionStore)
 	if *durable {
-		if err := server.EnableDurability(*initializeAuthority); err != nil {
+		// BAP_EPHEMERAL_AUTHORITY=acknowledged is a documented, non-production opt-in for hosts without
+		// persistent storage (for example free-tier demos). It only allows initializing a NEW authority when
+		// no checkpoint exists. An existing checkpoint is still restored and verified, and a corrupt or
+		// mismatched one is still refused. Every restart on ephemeral storage creates a new authority.
+		ephemeralAuthority := os.Getenv("BAP_EPHEMERAL_AUTHORITY") == "acknowledged"
+		if err := server.EnableDurability(*initializeAuthority || ephemeralAuthority); err != nil {
 			log.Fatalf("Durable authority unavailable: %v", err)
 		}
-		log.Print("Durable single-node authority enabled; keep this database on persistent storage and run one replica")
+		if ephemeralAuthority {
+			log.Print("[bapcontrolplane] WARNING: EPHEMERAL AUTHORITY acknowledged (BAP_EPHEMERAL_AUTHORITY). Not for production: state is lost whenever storage is wiped, and a lost volume starts a new authority instead of refusing to start")
+		} else {
+			log.Print("Durable single-node authority enabled; keep this database on persistent storage and run one replica")
+		}
 	}
 	server.SetPolicyKeyDir(signerDir)
 	if *pilotRoster != "" {
