@@ -129,6 +129,7 @@ func raiseHITLRequest(sessionID, clientType, mission, goal string, actions, reso
 	if rErr != nil {
 		return nil
 	}
+	emitApprovalLifecycle(p, "approval_pending")
 	return p
 }
 
@@ -172,6 +173,11 @@ func runZSPDecide(approve bool, args []string) error {
 	req, grant, err := authz.DecidePendingApproval(authz.ResolveZSPDir(), id, approve)
 	if err != nil {
 		return err
+	}
+	if approve {
+		emitApprovalLifecycle(req, "approval_approved")
+	} else {
+		emitApprovalLifecycle(req, "approval_denied")
 	}
 	if approve {
 		fmt.Printf("[BAP ZERO-TRUST] Request %s APPROVED. Grant %s minted for session %s (%d uses, expires %s). Tell the agent to retry.\n",

@@ -1862,6 +1862,21 @@
 
             var isUnmonitored = s.hooks_disabled === true || s.reporting_layer === 'unmonitored' || (layers.indexOf('unmonitored') !== -1);
 
+            // Per-layer coverage derived by the control plane from evidence actually received.
+            var covNote = '';
+            if (s.coverage) {
+              var covNames = { layer1_hooks: 'L1 hooks', layer2_mcp: 'L2 MCP', layer3_shims: 'L3 shims', layer4_broker: 'L4 broker', layer5_gateway: 'L5 gateway' };
+              covNote = 'Layer coverage: ' + Object.keys(covNames).map(function (k) {
+                return covNames[k] + ' ' + (s.coverage[k] === 'observed' ? 'observed' : 'silent');
+              }).join(', ') + '. ';
+            }
+            var degradedText = {
+              hooks_disabled: 'Hooks are disabled for this session. ',
+              hooks_unapproved_or_disabled: 'Hooks are not reporting while lower layers are, so hooks may be unapproved or disabled. ',
+              no_evidence_above_discovery: 'Only process discovery was seen; no tool evidence has been received. '
+            }[s.degraded_reason] || '';
+            covNote = degradedText + covNote;
+
             if (sessionReconciled) {
               protectText = 'Matched with bapedge';
               protectClass = 'g';
@@ -1901,7 +1916,7 @@
               } else {
                 promptNote = 'Prompt text not reported.';
               }
-              means = (layers.length ? 'Reported layers: ' + layers.map(esc).join(', ') + '. ' : 'Reporting coverage has not been confirmed. ') +
+              means = (layers.length ? 'Reported layers: ' + layers.map(esc).join(', ') + '. ' : 'Reporting coverage has not been confirmed. ') + esc(covNote) +
                 (isUnmonitored ? 'Session running with tool hooks disabled (--no-hooks). ' : (isStrict ? 'Tier 2 Strict Tool Enforcement active (Mandated by Control Plane). ' : 'Tier 1 Standard Governance active (Default). ')) +
                 promptNote;
             } else {

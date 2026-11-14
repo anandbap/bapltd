@@ -1177,11 +1177,9 @@ func RunStatus(args []string) error {
 
 	// 4. Inspect 5-Layer Defense-in-Depth Compliance
 	fmt.Println("\n  5-LAYER DEFENSE-IN-DEPTH COMPLIANCE STATUS:")
-	fmt.Println("    Layer 1 (Native Hooks): NOT_OBSERVED - verify approval and received callbacks")
-	fmt.Println("    Layer 2 (BAP MCP): NOT_OBSERVED - verify calls routed through BAP tools")
-	fmt.Println("    Layer 3 (Terminal Shims): NOT_OBSERVED - verify actual shim-routed commands")
-	fmt.Println("    Layer 4 (Broker): AVAILABLE - OS-wide enforcement is not attested here")
-	fmt.Println("    Layer 5 (Gateway PEP): NOT_OBSERVED - verify protected resource events")
+	for _, layerLine := range layerStatusLines(observedLayers(auditLogPath)) {
+		fmt.Println(layerLine)
+	}
 
 	// 5. Telemetry & Offline Spool
 	fmt.Println("\n  TELEMETRY & OFFLINE RESILIENCE:")

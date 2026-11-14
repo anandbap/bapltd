@@ -62,6 +62,10 @@ func hookHeartbeatName(sessionID string) string {
 // evidence only (no content), used so lower layers know whether Layer 1 is reporting.
 // Failure is ignored: a heartbeat must never block or fail a hook decision.
 func touchHookHeartbeat(sessionID string) {
+	// A hook running in disabled / prompt-only mode is not reporting, so it must not look alive.
+	if isHooksDisabled() {
+		return
+	}
 	name := hookHeartbeatName(sessionID)
 	if name == "" || name == "." || name == ".." {
 		return
