@@ -167,6 +167,11 @@ func runZSPDecide(approve bool, args []string) error {
 	if err != nil {
 		return err
 	}
+	// Check the state before asking the human anything: an already-decided or expired request must
+	// not produce a one-time-code prompt. DecidePendingApproval re-checks under the store lock.
+	if err := p.CheckDecidable(); err != nil {
+		return err
+	}
 	if approve && !humanApprovalChallenge(p.SessionID, p.Actions, p.Resources, p.Goal) {
 		return fmt.Errorf("%w: interactive human approval challenge failed or no terminal is attached", authz.ErrHighRiskApprovalRequired)
 	}

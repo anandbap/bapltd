@@ -149,6 +149,19 @@ func GetPendingApproval(zspDir, id string) (*PendingApproval, error) {
 	return &p, nil
 }
 
+// CheckDecidable reports whether the request can still be approved or denied. Callers that prompt a
+// human (the one-time-code challenge) must call it first, so nobody is asked to confirm a request
+// that is already decided or has expired.
+func (p *PendingApproval) CheckDecidable() error {
+	if p.Status != "pending" {
+		return fmt.Errorf("%w: %s is %s", ErrApprovalDecided, p.ID, p.Status)
+	}
+	if time.Now().After(p.ExpiresAt) {
+		return fmt.Errorf("%w: %s", ErrApprovalExpired, p.ID)
+	}
+	return nil
+}
+
 // DecidePendingApproval approves (minting the requested grant for the requesting session with the human
 // out-of-band delegation) or denies a pending request. Callers must have already verified a human is
 // present (terminal one-time code); this function does not and must never be reachable by an agent.
@@ -165,11 +178,8 @@ func DecidePendingApproval(zspDir, id string, approve bool) (*PendingApproval, *
 		if gErr != nil {
 			return gErr
 		}
-		if p.Status != "pending" {
-			return fmt.Errorf("%w: %s is %s", ErrApprovalDecided, p.ID, p.Status)
-		}
-		if time.Now().After(p.ExpiresAt) {
-			return fmt.Errorf("%w: %s", ErrApprovalExpired, p.ID)
+		if dErr := p.CheckDecidable(); dErr != nil {
+			return dErr
 		}
 		p.DecidedAt = time.Now().UTC()
 		if approve {

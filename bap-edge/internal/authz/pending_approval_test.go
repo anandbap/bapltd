@@ -15,6 +15,27 @@ func writeExpired(dir string, p *PendingApproval) error {
 	return writeFileAtomic(approvalPath(dir, p.ID), data, 0600)
 }
 
+// The approve/deny commands call CheckDecidable before the one-time-code prompt, so a request that
+// is already decided or expired must be refused with the specific sentinel, never prompted for.
+func TestCheckDecidableRefusesDecidedAndExpiredRequests(t *testing.T) {
+	live := PendingApproval{ID: "req-1", Status: "pending", ExpiresAt: time.Now().Add(time.Minute)}
+	if err := live.CheckDecidable(); err != nil {
+		t.Fatalf("a live pending request must be decidable: %v", err)
+	}
+	for _, status := range []string{"approved", "denied"} {
+		p := live
+		p.Status = status
+		if err := p.CheckDecidable(); !errors.Is(err, ErrApprovalDecided) {
+			t.Fatalf("%s request must report ErrApprovalDecided, got %v", status, err)
+		}
+	}
+	expired := live
+	expired.ExpiresAt = time.Now().Add(-time.Second)
+	if err := expired.CheckDecidable(); !errors.Is(err, ErrApprovalExpired) {
+		t.Fatalf("expired request must report ErrApprovalExpired, got %v", err)
+	}
+}
+
 func raiseFor(t *testing.T, dir, sess string, actions ...string) *PendingApproval {
 	t.Helper()
 	p, err := RaisePendingApproval(dir, PendingApproval{
