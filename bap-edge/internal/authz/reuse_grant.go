@@ -48,7 +48,7 @@ func FindLiveApprovedGrant(zspDir, sessionID, clientType string, actions, resour
 			continue
 		}
 		g := byID[a.GrantID]
-		if g == nil || g.IsBurned || g.RemainingUses <= 0 || !now.Before(g.ExpiresAt) {
+		if g == nil || g.CommandHash != "" || g.IsBurned || g.RemainingUses <= 0 || !now.Before(g.ExpiresAt) {
 			continue
 		}
 		if coversAll(g.AllowedActions, actions) && coversAll(g.AllowedResources, resources) {

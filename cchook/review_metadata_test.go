@@ -60,6 +60,13 @@ func TestReviewSearchInputAndDecisionCategory(t *testing.T) {
 	if !strings.Contains(fileHookEvidence.InputDetails, "inspect source") {
 		t.Fatal("unknown MCP tool input lost")
 	}
+	if err := json.Unmarshal([]byte(`{"tool_name":"mcp__example","tool_input":{"query":"keep locally","token":"PRIVATE_TOOL_SECRET"}}`), &payload); err != nil {
+		t.Fatal(err)
+	}
+	prepareHookEvidence(payload, "", "test")
+	if strings.Contains(fileHookEvidence.InputDetails, "PRIVATE_TOOL_SECRET") || !strings.Contains(fileHookEvidence.InputDetails, "keep locally") {
+		t.Fatal("structured local capture lost content or leaked credential")
+	}
 	prepareHookEvidence(HookPayload{ToolName: "Glob", ToolInput: ToolInput{Pattern: "**/*.go"}}, "", "test")
 	if !strings.Contains(fileHookEvidence.InputDetails, "**/*.go") {
 		t.Fatal("search pattern lost")

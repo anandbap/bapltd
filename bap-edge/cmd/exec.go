@@ -1371,16 +1371,17 @@ func RunExec(args []string) {
 	// except when invoking atomic ZSP control commands (e.g. 'bapedge zsp authorize' / 'bapedge status').
 	// An active development-only override suspends the grant requirement for bootstrapping BAP itself.
 	if allowed && isZSPRequiredForExec(ec) && taskGrantsEnforced() && !authz.IsZSPControlCommand(fullCommand) &&
-		!authz.IsLocalReadOnlyCommand(fullCommand, executable, cmdArguments, workspaceRoot) &&
-		!authz.IsApprovedLocalCommand(fullCommand, executable, cmdArguments, workspaceRoot) {
+		(authz.IsAutomaticBatchCandidate(fullCommand, workspaceRoot) ||
+			(!authz.IsLocalReadOnlyCommand(fullCommand, executable, cmdArguments, workspaceRoot) &&
+				!authz.IsApprovedLocalCommand(fullCommand, executable, cmdArguments, workspaceRoot))) {
 		zspChecks := authz.ResolveZSPCommandChecks(fullCommand, executable, cmdArguments, "", "", workspaceRoot)
-		svid, grant, _, zspErr := authz.VerifyOrConsumeSessionZSPChecks(
+		svid, grant, _, zspErr := authz.AuthorizeSessionCommandBatch(
 			authz.ResolveZSPDir(),
 			ec.sessionID,
 			ec.source,
-			zspChecks,
 			fullCommand,
 			workspaceRoot,
+			zspChecks,
 			!ec.decisionOnly,
 			[]string{fmt.Sprintf("parent:%d", ec.parentPID), fmt.Sprintf("broker:%d", os.Getpid())},
 		)

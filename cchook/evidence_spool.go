@@ -28,7 +28,11 @@ func prepareHookEvidence(payload HookPayload, sessionID, appID string) {
 					fields[key] = value
 				}
 				if combined, err := json.Marshal(fields); err == nil {
-					fileHookEvidence.InputDetails = string(combined)
+					// Redact structured credential fields before embedding any JSON
+					// in a human-readable operation string.
+					if captured, err := CaptureLocalJSON(combined); err == nil {
+						fileHookEvidence.InputDetails = string(captured)
+					}
 				}
 			}
 		}

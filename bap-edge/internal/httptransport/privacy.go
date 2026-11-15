@@ -74,6 +74,9 @@ func filterEvidenceJSON(raw []byte, local bool) ([]byte, error) {
 			}
 			for key, child := range node {
 				switch strings.ToLower(key) {
+				case "token", "secret", "password", "api_key", "api-key", "apikey", "authorization", "access_token", "refresh_token":
+					node[key] = "[redacted]"
+					continue
 				case "user_prompt", "prompt", "prompt_text":
 					// Prompt text follows the administrator's prompt-capture mode, not the generic
 					// content setting below.

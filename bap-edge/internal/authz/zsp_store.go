@@ -476,6 +476,14 @@ func SubmitTaskEnvelopeWithDelegation(
 	maxUses int,
 	ttl time.Duration,
 ) (*types.TaskGrant, *types.TaskAuthorizationEnvelope, error) {
+	return submitTaskEnvelopeBound(zspDir, sessionID, clientType, mission, goal, promptText, actions, resources, authorizedBy, delegationType, maxUses, ttl, nil)
+}
+
+func submitTaskEnvelopeBound(
+	zspDir, sessionID, clientType, mission, goal, promptText string,
+	actions, resources []string, authorizedBy, delegationType string,
+	maxUses int, ttl time.Duration, binding *types.TaskGrant,
+) (*types.TaskGrant, *types.TaskAuthorizationEnvelope, error) {
 	if zspDir == "" {
 		zspDir = ResolveZSPDir()
 	}
@@ -555,6 +563,10 @@ func SubmitTaskEnvelopeWithDelegation(
 	grant, err := engine.AuthorizeTaskEnvelope(env, maxUses, ttl)
 	if err != nil {
 		return nil, env, err
+	}
+	if binding != nil {
+		grant.CommandHash, grant.WorkspaceRoot, grant.PolicyHash = binding.CommandHash, binding.WorkspaceRoot, binding.PolicyHash
+		grant.AuthoritySignature = engine.signGrant(grant)
 	}
 
 	if err := withZSPStoreLock(zspDir, "grants-"+sessionID, func() error {
@@ -860,7 +872,7 @@ func VerifyOrConsumeSessionZSPChecks(
 	}
 
 	var (
-		matchedGrant *types.TaskGrant
+		matchedGrant  *types.TaskGrant
 		consumedProof *types.AuditLineageProof
 		firstErr      error
 	)
@@ -878,6 +890,9 @@ func VerifyOrConsumeSessionZSPChecks(
 		}
 
 		checkGrantCoversAll := func(g *types.TaskGrant) (*types.TaskGrant, error) {
+			if g.SessionID != sessionID || g.PrincipalSVID != svid.Subject {
+				return nil, fmt.Errorf("%w: grant belongs to a different session or principal", ErrZeroStandingPrivilegeViolation)
+			}
 			var checked *types.TaskGrant
 			for _, chk := range checks {
 				res := resolveZSPCheckResource(chk, workspaceRoot, sessionID)
@@ -886,6 +901,18 @@ func VerifyOrConsumeSessionZSPChecks(
 					return nil, checkErr
 				}
 				checked = cg
+			}
+			if g.CommandHash != "" {
+				if g.CommandHash != batchCommandHash(fullCommand) || g.WorkspaceRoot != canonicalBatchWorkspace(workspaceRoot) {
+					return nil, fmt.Errorf("%w: command or workspace differs from authorized batch", ErrActionNotGranted)
+				}
+				policy, err := LoadPermissionPolicy(zspDir, pepSecret)
+				if err != nil {
+					return nil, err
+				}
+				if g.PolicyHash != batchPolicyHash(policy) {
+					return nil, fmt.Errorf("%w: batch grant policy has changed", ErrActionNotGranted)
+				}
 			}
 			return checked, nil
 		}
@@ -902,7 +929,9 @@ func VerifyOrConsumeSessionZSPChecks(
 				if consumeErr == nil {
 					updated, _ := engine.GetGrant(g.GrantID)
 					if updated != nil {
-						_ = saveSessionGrant(zspDir, sessionID, updated)
+						if err := saveSessionGrant(zspDir, sessionID, updated); err != nil {
+							return err
+						}
 					}
 					matchedGrant = updated
 					consumedProof = proof

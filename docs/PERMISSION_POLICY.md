@@ -26,6 +26,23 @@ agent: bapedge zsp authorize --actions <catalog actions> --resources <scopes>
 
 Unknown actions fall to `default_tier` (`approve` or `deny`; `allow` is rejected at load time).
 
+## Automatic command-batch authorization
+
+Recognized routine command batches can request their own exact, single-use grant
+inside the broker after Cedar/invariant checks. Every actual effect must be allowed
+by policy; push or another approval-required effect is never added automatically.
+Existing suitable grants are reused. Automatic grants expire within 30 seconds and
+bind the command text, workspace, session/principal, and permission-policy version.
+The hook precheck does not consume the grant; broker execution checks all operations
+and consumes one use atomically for the whole invocation.
+
+For example, `git status; git log --oneline -n 10` can proceed without an agent
+authorization round trip. A grant for `git:status` cannot authorize `git push`, either
+alone or appended to status. See [command-batch authorization](COMMAND_BATCH_AUTHORIZATION.md)
+for the scope-check walkthrough, conservative syntax limits, strict-mode settings,
+revocation semantics, and regression-test interpretation. Policy tiers and ceilings
+continue to apply; automation does not convert `approve` or `deny` into `allow`.
+
 ## Rule semantics
 
 * `match`: `path.Match` globs over the lower-cased action. `:` is an ordinary character, so

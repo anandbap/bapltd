@@ -152,6 +152,16 @@ Run in order. Mark each row with the evidence you kept.
 
 ## 6. Human approval, as it really behaves
 
+Routine inspection batches can be authorized automatically without a human prompt.
+For example, status followed by bounded log inspection is checked as a whole and
+receives a short-lived signed batch grant when policy permits both operations.
+Appending push still requires publishing authorization; a status-only grant cannot
+cover it, and a rejected mixed batch executes nothing and burns no grant use.
+See [command batches and ZSP scope enforcement](COMMAND_BATCH_AUTHORIZATION.md).
+For explicit missing-grant demonstrations, use isolated state with both
+`BAP_ZSP_STRICT_READS=1` and `BAP_ZSP_AUTO_GRANTS=0`; do not mistake deliberately
+generated regression-test denials for ordinary agent friction.
+
 Read this before scene 5 and before approving anything.
 
 1. The agent asks for a high-risk permission with `bapedge zsp authorize`.

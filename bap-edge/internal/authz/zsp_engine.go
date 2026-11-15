@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -64,11 +65,11 @@ func FindHighRiskEscalationActions(actions []string) []string {
 
 // ZSPEngine implements Zero Standing Privileges and Just-In-Time Task Grant issuance (BAP-917).
 type ZSPEngine struct {
-	mu             sync.RWMutex
-	minter         *identity.WorkstationIdentityMinter
-	grants         map[string]*types.TaskGrant
-	pepSecret      []byte
-	policy         *PermissionPolicy
+	mu              sync.RWMutex
+	minter          *identity.WorkstationIdentityMinter
+	grants          map[string]*types.TaskGrant
+	pepSecret       []byte
+	policy          *PermissionPolicy
 	lineageReceipts []types.AuditLineageProof
 }
 
@@ -76,9 +77,9 @@ type ZSPEngine struct {
 func NewZSPEngine(minter *identity.WorkstationIdentityMinter, pepSecret string) *ZSPEngine {
 	// No default secret: an empty pepSecret makes the engine fail closed (see signingSecretConfigured).
 	return &ZSPEngine{
-		minter:         minter,
-		grants:         make(map[string]*types.TaskGrant),
-		pepSecret:      []byte(pepSecret),
+		minter:          minter,
+		grants:          make(map[string]*types.TaskGrant),
+		pepSecret:       []byte(pepSecret),
 		lineageReceipts: make([]types.AuditLineageProof, 0),
 	}
 }
@@ -217,6 +218,9 @@ func (e *ZSPEngine) ConsumeTaskGrant(
 	grant, exists := e.grants[grantID]
 	if !exists {
 		return nil, fmt.Errorf("%w: unrecognized grant ID %s", ErrZeroStandingPrivilegeViolation, grantID)
+	}
+	if grant.CommandHash != "" && grant.CommandHash != batchCommandHash(commandExecuted) {
+		return nil, fmt.Errorf("%w: command differs from authorized batch", ErrActionNotGranted)
 	}
 
 	now := time.Now().UTC()
@@ -433,6 +437,11 @@ func (e *ZSPEngine) signGrant(g *types.TaskGrant) string {
 		g.AllowedActions, g.AllowedResources, g.MaxUses, g.ExpiresAt.Unix())
 	mac := hmac.New(sha256.New, e.pepSecret)
 	mac.Write([]byte(raw))
+	if g.CommandHash != "" || g.WorkspaceRoot != "" || g.PolicyHash != "" {
+		binding, _ := json.Marshal([]string{g.CommandHash, g.WorkspaceRoot, g.PolicyHash})
+		mac.Write([]byte("\x00batch-binding\x00"))
+		mac.Write(binding)
+	}
 	return hex.EncodeToString(mac.Sum(nil))
 }
 

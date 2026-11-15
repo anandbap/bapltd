@@ -235,6 +235,9 @@ type TaskAuthorizationEnvelope struct {
 
 // TaskGrant represents an ephemeral, task-scoped grant token with zero standing privilege (BAP-917).
 type TaskGrant struct {
+	CommandHash        string    `json:"command_hash,omitempty"`
+	WorkspaceRoot      string    `json:"workspace_root,omitempty"`
+	PolicyHash         string    `json:"policy_hash,omitempty"`
 	GrantID            string    `json:"grant_id"`
 	EnvelopeID         string    `json:"envelope_id"`
 	SessionID          string    `json:"session_id"`

@@ -61,7 +61,11 @@ func TestStructuredLocalToolInputIsHashProtected(t *testing.T) {
 	entry := AuditEntry{ToolInput: json.RawMessage(`{"pattern":"*.go"}`)}
 	before := ComputeEntryHash(entry, "previous")
 	entry.ToolInput = json.RawMessage(`{ "pattern": "*.go" }`)
-	if before != ComputeEntryHash(entry, "previous") { t.Fatal("JSON whitespace changed hash") }
+	if before != ComputeEntryHash(entry, "previous") {
+		t.Fatal("JSON whitespace changed hash")
+	}
 	entry.ToolInput = json.RawMessage(`{"pattern":"*.py"}`)
-	if before == ComputeEntryHash(entry, "previous") { t.Fatal("tool input tampering was not detected") }
+	if before == ComputeEntryHash(entry, "previous") {
+		t.Fatal("tool input tampering was not detected")
+	}
 }

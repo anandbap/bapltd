@@ -75,6 +75,8 @@ func setupZSPHookTestEnv(t *testing.T) (repoRoot, bapOut, interOut string) {
 	// These tests exercise the task-grant flow using read-only commands (git status/log), which are
 	// exempt by default. Strict mode restores the grant requirement so the flow stays under test.
 	t.Setenv("BAP_ZSP_STRICT_READS", "1")
+	// Explicit-grant regression fixtures intentionally disable policy auto-minting.
+	t.Setenv("BAP_ZSP_AUTO_GRANTS", "0")
 	t.Setenv("BAP_ZSP", "enforce")
 	t.Setenv("BAP_ZSP_ENABLED", "1")
 	t.Setenv("BAP_NON_INTERACTIVE", "1")
@@ -433,5 +435,44 @@ func TestPreToolUseRewrittenZSPAuthorizeBindsSameSessionPrincipal(t *testing.T) 
 	outGit := runPreTool("git status")
 	if !strings.Contains(outGit, `"permissionDecision": "allow"`) && !strings.Contains(outGit, `"permissionDecision":"allow"`) {
 		t.Fatalf("expected allow for git status after rewritten zsp authorize, got: %s", outGit)
+	}
+}
+
+func TestPreToolUseAutomaticallyAuthorizesInspectionBatchButNotPush(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows hook/broker integration")
+	}
+	repoRoot, _, interceptor := setupZSPHookTestEnv(t)
+	t.Setenv("BAP_ZSP_AUTO_GRANTS", "1")
+	session := "sess-cchook-auto-batch-" + time.Now().Format("150405.000")
+	run := func(command string) map[string]any {
+		t.Helper()
+		payload, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "tool_name": "PowerShell", "app_id": "claude-code", "session_id": session, "tool_input": map[string]any{"command": command}})
+		cmd := exec.Command(interceptor)
+		cmd.Dir, cmd.Stdin = repoRoot, bytes.NewReader(payload)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("hook failed: %v %s", err, out)
+		}
+		var response map[string]any
+		if err := json.Unmarshal(out, &response); err != nil {
+			t.Fatalf("invalid hook response: %v %s", err, out)
+		}
+		return response["hookSpecificOutput"].(map[string]any)
+	}
+	command := "git status --short --branch; git log --oneline -n 10; git status"
+	for i := 0; i < 2; i++ {
+		response := run(command)
+		if response["permissionDecision"] != "allow" || response["updatedInput"] == nil {
+			t.Fatalf("inspection batch was not routed to broker: %+v", response)
+		}
+	}
+	for _, command := range []string{"git push origin main", "git status --short --branch; git push origin main"} {
+		response := run(command)
+		if response["permissionDecision"] != "deny" {
+			t.Fatalf("push escaped inspection grant: %+v", response)
+		}
 	}
 }

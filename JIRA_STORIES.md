@@ -2,6 +2,50 @@
 
 ## Pilot hardening implementation update (candidate work)
 
+### BAP-1090 — Automatic authorization for routine command batches
+
+**Status: DONE — implementation and automated verification, 2026-11-14.**
+**Deployment: pending.** This is a local backlog record, not an external Jira issue.
+
+**Problem:** Agents naturally submit two or more commands in one tool call. Requiring
+a separate grant request and retry for a policy-permitted inspection batch creates
+avoidable friction. BAP must still reject a status-only grant used for push, including
+when push is appended to an otherwise permitted batch.
+
+**Delivered:** The broker reuses suitable grants or automatically submits a signed
+envelope for recognized batches whose every effect is policy-allowed. Automatic
+grants bind the exact command hash, canonical workspace, session/principal, and
+permission-policy hash; they have one execution use and at most 30 seconds of life.
+All effects are checked before execution; a rejected batch executes nothing and
+consumes no use. Human approval, hard denies, policy signatures, and mint/use/TTL
+ceilings remain enforced. Unsupported syntax retains the existing authorization
+flow. Hook guidance now explains automatic batches and the explicit fallback.
+
+**Acceptance checked:**
+
+- [x] A three-command status/log/status batch receives a signed grant without an agent authorization round trip.
+- [x] Repeated prechecks reuse the same unspent grant; parallel consumption of a single-use grant succeeds exactly once.
+- [x] A manually issued `git:status` grant rejects both push alone and status followed by push, without consuming the grant.
+- [x] Changed command text or workspace cannot reuse the automatic grant; tampered bindings fail signature verification.
+- [x] A changed signed permission policy invalidates automatic-grant reuse; `approve` and `deny` decisions never auto-mint.
+- [x] The existing per-session mint ceiling still blocks issuance when exhausted.
+- [x] Background execution, redirections, substitutions, unknown options, and mixed inspection/publishing batches do not qualify for automatic minting.
+- [x] Real Windows hook/broker integration permits the inspection batch and denies push with development override excluded by the isolated fixture.
+- [x] Scope enforcement and limitations documented in [COMMAND_BATCH_AUTHORIZATION.md](docs/COMMAND_BATCH_AUTHORIZATION.md), [PERMISSION_POLICY.md](docs/PERMISSION_POLICY.md), and [PILOT_RUNBOOK.md](docs/PILOT_RUNBOOK.md).
+
+**Verification:** `go test ./internal/authz ./cmd` passed in `bap-edge`; focused
+automatic-batch, explicit compound-grant, and rewritten-session hook integration
+tests passed in `cchook`. Additional approval-tier and ceiling tests passed afterward.
+The reused-grant authorization benchmark measured approximately 2.3 ms/op over 20
+iterations on this Windows host; this excludes process startup and workload execution
+and is not a fleet SLA. Both updated binaries built successfully, staged under
+`.codex-test-tmp/batch-build/`. Targeted `git diff --check` passed.
+
+**Remaining operational acceptance:** deploy the matching broker and interceptor,
+then verify a real installed-agent session with developer override disabled. No
+installed runtime was updated, no external Jira transition was performed, and no
+broader capability roadmap or cross-platform acceptance is closed by this story.
+
 - **Hooks-first prompt fallback follow-up (2026-11-14):** MCP reporting is default-on, unrelated hook heartbeats cannot suppress it, and session/turn correlation now owns prompt counting and source priority across audit and prompt ingestion. Late hooks supersede fallback text/classification without adding a turn; canonical transcript deduplicates corroboration while raw audit evidence remains immutable. Added native/broker turn-ID propagation and SQLite/checkpoint correlation persistence. Identical repeated turns require distinct native IDs; legacy hash-only correlation is qualified. Per-session telemetry batches prevent a refused old session from blocking live sessions. Fresh sign-in is acknowledged, but live historical backlog reconciliation and deployment remain open. See `docs/POLICY_AND_REPORTING_HEALTH.md`.
 
 - **Policy/reporting resilience follow-up (2026-11-14; BAP-1080/1085, BAP-1004):** added the missing daemon signed-policy poller (three seconds, independent of native hooks/watchers), daemon prompt-spool replay, reporting-only heartbeat enrollment guidance, runtime/CLI skew diagnostics and stale-daemon replacement on start. Cache files use unique staged replacement with bounded Windows sharing retries. Explicit state installations no longer import/discover/purge another installation's credentials during logout. A broad regression exposed the old cleanup touching live enrollment; fresh browser sign-in was initiated and remains an external acceptance step. Edge cmd/policystore/state and control-plane API/registry suites pass; next-poll kill-switch regression passes. No fleet-wide latency SLA, plaintext-policy encryption or hook-free automatic prompt source is claimed. See `docs/POLICY_AND_REPORTING_HEALTH.md`. Source changes require deployment.
