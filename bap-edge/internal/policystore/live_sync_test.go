@@ -14,6 +14,37 @@ func TestSyncProofGolden(t *testing.T) {
 	}
 }
 
+// A live proof must come from the pinned key and be bound to the directive actually delivered.
+// A proof from another key, or one issued for a different directive (for example an ordinary
+// UPDATE_REQUIRED proof attached to a swapped KILL_SWITCH), must not authorize a downgrade.
+func TestLiveProofFromWrongKeyOrDirectiveIsRejected(t *testing.T) {
+	cp := newFakeCP(t)
+	cp.version = 1700000000
+	s := newManagedStore(t, cp, "asset-forged")
+	cp.version = 2
+	cp.liveProof = true
+
+	_, otherPriv, _ := ed25519.GenerateKey(nil)
+	cp.proofKey = otherPriv
+	if _, _, err := s.SyncWithServer(cp.srv.URL, "", time.Second); !errors.Is(err, ErrPolicyTampered) {
+		t.Fatalf("proof signed by an unpinned key was accepted: %v", err)
+	}
+	cp.proofKey = nil
+
+	cp.proofDirective = "CURRENT"
+	if _, _, err := s.SyncWithServer(cp.srv.URL, "", time.Second); !errors.Is(err, ErrPolicyTampered) {
+		t.Fatalf("proof bound to a different directive was accepted: %v", err)
+	}
+	cp.proofDirective = ""
+
+	if _, _, st, err := s.Current(); err != nil || st.Version != 1700000000 {
+		t.Fatalf("rejected proofs must leave the cached policy untouched: %+v %v", st, err)
+	}
+	if b, _, err := s.SyncWithServer(cp.srv.URL, "", time.Second); err != nil || b.Version != 2 {
+		t.Fatalf("a correct proof must still be accepted afterwards: %+v %v", b, err)
+	}
+}
+
 func TestLiveServerCanLowerVersionButLocalReplayCannot(t *testing.T) {
 	cp := newFakeCP(t)
 	cp.version = 1700000000

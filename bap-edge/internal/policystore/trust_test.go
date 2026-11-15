@@ -40,6 +40,8 @@ type fakeCP struct {
 	lastAuth      string
 	liveProof     bool
 	replayProof   string
+	proofKey      ed25519.PrivateKey // when set, sign the live proof with this key instead of the pinned one
+	proofDirective string            // when set, bind the live proof to this directive instead of the one sent
 }
 
 func keyIDOf(pub ed25519.PublicKey) string {
@@ -96,7 +98,14 @@ func newFakeCP(t *testing.T) *fakeCP {
 		}
 		proof := cp.replayProof
 		if cp.liveProof && proof == "" {
-			proof = base64.StdEncoding.EncodeToString(ed25519.Sign(cp.priv, syncProofPayload(req.SyncNonce, directive, b.SignatureEd25519)))
+			signKey, boundDirective := cp.priv, directive
+			if cp.proofKey != nil {
+				signKey = cp.proofKey
+			}
+			if cp.proofDirective != "" {
+				boundDirective = cp.proofDirective
+			}
+			proof = base64.StdEncoding.EncodeToString(ed25519.Sign(signKey, syncProofPayload(req.SyncNonce, boundDirective, b.SignatureEd25519)))
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"directive": directive, "bundle": b, "sync_signature": proof})
 	})

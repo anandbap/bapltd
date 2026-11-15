@@ -322,6 +322,38 @@ func TestKeyRotationIsAdminOnlyAndFollowable(t *testing.T) {
 	}
 }
 
+// The live-authority proof must travel through the real handler: a request carrying a nonce gets
+// a sync_signature bound to that nonce, a request without one gets none (legacy clients), and
+// the proof verifies under the published policy key.
+func TestPolicySyncEndpointReturnsNonceBoundProof(t *testing.T) {
+	s, pol := newSettingsServer(t, t.TempDir())
+	sync := func(body map[string]any) policy.SyncResponse {
+		w := call(s, http.MethodPost, "/api/v1/policy/sync", body, map[string]string{})
+		if w.Code != http.StatusOK {
+			t.Fatalf("sync failed: %d %s", w.Code, w.Body.String())
+		}
+		var resp policy.SyncResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	withNonce := sync(map[string]any{"installed_version": 0, "sync_nonce": "nonce-one"})
+	if withNonce.Bundle == nil || withNonce.SyncSignature == "" {
+		t.Fatalf("nonce request must receive a bundle and a proof: %+v", withNonce)
+	}
+	pub := pol.Signer().PublicKeyB64()
+	if !policy.VerifyEd25519(pub, policy.SyncProofPayload("nonce-one", string(withNonce.Directive), withNonce.Bundle.SignatureEd25519), withNonce.SyncSignature) {
+		t.Fatal("proof does not verify for the nonce that was sent")
+	}
+	if policy.VerifyEd25519(pub, policy.SyncProofPayload("nonce-two", string(withNonce.Directive), withNonce.Bundle.SignatureEd25519), withNonce.SyncSignature) {
+		t.Fatal("proof must not verify for a different nonce")
+	}
+	if legacy := sync(map[string]any{"installed_version": 0}); legacy.SyncSignature != "" {
+		t.Fatal("a request without a nonce must not receive a proof")
+	}
+}
+
 func TestSettingsPersistenceFileIsPrivate(t *testing.T) {
 	dir := t.TempDir()
 	_, _ = newSettingsServer(t, dir)

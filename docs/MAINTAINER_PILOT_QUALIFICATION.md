@@ -82,7 +82,7 @@ Provision stable `BAP_SECRET_KEY` and `BAP_POLICY_SIGNING_SEED` through the appr
 Example start command after operator configuration has supplied the secrets:
 
 ```powershell
-& $ControlPlane start --fg --mode prod --db "$PersistentData/authority.db" --policy-max-age 24h --min-edge-version 1.13.7 --pilot-roster "$OperatorConfig/pilot-roster.json"
+& $ControlPlane start --fg --mode prod --db "$PersistentData/authority.db" --policy-max-age 24h --min-edge-version 1.13.15 --pilot-roster "$OperatorConfig/pilot-roster.json"
 ```
 
 Use your real approved paths and origin. Production refuses ephemeral signing configuration, relative/in-memory database paths and a missing offline policy budget. Storage initialization failure refuses startup. API responses are released after the authority checkpoint and new audit links commit; ingest acknowledgements then report `durable: true`. A later commit failure returns 503 and leaves the service unavailable until the operator repairs storage and restarts.
