@@ -801,16 +801,38 @@ func getHTTPClient() *http.Client {
 // ToolInput represents the input object from Claude Code.
 // Supports both command-execution (Bash) and direct file tools (Read, View, Edit, Write).
 type ToolInput struct {
-	Command       string `json:"command,omitempty"`
-	Cmd           string `json:"cmd,omitempty"`
-	CommandLine   string `json:"CommandLine,omitempty"`
-	Script        string `json:"script,omitempty"`
-	FilePath      string `json:"file_path,omitempty"`
-	FilePathCamel string `json:"filePath,omitempty"`
-	Path          string `json:"path,omitempty"`
-	File          string `json:"file,omitempty"`
-	Target        string `json:"target,omitempty"`
-	TargetPath    string `json:"targetPath,omitempty"`
+	// Unknown tool arguments are evidence only, never echoed as executable updated input.
+	Extra         map[string]json.RawMessage `json:"-"`
+	Pattern       string                     `json:"pattern,omitempty"`
+	Query         string                     `json:"query,omitempty"`
+	Command       string                     `json:"command,omitempty"`
+	Cmd           string                     `json:"cmd,omitempty"`
+	CommandLine   string                     `json:"CommandLine,omitempty"`
+	Script        string                     `json:"script,omitempty"`
+	FilePath      string                     `json:"file_path,omitempty"`
+	FilePathCamel string                     `json:"filePath,omitempty"`
+	Path          string                     `json:"path,omitempty"`
+	File          string                     `json:"file,omitempty"`
+	Target        string                     `json:"target,omitempty"`
+	TargetPath    string                     `json:"targetPath,omitempty"`
+}
+
+func (input *ToolInput) UnmarshalJSON(data []byte) error {
+	type knownInput ToolInput
+	var known knownInput
+	if err := json.Unmarshal(data, &known); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for _, key := range []string{"pattern", "query", "command", "cmd", "CommandLine", "script", "file_path", "filePath", "path", "file", "target", "targetPath"} {
+		delete(fields, key)
+	}
+	*input = ToolInput(known)
+	input.Extra = fields
+	return nil
 }
 
 // AntigravityToolCall represents toolCall structure in Antigravity hook payloads.

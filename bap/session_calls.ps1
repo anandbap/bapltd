@@ -3,11 +3,22 @@
 function ConvertTo-LogicalCalls {
     param([psobject[]]$Events)
     $groups = [System.Collections.Generic.List[object]]::new()
+    $seen = @{}
     $acts = @($Events | Where-Object {
         $_.full_command -notin @('USER_PROMPT_SUBMITTED', 'AGENT_RESPONSE') -and $_.executable -ne 'agent_response'
     } | Sort-Object { try { [DateTimeOffset]::Parse($_.timestamp) } catch { [DateTimeOffset]::MinValue } })
     foreach ($e in $acts) {
+        if ($e.event_id) {
+            $id = [string]$e.event_id
+            if ($seen.ContainsKey($id)) { continue }
+            $seen[$id] = $true
+        }
         $key = (([string]$e.full_command).Trim() -replace '\s+', ' ').ToLowerInvariant()
+        # Missing content is not evidence that two operations are the same.
+        if (-not $key) {
+            $key = 'metadata:' + [string]$e.executable + ':' + [string]$e.content_hash
+            if (-not $e.content_hash) { $key += ':' + [guid]::NewGuid().ToString() }
+        }
         if ($key.Contains('zsp authorize')) {
             if ($key -match '--actions[ =]+"?([^"\s]+)') { $key = 'zsp-authorize:' + $Matches[1] }
             else { $key = 'zsp-authorize' }

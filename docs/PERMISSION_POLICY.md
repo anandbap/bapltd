@@ -81,6 +81,71 @@ pepper file is protected by OS file permissions and location (`~/bin/.bapstate/z
 separate trust boundary. The workspace-local `.bapstate\zsp\pepper.key` seen in older checkouts is a
 legacy copy and should be deleted and the live pepper rotated.
 
+## Repeated refusals: warning, halting, and what is not limited
+
+An agent that is refused will often retry the same request in a loop. BAP answers every
+refusal immediately and never waits for input. Two mechanisms react to repetition. Neither is a
+general rate limiter, and neither changes policy. Source: `bap-edge/internal/authz/denial_breaker.go`
+(BAP-936).
+
+### Anti-spin circuit breaker (identical refusals)
+
+| Identical refusals in 5 minutes | What the agent sees |
+|---|---|
+| 1-2 | Normal refusal with the next step |
+| 3-4 | The guidance starts with an explicit `STOP: BAP has refused this exact request N times` notice |
+| 5 or more | The agent turn is **halted**: the hook returns `continue:false` with a stop reason telling the developer a human decision is needed |
+
+* The count is per **session** and per **identical** refusal, over a rolling 5-minute window. The
+  window is `denialWindow`; the thresholds are `DenialWarnAfter = 3` and `DenialHaltAfter = 5`.
+  Entries older than the window are dropped the next time a refusal is recorded.
+* "Identical" means the same key. For `zsp authorize` it is the sorted actions and resources. For a
+  ZSP refusal in the hook/plugin path it is the refusal text, the command, the tool name and the
+  file path, lower-cased and hashed.
+* From the halt threshold, a repeated `zsp authorize` for the same actions and resources is not
+  submitted again at all. The agent gets a refusal that points to `bapedge zsp approvals`.
+* Counters are local files under the ZSP state directory (`denials/<session>.json`, mode 0600). They
+  are not sent to the control plane as a separate signal. The refusals themselves are audited as
+  usual. A `ClearDenial` helper exists, but counters currently end by the window expiring.
+* After a halt the developer decides: review `bapedge zsp approvals` or the refusal, then resume the
+  agent with new instructions. Halting does not freeze the session or the workstation.
+
+### Session threat label (broker commands only)
+
+For commands that go through `bapedge exec`, every denied command in a session is counted
+(`recordSessionDenial`, `bap-edge/cmd/exec.go`). From 2 denials the label is `ELEVATED` and from 4
+it is `CRITICAL`. The only effect is a `[CORRELATED RISK EVENT]` warning added to the response.
+
+* It does not halt, freeze or tighten anything, and it is not sent to the control plane.
+* It has no time window or decay, and it counts every kind of denial together.
+* It is stored in `.bap/risk_state.json` relative to the working directory, so it follows the
+  folder rather than the session or the machine.
+* Native-tool and hook refusals do not update it.
+
+### Other bounds that are not rate limits
+
+* `max_mints_per_session` is a hard stop on grant minting (`ErrMintCapExceeded`).
+* The ceiling clamps uses and lifetime per grant; a single-use grant burns on first use.
+* Identical pending approval requests collapse into one, so repeated asks do not flood the
+  operator.
+* Credentials and other `deny`-tier actions are never grantable, however often they are requested.
+
+### Known limits (record them; do not rely on more than this)
+
+* **No requests-per-time limit.** Nothing caps how fast an agent can ask or try.
+* **Varied attempts are not halted.** Rewording a command, changing a flag or switching shells
+  produces a new key each time, so the breaker never reaches its thresholds. Each attempt is still
+  refused or still needs a human, but the agent is not stopped for the volume.
+* **No automatic escalation.** A burst of different violations does not raise the session's risk
+  tier, freeze the session, or notify the control plane. Freezing and quarantine are administrator
+  actions (or follow missing heartbeats or hook tampering).
+* The breaker works only where a BAP hook, broker or CLI sees the attempt. An action that reaches no
+  BAP layer is not counted.
+
+Tests: `go test -C bap-edge ./internal/authz -run BAP936` (per-session and per-key counting, the
+STOP wording) and `go test -C bap-edge ./cmd -run TestE2E_RepeatedRefusalsAreStoppedNotSpun`
+(the halt after repeated refusals).
+
 ## Behavior changes versus the previous engine
 
 * `repo:*` narrows to `repo:read` only (previously `repo:read,repo:push`).

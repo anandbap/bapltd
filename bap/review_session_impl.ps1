@@ -82,6 +82,10 @@ function Find-AuditLedgers {
                     $found += $c
                 }
             }
+            # Acknowledged operations retain their full local evidence in archives.
+            foreach ($archive in @(Get-ChildItem -Path ($c + '.recovery-*.jsonl') -ErrorAction SilentlyContinue)) {
+                if ($found -notcontains $archive.FullName) { $found += $archive.FullName }
+            }
         } catch {}
     }
     return $found
@@ -101,6 +105,7 @@ function Load-SessionData {
                 if ($trimmed.Length -gt 2 -and $trimmed.StartsWith("{") -and $trimmed.EndsWith("}")) {
                     try {
                         $evt = $trimmed | ConvertFrom-Json
+                        if ($evt.entry -and $evt.entry.event_id) { $evt = $evt.entry }
                         $sid = [string]$evt.session_id
                         if ([string]::IsNullOrWhiteSpace($sid)) {
                             if ($evt.receipt -and -not [string]::IsNullOrWhiteSpace($evt.receipt.session_id)) {
@@ -151,7 +156,8 @@ function Load-SessionData {
 }
 
 function Format-Timestamp {
-    param([string]$IsoString)
+    param($IsoString)
+    if ($IsoString -is [datetime]) { return $IsoString.ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss') }
     if ([string]::IsNullOrWhiteSpace($IsoString)) { return "N/A" }
     try {
         $dto = [DateTimeOffset]::Parse($IsoString)
@@ -163,7 +169,8 @@ function Format-Timestamp {
 }
 
 function Format-TimeOnly {
-    param([string]$IsoString)
+    param($IsoString)
+    if ($IsoString -is [datetime]) { return $IsoString.ToUniversalTime().ToString('HH:mm:ss.ff') }
     if ([string]::IsNullOrWhiteSpace($IsoString)) { return "--:--:--" }
     try {
         $dto = [DateTimeOffset]::Parse($IsoString)
@@ -221,6 +228,11 @@ function Build-CallsReport {
             reporting_layer    = if ($e.reporting_layer) { [string]$e.reporting_layer } else { "hook" }
             tool               = [string]$e.executable
             command            = [string]$e.full_command
+            tool_input         = $e.tool_input
+            content_hash       = [string]$e.content_hash
+            event_id           = [string]$e.event_id
+            event_count        = $e.event_count
+            input_status       = if ($e.full_command) { 'recorded' } elseif ($e.telemetry_content -eq 'metadata' -or $e.reason -like '*withheld by metadata capture policy*') { 'withheld_by_policy' } else { 'not_recorded' }
             reason             = $reason
             canonical_action   = [string]$e.canonical_action
             canonical_resource = [string]$e.canonical_resource
@@ -261,6 +273,8 @@ function Build-CallsReport {
         blocked_calls         = $blockedCalls
         narrowed_grants       = $narrowedGrants
         allowed_limited_calls = $narrowedGrants
+        failed_calls          = @($Events | Where-Object outcome -eq 'failed')
+        unclassified_calls    = @($Events | Where-Object outcome -eq 'unclassified')
     }
 }
 
@@ -310,6 +324,11 @@ function Summarize-Session {
     $maxLatency = if ($latencies.Count -gt 0) { ($latencies | Measure-Object -Maximum).Maximum } else { 0.0 }
 
     $callsReport = Build-CallsReport -SessionId $SessionId -Agent $agent -Events $Events -AvgLatency $avgLatency -MaxLatency $maxLatency
+    $callsReport.summary | Add-Member -NotePropertyName latency_sample_count -NotePropertyValue $latencies.Count
+    if ($latencies.Count -eq 0) {
+        $callsReport.summary.avg_latency_ms = $null
+        $callsReport.summary.max_latency_ms = $null
+    }
     $rawActionCount = @($rawEvents | Where-Object { $_.full_command -notin @('USER_PROMPT_SUBMITTED', 'AGENT_RESPONSE') -and $_.executable -ne 'agent_response' }).Count
     $callsReport.summary | Add-Member -NotePropertyName raw_events -NotePropertyValue $rawActionCount
     $callsReport.summary | Add-Member -NotePropertyName failed_count -NotePropertyValue @($Events | Where-Object outcome -eq 'failed').Count
@@ -342,6 +361,8 @@ function Summarize-Session {
         StatusText     = $statusText
         CallsReport    = $callsReport
         RawEvents      = $rawEvents
+        LogicalEvents  = $Events
+        LatencySamples = $latencies.Count
     }
 }
 
@@ -385,10 +406,12 @@ function Show-SessionDetail {
     Write-Host "========================================================================================================" -ForegroundColor Cyan
     Write-Host "  Session ID      : " -NoNewline; Write-Host $Summary.SessionId -ForegroundColor Yellow
     Write-Host "  AI Agent Client : " -NoNewline; Write-Host $Summary.Agent -ForegroundColor Cyan
-    Write-Host "  Time Window     : $($Summary.StartTime)  -->  $($Summary.EndTime)" -ForegroundColor Gray
+    Write-Host "  Time Window UTC : $(Format-Timestamp $Summary.StartTime)  -->  $(Format-Timestamp $Summary.EndTime)" -ForegroundColor Gray
 
     Write-Host "  Health Verdict  : " -NoNewline
-    if ($Summary.Denied -eq 0 -and $Summary.Narrowed -gt 0) {
+    if ($Summary.CallsReport.summary.failed_count -gt 0 -or $Summary.CallsReport.summary.unclassified_count -gt 0) {
+        Write-Host '[REVIEW] Failed or unclassified actions recorded; inspect outcomes below.' -ForegroundColor Yellow
+    } elseif ($Summary.Denied -eq 0 -and $Summary.Narrowed -gt 0) {
         Write-Host ("[PASS] 100% COMPLIANT (ALLOWED-LIMITED) - {0} action(s) scope-narrowed to least privilege" -f $Summary.Narrowed) -ForegroundColor Yellow
     } elseif ($Summary.Denied -eq 0) {
         Write-Host "[PASS] 100% COMPLIANT - All agent operations permitted by Zero-Trust policy" -ForegroundColor Green
@@ -398,14 +421,26 @@ function Show-SessionDetail {
 
     Write-Host "--------------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host "  KEY PERFORMANCE AND SLA METRICS:" -ForegroundColor White
+    $missingInputs = @($Summary.LogicalEvents | Where-Object { -not $_.full_command }).Count
+    Write-Host ("    * Input details unavailable  : {0} / {1}" -f $missingInputs, $Summary.TotalEvents) -ForegroundColor Yellow
+    if ($missingInputs -gt 0) {
+        Write-Host '      Metadata policy can withhold commands; unavailable input does not mean empty input.' -ForegroundColor Yellow
+        Write-Host '      Previously withheld content cannot be recovered from this ledger.' -ForegroundColor Gray
+        Write-Host '      Updated hook and broker builds retain local details regardless of telemetry sync mode.' -ForegroundColor Gray
+    }
     Write-Host ("    * Total Evaluated Operations : {0}" -f $Summary.TotalEvents)
     Write-Host ("    * Permitted Actions          : {0}" -f $Summary.Allowed) -ForegroundColor Green
     Write-Host ("    * Blocked Security Actions   : {0}" -f $Summary.Denied) -ForegroundColor (Iif ($Summary.Denied -gt 0) "Red" "Gray")
     Write-Host ("    * Scope Attenuated (Limited) : {0}" -f $Summary.Narrowed) -ForegroundColor (Iif ($Summary.Narrowed -gt 0) "DarkYellow" "Gray")
-    Write-Host ("    * Average Decision Latency   : {0} ms" -f $Summary.AvgLatency) -ForegroundColor Cyan
-    Write-Host ("    * Peak Decision Latency      : {0} ms (Min: {1} ms)" -f $Summary.MaxLatency, $Summary.MinLatency) -ForegroundColor Gray
+    Write-Host ("    * Failed / Unclassified     : {0} / {1}" -f $Summary.CallsReport.summary.failed_count, $Summary.CallsReport.summary.unclassified_count)
+    if ($Summary.LatencySamples -gt 0) {
+        Write-Host ("    * Average Recorded Latency   : {0} ms ({1} samples)" -f $Summary.AvgLatency, $Summary.LatencySamples) -ForegroundColor Cyan
+        Write-Host ("    * Peak Recorded Latency      : {0} ms (Min: {1} ms)" -f $Summary.MaxLatency, $Summary.MinLatency) -ForegroundColor Gray
+    } else {
+        Write-Host '    * Recorded Latency           : N/A (no samples)' -ForegroundColor Gray
+    }
     
-    $slaMet = if ($Summary.MaxLatency -le 350.0) { "[PASS] (< 350ms SLA Target Met)" } else { "[!] Latency spike observed" }
+    $slaMet = if ($Summary.LatencySamples -eq 0) { '[UNKNOWN] No latency samples recorded' } elseif ($Summary.MaxLatency -lt 350.0) { "[PASS] (< 350ms SLA Target Met)" } else { "[!] Latency spike observed" }
     Write-Host ("    * SLA Target Compliance      : {0}" -f $slaMet) -ForegroundColor Green
     Write-Host "--------------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
 
@@ -430,17 +465,17 @@ function Show-SessionDetail {
     Write-Host ("  {0,-3} {1,-12} {2,-15} {3,-7} {4,-12} {5,-34} {6}" -f "#", "TIME (UTC)", "DECISION", "LAYER", "TOOL", "COMMAND / OPERATION", "SECURITY REASON / DETAILS") -ForegroundColor Yellow
     Write-Host "  ------------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
 
-    $events = $Summary.RawEvents
+    $events = $Summary.LogicalEvents
     for ($i = 0; $i -lt $events.Count; $i++) {
         $e = $events[$i]
         $timeStr = Format-TimeOnly $e.timestamp
         $dec = [string]$e.decision
         $isNarrowed = ($e.narrowing_applied -eq $true)
-        $decUpper = if ($isNarrowed -and ($dec -in @('allow', 'approved', 'approve', 'granted', 'ok', 'allowed-limited'))) { "ALLOWED-LIMITED" } elseif ($dec -in @('allow', 'approved', 'approve', 'granted', 'ok')) { "ALLOW" } else { "BLOCK" }
+        $decUpper = if ($e.outcome -eq 'failed') { 'FAILED' } elseif ($e.outcome -eq 'unclassified') { 'UNCLASSIFIED' } elseif ($isNarrowed) { 'ALLOWED-LIMITED' } elseif ($e.outcome -eq 'allowed') { 'ALLOW' } else { 'BLOCK' }
         $layer = if ($e.reporting_layer) { [string]$e.reporting_layer } else { "hook" }
         $tool = if ($e.executable) { [string]$e.executable } else { "-" }
         
-        $cmdStr = if ($e.full_command) { [string]$e.full_command } else { "(empty tool input)" }
+        $cmdStr = if ($e.full_command) { [string]$e.full_command } elseif ($e.telemetry_content -eq 'metadata' -or $e.reason -like '*withheld by metadata capture policy*') { '[input withheld by policy]' } else { '[input not recorded]' }
         $cmdShort = if ($cmdStr.Length -gt 33) { $cmdStr.Substring(0, 30) + "..." } else { $cmdStr }
 
         $reason = if ($e.narrowing_reason) { [string]$e.narrowing_reason } elseif ($e.reason) { [string]$e.reason } else { "Policy evaluated" }
@@ -450,6 +485,12 @@ function Show-SessionDetail {
         Write-Host ("  {0,-3} {1,-12} " -f ($i + 1), $timeStr) -NoNewline -ForegroundColor Gray
         Write-Host ("{0,-15} " -f $decUpper) -NoNewline -ForegroundColor $rowColor
         Write-Host ("{0,-7} {1,-12} {2,-34} {3}" -f $layer, $tool, $cmdShort, $reasonShort) -ForegroundColor White
+        if ($cmdStr.Length -gt 33) { Write-Host ("      Operation: {0}" -f $cmdStr) -ForegroundColor Gray }
+        if ($e.tool_input) { Write-Host ("      Input: {0}" -f ($e.tool_input | ConvertTo-Json -Depth 50 -Compress)) -ForegroundColor Gray }
+        if ($reason.Length -gt 45) { Write-Host ("      Reason: {0}" -f $reason) -ForegroundColor Gray }
+        foreach ($field in @('canonical_action', 'canonical_resource', 'zsp_concept', 'grant_id', 'content_hash', 'event_id')) {
+            if ($e.$field) { Write-Host ("      {0}: {1}" -f $field, $e.$field) -ForegroundColor Gray }
+        }
     }
 
     Write-Host "  ------------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
@@ -460,7 +501,7 @@ function Show-SessionDetail {
         Write-Host "       Review failed and unclassified outcomes, and verify boundary coverage separately.`n" -ForegroundColor Gray
     } else {
         Write-Host ("  [!] During this session, the agent attempted {0} action(s) blocked by enterprise invariants." -f $Summary.Denied) -ForegroundColor Yellow
-        Write-Host "      Review the recorded reasons and execution results above. Missing latency is reported as zero.`n" -ForegroundColor Gray
+        Write-Host "      Review the recorded reasons and execution results above. Missing latency is not an SLA pass.`n" -ForegroundColor Gray
     }
     Write-Host "========================================================================================================`n" -ForegroundColor Cyan
 }

@@ -87,6 +87,17 @@ func telemetryContentPath(path string) bool {
 }
 
 func MinimizeTelemetryJSON(raw []byte) ([]byte, error) {
+	return filterEvidenceJSON(raw, false)
+}
+
+// CaptureLocalJSON retains local evidence independently of outbound telemetry policy.
+// Credential redaction still applies, but local command/reason text is never dropped.
+func CaptureLocalJSON(raw []byte) ([]byte, error) {
+	return filterEvidenceJSON(raw, true)
+}
+
+func filterEvidenceJSON(raw []byte, local bool) ([]byte, error) {
+	metadataOnly := !local && MetadataOnly()
 	var value any
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return nil, err
@@ -99,6 +110,12 @@ func MinimizeTelemetryJSON(raw []byte) ([]byte, error) {
 				visit(child)
 			}
 		case map[string]any:
+			// Retain correlation without retaining command content. Do this before
+			// metadata minimization, and preserve it when retrying a spooled event.
+			if command, ok := node["full_command"].(string); ok && command != "" && node["content_hash"] == nil {
+				sum := sha256.Sum256([]byte(command))
+				node["content_hash"] = hex.EncodeToString(sum[:])
+			}
 			if prompt, ok := node["user_prompt"].(string); ok && prompt != "" && node["prompt_hash"] == nil {
 				sum := sha256.Sum256([]byte(prompt))
 				node["prompt_hash"] = hex.EncodeToString(sum[:])
@@ -108,34 +125,34 @@ func MinimizeTelemetryJSON(raw []byte) ([]byte, error) {
 				case "user_prompt", "prompt", "prompt_text":
 					// Prompt text follows the administrator's prompt-capture mode, not the generic
 					// content setting below.
-					if !PromptContentAllowed() {
+					if !local && !PromptContentAllowed() {
 						delete(node, key)
 						continue
 					}
-				case "agent_response", "response", "full_command", "arguments", "command", "text", "content", "evidence", "description", "task_description", "error":
-					if MetadataOnly() {
+				case "agent_response", "response", "full_command", "arguments", "command", "text", "content", "evidence", "description", "task_description", "error", "action", "deviation_reason", "tool_input", "input", "args", "parameters":
+					if metadataOnly {
 						delete(node, key)
 						continue
 					}
 				case "prompt_captured", "prompt_capture_enabled":
-					if !PromptContentAllowed() {
+					if !local && !PromptContentAllowed() {
 						node[key] = false
 						continue
 					}
 				case "captured":
-					if MetadataOnly() {
+					if metadataOnly {
 						node[key] = false
 						continue
 					}
 				case "reason":
-					if MetadataOnly() {
+					if metadataOnly {
 						node[key] = "Details withheld by metadata capture policy"
 						continue
 					}
 				}
 				if text, ok := child.(string); ok {
 					text = telemetrySecret.ReplaceAllString(text, "${1}[redacted]")
-					if len(text) > 4096 {
+					if !local && len(text) > 4096 {
 						text = text[:4096] + "[truncated]"
 					}
 					node[key] = text
@@ -143,7 +160,7 @@ func MinimizeTelemetryJSON(raw []byte) ([]byte, error) {
 					visit(child)
 				}
 			}
-			if MetadataOnly() {
+			if metadataOnly {
 				node["telemetry_content"] = "metadata"
 			}
 		}

@@ -14,10 +14,25 @@ import (
 
 var fileHookEvidence struct {
 	SessionID, AppID, Tool, Path, Command, UserPrompt string
+	InputDetails                                      string
 	PID                                               int
 }
 
 func prepareHookEvidence(payload HookPayload, sessionID, appID string) {
+	fileHookEvidence.InputDetails = ""
+	{
+		if raw, err := json.Marshal(payload.ToolInput); err == nil {
+			var fields map[string]json.RawMessage
+			if json.Unmarshal(raw, &fields) == nil {
+				for key, value := range payload.ToolInput.Extra {
+					fields[key] = value
+				}
+				if combined, err := json.Marshal(fields); err == nil {
+					fileHookEvidence.InputDetails = string(combined)
+				}
+			}
+		}
+	}
 	fileHookEvidence.SessionID, fileHookEvidence.AppID = sessionID, appID
 	fileHookEvidence.Tool, fileHookEvidence.Path = payload.ToolName, payload.ToolInput.FilePath
 	if fileHookEvidence.Path == "" {
@@ -126,6 +141,9 @@ func spoolFileHookDecision(decision, reason string) error {
 	} else {
 		fullCommand = e.Tool
 	}
+	if e.Command == "" && e.InputDetails != "" && e.InputDetails != "{}" {
+		fullCommand = e.Tool + " " + e.InputDetails
+	}
 
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
@@ -151,15 +169,17 @@ func spoolFileHookDecision(decision, reason string) error {
 		"reporting_layer":    "hook",
 		"executable":         executable,
 		"full_command":       fullCommand,
+		"tool_input":         localToolInput(e.InputDetails),
 		"decision":           decision,
 		"reason":             reason,
 		"canonical_action":   action,
 		"canonical_resource": e.Path,
+		"zsp_concept":        hookDecisionConcept(reason),
 	})
 	if err != nil {
 		return err
 	}
-	data, err = MinimizeTelemetryJSON(data)
+	data, err = CaptureLocalJSON(data)
 	if err != nil {
 		return err
 	}
@@ -213,6 +233,10 @@ func spoolFileHookDecision(decision, reason string) error {
 			"trace_id":         id,
 		}
 		if actBody, err := json.Marshal(activityEvt); err == nil {
+			actBody, err = MinimizeTelemetryJSON(actBody)
+			if err != nil {
+				return err
+			}
 			go func() {
 				client := &http.Client{Timeout: 800 * time.Millisecond}
 				resp, err := client.Post(serverURL+"/api/activity/ingest", "application/json", bytes.NewReader(actBody))
@@ -224,4 +248,27 @@ func spoolFileHookDecision(decision, reason string) error {
 	}
 
 	return nil
+}
+
+func localToolInput(details string) any {
+	if details == "" || details == "{}" {
+		return nil
+	}
+	return json.RawMessage(details)
+}
+
+// Preserve only a fixed category when metadata policy withholds free-form reasons.
+func hookDecisionConcept(reason string) string {
+	r := strings.ToLower(reason)
+	switch {
+	case strings.Contains(r, "already burned"), strings.Contains(r, "max uses exceeded"):
+		return "ZSP_SINGLE_USE_BURN"
+	case strings.Contains(r, "zero standing privilege"), strings.Contains(r, "zerostandingprivilege"):
+		return "ZSP_DENY_NO_GRANT"
+	case strings.Contains(r, "credential"), strings.Contains(r, ".env"):
+		return "CREDENTIAL_ISOLATION"
+	case strings.Contains(r, "out-of-band"), strings.Contains(r, "high-risk"), strings.Contains(r, "step-up"):
+		return "HIGH_RISK_OOB_GATE"
+	}
+	return ""
 }

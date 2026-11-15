@@ -11,37 +11,37 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
 
 // AuditEntry represents a structured, tamper-evident log record for an execution request.
 type AuditEntry struct {
-	EventID           string    `json:"event_id,omitempty"`
-	ReportingLayer    string    `json:"reporting_layer,omitempty"`
-	EvidenceGrade     string    `json:"evidence_grade,omitempty"` // set by fallback reporters, e.g. self_reported
-	TurnID            string    `json:"turn_id,omitempty"`        // per-turn id so the control plane can dedupe prompts
-	SessionID         string    `json:"session_id,omitempty"`
-	UserPrompt        string    `json:"user_prompt,omitempty"`
-	PromptHash        string    `json:"prompt_hash,omitempty"`
-	UserID            string    `json:"user_id,omitempty"`
-	UserEmail         string    `json:"user_email,omitempty"`
-	SPIFFEID          string    `json:"spiffe_id,omitempty"`
-	Timestamp         time.Time `json:"timestamp"`
-	Source            string    `json:"source"`
-	ClientPID         int       `json:"client_pid"`
-	Executable        string    `json:"executable"`
-	Arguments         string    `json:"arguments,omitempty"`
-	FullCommand       string    `json:"full_command"`
-	Decision          string    `json:"decision"` // "allow" or "deny"
-	Reason            string    `json:"reason,omitempty"`
-	DurationMs        int64     `json:"duration_ms"`
-	ExitCode          int       `json:"exit_code"`
-	Error             string    `json:"error,omitempty"`
-	CanonicalAction   string    `json:"canonical_action,omitempty"`
-	CanonicalResource string    `json:"canonical_resource,omitempty"`
-	ContentHash       string    `json:"content_hash,omitempty"`
+	EventID           string          `json:"event_id,omitempty"`
+	ReportingLayer    string          `json:"reporting_layer,omitempty"`
+	EvidenceGrade     string          `json:"evidence_grade,omitempty"` // set by fallback reporters, e.g. self_reported
+	TurnID            string          `json:"turn_id,omitempty"`        // per-turn id so the control plane can dedupe prompts
+	SessionID         string          `json:"session_id,omitempty"`
+	UserPrompt        string          `json:"user_prompt,omitempty"`
+	PromptHash        string          `json:"prompt_hash,omitempty"`
+	UserID            string          `json:"user_id,omitempty"`
+	UserEmail         string          `json:"user_email,omitempty"`
+	SPIFFEID          string          `json:"spiffe_id,omitempty"`
+	Timestamp         time.Time       `json:"timestamp"`
+	Source            string          `json:"source"`
+	ClientPID         int             `json:"client_pid"`
+	Executable        string          `json:"executable"`
+	Arguments         string          `json:"arguments,omitempty"`
+	FullCommand       string          `json:"full_command"`
+	ToolInput         json.RawMessage `json:"tool_input,omitempty"`
+	Decision          string          `json:"decision"` // "allow" or "deny"
+	Reason            string          `json:"reason,omitempty"`
+	DurationMs        int64           `json:"duration_ms"`
+	ExitCode          int             `json:"exit_code"`
+	Error             string          `json:"error,omitempty"`
+	CanonicalAction   string          `json:"canonical_action,omitempty"`
+	CanonicalResource string          `json:"canonical_resource,omitempty"`
+	ContentHash       string          `json:"content_hash,omitempty"`
 	// Delegation Lineage & Attenuation (BAP-532)
 	Lineage       []string `json:"lineage,omitempty"`
 	LineageTree   string   `json:"lineage_tree,omitempty"`
@@ -101,6 +101,15 @@ func ComputeEntryHash(entry AuditEntry, prevHash string) string {
 	h.Write([]byte(strconv.Itoa(entry.ClientPID)))
 	h.Write([]byte(entry.Executable))
 	h.Write([]byte(entry.FullCommand))
+	if len(entry.ToolInput) > 0 && string(entry.ToolInput) != "null" {
+		h.Write([]byte("\x00bap-tool-input\x00"))
+		// Canonicalize JSON so marshaling indentation cannot change the digest.
+		var input any
+		if json.Unmarshal(entry.ToolInput, &input) == nil {
+			canonical, _ := json.Marshal(input)
+			h.Write(canonical)
+		}
+	}
 	h.Write([]byte(entry.Decision))
 	h.Write([]byte(strconv.Itoa(entry.ExitCode)))
 	if entry.ReportingLayer != "" {
@@ -145,22 +154,17 @@ func Log(entryInput any, logPath string) error {
 	default:
 		return fmt.Errorf("unsupported entry type")
 	}
-	if httptransport.MetadataOnly() {
-		keepPrompt := entry.UserPrompt
-		if entry.UserPrompt != "" {
-			sum := sha256.Sum256([]byte(entry.UserPrompt))
-			entry.PromptHash = hex.EncodeToString(sum[:])
-		}
-		entry.UserPrompt, entry.Arguments, entry.FullCommand, entry.Error = "", "", "", ""
-		// Prompt text is governed by the administrator's prompt-capture mode, not this setting.
-		if httptransport.PromptContentAllowed() {
-			entry.UserPrompt = keepPrompt
-		}
-		if strings.Contains(entry.Reason, "ZeroStandingPrivilegeViolation") {
-			entry.Reason = "ZeroStandingPrivilegeViolation"
-		} else {
-			entry.Reason = "Details withheld by metadata capture policy"
-		}
+	// Sync minimization belongs at the transport boundary, never at local capture.
+	raw, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+	local, err := httptransport.CaptureLocalJSON(raw)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(local, entry); err != nil {
+		return err
 	}
 
 	mu.Lock()
@@ -208,7 +212,7 @@ func Log(entryInput any, logPath string) error {
 	entry.PreviousHash = lastHash
 	entry.EntryHash = ComputeEntryHash(*entry, lastHash)
 
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return err
 	}
@@ -380,7 +384,7 @@ func RemoveEntry(eventID string, logPath string) error {
 		buf.Write(l)
 		buf.WriteByte('\n')
 	}
-	return os.WriteFile(logPath, buf.Bytes(), 0644)
+	return os.WriteFile(logPath, buf.Bytes(), 0600)
 }
 
 // RemoveEntries removes multiple entries by event_id in a single atomic pass.
@@ -431,7 +435,7 @@ func RemoveEntries(eventIDs map[string]struct{}, logPath string) error {
 		buf.Write(l)
 		buf.WriteByte('\n')
 	}
-	return os.WriteFile(logPath, buf.Bytes(), 0644)
+	return os.WriteFile(logPath, buf.Bytes(), 0600)
 }
 
 // ClearLog truncates the local log file to 0 bytes.

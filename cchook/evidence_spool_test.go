@@ -36,8 +36,12 @@ func TestFileHookEvidenceSurvivesWithoutNetworkOrPrompt(t *testing.T) {
 	if _, ok := ev["user_prompt"]; ok {
 		t.Fatal("file-hook record invented prompt text")
 	}
-	if strings.Contains(string(data), "PRIVATE_REASON_MARKER") || ev["canonical_action"] != "fs:file:read" || ev["canonical_resource"] != "workspace/source.go" {
-		t.Fatalf("privacy or effect metadata lost: %s", data)
+	if !strings.Contains(string(data), "PRIVATE_REASON_MARKER") || ev["full_command"] != "Read workspace/source.go" || ev["canonical_action"] != "fs:file:read" || ev["canonical_resource"] != "workspace/source.go" {
+		t.Fatalf("local operation evidence lost: %s", data)
+	}
+	outbound, err := MinimizeTelemetryJSON(data)
+	if err != nil || strings.Contains(string(outbound), "PRIVATE_REASON_MARKER") || strings.Contains(string(outbound), "full_command") {
+		t.Fatalf("outbound metadata leaked content: %s %v", outbound, err)
 	}
 }
 

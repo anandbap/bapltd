@@ -168,8 +168,10 @@ Read this before scene 5 and before approving anything.
    the agent window, and developer override does not change this.
 3. Approval **mints a short-lived grant** (default about five minutes, limited
    uses) for the requesting session and the requested actions. It does **not**
-   mark the agent's request as "approved". Running `zsp authorize` again
-   raises a **new** request.
+   mark the agent's request as "approved". If a live human-approved grant for
+   the same session already covers every requested action and resource,
+   `zsp authorize` reuses it. A broader ask, another resource or an expired
+   grant raises a **new** request.
 4. After approval the agent must run the **actual command** (for example the
    build or test) straight away, while the grant is live. Do not re-run
    `authorize`. If the grant expires first, ask for a fresh approval and run the
@@ -212,9 +214,10 @@ Evidence grades:
 | `self_reported` | `bap_report_request` | The model said it; unverifiable; never used for decisions |
 | `presence` | Discovery | The agent process exists; no content |
 
-Enable the fallback reporter only where you want to test it: set
-`BAP_FALLBACK_REPORTING=1` in the environment of the BAP MCP server (the
-agent's MCP configuration). It is off by default.
+The fallback reporter (`bap_report_request`) is exposed by default by the BAP MCP
+server. Set `BAP_FALLBACK_REPORTING=0` in the MCP server's environment (the agent's
+MCP configuration) to turn it off, for example to test the silent-layer case.
+Reconnect MCP clients after an upgrade so they receive the current tool list.
 
 | Step | Action | Expected |
 |---|---|---|

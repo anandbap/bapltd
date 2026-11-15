@@ -123,6 +123,7 @@ func Transmit(entry AuditEntry, serverURL string, logPath string) (bool, string,
 			"executable":         entry.Executable,
 			"arguments":          defangWAF(entry.Arguments),
 			"full_command":       defangWAF(entry.FullCommand),
+			"tool_input":         entry.ToolInput,
 			"decision":           entry.Decision,
 			"reason":             entry.Reason,
 			"duration_ms":        entry.DurationMs,
@@ -174,10 +175,9 @@ func Transmit(entry AuditEntry, serverURL string, logPath string) (bool, string,
 
 	// 3. Remove transmitted entry locally after clean handshake (unless explicit retention is requested)
 	if os.Getenv("BAP_RETAIN_LOCAL") != "1" && logPath != "" && logPath != "off" && logPath != "none" {
-		if !ack.Durable {
-			if err := archiveAcknowledged(serverURL, logPath, []AuditEntry{entry}, ack.ServerEpoch); err != nil {
-				return false, "local_recovery_failed", err
-			}
+		// A metadata acknowledgement cannot replace the complete local evidence.
+		if err := archiveAcknowledged(serverURL, logPath, []AuditEntry{entry}, ack.ServerEpoch); err != nil {
+			return false, "local_recovery_failed", err
 		}
 		_ = RemoveEntry(entry.EventID, logPath)
 	}
@@ -252,6 +252,7 @@ func FlushOfflineAudit(serverURL string, logPath string) (int, error) {
 				"executable":         entry.Executable,
 				"arguments":          defangWAF(entry.Arguments),
 				"full_command":       defangWAF(entry.FullCommand),
+				"tool_input":         entry.ToolInput,
 				"decision":           entry.Decision,
 				"reason":             entry.Reason,
 				"duration_ms":        entry.DurationMs,
@@ -289,10 +290,8 @@ func FlushOfflineAudit(serverURL string, logPath string) (int, error) {
 			// Acknowledged by central control plane (either newly ingested or duplicate reconciled)
 			if ack.ChainValid && (ack.Status == "acknowledged" || ack.Ingested > 0) {
 				if os.Getenv("BAP_RETAIN_LOCAL") != "1" {
-					if !ack.Durable {
-						if err := archiveAcknowledged(serverURL, logPath, batch, ack.ServerEpoch); err != nil {
-							return totalFlushed, err
-						}
+					if err := archiveAcknowledged(serverURL, logPath, batch, ack.ServerEpoch); err != nil {
+						return totalFlushed, err
 					}
 					if err := RemoveEntries(batchIDs, logPath); err != nil {
 						return totalFlushed, fmt.Errorf("remove acknowledged audit entries: %w", err)

@@ -12,7 +12,7 @@ import (
 	"bap-edge/internal/httptransport"
 )
 
-func TestMetadataAuditSpoolAndRetryContainNoCommandOrPrompt(t *testing.T) {
+func TestLocalAuditRetainsEvidenceWhileMetadataSyncAndRetryOmitContent(t *testing.T) {
 	t.Setenv("BAP_TELEMETRY_CONTENT", "")
 	t.Setenv("BAP_TEST_MODE", "")
 	prev := httptransport.PromptContentProvider
@@ -20,6 +20,7 @@ func TestMetadataAuditSpoolAndRetryContainNoCommandOrPrompt(t *testing.T) {
 	defer func() { httptransport.PromptContentProvider = prev }()
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	entry := AuditEntry{EventID: "metadata-event", FullCommand: "echo PRIVATE_CODE", UserPrompt: "PRIVATE_PROMPT", Arguments: "--token=PRIVATE_TOKEN", Reason: "PRIVATE_REASON", CanonicalAction: "dev:go:test", Decision: "allow"}
+	entry.ToolInput = json.RawMessage(`{"command":"echo PRIVATE_INPUT","token":"PRIVATE_TOKEN"}`)
 	if err := Log(&entry, path); err != nil {
 		t.Fatal(err)
 	}
@@ -27,8 +28,8 @@ func TestMetadataAuditSpoolAndRetryContainNoCommandOrPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), "PRIVATE_") || entry.PromptHash == "" {
-		t.Fatal("private content persisted or correlation hash missing")
+	if !strings.Contains(string(raw), "PRIVATE_CODE") || !strings.Contains(string(raw), "PRIVATE_REASON") || !strings.Contains(string(raw), "PRIVATE_PROMPT") || strings.Contains(string(raw), "PRIVATE_TOKEN") || entry.PromptHash == "" || entry.ContentHash == "" {
+		t.Fatal("local evidence lost, secret not redacted, or correlation hash missing")
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var events []map[string]any
@@ -45,9 +46,22 @@ func TestMetadataAuditSpoolAndRetryContainNoCommandOrPrompt(t *testing.T) {
 	if n, err := FlushOfflineAudit(server.URL, path); err != nil || n != 1 {
 		t.Fatal(n, err)
 	}
+	retained, err := os.ReadFile(archivePath(server.URL, path))
+	if err != nil || !strings.Contains(string(retained), "PRIVATE_CODE") || !strings.Contains(string(retained), "PRIVATE_REASON") {
+		t.Fatalf("durable metadata sync destroyed local evidence: %s %v", retained, err)
+	}
 	// Old backlog created before the privacy change is filtered again before transmission.
 	legacy := AuditEntry{EventID: "metadata-event", FullCommand: "echo PRIVATE_LEGACY", UserPrompt: "PRIVATE_LEGACY_PROMPT", CanonicalAction: "dev:go:test"}
 	if ok, _, err := Transmit(legacy, server.URL, ""); !ok || err != nil {
 		t.Fatal(ok, err)
 	}
+}
+
+func TestStructuredLocalToolInputIsHashProtected(t *testing.T) {
+	entry := AuditEntry{ToolInput: json.RawMessage(`{"pattern":"*.go"}`)}
+	before := ComputeEntryHash(entry, "previous")
+	entry.ToolInput = json.RawMessage(`{ "pattern": "*.go" }`)
+	if before != ComputeEntryHash(entry, "previous") { t.Fatal("JSON whitespace changed hash") }
+	entry.ToolInput = json.RawMessage(`{"pattern":"*.py"}`)
+	if before == ComputeEntryHash(entry, "previous") { t.Fatal("tool input tampering was not detected") }
 }
