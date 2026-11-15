@@ -119,6 +119,13 @@ rejection without consumption, command/workspace binding, signature tampering,
 policy changes, and unsupported syntax. A Windows hook integration test exercises
 inspection auto-authorization and push rejection through the real broker.
 
+The Python ZSP lifecycle suite disables automatic grants in its explicit-grant
+fixture: its replay test must reject the burned token without requesting fresh
+authority. A separate automatic-repeat test enables issuance and verifies that two
+permitted executions use different grant IDs, both burned with zero remaining uses.
+Repeating an allowed operation with a newly authorized grant is not reuse of the
+old token. `BAP_ZSP_STRICT_READS=1` alone does not disable automatic issuance.
+
 Rebuild and deploy `bapedge` and the hook interceptor together to enable the new flow.
 No broad Git allow rule or change to `policy.cedar` is required. Verify behavior with
 development override disabled and isolated test state before activating a build.

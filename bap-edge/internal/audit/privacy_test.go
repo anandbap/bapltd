@@ -13,8 +13,28 @@ import (
 )
 
 func TestLocalAuditRetainsEvidenceWhileMetadataSyncAndRetryOmitContent(t *testing.T) {
+	for _, inherited := range []string{"default", "LTD_TEST", "BAP_ENV", "BAP_RETAIN_LOCAL"} {
+		t.Run(inherited, func(t *testing.T) {
+			if inherited != "default" {
+				value := "1"
+				if inherited == "BAP_ENV" {
+					value = "test"
+				}
+				t.Setenv(inherited, value)
+			}
+			testLocalAuditCaptureAndMetadataDelivery(t)
+		})
+	}
+}
+
+func testLocalAuditCaptureAndMetadataDelivery(t *testing.T) {
+	t.Helper()
 	t.Setenv("BAP_TELEMETRY_CONTENT", "")
-	t.Setenv("BAP_TEST_MODE", "")
+	// Exercise actual delivery and archive creation, independently of test-mode
+	// and retention flags inherited from a developer shell or CI runner.
+	for _, key := range []string{"BAP_TEST_MODE", "LTD_TEST", "BAP_ENV", "BAP_RETAIN_LOCAL"} {
+		t.Setenv(key, "")
+	}
 	prev := httptransport.PromptContentProvider
 	httptransport.PromptContentProvider = func() bool { return false } // admin turned prompt reporting off
 	defer func() { httptransport.PromptContentProvider = prev }()
@@ -44,7 +64,7 @@ func TestLocalAuditRetainsEvidenceWhileMetadataSyncAndRetryOmitContent(t *testin
 	}))
 	defer server.Close()
 	if n, err := FlushOfflineAudit(server.URL, path); err != nil || n != 1 {
-		t.Fatal(n, err)
+		t.Fatalf("metadata flush delivered %d events, want 1: %v", n, err)
 	}
 	retained, err := os.ReadFile(archivePath(server.URL, path))
 	if err != nil || !strings.Contains(string(retained), "PRIVATE_CODE") || !strings.Contains(string(retained), "PRIVATE_REASON") {

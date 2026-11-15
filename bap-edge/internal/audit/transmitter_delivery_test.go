@@ -113,7 +113,9 @@ func TestConcurrentFlushPreservesNewEventsAndUploadsBacklogOnce(t *testing.T) {
 }
 
 func TestRejectedAuditRemainsQueuedUntilVerifiedAcknowledgement(t *testing.T) {
-	t.Setenv("BAP_RETAIN_LOCAL", "0")
+	for _, key := range []string{"BAP_TEST_MODE", "LTD_TEST", "BAP_ENV", "BAP_RETAIN_LOCAL"} {
+		t.Setenv(key, "")
+	}
 	logPath := filepath.Join(t.TempDir(), "audit.jsonl")
 	entry := AuditEntry{EventID: "delivery", Source: "claude-code", FullCommand: "git status", Decision: "deny", Timestamp: time.Now().UTC()}
 	if err := Log(&entry, logPath); err != nil {

@@ -54,6 +54,15 @@ class TestZSPZeroStandingPrivileges(unittest.TestCase):
         # read-only commands such as `git status`. Plain local reads are exempt from grants by default,
         # so strict mode keeps the grant lifecycle under test.
         env["BAP_ZSP_STRICT_READS"] = "1"
+        # Test explicit grants without automatic issuance of fresh authority.
+        env["BAP_ZSP_AUTO_GRANTS"] = "0"
+        env["BAP_ENVIRONMENT"] = "production"
+        env["BAP_DEV_OVERRIDE"] = ""
+        env["BAP_DEV_MODE"] = ""
+        env["HOME"] = self.tmp_dir
+        env["USERPROFILE"] = self.tmp_dir
+        env["BAP_PEP_HOME"] = self.tmp_dir
+        env["BAP_CREDENTIALS"] = os.path.join(self.tmp_dir, "no-enrollment.json")
         env["BAP_ZSP_DIR"] = self.zsp_dir
         env["BAP_STATE_DIR"] = self.state_dir
         env["BAP_ENFORCEMENT_MODE"] = "enforce"
@@ -216,6 +225,11 @@ class TestZSPZeroStandingPrivileges(unittest.TestCase):
         self.assertEqual(allowed_exec.returncode, 0, f"Expected granted git status to pass: {allowed_exec.stderr}\n{allowed_exec.stdout}")
         allowed_data = json.loads(allowed_exec.stdout)
         self.assertTrue(allowed_data.get("allowed", False))
+        self.assertEqual(
+            allowed_data.get("receipt", {}).get("grant_id"),
+            auth_data["grant"]["grant_id"],
+            "Execution must consume the explicitly issued grant",
+        )
 
         # Replay after single-use grant burns must fail closed
         replay_exec = subprocess.run(
@@ -228,8 +242,48 @@ class TestZSPZeroStandingPrivileges(unittest.TestCase):
         )
         self.assertNotEqual(replay_exec.returncode, 0, f"Expected replay after burn to fail: {replay_exec.stdout}")
         replay_data = json.loads(replay_exec.stdout)
+        self.assertIn("already burned", replay_data.get("reason", "").lower())
         self.assertFalse(replay_data.get("allowed", True))
 
+
+    def test_05_automatic_repeat_uses_a_new_grant_not_a_burned_grant(self):
+        if not BAPEDGE_BIN:
+            self.skipTest("bapedge binary not found")
+
+        env = self._base_env()
+        env["BAP_ZSP_AUTO_GRANTS"] = "1"
+        grant_ids = []
+        for _ in range(2):
+            result = subprocess.run(
+                [BAPEDGE_BIN, "exec", "-json", "-source", "claude-code",
+                 "-session-id", self.session_id, "git status"],
+                cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=15,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            data = json.loads(result.stdout)
+            self.assertTrue(data.get("allowed", False))
+            grant_id = data.get("receipt", {}).get("grant_id")
+            self.assertTrue(grant_id, "Automatic execution requires a signed grant")
+            grant_ids.append(grant_id)
+        self.assertNotEqual(grant_ids[0], grant_ids[1], "A burned grant must never be reused")
+
+        result = subprocess.run(
+            [BAPEDGE_BIN, "zsp", "status", "--session-id", self.session_id,
+             "--client", "claude-code", "--json"],
+            cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        status = json.loads(result.stdout)
+        self.assertFalse(status.get("active_grants"))
+        burned = {g["grant_id"]: g for g in status.get("burned_or_expired_grants", [])}
+        for grant_id in grant_ids:
+            self.assertIn(grant_id, burned)
+            grant = burned[grant_id]
+            self.assertTrue(grant["is_burned"])
+            self.assertEqual(grant["remaining_uses"], 0)
+            self.assertEqual(grant["max_uses"], 1)
+            self.assertTrue(grant.get("command_hash"))
+            self.assertTrue(grant.get("authority_signature"))
 
 if __name__ == "__main__":
     unittest.main()
