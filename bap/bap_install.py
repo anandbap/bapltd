@@ -256,42 +256,129 @@ def get_bapstate_dir(target_dir: str = None, portable: bool = False) -> str:
     return os.path.join(os.path.expanduser("~"), "bin", ".bapstate")
 
 
-def stop_running_bap_processes(target_dir: str = None, portable: bool = False):
+def get_running_bap_pids():
     """
-    Gracefully stops the selected user's daemon/supervisor/gateway through their CLIs
-    so Windows file locks are released before binary replacement or uninstallation.
+    Finds running PIDs of BAP processes (bapedge, bapgateway, bapcontrolplane, cchook-interceptor).
+    Excludes the current running installer process PID.
+    """
+    my_pid = os.getpid()
+    running_pids = set()
+    bap_names = {"bapedge.exe", "bapedge", "bapgateway.exe", "bapgateway", "bapcontrolplane.exe", "bapcontrolplane", "cchook-interceptor.exe", "cchook-interceptor"}
+    if sys.platform == "win32":
+        try:
+            cmd = ["tasklist", "/FO", "CSV", "/NH"]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if res.returncode == 0:
+                for line in res.stdout.strip().splitlines():
+                    parts = [p.strip('"') for p in line.split('","')]
+                    if len(parts) >= 2:
+                        name, pid_str = parts[0], parts[1]
+                        if name.lower() in bap_names:
+                            try:
+                                pid = int(pid_str)
+                                if pid != my_pid:
+                                    running_pids.add((pid, name))
+                            except ValueError:
+                                pass
+        except Exception:
+            pass
+    else:
+        try:
+            cmd = ["ps", "-eo", "pid,comm"]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if res.returncode == 0:
+                for line in res.stdout.strip().splitlines()[1:]:
+                    parts = line.strip().split(None, 1)
+                    if len(parts) == 2:
+                        pid_str, name = parts[0], os.path.basename(parts[1])
+                        if name in bap_names:
+                            try:
+                                pid = int(pid_str)
+                                if pid != my_pid:
+                                    running_pids.add((pid, name))
+                            except ValueError:
+                                pass
+        except Exception:
+            pass
+    return list(running_pids)
+
+
+def stop_running_bap_processes(target_dir: str = None, portable: bool = False, prompt_confirmation: bool = True):
+    """
+    Detects running BAP processes, asks user confirmation to stop them if interactive,
+    and terminates them cleanly (with fallback to taskkill/SIGKILL) so no stale or locked
+    binaries remain during install or upgrade.
     """
     if "unittest" in sys.modules or os.environ.get("BAP_TEST_ENV") == "1":
         return
 
-    def resolve_tool(tool_names):
-        if target_dir:
-            for name in tool_names:
-                candidate = os.path.join(target_dir, name)
-                if os.path.isfile(candidate):
-                    return candidate
-        if portable:
-            return None
-        for name in tool_names:
-            found = shutil.which(name)
-            if found:
-                return found
-        return None
+    running = get_running_bap_pids()
+    if running:
+        names_str = ", ".join(f"{name} (PID {pid})" for pid, name in sorted(running, key=lambda x: x[0]))
+        print(f"\n{TermColor.YELLOW}[!] Detected {len(running)} running BAP process(es): {names_str}{TermColor.RESET}")
+        
+        should_stop = True
+        if prompt_confirmation and sys.stdin.isatty() and not os.environ.get("BAP_NON_INTERACTIVE"):
+            try:
+                ans = input(f"  {TermColor.BOLD}Stop these processes now to prevent stale binaries and file locks? [Y/n]: {TermColor.RESET}").strip().lower()
+                if ans in ("n", "no"):
+                    should_stop = False
+                    print(f"  {TermColor.YELLOW}[-] Proceeding without stopping running processes (files may be locked).{TermColor.RESET}")
+            except (KeyboardInterrupt, EOFError):
+                should_stop = True
 
-    bapedge_bin = resolve_tool(["bapedge.exe", "bapedge"] if sys.platform == "win32" else ["bapedge"])
-    if bapedge_bin:
-        try:
-            subprocess.run([bapedge_bin, "daemon", "supervise", "--stop"], capture_output=True, timeout=6)
-            subprocess.run([bapedge_bin, "daemon", "stop"], capture_output=True, timeout=3)
-        except Exception:
-            pass
+        if should_stop:
+            print(f"[*] Stopping running BAP processes to release file locks...")
+            def resolve_tool(tool_names):
+                if target_dir:
+                    for name in tool_names:
+                        candidate = os.path.join(target_dir, name)
+                        if os.path.isfile(candidate):
+                            return candidate
+                if portable:
+                    return None
+                for name in tool_names:
+                    found = shutil.which(name)
+                    if found:
+                        return found
+                return None
 
-    gateway_bin = resolve_tool(["bapgateway.exe", "bapgateway"] if sys.platform == "win32" else ["bapgateway"])
-    if gateway_bin:
-        try:
-            subprocess.run([gateway_bin, "stop"], capture_output=True, timeout=3)
-        except Exception:
-            pass
+            bapedge_bin = resolve_tool(["bapedge.exe", "bapedge"] if sys.platform == "win32" else ["bapedge"])
+            if bapedge_bin:
+                try:
+                    subprocess.run([bapedge_bin, "daemon", "supervise", "--stop"], capture_output=True, timeout=6)
+                    subprocess.run([bapedge_bin, "daemon", "stop"], capture_output=True, timeout=3)
+                except Exception:
+                    pass
+
+            gateway_bin = resolve_tool(["bapgateway.exe", "bapgateway"] if sys.platform == "win32" else ["bapgateway"])
+            if gateway_bin:
+                try:
+                    subprocess.run([gateway_bin, "stop"], capture_output=True, timeout=3)
+                except Exception:
+                    pass
+
+            time.sleep(0.5)
+
+            # Check if any processes are still lingering and terminate them forcefully
+            remaining = get_running_bap_pids()
+            for pid, name in remaining:
+                try:
+                    if sys.platform == "win32":
+                        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, timeout=3)
+                    else:
+                        os.kill(pid, 9)
+                except Exception:
+                    pass
+            if remaining:
+                time.sleep(0.3)
+                final_check = get_running_bap_pids()
+                if not final_check:
+                    print(f"  {TermColor.GREEN}[+] All stale BAP processes terminated successfully.{TermColor.RESET}")
+                else:
+                    print(f"  {TermColor.YELLOW}[!] Notice: {len(final_check)} process(es) could not be terminated: {final_check}{TermColor.RESET}")
+            else:
+                print(f"  {TermColor.GREEN}[+] All BAP processes stopped cleanly.{TermColor.RESET}")
 
     if sys.platform == "win32":
         time.sleep(0.2)
