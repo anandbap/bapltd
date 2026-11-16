@@ -129,7 +129,7 @@ func (s *Store) EnablePersistence(path string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.settingsPath = path
-	data, err := os.ReadFile(path)
+	ps, err := readPersistedSettingsWithRetry(path)
 	if os.IsNotExist(err) {
 		// First start must prove that persistence is writable; never silently announce success
 		// with settings that cannot survive a restart.
@@ -137,10 +137,6 @@ func (s *Store) EnablePersistence(path string) error {
 	}
 	if err != nil {
 		return err
-	}
-	var ps persistedSettings
-	if err := json.Unmarshal(data, &ps); err != nil {
-		return fmt.Errorf("corrupt policy settings %s: %w", path, err)
 	}
 	s.bundle.ZSPReadExempt = ps.FleetReadExempt
 	s.bundle.PromptCapture = NormalizePromptCapture(ps.PromptCapture)
@@ -161,6 +157,36 @@ func (s *Store) EnablePersistence(path string) error {
 	}
 	s.bundle.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	return s.saveSettingsLocked()
+}
+
+// readPersistedSettingsWithRetry handles Windows file-sharing races where another process/goroutine
+// has the settings file open or is in the middle of renaming over it.
+func readPersistedSettingsWithRetry(path string) (*persistedSettings, error) {
+	var lastErr error
+	for attempt := 0; attempt < 40; attempt++ {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, err
+			}
+			lastErr = err
+			time.Sleep(time.Duration(5+attempt) * time.Millisecond)
+			continue
+		}
+		if len(data) == 0 {
+			lastErr = fmt.Errorf("empty settings file %s", path)
+			time.Sleep(time.Duration(5+attempt) * time.Millisecond)
+			continue
+		}
+		var ps persistedSettings
+		if err := json.Unmarshal(data, &ps); err != nil {
+			lastErr = fmt.Errorf("corrupt policy settings %s: %w", path, err)
+			time.Sleep(time.Duration(5+attempt) * time.Millisecond)
+			continue
+		}
+		return &ps, nil
+	}
+	return nil, lastErr
 }
 
 func (s *Store) saveSettingsLocked() error {

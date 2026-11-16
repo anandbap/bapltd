@@ -44,10 +44,14 @@ func TestConcurrentStartsOnOneDirectoryDoNotCollide(t *testing.T) {
 			errs <- err
 		}()
 	}
+	var collected []error
 	for i := 0; i < 8; i++ {
 		if err := <-errs; err != nil {
-			t.Fatalf("concurrent control plane start/write failed: %v", err)
+			collected = append(collected, err)
 		}
+	}
+	if len(collected) > 0 {
+		t.Fatalf("concurrent control plane start/write failed (%d errors): %v", len(collected), collected[0])
 	}
 }
 
