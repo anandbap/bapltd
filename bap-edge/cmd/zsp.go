@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -176,14 +177,75 @@ func RunZSP(args []string) error {
 		clientFlag := fs.String("client", "claude-code", "Agent client type")
 		jsonFlag := fs.Bool("json", false, "JSON output")
 		allFlag := fs.Bool("all", false, "Show all grants including burned/used and expired")
+		allSessionsFlag := fs.Bool("all-sessions", false, "Show grants across all sessions on this workstation")
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
+
+		// Workstation-wide inspection if requested or if no session specified and default has 0 grants
+		if *allSessionsFlag {
+			allG, err := authz.CollectAllWorkstationGrants(authz.ResolveZSPDir())
+			if err != nil {
+				return err
+			}
+			if *jsonFlag {
+				data, _ := json.MarshalIndent(map[string]any{
+					"standing_privileges": "NONE (Starting Permission Set: ZERO / ZSP Active)",
+					"total_grants":        len(allG),
+					"grants":              allG,
+				}, "", "  ")
+				fmt.Println(string(data))
+				return nil
+			}
+			fmt.Println("================================================================================")
+			fmt.Println("  [BAP ZERO-TRUST] Workstation ZSP Task Grant Ledger (All Sessions)")
+			fmt.Println("================================================================================")
+			fmt.Printf("  Total Recorded Grants: %d\n", len(allG))
+			for idx, g := range allG {
+				mode := "AUTOMATIC (Cedar Policy)"
+				if strings.Contains(strings.ToLower(g.DelegationType), "oob") ||
+					strings.Contains(strings.ToLower(g.DelegationType), "prompt") ||
+					strings.Contains(strings.ToLower(g.DelegationType), "step_up") ||
+					strings.Contains(strings.ToLower(g.DelegationType), "manual") {
+					mode = "MANUAL (HITL Challenge)"
+				}
+				statusStr := "ACTIVE"
+				if g.IsBurned || g.RemainingUses < g.MaxUses {
+					statusStr = fmt.Sprintf("1x USED & BURNED (%s)", g.BurnReason)
+				} else if time.Now().After(g.ExpiresAt) {
+					statusStr = "EXPIRED UNUSED"
+				}
+				fmt.Printf("  [%d] %s [%s]\n", idx+1, g.GrantID, mode)
+				fmt.Printf("      Session/Agent: %s (%s)\n", g.SessionID, g.ClientType)
+				fmt.Printf("      Scopes:        actions=%v, resources=%v\n", g.AllowedActions, g.AllowedResources)
+				fmt.Printf("      Lifecycle:     %s\n", statusStr)
+				if g.ConsumedCmd != "" {
+					fmt.Printf("      Consumed:      %s (Receipt: %s)\n", g.ConsumedCmd, g.ReceiptID)
+				}
+			}
+			fmt.Println("================================================================================")
+			return nil
+		}
+
 		sessionID := resolveDefaultZSPSessionID(*sessFlag)
 		rep, err := authz.ListSessionZSPStatus(authz.ResolveZSPDir(), sessionID, normalizeZSPClientType(*clientFlag))
 		if err != nil {
 			return err
 		}
+
+		// Fallback: If caller didn't pass explicit session and default session is empty, check workstation-wide grants
+		if *sessFlag == "" && len(rep.ActiveGrants) == 0 && len(rep.BurnedOrExpired) == 0 {
+			if allG, err := authz.CollectAllWorkstationGrants(authz.ResolveZSPDir()); err == nil && len(allG) > 0 {
+				for _, g := range allG {
+					if !g.IsBurned && g.RemainingUses > 0 && time.Now().Before(g.ExpiresAt) {
+						rep.ActiveGrants = append(rep.ActiveGrants, *g)
+					} else {
+						rep.BurnedOrExpired = append(rep.BurnedOrExpired, *g)
+					}
+				}
+			}
+		}
+
 		if *jsonFlag {
 			data, _ := json.MarshalIndent(rep, "", "  ")
 			fmt.Println(string(data))
@@ -234,13 +296,15 @@ func RunZSP(args []string) error {
 					strings.Contains(strings.ToLower(g.DelegationType), "step_up") {
 					mode = "MANUAL (HITL Challenge)"
 				}
-				consumedCmd := ""
-				receiptID := ""
-				for _, lin := range rep.RecentLineage {
-					if lin.GrantID == g.GrantID {
-						consumedCmd = lin.CommandExecuted
-						receiptID = lin.ProofID
-						break
+				consumedCmd := g.ConsumedCmd
+				receiptID := g.ReceiptID
+				if consumedCmd == "" {
+					for _, lin := range rep.RecentLineage {
+						if lin.GrantID == g.GrantID {
+							consumedCmd = lin.CommandExecuted
+							receiptID = lin.ProofID
+							break
+						}
 					}
 				}
 				fmt.Printf("    - %s [%s]\n", g.GrantID, mode)
@@ -260,6 +324,81 @@ func RunZSP(args []string) error {
 		}
 
 		fmt.Printf("  Recent Lineage Proofs:%d\n", len(rep.RecentLineage))
+		fmt.Println("================================================================================")
+		return nil
+
+	case "playback":
+		fs := flag.NewFlagSet("zsp playback", flag.ContinueOnError)
+		limitFlag := fs.Int("limit", 50, "Max grants to playback")
+		jsonFlag := fs.Bool("json", false, "Output playback in JSON format")
+		if err := fs.Parse(rest); err != nil {
+			return err
+		}
+		grants, err := authz.CollectAllWorkstationGrants(authz.ResolveZSPDir())
+		if err != nil {
+			return err
+		}
+		sort.Slice(grants, func(i, j int) bool {
+			return grants[i].IssuedAt.Before(grants[j].IssuedAt)
+		})
+		if len(grants) > *limitFlag {
+			grants = grants[len(grants)-*limitFlag:]
+		}
+		if *jsonFlag {
+			data, _ := json.MarshalIndent(grants, "", "  ")
+			fmt.Println(string(data))
+			return nil
+		}
+		fmt.Println("================================================================================")
+		fmt.Println("  [BAP ZERO-TRUST] 🎬 ZSP Grant Lifecycle Playback & Policy Tuning Feed")
+		fmt.Println("================================================================================")
+		if len(grants) == 0 {
+			fmt.Println("  (No ZSP task grants recorded on this workstation yet)")
+			fmt.Println("================================================================================")
+			return nil
+		}
+		autoCount, manualCount := 0, 0
+		for idx, g := range grants {
+			mode := "AUTOMATIC (Cedar Policy)"
+			if strings.Contains(strings.ToLower(g.DelegationType), "oob") ||
+				strings.Contains(strings.ToLower(g.DelegationType), "prompt") ||
+				strings.Contains(strings.ToLower(g.DelegationType), "step_up") ||
+				strings.Contains(strings.ToLower(g.DelegationType), "manual") {
+				mode = "MANUAL (HITL Challenge)"
+				manualCount++
+			} else {
+				autoCount++
+			}
+			statusStr := "ACTIVE"
+			if g.IsBurned || g.RemainingUses < g.MaxUses {
+				statusStr = fmt.Sprintf("1x USED & BURNED (%s)", g.BurnReason)
+			} else if time.Now().After(g.ExpiresAt) {
+				statusStr = "EXPIRED UNUSED"
+			}
+			fmt.Printf("  [%d] %s | %s [%s]\n", idx+1, g.IssuedAt.Format("15:04:05 UTC"), g.GrantID, mode)
+			fmt.Printf("      Agent/Session: %s (%s)\n", g.ClientType, g.SessionID)
+			fmt.Printf("      Scopes:        actions=%v, resources=%v\n", g.AllowedActions, g.AllowedResources)
+			fmt.Printf("      Lifecycle:     %s\n", statusStr)
+			if g.ConsumedCmd != "" {
+				rcpt := g.ReceiptID
+				if rcpt == "" {
+					rcpt = "verified-receipt"
+				}
+				fmt.Printf("      Execution:     %s (Receipt: %s)\n", g.ConsumedCmd, rcpt)
+			}
+		}
+		total := autoCount + manualCount
+		autoPct := 0.0
+		if total > 0 {
+			autoPct = float64(autoCount) / float64(total) * 100.0
+		}
+		fmt.Println("--------------------------------------------------------------------------------")
+		fmt.Printf("  PLAYBACK SUMMARY FOR POLICY TUNING:\n")
+		fmt.Printf("    Total Grants Replayed: %d (%d Automatic, %d Step-Up HITL)\n", total, autoCount, manualCount)
+		fmt.Printf("    Automation Velocity:   %.1f%% automated by Cedar invariants\n", autoPct)
+		if autoCount > 3 {
+			fmt.Printf("    Policy Recommendation: Recurring safe routine grants qualify for permanent Cedar rules.\n")
+		}
 		fmt.Println("================================================================================")
 		return nil
 
@@ -587,6 +726,7 @@ func printZSPUsage() {
 Subcommands:
   init       Initialize cryptographic Agent Principal SVID with 0 standing privileges
   status     Inspect cryptographic principal, standing privilege posture, and JIT grants
+  playback   Replay full chronological grant lifecycle, modes (auto vs HITL) and policy recommendations
   authorize  Submit signed 4-Tuple Task Authorization Envelope and mint least-privilege JIT TaskGrant
   check      Verify (or consume) a TaskGrant for a specific action & resource
   revoke     Immediately burn one or all TaskGrants in a session`)

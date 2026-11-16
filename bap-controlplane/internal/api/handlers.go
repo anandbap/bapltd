@@ -411,6 +411,11 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/escalation/requests", s.requireAdminAuth(s.handleListEscalations))
 	s.mux.HandleFunc("/api/v1/escalation/", s.handleGetEscalation)
 
+	// Zero Standing Privilege (ZSP) Task Grants (BAP-917, BAP-1093)
+	s.mux.HandleFunc("/api/v1/zsp/grants/sync", s.handleZSPGrantsSync)
+	s.mux.HandleFunc("/api/v1/zsp/grants", s.handleZSPGrants)
+	s.mux.HandleFunc("/api/v1/zsp/grants/", s.handleZSPGrantByID)
+
 	// Web Inspector & React Admin Handshake / Login
 	s.mux.HandleFunc("/api/v1/auth/inspector-handshake", s.handleInspectorHandshake)
 	s.mux.HandleFunc("/api/v1/auth/admin-login", s.handleAdminLogin)
@@ -3945,6 +3950,37 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
+
+	if s.sessionStore != nil {
+		if dbGrants, err := s.sessionStore.ListZSPGrants(sessionID, 100); err == nil && len(dbGrants) > 0 {
+			for _, dg := range dbGrants {
+				mode := "AUTOMATIC"
+				if dg.DelegationType == "manual_hitl" || strings.Contains(strings.ToLower(dg.DelegationType), "oob") || strings.Contains(strings.ToLower(dg.DelegationType), "step_up") {
+					mode = "MANUAL"
+				}
+				status := "used"
+				if !dg.IsBurned && dg.RemainingUses > 0 && time.Now().Before(dg.ExpiresAt) {
+					status = "active"
+				}
+				agentName := dg.ClientType
+				if agentName == "" {
+					agentName = "agent"
+				}
+				grantMap[dg.GrantID] = &transcriptGrant{
+					GrantID:   dg.GrantID,
+					Agent:     agentName,
+					User:      dg.HumanOwner,
+					Mode:      mode,
+					Actions:   dg.AllowedActions,
+					Status:    status,
+					Command:   dg.ConsumedCmd,
+					Timestamp: dg.IssuedAt.Format(time.RFC3339),
+					ReceiptID: dg.ReceiptID,
+				}
+			}
+		}
+	}
+
 	var sessionGrants []transcriptGrant
 	for _, g := range grantMap {
 		sessionGrants = append(sessionGrants, *g)

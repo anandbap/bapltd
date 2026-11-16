@@ -4,15 +4,62 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"bap-edge/internal/config"
 	"bap-edge/internal/httptransport"
+	"bap-edge/internal/state"
 )
 
-// RunStepUp handles the 'bapedge stepup' command (BAP-565)
+func resolveStepUpServerURL() string {
+	serverURL := os.Getenv("BAP_SERVER_URL")
+	if serverURL == "" {
+		serverURL = os.Getenv("BAP_CONTROL_PLANE_URL")
+	}
+	if serverURL == "" {
+		ep := config.ResolveEndpoints()
+		serverURL = ep.ControlPlaneURL
+	}
+	if serverURL == "" {
+		serverURL = config.DefaultControlPlaneURL
+	}
+	if serverURL == "" {
+		serverURL = "http://localhost:8443"
+	}
+	return strings.TrimRight(serverURL, "/")
+}
+
+func sendStepUpRequest(client *http.Client, method, url string, body []byte) (*http.Response, error) {
+	var bodyReader io.Reader
+	if len(body) > 0 {
+		bodyReader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(method, url, bodyReader)
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > 0 {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	// Attach enrolled session token if present
+	if credsData, err := os.ReadFile(state.CredentialsPath()); err == nil && len(credsData) > 0 {
+		var creds struct {
+			SessionToken string `json:"session_token"`
+		}
+		if json.Unmarshal(credsData, &creds) == nil && creds.SessionToken != "" {
+			req.Header.Set("Authorization", "Bearer "+creds.SessionToken)
+		}
+	}
+
+	return client.Do(req)
+}
+
+// RunStepUp handles the 'bapedge stepup' command (BAP-565, BAP-1093)
 func RunStepUp(args []string) error {
 	if len(args) == 0 {
 		printStepUpUsage()
@@ -22,15 +69,7 @@ func RunStepUp(args []string) error {
 	sub := args[0]
 	rest := args[1:]
 
-	serverURL := os.Getenv("BAP_SERVER_URL")
-	if serverURL == "" {
-		serverURL = os.Getenv("BAP_CONTROL_PLANE_URL")
-	}
-	if serverURL == "" {
-		serverURL = "http://localhost:8443"
-	}
-	serverURL = strings.TrimRight(serverURL, "/")
-
+	serverURL := resolveStepUpServerURL()
 	client := httptransport.New(5 * time.Second)
 
 	switch sub {
@@ -62,7 +101,7 @@ func RunStepUp(args []string) error {
 		}
 
 		data, _ := json.Marshal(payload)
-		resp, err := client.Post(serverURL+"/api/v1/escalation/request", "application/json", bytes.NewReader(data))
+		resp, err := sendStepUpRequest(client, http.MethodPost, serverURL+"/api/v1/escalation/request", data)
 		if err != nil {
 			return fmt.Errorf("failed to submit escalation request: %w", err)
 		}
@@ -86,7 +125,7 @@ func RunStepUp(args []string) error {
 			return fmt.Errorf("usage: bapedge stepup status <escalation_id>")
 		}
 		escID := rest[0]
-		resp, err := client.Get(serverURL + "/api/v1/escalation/" + escID)
+		resp, err := sendStepUpRequest(client, http.MethodGet, serverURL+"/api/v1/escalation/"+escID, nil)
 		if err != nil {
 			return fmt.Errorf("failed to query escalation status: %w", err)
 		}
@@ -99,7 +138,7 @@ func RunStepUp(args []string) error {
 		return nil
 
 	case "list":
-		resp, err := client.Get(serverURL + "/api/v1/escalation/requests")
+		resp, err := sendStepUpRequest(client, http.MethodGet, serverURL+"/api/v1/escalation/requests", nil)
 		if err != nil {
 			return fmt.Errorf("failed to list escalations: %w", err)
 		}

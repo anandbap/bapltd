@@ -1,6 +1,7 @@
 package authz
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -8,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,7 +18,9 @@ import (
 	"sync"
 	"time"
 
+	"bap-edge/internal/httptransport"
 	"bap-edge/internal/identity"
+	"bap-edge/internal/state"
 	"bap-edge/pkg/types"
 )
 
@@ -929,6 +933,10 @@ func VerifyOrConsumeSessionZSPChecks(
 				if consumeErr == nil {
 					updated, _ := engine.GetGrant(g.GrantID)
 					if updated != nil {
+						updated.ConsumedCmd = fullCommand
+						if proof != nil {
+							updated.ReceiptID = proof.ProofID
+						}
 						if err := saveSessionGrant(zspDir, sessionID, updated); err != nil {
 							return err
 						}
@@ -1119,4 +1127,86 @@ func RevokeSessionZSPGrants(zspDir, sessionID, grantID string) (int, error) {
 		return 0, err
 	}
 	return revoked, nil
+}
+
+// CollectAllWorkstationGrants returns all ZSP TaskGrants found across all sessions on the workstation.
+func CollectAllWorkstationGrants(zspDir string) ([]*types.TaskGrant, error) {
+	if zspDir == "" {
+		zspDir = ResolveZSPDir()
+	}
+	grantsBase := filepath.Join(zspDir, "grants")
+	sessDirs, err := os.ReadDir(grantsBase)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var allGrants []*types.TaskGrant
+	for _, sd := range sessDirs {
+		if !sd.IsDir() {
+			continue
+		}
+		sessPath := filepath.Join(grantsBase, sd.Name())
+		files, err := os.ReadDir(sessPath)
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(sessPath, f.Name()))
+			if err != nil {
+				continue
+			}
+			var g types.TaskGrant
+			if err := json.Unmarshal(data, &g); err == nil && g.GrantID != "" {
+				allGrants = append(allGrants, &g)
+			}
+		}
+	}
+	sort.Slice(allGrants, func(i, j int) bool {
+		return allGrants[i].IssuedAt.After(allGrants[j].IssuedAt)
+	})
+	return allGrants, nil
+}
+
+// SyncWorkstationGrants transmits all local TaskGrants with rich details to the Control Plane.
+func SyncWorkstationGrants(serverURL string, zspDir string) (int, error) {
+	grants, err := CollectAllWorkstationGrants(zspDir)
+	if err != nil || len(grants) == 0 {
+		return 0, err
+	}
+	serverURL = strings.TrimRight(serverURL, "/")
+	if serverURL == "" || serverURL == "off" || serverURL == "none" {
+		return 0, nil
+	}
+	data, err := json.Marshal(grants)
+	if err != nil {
+		return 0, err
+	}
+	client := httptransport.New(5 * time.Second)
+	req, err := http.NewRequest(http.MethodPost, serverURL+"/api/v1/zsp/grants/sync", bytes.NewReader(data))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if credsData, err := os.ReadFile(state.CredentialsPath()); err == nil && len(credsData) > 0 {
+		var creds struct {
+			SessionToken string `json:"session_token"`
+		}
+		if json.Unmarshal(credsData, &creds) == nil && creds.SessionToken != "" {
+			req.Header.Set("Authorization", "Bearer "+creds.SessionToken)
+		}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("control plane returned status %d", resp.StatusCode)
+	}
+	return len(grants), nil
 }

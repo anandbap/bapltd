@@ -1605,6 +1605,7 @@ func PerformSweep(serverURL string, force bool) (SweepResult, error) {
 	if n, flushErr := audit.FlushOfflineAudit(serverURL, ""); flushErr == nil {
 		res.FlushedAuditCount = n
 	}
+	_, _ = authz.SyncWorkstationGrants(serverURL, authz.ResolveZSPDir())
 
 	// Request central control plane sweep
 	sweepResp, cpErr := executeControlPlaneSweep(serverURL)

@@ -172,6 +172,7 @@ type Store struct {
 	prompts           []PromptRecord
 	principals        map[string]*types.AgentPrincipal
 	sessionPrincipals map[string]string
+	zspGrants         map[string]*types.TaskGrant
 	db                *sql.DB // persistent SQLite storage
 	promptIndexes     map[string]*promptIndex
 }
@@ -186,6 +187,7 @@ func NewStore() *Store {
 		prompts:           make([]PromptRecord, 0),
 		principals:        make(map[string]*types.AgentPrincipal),
 		sessionPrincipals: make(map[string]string),
+		zspGrants:         make(map[string]*types.TaskGrant),
 	}
 }
 
@@ -273,7 +275,13 @@ func NewStoreWithDB(dbPath string) (*Store, error) {
 		prompts:           make([]PromptRecord, 0),
 		principals:        make(map[string]*types.AgentPrincipal),
 		sessionPrincipals: make(map[string]string),
+		zspGrants:         make(map[string]*types.TaskGrant),
 		db:                db,
+	}
+
+	if err := store.EnsureZSPGrantsSchema(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to initialize sqlite zsp_grants schema: %w", err)
 	}
 
 	if err := store.loadFromDB(); err != nil {

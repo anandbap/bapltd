@@ -131,6 +131,13 @@ func Transmit(entry AuditEntry, serverURL string, logPath string) (bool, string,
 			"content_hash":       entry.ContentHash,
 			"previous_hash":      entry.PreviousHash,
 			"entry_hash":         entry.EntryHash,
+			"grant_id":           entry.GrantID,
+			"parent_grant_id":    entry.ParentGrantID,
+			"narrowing_applied":  entry.NarrowingApplied,
+			"narrowing_reason":   entry.NarrowingReason,
+			"requested_actions":  entry.RequestedActions,
+			"allowed_actions":    entry.AllowedActions,
+			"zsp_concept":        entry.ZSPConcept,
 		},
 	}
 
@@ -260,6 +267,13 @@ func FlushOfflineAudit(serverURL string, logPath string) (int, error) {
 				"content_hash":       entry.ContentHash,
 				"previous_hash":      entry.PreviousHash,
 				"entry_hash":         entry.EntryHash,
+				"grant_id":           entry.GrantID,
+				"parent_grant_id":    entry.ParentGrantID,
+				"narrowing_applied":  entry.NarrowingApplied,
+				"narrowing_reason":   entry.NarrowingReason,
+				"requested_actions":  entry.RequestedActions,
+				"allowed_actions":    entry.AllowedActions,
+				"zsp_concept":        entry.ZSPConcept,
 			})
 		}
 

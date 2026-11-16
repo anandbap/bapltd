@@ -257,6 +257,8 @@ type TaskGrant struct {
 	BurnReason         string    `json:"burn_reason,omitempty"`
 	DelegationType     string    `json:"delegation_type,omitempty"`
 	ClientType         string    `json:"client_type,omitempty"`
+	ConsumedCmd        string    `json:"consumed_cmd,omitempty"`
+	ReceiptID          string    `json:"receipt_id,omitempty"`
 	AuthoritySignature string    `json:"authority_signature"` // Signed by BAP Local PEP
 }
 

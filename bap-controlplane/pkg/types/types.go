@@ -540,8 +540,11 @@ type TaskAuthorizationEnvelope struct {
 	Timestamp      time.Time              `json:"timestamp"`
 }
 
-// TaskGrant represents an ephemeral, task-scoped grant token with zero standing privilege (BAP-917).
+// TaskGrant represents an ephemeral, task-scoped grant token with zero standing privilege (BAP-917, BAP-1093).
 type TaskGrant struct {
+	CommandHash        string    `json:"command_hash,omitempty"`
+	WorkspaceRoot      string    `json:"workspace_root,omitempty"`
+	PolicyHash         string    `json:"policy_hash,omitempty"`
 	GrantID            string    `json:"grant_id"`
 	EnvelopeID         string    `json:"envelope_id"`
 	SessionID          string    `json:"session_id"`
@@ -549,12 +552,20 @@ type TaskGrant struct {
 	HumanOwner         string    `json:"human_owner"`
 	AllowedActions     []string  `json:"allowed_actions"`
 	AllowedResources   []string  `json:"allowed_resources"`
+	RequestedActions   []string  `json:"requested_actions,omitempty"`
+	RequestedResources []string  `json:"requested_resources,omitempty"`
+	NarrowingApplied   bool      `json:"narrowing_applied,omitempty"`
+	NarrowingReason    string    `json:"narrowing_reason,omitempty"`
 	MaxUses            int       `json:"max_uses"`
 	RemainingUses      int       `json:"remaining_uses"`
 	ExpiresAt          time.Time `json:"expires_at"`
 	IssuedAt           time.Time `json:"issued_at"`
 	IsBurned           bool      `json:"is_burned"`
 	BurnReason         string    `json:"burn_reason,omitempty"`
+	DelegationType     string    `json:"delegation_type,omitempty"`
+	ClientType         string    `json:"client_type,omitempty"`
+	ConsumedCmd        string    `json:"consumed_cmd,omitempty"`
+	ReceiptID          string    `json:"receipt_id,omitempty"`
 	AuthoritySignature string    `json:"authority_signature"` // Signed by BAP Local PEP
 }
 

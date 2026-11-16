@@ -418,6 +418,50 @@ func (s *Server) handleSTSInspector(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	if s.sessionStore != nil {
+		if dbGrants, err := s.sessionStore.ListZSPGrants("", 100); err == nil && len(dbGrants) > 0 {
+			grantMap := make(map[string]*ZSPGrantSummary)
+			for i := range zspGrants {
+				grantMap[zspGrants[i].GrantID] = &zspGrants[i]
+			}
+			for _, dg := range dbGrants {
+				mode := "AUTOMATIC"
+				if dg.DelegationType == "manual_hitl" || strings.Contains(strings.ToLower(dg.DelegationType), "oob") || strings.Contains(strings.ToLower(dg.DelegationType), "step_up") {
+					mode = "MANUAL"
+				}
+				status := "USED"
+				if !dg.IsBurned && dg.RemainingUses > 0 && time.Now().Before(dg.ExpiresAt) {
+					status = "ACTIVE"
+				} else if time.Now().After(dg.ExpiresAt) && !dg.IsBurned {
+					status = "EXPIRED"
+				}
+				agentName := dg.ClientType
+				if agentName == "" {
+					agentName = "agent"
+				}
+				grantMap[dg.GrantID] = &ZSPGrantSummary{
+					GrantID:   dg.GrantID,
+					SessionID: dg.SessionID,
+					Agent:     agentName,
+					User:      dg.HumanOwner,
+					Mode:      mode,
+					Actions:   dg.AllowedActions,
+					Status:    status,
+					Command:   dg.ConsumedCmd,
+					Timestamp: dg.IssuedAt.Format(time.RFC3339),
+					ReceiptID: dg.ReceiptID,
+				}
+			}
+			zspGrants = make([]ZSPGrantSummary, 0, len(grantMap))
+			for _, zg := range grantMap {
+				zspGrants = append(zspGrants, *zg)
+			}
+			sort.Slice(zspGrants, func(i, j int) bool {
+				return zspGrants[i].Timestamp > zspGrants[j].Timestamp
+			})
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"exchanges":     exchanges,
 		"active_tokens": bindings,
