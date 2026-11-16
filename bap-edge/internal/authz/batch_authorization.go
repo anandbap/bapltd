@@ -115,6 +115,13 @@ func automaticGitInspection(args []string) bool {
 		return false
 	}
 	switch args[1] {
+	case "add", "stage":
+		for _, arg := range args[2:] {
+			if strings.HasPrefix(arg, "-") && arg != "-A" && arg != "--all" && arg != "-u" && arg != "--update" {
+				return false
+			}
+		}
+		return true
 	case "status":
 		for _, arg := range args[2:] {
 			switch arg {
