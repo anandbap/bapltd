@@ -42,7 +42,37 @@ if (-not (Test-Path $binDir)) {
 
 # 2. Deploy Binaries
 Write-Host ">>> Deploying BAP Zero-Trust binaries to $binDir..." -ForegroundColor Cyan
+
+function Deploy-BinarySafe {
+    param(
+        [Parameter(Mandatory=$true)][string]$SourcePath,
+        [Parameter(Mandatory=$true)][string]$DestinationPath,
+        [string]$DisplayName
+    )
+    if (-not (Test-Path -LiteralPath $SourcePath)) {
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($DisplayName)) {
+        $DisplayName = Split-Path $DestinationPath -Leaf
+    }
+    try {
+        Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath -Force -ErrorAction Stop
+        Write-Host "  [+] Copied $DisplayName" -ForegroundColor Gray
+    } catch {
+        # On Windows, locked/in-use binaries can still be renamed to .old then replaced
+        $oldFile = "$DestinationPath.old.$PID.$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
+        try {
+            Move-Item -LiteralPath $DestinationPath -Destination $oldFile -Force -ErrorAction Stop
+            Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath -Force -ErrorAction Stop
+            Write-Host "  [+] Copied $DisplayName (rotated active binary to $(Split-Path $oldFile -Leaf))" -ForegroundColor Gray
+        } catch {
+            Write-Warning "Failed to update $DisplayName : $_"
+        }
+    }
+}
+
 $bins = @(
+    "bap.exe",
     "bapedge.exe",
     "bapmcp.exe",
     "bapcontrolplane.exe",
@@ -51,9 +81,29 @@ $bins = @(
 
 foreach ($b in $bins) {
     $src = Join-Path $repoRoot $b
-    if (Test-Path $src) {
-        Copy-Item -Path $src -Destination (Join-Path $binDir $b) -Force
-        Write-Host "  [+] Copied $b" -ForegroundColor Gray
+    Deploy-BinarySafe -SourcePath $src -DestinationPath (Join-Path $binDir $b) -DisplayName $b
+}
+
+# 2b. Synchronize any legacy or pip-installed locations (e.g. Python Scripts directories)
+# to prevent stale shadowing binaries from executing
+$legacyDirs = @(
+    (Join-Path $env:APPDATA "Python\Python312\Scripts"),
+    (Join-Path $env:APPDATA "Python\Python311\Scripts"),
+    (Join-Path $env:APPDATA "Python\Python310\Scripts"),
+    (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\Scripts"),
+    (Join-Path $env:LOCALAPPDATA "Programs\Python\Python311\Scripts"),
+    (Join-Path $env:USERPROFILE ".local\bin")
+)
+
+foreach ($ld in $legacyDirs) {
+    if (Test-Path $ld) {
+        foreach ($b in $bins) {
+            $targetPath = Join-Path $ld $b
+            if (Test-Path $targetPath) {
+                $src = Join-Path $repoRoot $b
+                Deploy-BinarySafe -SourcePath $src -DestinationPath $targetPath -DisplayName "$b (synced legacy copy in $ld)"
+            }
+        }
     }
 }
 
@@ -63,8 +113,7 @@ if (-not (Test-Path $interceptorSrc)) {
     $interceptorSrc = Join-Path $repoRoot "interceptor.exe"
 }
 if (Test-Path $interceptorSrc) {
-    Copy-Item -Path $interceptorSrc -Destination (Join-Path $binDir "interceptor.exe") -Force
-    Write-Host "  [+] Copied interceptor.exe" -ForegroundColor Gray
+    Deploy-BinarySafe -SourcePath $interceptorSrc -DestinationPath (Join-Path $binDir "interceptor.exe") -DisplayName "interceptor.exe"
 }
 
 # Config & Policy assets
@@ -120,12 +169,14 @@ if ($Debug) {
 Write-Host ">>> Registering $binDir in PATH..." -ForegroundColor Cyan
 $targetScope = if ($useUserScope) { [System.EnvironmentVariableTarget]::User } else { [System.EnvironmentVariableTarget]::Machine }
 $currentPath = [System.Environment]::GetEnvironmentVariable("Path", $targetScope)
-if ($currentPath -notlike "*$binDir*") {
-    $newPath = if ([string]::IsNullOrWhiteSpace($currentPath)) { $binDir } else { "$binDir;$currentPath" }
+$pathParts = if ([string]::IsNullOrWhiteSpace($currentPath)) { @() } else { $currentPath -split ';' }
+$filteredParts = @($pathParts | Where-Object { $_ -ne $binDir -and -not [string]::IsNullOrWhiteSpace($_) })
+$newPath = "$binDir;" + ($filteredParts -join ';')
+if ($currentPath -ne $newPath) {
     [System.Environment]::SetEnvironmentVariable("Path", $newPath, $targetScope)
-    Write-Host "[+] Appended $binDir to $(if ($useUserScope) { 'User' } else { 'System' }) PATH environment." -ForegroundColor Green
+    Write-Host "[+] Prioritized $binDir at front of $(if ($useUserScope) { 'User' } else { 'System' }) PATH environment." -ForegroundColor Green
 } else {
-    Write-Host "[=] $binDir already present in PATH." -ForegroundColor Gray
+    Write-Host "[=] $binDir already at front of PATH." -ForegroundColor Gray
 }
 # Also update current session PATH
 $env:PATH = "$binDir;$env:PATH"
@@ -138,7 +189,7 @@ if (-not (Test-Path $claudeHooksDir)) {
     New-Item -ItemType Directory -Path $claudeHooksDir -Force | Out-Null
 }
 $interceptorBin = Join-Path $binDir "interceptor.exe"
-Copy-Item -Path $interceptorBin -Destination (Join-Path $claudeHooksDir "interceptor.exe") -Force
+Deploy-BinarySafe -SourcePath $interceptorBin -DestinationPath (Join-Path $claudeHooksDir "interceptor.exe") -DisplayName "claude interceptor.exe"
 
 $claudeSettingsPath = Join-Path $claudeHome "settings.json"
 $claudeSettings = [ordered]@{

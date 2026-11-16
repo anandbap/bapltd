@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -350,10 +351,78 @@ func (s *Server) handleSTSInspector(w http.ResponseWriter, r *http.Request) {
 	exchanges := s.saasTokenMgr.ListExchanges()
 	bindings := s.saasTokenMgr.ListBindings()
 
+	type ZSPGrantSummary struct {
+		GrantID   string   `json:"grant_id"`
+		SessionID string   `json:"session_id"`
+		Agent     string   `json:"agent"`
+		User      string   `json:"user"`
+		Mode      string   `json:"mode"` // "AUTOMATIC" vs "MANUAL"
+		Actions   []string `json:"actions,omitempty"`
+		Status    string   `json:"status"` // "USED", "ACTIVE", "EXPIRED"
+		Command   string   `json:"command,omitempty"`
+		Timestamp string   `json:"timestamp"`
+		ReceiptID string   `json:"receipt_id,omitempty"`
+	}
+
+	var zspGrants []ZSPGrantSummary
+	if s.auditStore != nil {
+		allEvts := s.auditStore.List(0)
+		grantMap := make(map[string]*ZSPGrantSummary)
+		for _, ev := range allEvts {
+			gid := ev.GrantID
+			if gid == "" || gid == "none" {
+				continue
+			}
+			mode := "AUTOMATIC"
+			cmdLow := strings.ToLower(ev.FullCommand)
+			rLow := strings.ToLower(ev.Reason)
+			if ev.ZSPConcept == "ZSP_APPROVED_GRANT_REUSED" || strings.Contains(cmdLow, "zsp authorize") || strings.Contains(rLow, "oob") || strings.Contains(rLow, "prompt") || strings.Contains(rLow, "step-up") {
+				mode = "MANUAL"
+			}
+			status := "USED"
+			if ev.Decision == "deny" {
+				status = "BLOCKED"
+			}
+			zg, exists := grantMap[gid]
+			if !exists {
+				agentName := ev.Source
+				if agentName == "" || agentName == "broker" {
+					agentName = "agent"
+				}
+				grantMap[gid] = &ZSPGrantSummary{
+					GrantID:   gid,
+					SessionID: ev.SessionID,
+					Agent:     agentName,
+					User:      ev.UserEmail,
+					Mode:      mode,
+					Actions:   ev.AllowedActions,
+					Status:    status,
+					Command:   ev.FullCommand,
+					Timestamp: ev.Timestamp,
+					ReceiptID: ev.EventID,
+				}
+			} else {
+				if len(zg.Actions) == 0 && len(ev.AllowedActions) > 0 {
+					zg.Actions = ev.AllowedActions
+				}
+				if zg.Command == "" && ev.FullCommand != "" {
+					zg.Command = ev.FullCommand
+				}
+			}
+		}
+		for _, zg := range grantMap {
+			zspGrants = append(zspGrants, *zg)
+		}
+		sort.Slice(zspGrants, func(i, j int) bool {
+			return zspGrants[i].Timestamp > zspGrants[j].Timestamp
+		})
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"exchanges":     exchanges,
 		"active_tokens": bindings,
 		"total_count":   len(exchanges),
+		"zsp_grants":    zspGrants,
 	})
 }
 

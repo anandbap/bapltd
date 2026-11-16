@@ -185,6 +185,8 @@ func (e *ZSPEngine) AuthorizeTaskEnvelope(env *types.TaskAuthorizationEnvelope, 
 		IssuedAt:           now,
 		ExpiresAt:          now.Add(ttl),
 		IsBurned:           false,
+		DelegationType:     env.AuthorizedBy.DelegationType,
+		ClientType:         env.Identity.ClientType,
 	}
 
 	// Sign the grant with PEP Authority Secret

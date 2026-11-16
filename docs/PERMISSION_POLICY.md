@@ -163,6 +163,33 @@ Tests: `go test -C bap-edge ./internal/authz -run BAP936` (per-session and per-k
 STOP wording) and `go test -C bap-edge ./cmd -run TestE2E_RepeatedRefusalsAreStoppedNotSpun`
 (the halt after repeated refusals).
 
+## Grant Lifecycle, Lineage, and Cockpit UI Visibility
+
+Every grant minted in BAP adheres to Zero Standing Privilege (ZSP): single-use execution tokens that bind the exact agent, human delegator, scope, and command.
+
+### 1. Acquisition Modes
+* **AUTOMATIC (Cedar Policy Attestation / Batch Engine)**: Minted dynamically by the broker when a routine, policy-permitted command (e.g. `git status`, test runs) is evaluated. TTL is capped at 30 seconds.
+* **MANUAL (HITL Out-of-Band Challenge)**: Minted when a high-risk or sensitive command (e.g., `git reset --hard`, `git push`) is blocked, requiring an interactive human operator challenge (`bapedge zsp authorize --agent <id> --action <action> --ttl 5m`).
+
+### 2. Lifecycle States
+* **`ACTIVE`**: Minted token waiting in memory. Valid until TTL or first execution use.
+* **`1x USED & BURNED`**: Atomically consumed upon child process launch. Binds the consumed command text and links directly to the cryptographic audit receipt ID (`ReceiptID`). Replay is cryptographically impossible.
+* **`EXPIRED UNUSED`**: TTL lapsed without execution. Retained in historical ledger for forensic auditing.
+
+### 3. Multi-Agent Principal Attribution
+Grants record:
+* `AgentPrincipalSVID`: e.g. `spiffe://bap.local/.../agent-<client>-<id>`
+* `ClientType`: `antigravity`, `claude-code`, `codex`, `copilot`
+* `DelegationType`: `policy_automatic_batch`, `automatic`, `manual`
+
+### 4. Visibility in CLI, Control Plane, and UI
+* **CLI**: `bapedge zsp status --all` and `bapedge zsp grants` report active, burned, and expired grants with receipts and executed command lineage.
+* **API**: `/api/v1/sts/tokens` and `/api/v1/sessions/transcript` aggregate ZSP grants.
+* **Dashboard Cockpit UI**:
+  * **Session Conversation Drawer (`dConvo`)**: Top-level **Zero Standing Privilege (ZSP) Task Grants** card displaying Principal, Agent, Acquisition Mode, Scope, Lifecycle Status, and Command.
+  * **STS & OBO Inspector (`viewOBO`)**: Fleet-wide **Zero Standing Privilege (ZSP) Agent Execution Grants** table.
+* **Story Ledger (`Show-BapStory.ps1`)**: Scene 1 outputs distinct Grant Cards linking requests, grants, burned statuses, and tamper-evident audit receipts.
+
 ## Behavior changes versus the previous engine
 
 * `repo:*` narrows to `repo:read` only (previously `repo:read,repo:push`).

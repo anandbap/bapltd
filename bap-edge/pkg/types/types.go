@@ -255,6 +255,8 @@ type TaskGrant struct {
 	IssuedAt           time.Time `json:"issued_at"`
 	IsBurned           bool      `json:"is_burned"`
 	BurnReason         string    `json:"burn_reason,omitempty"`
+	DelegationType     string    `json:"delegation_type,omitempty"`
+	ClientType         string    `json:"client_type,omitempty"`
 	AuthoritySignature string    `json:"authority_signature"` // Signed by BAP Local PEP
 }
 

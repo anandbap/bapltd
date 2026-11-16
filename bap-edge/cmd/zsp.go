@@ -14,6 +14,7 @@ import (
 	"bap-edge/internal/authz"
 	"bap-edge/internal/config"
 	"bap-edge/internal/state"
+	"bap-edge/pkg/types"
 )
 
 func collectAncestorPIDs(ppid int, processes []agentProcess) []int {
@@ -169,11 +170,12 @@ func RunZSP(args []string) error {
 		fmt.Printf("  Standing Privileges: NONE (Starting Permission Set: ZERO / ZSP Active)\n")
 		return nil
 
-	case "status", "list":
+	case "status", "list", "grants":
 		fs := flag.NewFlagSet("zsp status", flag.ContinueOnError)
 		sessFlag := fs.String("session-id", "", "Session ID")
 		clientFlag := fs.String("client", "claude-code", "Agent client type")
 		jsonFlag := fs.Bool("json", false, "JSON output")
+		allFlag := fs.Bool("all", false, "Show all grants including burned/used and expired")
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
@@ -200,9 +202,63 @@ func RunZSP(args []string) error {
 		fmt.Printf("  Standing Privileges:  %s\n", rep.StandingPrivileges)
 		fmt.Printf("  Active JIT Grants:    %d\n", len(rep.ActiveGrants))
 		for _, g := range rep.ActiveGrants {
-			fmt.Printf("    - %s | actions=%v | resources=%v | uses=%d/%d | exp=%s\n",
-				g.GrantID, g.AllowedActions, g.AllowedResources, g.RemainingUses, g.MaxUses, g.ExpiresAt.Format(time.RFC3339))
+			mode := "AUTOMATIC (Cedar Policy)"
+			if strings.Contains(strings.ToLower(g.DelegationType), "oob") ||
+				strings.Contains(strings.ToLower(g.DelegationType), "prompt") ||
+				strings.Contains(strings.ToLower(g.DelegationType), "step_up") {
+				mode = "MANUAL (HITL Challenge)"
+			}
+			fmt.Printf("    - %s [%s]\n", g.GrantID, mode)
+			fmt.Printf("      Status:    ACTIVE EPHEMERAL (remaining: %d/%d, exp: %s)\n", g.RemainingUses, g.MaxUses, g.ExpiresAt.Format("15:04:05Z"))
+			fmt.Printf("      Scopes:    actions=%v, resources=%v\n", g.AllowedActions, g.AllowedResources)
 		}
+
+		now := time.Now().UTC()
+		var burnedGrants []types.TaskGrant
+		var expiredGrants []types.TaskGrant
+		for _, g := range rep.BurnedOrExpired {
+			if g.IsBurned || g.RemainingUses < g.MaxUses {
+				burnedGrants = append(burnedGrants, g)
+			} else if now.After(g.ExpiresAt) {
+				expiredGrants = append(expiredGrants, g)
+			}
+		}
+
+		showHistory := *allFlag || sub == "grants" || len(rep.ActiveGrants) == 0
+		if showHistory && len(burnedGrants) > 0 {
+			fmt.Printf("  Used & Burned Grants: %d (Zero Standing Privilege Expended)\n", len(burnedGrants))
+			for _, g := range burnedGrants {
+				mode := "AUTOMATIC (Cedar Policy)"
+				if strings.Contains(strings.ToLower(g.DelegationType), "oob") ||
+					strings.Contains(strings.ToLower(g.DelegationType), "prompt") ||
+					strings.Contains(strings.ToLower(g.DelegationType), "step_up") {
+					mode = "MANUAL (HITL Challenge)"
+				}
+				consumedCmd := ""
+				receiptID := ""
+				for _, lin := range rep.RecentLineage {
+					if lin.GrantID == g.GrantID {
+						consumedCmd = lin.CommandExecuted
+						receiptID = lin.ProofID
+						break
+					}
+				}
+				fmt.Printf("    - %s [%s]\n", g.GrantID, mode)
+				fmt.Printf("      Status:    1x USED & BURNED (%s)\n", g.BurnReason)
+				fmt.Printf("      Scopes:    actions=%v, resources=%v\n", g.AllowedActions, g.AllowedResources)
+				if consumedCmd != "" {
+					fmt.Printf("      Consumed:  %s (Receipt: %s)\n", consumedCmd, receiptID)
+				}
+			}
+		}
+
+		if showHistory && len(expiredGrants) > 0 {
+			fmt.Printf("  Expired Unused Grants:%d\n", len(expiredGrants))
+			for _, g := range expiredGrants {
+				fmt.Printf("    - %s [EXPIRED UNUSED] actions=%v exp=%s\n", g.GrantID, g.AllowedActions, g.ExpiresAt.Format("15:04:05Z"))
+			}
+		}
+
 		fmt.Printf("  Recent Lineage Proofs:%d\n", len(rep.RecentLineage))
 		fmt.Println("================================================================================")
 		return nil

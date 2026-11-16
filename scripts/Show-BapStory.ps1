@@ -163,7 +163,8 @@ function Test-GrantMint {
     param($E)
     $concept = [string](Get-Prop $E 'zsp_concept')
     $cmd = ([string](Get-Prop $E 'full_command')).ToLowerInvariant()
-    return (($concept -in $GrantMintConcepts) -and (-not (Test-Denied $E)) -and $cmd.Contains('zsp authorize'))
+    $gid = [string](Get-Prop $E 'grant_id')
+    return (($concept -in $GrantMintConcepts -or ($gid -and $gid -ne 'none')) -and (-not (Test-Denied $E)))
 }
 
 function Get-ConceptFor {
@@ -374,15 +375,71 @@ $work = @(Merge-Logical $work)
 # ----------------------------------------------------------------------------
 # Build the story model
 # ----------------------------------------------------------------------------
-$mints = @($work | Where-Object { Test-GrantMint $_ })
-$usesByGrant = @{}
-foreach ($m in $mints) {
-    $gid = [string](Get-Prop $m 'grant_id')
-    if ($gid -and -not $usesByGrant.ContainsKey($gid)) {
-        $usesByGrant[$gid] = @($work | Where-Object {
-            ([string](Get-Prop $_ 'grant_id') -eq $gid) -and -not (Test-GrantMint $_)
-        })
+$zspDirCandidates = @(
+    (Join-Path $env:USERPROFILE "bin\.bapstate\zsp"),
+    (Join-Path $env:USERPROFILE ".bapstate\zsp"),
+    (Join-Path (Get-Location) ".bapstate\zsp")
+)
+if ($env:BAP_ZSP_DIR) { $zspDirCandidates = @($env:BAP_ZSP_DIR) + $zspDirCandidates }
+$diskGrantsById = @{}
+foreach ($zd in $zspDirCandidates) {
+    if (-not (Test-Path -LiteralPath $zd)) { continue }
+    $gDir = Join-Path $zd "grants\$SessionId"
+    if (Test-Path -LiteralPath $gDir) {
+        Get-ChildItem -LiteralPath $gDir -Filter "*.json" -ErrorAction SilentlyContinue | ForEach-Object {
+            try {
+                $raw = Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json
+                if ($raw -and $raw.grant_id) { $diskGrantsById[[string]$raw.grant_id] = $raw }
+            } catch { }
+        }
     }
+}
+
+$allGrantIds = New-Object System.Collections.Generic.List[string]
+foreach ($e in $session) {
+    $gid = [string](Get-Prop $e 'grant_id')
+    if ($gid -and $gid -ne 'none' -and -not $allGrantIds.Contains($gid)) {
+        $allGrantIds.Add($gid)
+    }
+}
+foreach ($dgId in $diskGrantsById.Keys) {
+    if (-not $allGrantIds.Contains($dgId)) {
+        $allGrantIds.Add($dgId)
+    }
+}
+
+$mints = @($work | Where-Object { Test-GrantMint $_ })
+# If distinct grants were recorded on disk or in events without explicit separate mint events, synthesize them:
+if ($mints.Count -lt $allGrantIds.Count) {
+    $mintGids = @($mints | ForEach-Object { [string](Get-Prop $_ 'grant_id') })
+    foreach ($agId in $allGrantIds) {
+        if (-not ($mintGids -contains $agId)) {
+            $matchingEvt = @($work | Where-Object { [string](Get-Prop $_ 'grant_id') -eq $agId }) | Select-Object -First 1
+            if ($matchingEvt) {
+                $mints += $matchingEvt
+            } elseif ($diskGrantsById.ContainsKey($agId)) {
+                $dg = $diskGrantsById[$agId]
+                $synth = [ordered]@{
+                    grant_id          = $agId
+                    timestamp         = $dg.issued_at
+                    allowed_actions   = $dg.allowed_actions
+                    requested_actions = $dg.requested_actions
+                    zsp_concept       = if ($dg.narrowing_applied) { 'ZSP_SCOPE_NARROWED' } else { 'ZSP_GRANT_MINTED' }
+                    full_command      = "auto-mint $agId"
+                    decision          = "allow"
+                    source            = if ($dg.principal_svid -match 'agent-([a-zA-Z0-9._-]+)') { $matches[1] } else { $Agent }
+                }
+                $mints += (New-Object PSObject -Property $synth)
+            }
+        }
+    }
+}
+
+$usesByGrant = @{}
+foreach ($gid in $allGrantIds) {
+    $usesByGrant[$gid] = @($work | Where-Object {
+        ([string](Get-Prop $_ 'grant_id') -eq $gid) -and (-not (Test-Denied $_))
+    })
 }
 # Wrap the whole expression: a one-element array assigned from an if-block is unrolled to a bare
 # object, and .Count on that is empty in Windows PowerShell.
@@ -393,9 +450,12 @@ $boundary = @($denials | Where-Object { (Get-ConceptFor $_) -in @('CREDENTIAL_IS
 $freezeEvts = @($work | Where-Object {
     ([string](Get-Prop $_ 'reason') + ' ' + [string](Get-Prop $_ 'full_command')) -match 'freez|frozen|session restricted|workstation restricted'
 })
-$allowedOps = @($work | Where-Object { -not (Test-Denied $_) -and -not (Test-GrantMint $_) })
+$allowedOps = @($work | Where-Object { -not (Test-Denied $_) })
 $allowedCount = $allowedOps.Count
-$withGrant = @($allowedOps | Where-Object { Get-Prop $_ 'grant_id' }).Count
+$withGrant = @($allowedOps | Where-Object {
+    $gid = [string](Get-Prop $_ 'grant_id')
+    $gid -and $gid -ne 'none'
+}).Count
 $exempt = $allowedCount - $withGrant
 $approvals = @($work | Where-Object { (Get-ConceptFor $_) -eq 'HIGH_RISK_OOB_GATE' -or (Get-ConceptFor $_) -eq 'ZSP_APPROVED_GRANT_REUSED' })
 $layers = @($session | ForEach-Object { $l = [string](Get-Prop $_ 'reporting_layer'); if ($l) { $l } else { 'unlabelled' } } |
@@ -411,7 +471,7 @@ $model = [ordered]@{
         allowed_with_grant = $withGrant
         allowed_no_grant_needed = $exempt
         plumbing_hidden    = $hidden
-        grants_minted      = $mints.Count
+        grants_minted      = [Math]::Max($allGrantIds.Count, $mints.Count)
         allowed_operations = $allowedCount
         denied_no_grant    = $noGrant.Count
         denied_boundary    = $boundary.Count
@@ -467,6 +527,34 @@ if ($Scene -in @('1', 'All')) {
         $n++
         $gid = [string](Get-Prop $m 'grant_id')
         $mt = ConvertTo-Utc (Get-Prop $m 'timestamp')
+        $diskG = if ($gid -and $diskGrantsById.ContainsKey($gid)) { $diskGrantsById[$gid] } else { $null }
+
+        # Determine Who Acquired It
+        $whoAcquired = if ($diskG -and $diskG.principal_svid) {
+            $p = [string]$diskG.principal_svid
+            if ($p -match 'agent-([a-zA-Z0-9._-]+)') { $matches[1] } else { $p }
+        } else {
+            $s = [string](Get-Prop $m 'source')
+            if ($s) { $s } else { $Agent }
+        }
+        $grantOwner = if ($diskG -and $diskG.human_owner) { [string]$diskG.human_owner } else { $Owner }
+
+        # Determine Automatic vs Manual Mode
+        $isManual = ($diskG -and ($diskG.delegation_type -match 'oob|prompt|step_up')) -or
+                    ([string](Get-Prop $m 'full_command') -match 'zsp authorize') -or
+                    ([string](Get-Prop $m 'zsp_concept') -match 'APPROVED_GRANT|OOB') -or
+                    ([string](Get-Prop $m 'delegation') -match 'oob|prompt')
+        $modeTag = if ($isManual) { 'MANUAL (Interactive Human Approval)' } else { 'AUTOMATIC (Cedar Policy Attestation)' }
+
+        # Determine Lifecycle Status
+        $uses = @($usesByGrant[$gid])
+        $isBurned = ($diskG -and $diskG.is_burned) -or ($uses.Count -gt 0)
+        $isExpired = ($diskG -and -not $isBurned -and (ConvertTo-Utc $diskG.expires_at) -lt [DateTime]::UtcNow)
+        $lifecycleTag = if ($isBurned) { '1x USED & BURNED (Single-Use Token Expended)' }
+                        elseif ($isExpired) { 'EXPIRED UNUSED (TTL Elapsed)' }
+                        else { 'ACTIVE EPHEMERAL' }
+        $lifecycleColor = if ($isBurned) { 'Green' } elseif ($isExpired) { 'DarkGray' } else { 'Yellow' }
+
         # Step 1: what the agent was refused immediately before asking for authority.
         $before = @($noGrant | Where-Object {
                 $t = ConvertTo-Utc (Get-Prop $_ 'timestamp'); $t -le $mt -and ($mt - $t).TotalSeconds -le 180
@@ -477,19 +565,25 @@ if ($Scene -in @('1', 'All')) {
             Out-Line ("    1. WITHOUT a grant   : {0}" -f (Limit-Text (Get-Operation $before) 70)) 'Red'
             Out-Line ("       result            : DENIED. {0}" -f (Limit-Text (Get-Prop $before 'reason') 80)) 'Red'
         } else {
-            Out-Line '    1. WITHOUT a grant   : (none refused: the agent asked for the grant first)' 'DarkGray'
+            Out-Line '    1. WITHOUT a grant   : (none refused: policy attestation minted JIT grant before execution)' 'DarkGray'
         }
-        $acts = @(Get-Prop $m 'allowed_actions'); if ($acts.Count -eq 0) { $acts = @(Get-Prop $m 'requested_actions') }
-        Out-Line ("    2. GRANT MINTED      : {0}  [{1}]" -f (Get-ShortId $gid), (Get-Prop $m 'zsp_concept')) 'Green'
+        $acts = @(Get-Prop $m 'allowed_actions'); if ($acts.Count -eq 0 -and $diskG) { $acts = @($diskG.allowed_actions) }
+        if ($acts.Count -eq 0) { $acts = @(Get-Prop $m 'requested_actions') }
+        $conceptName = [string](Get-Prop $m 'zsp_concept')
+        if (-not $conceptName) { $conceptName = 'ZSP_GRANT_MINTED' }
+        Out-Line ("    2. GRANT MINTED      : {0}  [{1}]" -f (Get-ShortId $gid), $conceptName) 'Green'
+        Out-Line ("       acquired by       : {0} (on behalf of {1})" -f $whoAcquired, $grantOwner) 'Green'
+        Out-Line ("       acquisition mode  : {0}" -f $modeTag) 'Cyan'
         Out-Line ("       may do            : {0}" -f ($acts -join ', ')) 'Green'
+        Out-Line ("       lifecycle status  : {0}" -f $lifecycleTag) $lifecycleColor
         Out-Line ("       where / when      : workspace only, minted {0:HH:mm:ss}Z" -f $mt) 'Green'
-        $uses = @($usesByGrant[$gid])
+
         if ($before -and $uses.Count -gt 0) { $pairs++ }
-        if ($uses.Count -eq 0) {
+        if ($uses.Count -eq 0 -and -not $isBurned) {
             Out-Line '    3. WITH the grant    : minted but never consumed. Read-only commands need no grant by default' 'Yellow'
             Out-Line '                           (set BAP_ZSP_STRICT_READS=1 to require one), so use a write or test run for this scene.' 'Yellow'
         } else {
-            Out-Line '    3. WITH the grant    : the same kind of command now runs' 'Green'
+            Out-Line '    3. WITH the grant    : the command was authorized and executed under this grant' 'Green'
             foreach ($u in $uses) {
                 Out-Line ('       RECEIPT  ' + (New-Receipt -E $u -Owner $Owner -Agent $Agent -Detailed:$Detail)) 'White'
                 if ($Detail) {

@@ -33,6 +33,8 @@ Two audiences, kept apart on purpose:
 | `bapedge trust --path <dir> --scope session\|project\|global` | Authorize writes or deletes in a folder outside the workspace. Never accepted for filesystem roots, the home directory, system folders or credential locations. |
 | `bapedge untrust --path <dir>` / `bapedge permissions` | Revoke / list those authorizations. |
 | `bapedge zsp authorize ...` | Ask for a task grant (zero standing privilege). Evaluated by policy; it does not approve itself. |
+| `bapedge zsp status [--all]` | Inspect ZSP Task Grants. Without `--all`, reports active in-memory grants. With `--all`, shows active grants, 1x burned grants (correlated with execution lineage, command text, and cryptographic receipt ID), and expired grants. |
+| `bapedge zsp grants [--all]` | Alias for full ZSP task grant inspection across automatic and manual grants. |
 | `bapedge sweep` | Remove orphaned session markers and flush the offline audit spool. |
 | `bapedge verify-log` | Verify the tamper-evident hash chain of the local audit log. |
 | `bapedge version [--json]` | Version, commit, build date. |
@@ -107,6 +109,7 @@ Hosted control planes with an ephemeral disk (Render, containers) must set `BAP_
 | `build_all_platforms.ps1` | Cross-platform release-style build and role packages (`dist/`). |
 | `python scripts/build_wheel.py [--universal]` | Build the PyPI wheel and sdist. |
 | `install_bap_client.bat` | Install the locally built client for this developer. |
+| `install_bap_global.bat` | One-click universal global deployment (`~/.bap/bin`), rotates in-use binaries safely (`.old`), synchronizes Python Scripts legacy locations, and configures global hooks for Claude Code and Antigravity. |
 | `scripts/bump_version.py` | Bump the version everywhere. |
 
 After any rebuild, confirm the hook binaries match (a stale copy under `dist/` once denied what the current build allowed):

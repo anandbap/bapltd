@@ -48,6 +48,7 @@ try {
     if (Test-Path "$rootDir\bapedge.exe") { Move-Item -Force "$rootDir\bapedge.exe" "$rootDir\bapedge.old" -ErrorAction SilentlyContinue }
     Move-Item -Force "$rootDir\bapedge.new.exe" "$rootDir\bapedge.exe"
     Copy-Item -Force "$rootDir\bapedge.exe" "$rootDir\bapmcp.exe"
+    Copy-Item -Force "$rootDir\bapedge.exe" "$rootDir\bap.exe"
     if (Test-Path "$rootDir\dist\windows-amd64") {
         Copy-Item -Force "$rootDir\bapedge.exe" "$rootDir\dist\windows-amd64\bapedge.exe"
         Copy-Item -Force "$rootDir\bapedge.exe" "$rootDir\dist\windows-amd64\bapmcp.exe"

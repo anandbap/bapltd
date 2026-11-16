@@ -46,6 +46,53 @@ then verify a real installed-agent session with developer override disabled. No
 installed runtime was updated, no external Jira transition was performed, and no
 broader capability roadmap or cross-platform acceptance is closed by this story.
 
+### BAP-1091 — Multi-Agent ZSP Task Grant Inspection, Lifecycle Tracking, and Cockpit UI Integration
+
+**Status: DONE — implementation, CLI, API, UI, and story verification, 2026-11-16.**
+**Deployment: deployed locally.** This is a local backlog record, not an external Jira issue.
+
+**Problem:** Operators, security auditors, and developers lacked visibility into who acquired execution grants, whether they were granted automatically (via Cedar policy attestation / routine command batches) or manually (via out-of-band HITL approvals), and their exact lifecycle state (Active, 1x Used & Burned, Expired Unused). Once single-use grants were consumed by an agent, running `bapedge zsp status` returned zero active grants, hiding the historical lineage and receipt. Furthermore, while grants were tracked in memory by `bapedge`, they were not aggregated into the Control Plane STS/OBO APIs or surfaced in the Dashboard Cockpit UI (`dConvo` session transcript drawer & `viewOBO` tab) when used across coding agents (Google Antigravity, OpenAI Codex, Claude Code). Finally, `Show-BapStory.ps1` had hardcoded filters that suppressed automatic broker grants, leaving Scene 1 of the 5-minute story incomplete.
+
+**Delivered:**
+1. **Core Data Model:** Enriched `TaskGrant` in `bap-edge/pkg/types/types.go` with `DelegationType` (`policy_automatic_batch`, `automatic`, `manual`) and `ClientType` (`antigravity`, `claude-code`, `codex`, `copilot`), populated during minting in `bap-edge/internal/authz/zsp_engine.go`.
+2. **CLI Inspection (`bapedge zsp status --all` & `bapedge zsp grants`):** Added the `--all` flag and `zsp grants` subcommand in `bap-edge/cmd/zsp.go`. Displays active grants, 1x burned grants (correlated with the executed command line and cryptographic receipt ID), and expired grants, explicitly categorizing acquisition mode (`AUTOMATIC (Cedar Policy Attestation)` vs `MANUAL (HITL Out-of-Band Challenge)`).
+3. **Control Plane STS & Transcript APIs:** Updated `bap-controlplane/internal/api/sts.go` (`/api/v1/sts/tokens`, `/api/v1/sts/inspector`) and `handlers.go` (`/api/v1/sessions/transcript`) to aggregate and return active and burned ZSP task grants with client and delegation metadata.
+4. **Cockpit UI Integration:** In `bap-controlplane/internal/dashboardui/web/v3.html`, added the **Zero Standing Privilege (ZSP) Task Grants** inspection panel in the session transcript conversation drawer (`loadConvo`) and the **ZSP Agent Execution Grants** table in the STS/OBO tab (`viewOBO`), detailing Principal, Client Type, Acquisition Mode, Grant Scope, Lifecycle Status, and Command.
+5. **Story & Verifier Parity:** Updated `scripts/Show-BapStory.ps1` to load grants from disk, parse automatic vs manual modes, and render comprehensive Grant Cards with execution receipts in Scene 1.
+6. **Demo Story Overhaul:** Rewrote Scene 1 in `docs/DEMO_5_MINUTE_STORY.md` into Scene 1A (Automatic JIT Grants) and Scene 1B (Manual HITL Grants) with explicit multi-agent scenarios across Google Antigravity, OpenAI Codex, and Claude Code.
+
+**Acceptance checked:**
+- [x] `bapedge zsp status --all` and `bapedge zsp grants --all` display active, burned (with receipt ID and command text), and expired grants.
+- [x] Automatic broker grants are properly tagged `AUTOMATIC (Cedar Policy Attestation)` while `bapedge zsp authorize` grants are tagged `MANUAL (HITL Out-of-Band Challenge)`.
+- [x] Control Plane `/api/v1/sts/tokens` and `/api/v1/sessions/transcript` include the `zsp_grants` array.
+- [x] Cockpit UI conversation drawer and OBO tabs render the ZSP task grants live.
+- [x] `Show-BapStory.ps1 -Scene 1 -Detail` renders grant cards showing who acquired each grant, mode, lifecycle, and cryptographic receipt.
+- [x] Multi-agent prompts for Antigravity, Codex, and Claude documented and verified in `docs/DEMO_5_MINUTE_STORY.md`.
+
+---
+
+### BAP-1092 — Universal Global Binary Deployment, In-Use Binary Rotation, and Shadowing Prevention
+
+**Status: DONE — implementation, deployment script, and validation, 2026-11-16.**
+**Deployment: deployed locally.** This is a local backlog record, not an external Jira issue.
+
+**Problem:** Running `install_bap_global.ps1` failed on Windows whenever daemons (`bapmcp.exe`, `bapedge.exe`) were running, throwing `IOException: The process cannot access the file ... because it is being used by another process`. Additionally, legacy installations in Python script directories (e.g. `AppData\Roaming\Python\Python312\Scripts`) contained older binaries (`v1.13.10`), which shadowed `~/.bap/bin` and caused a discrepancy where `bapedge --version` was `v1.13.24` while `bap --version` was `v1.13.10`.
+
+**Delivered:**
+1. **Safe In-Use Binary Deployment (`Deploy-BinarySafe`):** Implemented in `scripts/install_bap_global.ps1`. If a target binary is locked by an active process, it renames the file to `.old.<pid>.<timestamp>` and deploys the new binary safely without throwing errors.
+2. **Dual-Binary Parity (`bap.exe` & `bapedge.exe`):** Added `bap.exe` alongside `bapedge.exe` in the core binary list deployed to `~/.bap/bin` and generated during `scripts/build_binaries.ps1`.
+3. **Legacy Shadowing Cleansing:** Automated scanning and updating of `AppData\Roaming\Python\Python*\Scripts`, `Programs\Python\Python*\Scripts`, and `~/.local/bin` during installation to eliminate stale binary conflicts.
+4. **Guaranteed PATH Precedence:** Updated PATH registration to guarantee `~/.bap/bin` is inserted at index 0 of the User PATH.
+5. **Root Launcher:** Added `install_bap_global.bat` in the repository root for one-click global installation.
+
+**Acceptance checked:**
+- [x] `install_bap_global.bat` succeeds without access errors even while `bapmcp` and `bapedge` are actively running.
+- [x] Running `bapedge --version` and `bap --version` yields identical version output (`v1.13.24`).
+- [x] Legacy copies in `AppData\Roaming\Python\Python312\Scripts` are automatically updated and kept in sync.
+- [x] `~/.bap/bin` is prioritized at the front of User PATH.
+
+---
+
 - **Hooks-first prompt fallback follow-up (2026-11-14):** MCP reporting is default-on, unrelated hook heartbeats cannot suppress it, and session/turn correlation now owns prompt counting and source priority across audit and prompt ingestion. Late hooks supersede fallback text/classification without adding a turn; canonical transcript deduplicates corroboration while raw audit evidence remains immutable. Added native/broker turn-ID propagation and SQLite/checkpoint correlation persistence. Identical repeated turns require distinct native IDs; legacy hash-only correlation is qualified. Per-session telemetry batches prevent a refused old session from blocking live sessions. Fresh sign-in is acknowledged, but live historical backlog reconciliation and deployment remain open. See `docs/POLICY_AND_REPORTING_HEALTH.md`.
 
 - **Policy/reporting resilience follow-up (2026-11-14; BAP-1080/1085, BAP-1004):** added the missing daemon signed-policy poller (three seconds, independent of native hooks/watchers), daemon prompt-spool replay, reporting-only heartbeat enrollment guidance, runtime/CLI skew diagnostics and stale-daemon replacement on start. Cache files use unique staged replacement with bounded Windows sharing retries. Explicit state installations no longer import/discover/purge another installation's credentials during logout. A broad regression exposed the old cleanup touching live enrollment; fresh browser sign-in was initiated and remains an external acceptance step. Edge cmd/policystore/state and control-plane API/registry suites pass; next-poll kill-switch regression passes. No fleet-wide latency SLA, plaintext-policy encryption or hook-free automatic prompt source is claimed. See `docs/POLICY_AND_REPORTING_HEALTH.md`. Source changes require deployment.
@@ -368,6 +415,9 @@ Legend: **Verified** = unit-tested here. **Spec only** = generated config is tes
 | BAP-1066 key rotation/recovery | Implemented, unit-tested | Rotation chain, admin rotate endpoint, env-seed rotation, persistence, client auto-follow, re-enrollment re-pin, forged/unchained rotations rejected | Live rotation across real clients; hosted deployment not exercised; Linux/macOS not run |
 | BAP-1067 policy matrix | First slice delivered, matrix itself not started | Delivered 2026-11-13: plain local reads need no task grant, both for native tools (`Read`/`Glob`/`Grep`/listing) and for shell commands whose every effect is a local read inside the workspace (`dir`, `ls`, `cat <project file>`, `git status/log/show/diff`, read pipelines). Conservative: output redirection, `git branch`, credential stores, filesystem roots, anything outside the workspace and any mixed command still need a grant. Controlled by the control plane's signed `zsp_read_exempt` (fleet and per asset) and the local `BAP_ZSP_STRICT_READS=1` escape hatch. Found because a shell `dir` on a project log folder was refused while the same read through a native tool was allowed | Existing building blocks: signed per-asset bundles, per-effect classification in the grant check, `zsp_read_exempt` as the first setting | Everything else |
 | BAP-1049 loop KPIs | CLI subset implemented | Project-scoped recorded event/session/denial/approval/would-deny/mismatch counts in `bap learn report` | Developer-hour denominators, proposal-vs-code fix rate, resolution latency and cockpit display |
+| BAP-1090 command batch authorization | Implemented and verified | Reuses suitable grants or mints single-use envelope for safe routine batches; 30s TTL; exact hash/workspace/session binding; tests in `internal/authz` and `cchook` | Cross-platform execution under non-Windows runners |
+| BAP-1091 multi-agent ZSP grant visibility & UI | Implemented and verified | Extended `TaskGrant` with `DelegationType` and `ClientType`; `bapedge zsp status --all` and `zsp grants`; STS token API and session transcript aggregation; Cockpit UI conversation drawer and OBO tabs; `Show-BapStory.ps1` and `DEMO_5_MINUTE_STORY.md` Scene 1 multi-agent coverage (Antigravity, Codex, Claude) | Remote cloud WebSocket push to UI (currently poll-backed) |
+| BAP-1092 safe global binary deployment | Implemented and verified | `Deploy-BinarySafe` in `scripts/install_bap_global.ps1` with in-use rotation (`.old`); `bap.exe` synchronization; legacy Python Scripts path syncing; index-0 PATH precedence; root `install_bap_global.bat` | Non-Windows packaging into system package managers (deb/rpm) |
 
 Still requiring implementation or full acceptance: BAP-1001/1002/1004, 1010..1015, 1020..1024, 1030, 1040..1049, 1067 (not started), and live verification of 1060..1066 as qualified above. BAP-1031's Windows AppContainer choice and proof already exist; it is not an unstarted decision. BAP-1048 remains optional. Do not close the full roadmap from package-level or rendering tests. See `docs/CAPABILITY_MODEL.md` and `docs/LEARNING_LOOP.md` for command behavior and remaining integrations.
 

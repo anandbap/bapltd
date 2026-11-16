@@ -23,46 +23,93 @@ This is the story version. The full acceptance runbook, with every pass/fail che
 
 **Show:** the dashboard with one enrolled workstation and no active grants.
 
-## Scene 1: The agent asks, policy answers & JIT grant obtained (90 seconds)
+## Scene 1: The agent asks, policy answers & JIT grants obtained (Automatic & Manual) (90 seconds)
 
-**Goal:** show zero standing privilege, automatic JIT grant acquisition for workspace modification, and useful work in the same scene.
+**Goal:** show zero standing privilege, contrast **Automatic JIT Grants** (routine workspace modification) against **Manual HITL Grants** (elevated/sensitive scopes), and prove seamless multi-agent governance across **Google Antigravity (AG)**, **OpenAI Codex**, and **Claude Code**.
 
-**Prompt to Claude:**
+### 1A. Automatic JIT Grant Acquisition (Routine Workspace Work)
+
+**Prompt to your coding agent (Antigravity, Codex, or Claude):**
 
 ```text
 execute command "git add GEMINI.md" and obtain grant if needed
 ```
-*(Alternative for read & test):*
+*(Or test run):*
 ```text
 Inspect this repository with git status and git diff --stat. Summarize what
 changed and suggest one small test improvement. Obey workspace policy. Do not
 read credential files.
 ```
 
-**What to point at:**
+**What happens behind the scenes:**
+- The agent starts with **Zero Standing Privilege (ZSP)**.
+- When `git add GEMINI.md` is invoked, the broker intercepts the action. Because it is a benign workspace write bounded to the current repository, Cedar policy automatically attests the intent and mints a single-use ephemeral grant tagged **`[AUTOMATIC]`** (`grant-xxxxxx`).
+- The command executes with exit code 0.
+- The grant **immediately burns** upon execution (`1x Used / Burned`) to prevent replay attacks.
 
-1. **Explicit JIT Grant Acquisition:** Before modifying workspace files or index (`git add GEMINI.md`), the agent or launcher asserts intent. Under BAP Zero Standing Privilege (ZSP), the local daemon mints a nonce-bound, single-use execution grant (`grant_id: zsp-grant-...` or batch grant).
-2. **Cockpit UI & Live Drawer:**
-   - In the Live Session drawer (`dConvo`), observe the action badge: **ALLOWED** accompanied by the green **`🔑 Grant: zsp-grant-...`** tag.
-   - In **STS & OBO Tokens** tab (`viewOBO`), view the session-bound token delegation and single-use lifecycle counter.
-3. **Execution Receipt:** The command completes with code 0. Open the receipt in the dashboard drawer. Point at the five core pillars:
-   - **1. Who initiated**: `claude-code` (or agent identity).
-   - **2. On Behalf Of (OBO)**: Attested human developer SSO identity (`user:developer -> agent:claude`).
-   - **3. What was done**: `git add GEMINI.md`.
-   - **4. What executed vs stopped**: Allowed & executed under authenticated grant, bounded to the workspace.
-   - **5. Prove**: Cryptographic SHA-256 tamper-evident receipt and policy version digest.
+---
 
-**Say:** "The agent did real work modifying repository state. It never held standing ambient write privileges. It requested intent, held a short-lived single-use grant that names exactly what it could do, and both the grant ID and cryptographic receipt are surfaced immediately in the Cockpit UI."
+### 1B. Manual / Out-of-Band HITL Grant (Elevated / High-Risk Operations)
 
-**Pass:** Command succeeds, single-use grant appears in the session transcript drawer, and receipt is correlated to the live session.
+**Prompt to your coding agent (Antigravity, Codex, or Claude):**
+
+```text
+Request an elevated task grant for python execution "dev:python:exec" to run scripts/verify_sts.py
+```
+*(Or via direct terminal command):*
+```powershell
+bapedge zsp authorize --actions "dev:python:exec" --resources "workspace://current" --goal "Run STS verification"
+```
+
+**What happens behind the scenes:**
+- High-risk / elevated operations cannot be auto-minted (`HIGH_RISK_OOB_GATE`).
+- The agent submits a 4-Tuple Task Authorization Envelope (Who, AuthorizedBy, Intent, PermissionAsk) via MCP (`bap_request_task_grant`) or CLI (`bapedge zsp authorize`).
+- A human operator is prompted for an **interactive out-of-band challenge** (`bapedge zsp approve` or terminal prompt).
+- Once approved, the daemon mints an attested single-use grant tagged **`[MANUAL (HITL)]`**.
+- The agent consumes the grant to execute the task; the cryptographic receipt permanently records the human approver's SSO identity.
+
+---
+
+### Multi-Agent Governance Across All Coding Agents
+
+The exact same ZSP grant lifecycle governs all coding agents:
+- **Google Antigravity (`AG`)**: Governed via the native `bap-zero-trust` MCP server (`bap_execute`, `bap_request_task_grant`) and the `agy` CLI launcher.
+- **OpenAI Codex**: Governed via `bapedge exec` and `codex` / `run_codex_cli_bap.bat`.
+- **Claude Code**: Governed via `interceptor.exe` hooks and `claude` / `run_claude_bap.bat`.
+
+---
+
+### What to point at in the Cockpit UI & Dashboard
+
+1. **Live Session Drawer (`dConvo`):**
+   - Click on the active session row in the dashboard.
+   - At the top of the drawer, point at the **🔑 Zero Standing Privilege (ZSP) Task Grants** ledger table:
+     - **Grant ID**: Nonce-bound ephemeral token (`grant-xxxxxx`).
+     - **Acquired By**: Identifies the exact agent (`🤖 Antigravity`, `🤖 Claude Code`, `🤖 Codex`).
+     - **Acquisition Mode**: Clearly contrasts **`[AUTOMATIC]`** (Policy Attestation) vs **`[MANUAL (HITL)]`** (Human Approved).
+     - **Scope**: Narrowed canonical action scopes (e.g. `git:add:write`, `workspace://current`).
+     - **Lifecycle**: Displays **`1x Used / Burned`** (or `Expired Unused` if unconsumed).
+     - **Executed Command**: The exact command executed under the grant with its tamper-evident receipt link.
+2. **STS & OBO Tokens Tab (`viewOBO`):**
+   - Switch to the **🔐 STS & OBO Tokens** tab.
+   - Point at the **Zero Standing Privilege (ZSP) Agent Execution Grants** table:
+     - Highlights all active and recent grants minted across fleet workstations.
+     - Proves whether grants were acquired automatically or through human escalation.
+     - Displays the single-use burn counter and expiry countdown.
+
+**Say:** "Notice that regardless of whether the developer uses Antigravity, Claude Code, or Codex, no agent ever has standing write authority. Routine commands receive automatic single-use grants through Cedar policy, while sensitive operations escalate to human review. In both cases, every grant names the exact agent, operator, and scope, and burns immediately upon execution."
+
+**Pass:** Commands succeed under their respective grants, the UI distinguishes automatic from manual grants with explicit burned badges, and all evidence reconciles.
 
 **Show the evidence** (read-only, run in your own terminal):
 
 ```powershell
 powershell -NoProfile -File .\scripts\Show-BapStory.ps1 -Scene 1 -Detail
 ```
-
-It prints each grant as a card, then each action it enabled as a one-sentence receipt that names the grant. Its "Evidence coverage" section tells you if capture is incomplete before you go on stage.
+*(Or inspect the live local grant ledger directly):*
+```powershell
+bapedge zsp status --all
+```
 
 ## Scene 2: The boundary holds, including the workaround (90 seconds)
 

@@ -644,5 +644,67 @@ The Claude Code PreToolUse hook (or Antigravity/Copilot hook) intercepts and blo
    # or: bap permissions
    ```
 
+---
+
+### Playbook 13: Resolving In-Use Binary Lock Errors & Version Skew (`bap` vs `bapedge`)
+
+**Symptom**:
+1. Running installer or build scripts fails with:
+   ```text
+   Copy-Item : The process cannot access the file 'C:\Users\User\.bap\bin\bapmcp.exe' because it is being used by another process.
+   ```
+2. Running version check shows conflicting versions:
+   ```text
+   bapedge --version  -> bapedge v1.13.24 ...
+   bap --version      -> bapedge v1.13.10 ...
+   ```
+
+**Root Causes**:
+1. **Windows Executable Locking**: Windows forbids overwriting running `.exe` files in place while processes (`bapmcp.exe`, `bapedge.exe`) are executing.
+2. **Legacy Python Scripts Shadowing**: Stale copies of `bap.exe` or `bapedge.exe` in `AppData\Roaming\Python\Python312\Scripts` or `~/.local/bin` take precedence over `~/.bap/bin` if PATH ordering is misconfigured or if `bap.exe` was omitted from `~/.bap/bin`.
+
+**Resolution Steps**:
+1. Run the universal root installer:
+   ```bat
+   .\install_bap_global.bat
+   ```
+   *What this executes under the hood*:
+   - Uses `Deploy-BinarySafe` in `scripts/install_bap_global.ps1` to rotate locked active binaries to `.old.<pid>.<timestamp>` before copying new builds.
+   - Deploys both `bap.exe` and `bapedge.exe` in lockstep.
+   - Scans and synchronizes any legacy Python Scripts directories (`AppData\Roaming\Python\Python*\Scripts`).
+   - Ensures `~/.bap/bin` is prioritized at index 0 of the Windows User PATH.
+2. Verify version alignment across both commands:
+   ```powershell
+   bapedge --version
+   bap --version
+   ```
+
+---
+
+### Playbook 14: Inspecting Zero Standing Privilege (ZSP) Task Grants & Burned Tokens
+
+**Symptom**:
+An agent executed a command via grant, but running `bapedge zsp status` immediately reports `Active JIT Grants: 0`, and the operator cannot determine whether the grant was automatic or manual, who acquired it, or what command consumed it.
+
+**Root Causes**:
+Under BAP Zero Standing Privilege (ZSP), all execution task grants are **single-use ephemeral tokens**. As soon as the brokered command launches, the token is atomically consumed and transitions to `1x USED & BURNED`. Standard `zsp status` displays only unspent, currently active in-memory tokens.
+
+**Resolution Steps**:
+1. Query the full grant ledger (including burned and expired tokens):
+   ```powershell
+   bapedge zsp status --all
+   # Or using the direct alias:
+   bapedge zsp grants --all
+   ```
+   *Expected Output*: Displays each grant's ID, acquisition mode (`AUTOMATIC` Cedar policy attestation vs `MANUAL` HITL challenge), delegator, agent principal, lifecycle status, cryptographic receipt ID, and exact consumed command line.
+2. View in the BAP Cockpit UI:
+   - **Session Conversation Drawer (`dConvo`)**: Click on any session; top card **Zero Standing Privilege (ZSP) Task Grants** details all task grants for that conversation.
+   - **STS & OBO Inspector (`viewOBO`)**: Displays the fleet-wide ledger of task grants across Antigravity, Claude Code, and Codex.
+3. Review formatted grant lineage via story verifier:
+   ```powershell
+   .\scripts\Show-BapStory.ps1 -Scene 1 -Detail
+   ```
+
+
 
 

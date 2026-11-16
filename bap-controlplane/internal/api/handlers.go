@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -3890,11 +3891,74 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
+
+	type transcriptGrant struct {
+		GrantID   string   `json:"grant_id"`
+		Agent     string   `json:"agent"`
+		User      string   `json:"user"`
+		Mode      string   `json:"mode"`
+		Actions   []string `json:"actions,omitempty"`
+		Status    string   `json:"status"`
+		Command   string   `json:"command,omitempty"`
+		Timestamp string   `json:"timestamp"`
+		ReceiptID string   `json:"receipt_id,omitempty"`
+	}
+	grantMap := make(map[string]*transcriptGrant)
+	for _, ev := range sessionEvents {
+		gid := ev.GrantID
+		if gid == "" || gid == "none" {
+			continue
+		}
+		mode := "AUTOMATIC"
+		cmdLow := strings.ToLower(ev.FullCommand)
+		rLow := strings.ToLower(ev.Reason)
+		if ev.ZSPConcept == "ZSP_APPROVED_GRANT_REUSED" || strings.Contains(cmdLow, "zsp authorize") || strings.Contains(rLow, "oob") || strings.Contains(rLow, "prompt") || strings.Contains(rLow, "step-up") {
+			mode = "MANUAL"
+		}
+		status := "used"
+		if ev.Decision == "deny" {
+			status = "blocked"
+		}
+		tg, exists := grantMap[gid]
+		if !exists {
+			agentName := ev.Source
+			if agentName == "" || agentName == "broker" {
+				agentName = "agent"
+			}
+			grantMap[gid] = &transcriptGrant{
+				GrantID:   gid,
+				Agent:     agentName,
+				User:      ev.UserEmail,
+				Mode:      mode,
+				Actions:   ev.AllowedActions,
+				Status:    status,
+				Command:   ev.FullCommand,
+				Timestamp: ev.Timestamp,
+				ReceiptID: ev.EventID,
+			}
+		} else {
+			if len(tg.Actions) == 0 && len(ev.AllowedActions) > 0 {
+				tg.Actions = ev.AllowedActions
+			}
+			if tg.Command == "" && ev.FullCommand != "" {
+				tg.Command = ev.FullCommand
+			}
+		}
+	}
+	var sessionGrants []transcriptGrant
+	for _, g := range grantMap {
+		sessionGrants = append(sessionGrants, *g)
+	}
+	sort.Slice(sessionGrants, func(i, j int) bool {
+		return sessionGrants[i].Timestamp < sessionGrants[j].Timestamp
+	})
+
 	out := map[string]any{
 		"session_id": sessionID,
 		"count":      len(items),
 		"items":      items,
 		"calls":      sum.Calls,
+		"grants":     sessionGrants,
 		"unlocked":   isAdmin,
 	}
 	for k, v := range callCounts {
