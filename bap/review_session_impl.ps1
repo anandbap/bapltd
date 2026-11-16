@@ -54,9 +54,18 @@ function Find-AuditLedgers {
         }
     }
 
+    # Mirror bapedge's own resolution (state.AuditLogPath / state.Dir): explicit log
+    # overrides, then BAP_STATE_DIR, then <home>\bin\.bapstate, which is where the broker
+    # writes by default. Without these, broker-layer events (grant minting, executed
+    # commands) are silently missing from the report.
+    foreach ($logVar in @('BAP_AUDIT_LOG', 'LTD_AUDIT_LOG')) {
+        $logVal = [Environment]::GetEnvironmentVariable($logVar)
+        if ($logVal) { $candidates += $logVal }
+    }
     if ($env:BAP_STATE_DIR) {
         $candidates += (Join-Path $env:BAP_STATE_DIR "audit.jsonl")
     }
+    $candidates += (Join-Path $env:USERPROFILE "bin\.bapstate\audit.jsonl")
 
     $candidates += @(
         (Join-Path (Get-Location) ".bapstate\audit.jsonl"),

@@ -835,6 +835,12 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 		CallerBinary:      ec.callerBinary,
 		CallerHash:        ec.callerHash,
 	}
+	if ec.authorizerMS != nil {
+		entry.PolicyEvalMs = *ec.authorizerMS
+	}
+	if ec.preExecutionMS != nil {
+		entry.PreExecMs = *ec.preExecutionMS
+	}
 	if ec.workloadPID > 0 {
 		entry.ClientPID = ec.workloadPID
 	}

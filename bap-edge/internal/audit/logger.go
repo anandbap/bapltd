@@ -54,6 +54,12 @@ type AuditEntry struct {
 	RequestedActions []string `json:"requested_actions,omitempty"`
 	AllowedActions   []string `json:"allowed_actions,omitempty"`
 	ZSPConcept       string   `json:"zsp_concept,omitempty"`
+	// Latency breakdown. DurationMs is the whole brokered command; these separate the
+	// policy decision from sandbox setup. Not part of the entry hash, so older
+	// entries and existing chains still verify.
+	PolicyEvalMs float64 `json:"policy_eval_ms,omitempty"`
+	PreExecMs    float64 `json:"pre_exec_ms,omitempty"`
+
 	// Identity-Aware Egress Control (BAP-530)
 	DestinationTenantID string `json:"destination_tenant_id,omitempty"`
 	// Process-Level Supervision & Child Ancestry Tracking (BAP-534)

@@ -59,6 +59,23 @@ async function main() {
   assert.match(ctx.S.coverage[0].actionHtml, /Stopped/);
   assert.doesNotMatch(ctx.S.coverage[0].actionHtml, /Unfreeze/);
 
+  // A session that simply finished is "Ended"; only an administrator action reads "Stopped".
+  const finishedSession = fixtures['/api/v1/sessions'].sessions[0];
+  finishedSession.status = 'closed';
+  finishedSession.close_reason = 'normal exit';
+  await ctx.loadLive();
+  assert.equal(ctx.S.coverage[0].report, 'Ended');
+  assert.match(ctx.S.coverage[0].actionHtml, /Ended/);
+  assert.doesNotMatch(ctx.S.coverage[0].actionHtml, /Stopped/);
+  finishedSession.close_reason = 'idle_timeout';
+  await ctx.loadLive();
+  assert.equal(ctx.S.coverage[0].report, 'Ended');
+  finishedSession.close_reason = 'Stopped by administrator';
+  await ctx.loadLive();
+  assert.equal(ctx.S.coverage[0].report, 'Stopped');
+  // Restore the state the remaining checks expect.
+  finishedSession.status = 'revoked';
+
   // A slow request must finish instead of being invalidated on every poll.
   const originalGetJSON = ctx.getJSON;
   let release;

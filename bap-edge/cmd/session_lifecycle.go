@@ -140,6 +140,9 @@ func EnsureSessionStarted(sessionID, appID string, clientPID int, initialPrompt 
 	if instanceID == "" {
 		instanceID = resolveDefaultInstanceID("")
 	}
+	// Remember whether the stored credentials carried an identity before the fallback below
+	// fills it in; the 401 handling needs to tell "unenrolled" from "credentials rejected".
+	hadEnrolledIdentity := credSPIFFE != ""
 	if credSPIFFE == "" {
 		credSPIFFE = fmt.Sprintf("spiffe://bap.local/workstation/%s", instanceID)
 	}
@@ -203,10 +206,20 @@ func EnsureSessionStarted(sessionID, appID string, clientPID int, initialPrompt 
 			writeLocalRevoked(sessionID, reason)
 			return fmt.Errorf("Session startup BLOCKED: %s", reason)
 		} else if resp.StatusCode == http.StatusUnauthorized {
-			if credSPIFFE == "" {
+			// credSPIFFE is back-filled above, so testing it here could never be true and the
+			// notice never printed. Use what the stored credentials actually held.
+			if !hadEnrolledIdentity {
 				fmt.Fprintf(os.Stderr, "[i] Central Control Plane: Workstation is Unenrolled (HTTP 401). Session will be governed locally.\n    Run 'bap login' to stream sessions to %s\n", serverURL)
+			} else {
+				fmt.Fprintf(os.Stderr, "[i] Central Control Plane rejected this workstation's credentials (HTTP 401). Session %s is governed locally and will not appear centrally.\n    Run 'bap login' to re-enroll against %s\n", sessionID, serverURL)
 			}
+		} else if resp.StatusCode >= 300 {
+			fmt.Fprintf(os.Stderr, "[i] Central Control Plane answered HTTP %d to session registration at %s. Session %s is governed locally until registration succeeds.\n", resp.StatusCode, serverURL, sessionID)
 		}
+	} else if err != nil {
+		// Unreachable or slow (the request has a short timeout). Previously this was silent,
+		// so a session could look started locally while the remote never heard of it.
+		fmt.Fprintf(os.Stderr, "[i] Central Control Plane unreachable at %s (%v). Session %s is governed locally and may not appear centrally.\n", serverURL, err, sessionID)
 	}
 
 	// 6. Persist local session markers

@@ -8,6 +8,8 @@ A presenter runbook and acceptance checklist for UI v3, authenticated sessions, 
 
 **Format:** a 12-minute executive story; 30–45 minutes with technical proofs.
 
+**Short version:** for a 5-minute story demo, see [docs/DEMO_5_MINUTE_STORY.md](docs/DEMO_5_MINUTE_STORY.md). This file is the full acceptance runbook.
+
 **Remote cockpit:** [BAP Control Plane](https://bap-controlplane.onrender.com/dashboard/).
 **Developer Prompt-Driven Runbook:** see [DEMO_CLAUDE_CODEX_ZERO_TRUST.md](DEMO_CLAUDE_CODEX_ZERO_TRUST.md) for copy-pasteable prompts, HITL interactive approvals, and RFC 8693 STS OBO exchanges.
 **Fresh-install acceptance:** use the [operator runbook](docs/FRESH_INSTALL_ACCEPTANCE.md) and [installed-client smoke script](scripts/Test-BapFreshInstall.ps1) before this showcase. They include the unapproved-hook reporting case and explicit pass/fail evidence.

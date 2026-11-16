@@ -1865,6 +1865,12 @@
               '</small>';
 
             var sessionStopped = s.status === 'revoked' || s.status === 'closed';
+            // Both an administrator stop and a normal finish leave the session "closed", so the
+            // label comes from the recorded reason. "Stopped" is reserved for an administrator
+            // action; a session that simply finished (normal exit, idle timeout) is "Ended".
+            var closeReasonText = String(s.close_reason || '');
+            var stoppedByAdmin = s.status === 'revoked' || /by administrator|cascading revocation/i.test(closeReasonText);
+            var stopLabel = stoppedByAdmin ? 'Stopped' : 'Ended';
             var sessionReconciled = s.status === 'reconciled' || !!s.reconciled_to;
             var layers = s.reporting_layers || [];
             var isBackedByBroker = layers.indexOf('broker') !== -1;
@@ -1874,7 +1880,7 @@
             var actionHtml = '';
             if (S.adminActive && !/^\[Protected/i.test(s.session_id)) {
               if (sessionStopped) {
-                actionHtml = '<span class="sess-pill" style="color:var(--ink-3);font-size:11.5px;font-weight:600">Stopped</span>';
+                actionHtml = '<span class="sess-pill" style="color:var(--ink-3);font-size:11.5px;font-weight:600">' + stopLabel + '</span>';
               } else if (sessionReconciled) {
                 actionHtml = '<span class="sess-pill" style="color:var(--ok);font-size:11.5px;font-weight:600">Reconciled</span>';
               } else {
@@ -1915,11 +1921,17 @@
               reportClass = 'g';
               means = 'Process ID ' + (s.client_pid || '') + ' matched & reconciled with bapedge session ' + esc(s.reconciled_to || s.session_id) + '.';
             } else if (sessionStopped) {
-              protectText = toolEvidence ? 'Governed' : 'Stopped';
+              protectText = toolEvidence ? 'Governed' : stopLabel;
               protectClass = toolEvidence ? 'g' : 'off';
-              reportText = 'Stopped';
+              reportText = stopLabel;
               reportClass = 'off';
-              means = s.close_reason ? ('Session ' + s.close_reason + '.') : 'Session stopped by administrator.';
+              if (stoppedByAdmin) {
+                means = closeReasonText ? ('Session ' + closeReasonText + '.') : 'Session stopped by administrator.';
+              } else if (closeReasonText === 'idle_timeout') {
+                means = 'Session ended after going idle.';
+              } else {
+                means = closeReasonText ? ('Session ended (' + closeReasonText + ').') : 'Session ended.';
+              }
             } else if (isObserved && isBackedByBroker) {
               protectText = 'Matched with bapedge';
               protectClass = 'g';
