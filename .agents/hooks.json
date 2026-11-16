@@ -1,0 +1,34 @@
+﻿{
+    "bap-governance":  {
+                           "enabled":  true,
+                           "SessionStart":  [
+                                                {
+                                                    "type":  "command",
+                                                    "command":  "C:\\Users\\User\\.bap\\bin\\interceptor.exe --event SessionStart"
+                                                }
+                                            ],
+                           "PreInvocation":  [
+                                                 {
+                                                     "type":  "command",
+                                                     "command":  "C:\\Users\\User\\.bap\\bin\\interceptor.exe --event PreInvocation"
+                                                 }
+                                             ],
+                           "PreToolUse":  [
+                                              {
+                                                  "matcher":  "*",
+                                                  "hooks":  [
+                                                                {
+                                                                    "type":  "command",
+                                                                    "command":  "C:\\Users\\User\\.bap\\bin\\interceptor.exe --event PreToolUse"
+                                                                }
+                                                            ]
+                                              }
+                                          ],
+                           "Stop":  [
+                                        {
+                                            "type":  "command",
+                                            "command":  "C:\\Users\\User\\.bap\\bin\\interceptor.exe --event Stop"
+                                        }
+                                    ]
+                       }
+}

@@ -36,12 +36,23 @@ type CallerProcessInfo struct {
 	AppID      string `json:"app_id"`
 }
 
-// UniversalHookResponse enforces the canonical contract across Claude, Codex, Copilot, etc.
+// AntigravitySystemMessagePayload represents the system message payload for Antigravity injectSteps.
+type AntigravitySystemMessagePayload struct {
+	SystemMessage string `json:"systemMessage"`
+}
+
+// AntigravityInjectStep represents an injected step in Antigravity PreInvocation / SessionStart.
+type AntigravityInjectStep struct {
+	SystemMessage AntigravitySystemMessagePayload `json:"systemMessage"`
+}
+
+// UniversalHookResponse enforces the canonical contract across Claude, Codex, Antigravity, Copilot, etc.
 type UniversalHookResponse struct {
-	Status             string              `json:"status"`
-	Continue           bool                `json:"continue"`
-	Message            string              `json:"message,omitempty"`
-	HookSpecificOutput *HookSpecificOutput `json:"hookSpecificOutput,omitempty"`
+	Status             string                  `json:"status"`
+	Continue           bool                    `json:"continue"`
+	Message            string                  `json:"message,omitempty"`
+	HookSpecificOutput *HookSpecificOutput     `json:"hookSpecificOutput,omitempty"`
+	InjectSteps        []AntigravityInjectStep `json:"injectSteps,omitempty"`
 }
 
 func emitUniversalSuccess() {
@@ -68,6 +79,13 @@ func emitClaudeUserPromptSuccessWithZSPContext(sessionID string) {
 		HookSpecificOutput: &HookSpecificOutput{
 			HookEventName:     "UserPromptSubmit",
 			AdditionalContext: ctx,
+		},
+		InjectSteps: []AntigravityInjectStep{
+			{
+				SystemMessage: AntigravitySystemMessagePayload{
+					SystemMessage: ctx,
+				},
+			},
 		},
 	}
 	data, _ := json.Marshal(resp)
@@ -848,6 +866,7 @@ type AntigravityToolCall struct {
 type HookPayload struct {
 	TurnID             string                 `json:"turn_id,omitempty"`
 	HookEventName      string                 `json:"hook_event_name"`
+	HookEventNameCamel string                 `json:"hookEventName,omitempty"`
 	EventName          string                 `json:"event_name,omitempty"`
 	Event              string                 `json:"event,omitempty"`
 	Type               string                 `json:"type,omitempty"`
@@ -865,6 +884,8 @@ type HookPayload struct {
 	UserPrompt         string                 `json:"user_prompt,omitempty"`
 	UserPromptCamel    string                 `json:"userPrompt,omitempty"`
 	Prompt             string                 `json:"prompt,omitempty"`
+	LastUserInput      string                 `json:"lastUserInput,omitempty"`
+	LastUserInputSnake string                 `json:"last_user_input,omitempty"`
 	SessionID          string                 `json:"session_id,omitempty"`
 	SessionIDCamel     string                 `json:"sessionId,omitempty"`
 	Session            string                 `json:"session,omitempty"`
@@ -905,6 +926,7 @@ type HookResponse struct {
 	PermissionDecision string             `json:"permissionDecision,omitempty"` // Direct flat alias: "allow" / "deny"
 	Reason             string             `json:"reason,omitempty"`
 	UpdatedInput       *ToolInput         `json:"updatedInput,omitempty"` // Direct flat alias for generic runners
+	Overwrite          map[string]any     `json:"overwrite,omitempty"`    // Antigravity shallow argument overwrite
 	HookSpecificOutput HookSpecificOutput `json:"hookSpecificOutput"`
 }
 
@@ -921,7 +943,9 @@ func normalizeHookPayload(payload *HookPayload) {
 	}
 	// Normalize HookEventName
 	if payload.HookEventName == "" {
-		if payload.EventName != "" {
+		if payload.HookEventNameCamel != "" {
+			payload.HookEventName = payload.HookEventNameCamel
+		} else if payload.EventName != "" {
 			payload.HookEventName = payload.EventName
 		} else if payload.Event != "" {
 			payload.HookEventName = payload.Event
@@ -2856,6 +2880,12 @@ func handleUserPromptHook(payload HookPayload) {
 	if prompt == "" {
 		prompt = strings.TrimSpace(payload.Prompt)
 	}
+	if prompt == "" {
+		prompt = strings.TrimSpace(payload.LastUserInput)
+	}
+	if prompt == "" {
+		prompt = strings.TrimSpace(payload.LastUserInputSnake)
+	}
 	tPath := payload.TranscriptPath
 	if tPath == "" {
 		tPath = payload.TranscriptPathSnake
@@ -2961,8 +2991,8 @@ func handleUserPromptHook(payload HookPayload) {
 		}
 	}
 
-	// Valid for both Claude-compatible hooks and Codex lifecycle hooks.
-	if sessionID != "" && (isClaudeApp(activeCallerAppID) || isClaudeApp(caller.AppID)) && isZSPEnforcedClientSide() {
+	// Valid for Claude, Antigravity, and Codex lifecycle hooks.
+	if sessionID != "" && isZSPEnforcedClientSide() {
 		emitClaudeUserPromptSuccessWithZSPContext(sessionID)
 		return
 	}
@@ -3178,8 +3208,19 @@ func main() {
 			payload.ToolName = payload.ToolCall.Name
 		}
 		if payload.ToolInput.Command == "" && payload.ToolCall.Args != nil {
-			if cmd, ok := payload.ToolCall.Args["CommandLine"].(string); ok {
-				payload.ToolInput.Command = cmd
+			for _, k := range []string{"CommandLine", "command", "cmd", "script"} {
+				if cmd, ok := payload.ToolCall.Args[k].(string); ok && cmd != "" {
+					payload.ToolInput.Command = cmd
+					break
+				}
+			}
+		}
+		if payload.ToolInput.FilePath == "" && payload.ToolCall.Args != nil {
+			for _, k := range []string{"Path", "path", "file_path", "filePath", "file", "target"} {
+				if f, ok := payload.ToolCall.Args[k].(string); ok && f != "" {
+					payload.ToolInput.FilePath = f
+					break
+				}
 			}
 		}
 		if payload.HookEventName == "" {
@@ -3892,6 +3933,21 @@ func outputDecisionWithUpdatedInput(decision, reason, context string, updatedInp
 			UpdatedInput:             updatedInput,
 		},
 		UpdatedInput: updatedInput,
+	}
+
+	if updatedInput != nil {
+		resp.Overwrite = make(map[string]any)
+		if updatedInput.Command != "" {
+			resp.Overwrite["CommandLine"] = updatedInput.Command
+			resp.Overwrite["command"] = updatedInput.Command
+			resp.Overwrite["cmd"] = updatedInput.Command
+		}
+		if updatedInput.FilePath != "" {
+			resp.Overwrite["Path"] = updatedInput.FilePath
+			resp.Overwrite["path"] = updatedInput.FilePath
+			resp.Overwrite["filePath"] = updatedInput.FilePath
+			resp.Overwrite["file_path"] = updatedInput.FilePath
+		}
 	}
 
 	// Determine decision style:

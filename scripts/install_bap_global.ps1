@@ -278,6 +278,38 @@ $bapHooks = [ordered]@{
 }
 $bapHooks | ConvertTo-Json -Depth 10 | Set-Content -Path (Join-Path $bapPluginDir "hooks.json") -Encoding UTF8
 
+# Also write global ~/.gemini/config/hooks.json for Antigravity (loaded directly when launched from menu)
+$bapHooks | ConvertTo-Json -Depth 10 | Set-Content -Path (Join-Path $geminiConfigDir "hooks.json") -Encoding UTF8
+
+# plugins.json (registers plugin globally)
+$pluginsManifest = [ordered]@{
+    entries = @(
+        [ordered]@{
+            path = "~/.gemini/config/plugins/bap-zero-trust"
+        }
+    )
+}
+$pluginsManifest | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $geminiConfigDir "plugins.json") -Encoding UTF8
+
+# Update global ~/.gemini/config/config.json plugins map
+$geminiMainConfigPath = Join-Path $geminiConfigDir "config.json"
+if (Test-Path $geminiMainConfigPath) {
+    try {
+        $mainCfg = Get-Content $geminiMainConfigPath -Raw | ConvertFrom-Json
+        $mainCfg.plugins = [ordered]@{ "bap-zero-trust" = [ordered]@{ enabled = $true } }
+        $mainCfg | ConvertTo-Json -Depth 10 | Set-Content $geminiMainConfigPath -Encoding UTF8
+    } catch {
+        Write-Warning "Could not update config.json plugins map: $_"
+    }
+}
+
+# Workspace-level .agents/hooks.json
+$wsAgentsDir = Join-Path $repoRoot ".agents"
+if (-not (Test-Path $wsAgentsDir)) {
+    New-Item -ItemType Directory -Path $wsAgentsDir -Force | Out-Null
+}
+$bapHooks | ConvertTo-Json -Depth 10 | Set-Content -Path (Join-Path $wsAgentsDir "hooks.json") -Encoding UTF8
+
 # rules/AGENTS.md
 $agentsMdContent = @"
 # BAP Zero-Trust Policy & Enterprise Governance
