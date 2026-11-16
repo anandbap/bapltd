@@ -256,16 +256,78 @@ def get_bapstate_dir(target_dir: str = None, portable: bool = False) -> str:
     return os.path.join(os.path.expanduser("~"), "bin", ".bapstate")
 
 
+def get_ancestor_pids():
+    """Returns the set of PIDs comprising the current process and all of its ancestor processes."""
+    ancestors = {os.getpid()}
+    if hasattr(os, "getppid"):
+        try:
+            pp = os.getppid()
+            if pp > 0:
+                ancestors.add(pp)
+        except Exception:
+            pass
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            TH32CS_SNAPPROCESS = 0x00000002
+            class PROCESSENTRY32(ctypes.Structure):
+                _fields_ = [
+                    ("dwSize", wintypes.DWORD),
+                    ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD),
+                    ("th32DefaultHeapID", ctypes.c_size_t),
+                    ("th32ModuleID", wintypes.DWORD),
+                    ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD),
+                    ("pcPriClassBase", wintypes.LONG),
+                    ("dwFlags", wintypes.DWORD),
+                    ("szExeFile", ctypes.c_char * 260)
+                ]
+            kernel32 = ctypes.windll.kernel32
+            hSnapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+            if hSnapshot != -1:
+                pe = PROCESSENTRY32()
+                pe.dwSize = ctypes.sizeof(PROCESSENTRY32)
+                pids = {}
+                if kernel32.Process32First(hSnapshot, ctypes.byref(pe)):
+                    while True:
+                        pids[pe.th32ProcessID] = pe.th32ParentProcessID
+                        if not kernel32.Process32Next(hSnapshot, ctypes.byref(pe)):
+                            break
+                kernel32.CloseHandle(hSnapshot)
+                curr = os.getpid()
+                while curr in pids and pids[curr] not in ancestors and pids[curr] > 0:
+                    ancestors.add(pids[curr])
+                    curr = pids[curr]
+        except Exception:
+            pass
+    elif sys.platform.startswith("linux"):
+        curr = os.getpid()
+        while True:
+            try:
+                with open(f"/proc/{curr}/stat", "r") as f:
+                    fields = f.read().split()
+                    ppid = int(fields[3])
+                    if ppid <= 1 or ppid in ancestors:
+                        break
+                    ancestors.add(ppid)
+                    curr = ppid
+            except Exception:
+                break
+    return ancestors
+
+
 def get_running_bap_pids():
     """
-    Finds running PIDs of BAP processes (bapedge, bapgateway, bapcontrolplane, cchook-interceptor).
-    Excludes the current running installer process PID.
+    Finds running PIDs of BAP background daemons and interceptors.
+    Excludes the current running installer process PID and all of its ancestor PIDs.
     """
-    my_pid = os.getpid()
+    excluded_pids = get_ancestor_pids()
     running_pids = set()
     bap_names = {
         "bapedge.exe", "bapedge",
-        "bap.exe", "bap",
         "bapgateway.exe", "bapgateway",
         "bapcontrolplane.exe", "bapcontrolplane",
         "bapdashboard.exe", "bapdashboard",
@@ -286,7 +348,7 @@ def get_running_bap_pids():
                         if name.lower() in bap_names:
                             try:
                                 pid = int(pid_str)
-                                if pid != my_pid:
+                                if pid not in excluded_pids:
                                     running_pids.add((pid, name))
                             except ValueError:
                                 pass
@@ -304,7 +366,7 @@ def get_running_bap_pids():
                         if name in bap_names:
                             try:
                                 pid = int(pid_str)
-                                if pid != my_pid:
+                                if pid not in excluded_pids:
                                     running_pids.add((pid, name))
                             except ValueError:
                                 pass
@@ -375,7 +437,7 @@ def stop_running_bap_processes(target_dir: str = None, portable: bool = False, p
             for pid, name in remaining:
                 try:
                     if sys.platform == "win32":
-                        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, timeout=3)
+                        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, timeout=3)
                     else:
                         os.kill(pid, 9)
                 except Exception:
