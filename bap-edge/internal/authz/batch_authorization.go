@@ -125,8 +125,33 @@ func automaticGitInspection(args []string) bool {
 	case "status":
 		for _, arg := range args[2:] {
 			switch arg {
-			case "--short", "--branch", "-s", "-b", "-sb", "-bs", "--porcelain", "--porcelain=1", "--porcelain=2":
+			case "--short", "--branch", "-s", "-b", "-sb", "-bs", "--porcelain", "--porcelain=1", "--porcelain=2",
+				"-u", "-uno", "-unormal", "-uall", "--untracked-files", "--ignored":
 			default:
+				if strings.HasPrefix(arg, "-") {
+					return false
+				}
+			}
+		}
+	case "branch":
+		for _, arg := range args[2:] {
+			switch arg {
+			case "-v", "-vv", "-a", "--all", "-r", "--remotes", "--list", "--show-current":
+			default:
+				if strings.HasPrefix(arg, "-") {
+					return false
+				}
+			}
+		}
+	case "diff":
+		for _, arg := range args[2:] {
+			if strings.HasPrefix(arg, "--output") || strings.HasPrefix(arg, "-O") {
+				return false
+			}
+		}
+	case "show":
+		for _, arg := range args[2:] {
+			if strings.HasPrefix(arg, "--output") || strings.HasPrefix(arg, "-O") {
 				return false
 			}
 		}
@@ -170,6 +195,10 @@ func AuthorizeSessionCommandBatch(zspDir, sessionID, clientType, command, worksp
 	}
 	// A local flag can only restrict this path, never expand policy permissions.
 	if os.Getenv("BAP_ZSP_AUTO_GRANTS") == "0" {
+		return svid, grant, proof, originalErr
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("BAP_ZSP_STRICT_READS"))) {
+	case "1", "true", "on", "yes":
 		return svid, grant, proof, originalErr
 	}
 	derived, eligible := automaticBatchChecks(command, workspace)

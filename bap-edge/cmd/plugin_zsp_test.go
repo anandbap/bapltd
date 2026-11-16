@@ -216,3 +216,26 @@ func TestRunZSPValidationDefaultMaxUsesAndAncestorPIDSession(t *testing.T) {
 		t.Fatalf("expected ancestor PID marker to resolve \"sess-ancestor-9001\", got %q (pids=%v)", got, pids)
 	}
 }
+
+func TestPluginAutoMintsGrantForEligibleGitStaging(t *testing.T) {
+	zspDir := t.TempDir()
+	t.Setenv("BAP_ZSP_DIR", zspDir)
+	t.Setenv("BAP_ZSP", "enforce")
+	t.Setenv("BAP_MODE", "enforce")
+	t.Setenv("BAP_ZSP_STRICT_READS", "")
+	t.Setenv("BAP_ZSP_AUTO_GRANTS", "1")
+
+	sessID := "sess-plugin-automint-1"
+
+	// Calling git add GEMINI.md in a session without prior manual grant must auto-mint and succeed.
+	resp := evaluateWithBapedgeTool(sessID, "claude-code", "Bash", "git add GEMINI.md", "")
+	if !resp.Allowed {
+		t.Fatalf("expected git add GEMINI.md to be auto-authorized, got reason=%q, suggestion=%q", resp.Reason, resp.Suggestion)
+	}
+	if resp.Receipt == nil || resp.Receipt.GrantID == "" {
+		t.Fatalf("expected non-empty GrantID in execution receipt, got %+v", resp.Receipt)
+	}
+	if !strings.HasPrefix(resp.Receipt.GrantID, "grant-") {
+		t.Fatalf("expected grant ID to start with 'grant-', got %q", resp.Receipt.GrantID)
+	}
+}

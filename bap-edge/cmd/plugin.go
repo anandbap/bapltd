@@ -2015,8 +2015,8 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 			consumeHere = false
 		}
 
-		svid, grant, _, zspErr := authz.VerifyOrConsumeSessionZSPChecks(
-			authz.ResolveZSPDir(), sessionID, normClient, zspChecks, command, wsRoot, consumeHere, nil,
+		svid, grant, _, zspErr := authz.AuthorizeSessionCommandBatch(
+			authz.ResolveZSPDir(), sessionID, normClient, command, wsRoot, zspChecks, consumeHere, nil,
 		)
 		if svid != nil {
 			principalIdentity = svid.Subject

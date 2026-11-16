@@ -1179,13 +1179,36 @@
   var lastFocus = null;
   function fmtTime(ts) { var d = new Date(ts); return isNaN(d) ? '' : d.toISOString().replace('T', ' ').slice(0, 19) + ' UTC'; }
   // Loads every prompt, reply and governed action for a session, oldest first.
-  function loadConvo(sessionId) {
+  function loadConvo(sessionId, f) {
     var box = $('dConvo'), head = $('dConvoH');
     box.innerHTML = ''; head.hidden = true;
     if (!sessionId || S.mode === 'demo') { return; }
     head.hidden = false;
     box.innerHTML = '<li class="convo-note">Loading the full session...</li>';
     getJSON('/api/v1/sessions/transcript?session_id=' + encodeURIComponent(sessionId)).then(function (r) {
+      var whoVal = f ? f.who : ($('dSteps').querySelector('.v') ? $('dSteps').querySelector('.v').textContent : 'Agent');
+      if (r.calls && r.calls.length) {
+        var latestCall = r.calls[r.calls.length - 1];
+        for (var ci = r.calls.length - 1; ci >= 0; ci--) {
+          var actName = (r.calls[ci].action || '').trim();
+          if (actName && actName !== 'bapedge' && actName.indexOf('bapedge session-telemetry') !== 0) {
+            latestCall = r.calls[ci];
+            break;
+          }
+        }
+        var latestActionStr = latestCall.action || (f ? f.did : '-');
+        var trueResult = (r.blocked_count > 0) ? 'Blocked' :
+                         ((r.allowed_limited_count > 0) ? 'Allowed-Limited' :
+                         (((r.failed_count || 0) > 0 && !(r.allowed_count || 0)) ? 'Failed' : 'Allowed'));
+        var resultColor = (r.blocked_count > 0) ? 'var(--bad)' : ((r.allowed_limited_count > 0) ? '#c2410c' : 'var(--ok)');
+        $('dSteps').innerHTML = [
+          ['Who', esc(whoVal)],
+          ['Latest action', esc(latestActionStr)],
+          ['Result', '<span style="color:' + resultColor + ';font-weight:700">' + esc(trueResult) + '</span>']
+        ].map(function (p) {
+          return '<li><div class="k">' + p[0] + '</div><div class="v">' + p[1] + '</div></li>';
+        }).join('');
+      }
       var items = (function () { if (!r.calls) { return r.items || []; } var base = (r.items || []).filter(function (i) { return i.kind !== 'action'; }); var calls = r.calls.map(function (c) { return { kind: 'action', timestamp: c.timestamp, action: c.action, decision: c.decision, reason: c.reason, narrowing_applied: c.narrowing_applied, narrowing_reason: c.narrowing_reason, requested_actions: c.requested_actions, allowed_actions: c.allowed_actions, zsp_concept: c.zsp_concept, grant_id: c.grant_id, outcome: c.outcome, layers: c.layers, event_count: c.event_count, exit_code: c.exit_code }; }); return base.concat(calls).sort(function (a, b) { return String(a.timestamp).localeCompare(String(b.timestamp)); }); })(), nPrompt = 0, total = items.filter(function (i) { return i.kind === 'prompt'; }).length;
       if (!items.length) { box.innerHTML = '<li class="convo-note">No prompts or replies have been recorded for this session yet.</li>'; return; }
       head.textContent = 'Everything in this session (' + total + ' prompt' + (total === 1 ? '' : 's') + ', ' + items.length + ' records)';
@@ -1221,26 +1244,26 @@
         var meta = '';
         if (isAction) {
           var conceptTag = (i.zsp_concept ? ' <span class="chip" style="font-size:10px;padding:1px 6px;margin-left:6px;background:rgba(15,23,42,0.06);color:var(--ink-2)">' + esc(i.zsp_concept) + '</span>' : '') + (i.event_count > 1 ? ' <span class="chip" title="The same action is logged by the tool hook, the shell wrapper and the broker; they are shown once" style="font-size:10px;padding:1px 6px;margin-left:6px;background:rgba(15,23,42,0.04);color:var(--ink-2)">' + esc(String(i.event_count)) + ' log events merged</span>' : '');
+          var grantTag = '';
+          if (i.grant_id) {
+            var isUsed = !isDeny;
+            var grantStatusLabel = isUsed ? '1x Used / Burned' : 'Unused / Pending';
+            var grantBg = isUsed ? 'rgba(16,185,129,0.1)' : 'rgba(234,88,12,0.1)';
+            var grantColor = isUsed ? '#047857' : '#c2410c';
+            var grantBorder = isUsed ? 'rgba(16,185,129,0.3)' : 'rgba(234,88,12,0.3)';
+            grantTag = ' <span class="chip" style="font-size:10px;padding:2px 7px;margin-left:6px;background:' + grantBg + ';color:' + grantColor + ';border:1px solid ' + grantBorder + '" title="ZSP Execution Grant Minted & Bound: ' + esc(i.grant_id) + ' (' + grantStatusLabel + ')">🔑 Grant: ' + esc(i.grant_id) + ' <b style="margin-left:4px">[' + grantStatusLabel + ']</b></span>';
+          }
           if (isShadow) {
             var reasonText = i.reason ? ' &mdash; ' + esc(i.reason) : '';
-            meta = '<div class="tm" style="font-size:12.5px;margin-top:8px;padding-top:6px;border-top:1px solid rgba(245,158,11,0.3);color:#b06000;font-weight:600"><b>EXECUTED IN AUDIT (WOULD BE BLOCKED BY POLICY)</b>' + reasonText + conceptTag + '</div>';
+            meta = '<div class="tm" style="font-size:12.5px;margin-top:8px;padding-top:6px;border-top:1px solid rgba(245,158,11,0.3);color:#b06000;font-weight:600"><b>EXECUTED IN AUDIT (WOULD BE BLOCKED BY POLICY)</b>' + reasonText + conceptTag + grantTag + '</div>';
           } else if (isNarrowed) {
             var reqStr = (i.requested_actions || []).join(', ');
             var allowStr = (i.allowed_actions || []).join(', ');
             var nDetail = (reqStr && allowStr) ? ('Requested: <span style="text-decoration:line-through;color:#d93025">[' + esc(reqStr) + ']</span> &rarr; Granted: <span style="color:#188038;font-weight:700">[' + esc(allowStr) + ']</span>') : esc(i.narrowing_reason || i.reason || 'Scope narrowed');
-            meta = '<div class="tm" style="font-size:12.5px;margin-top:8px;padding-top:6px;border-top:1px solid rgba(234,88,12,0.35);color:#9a3412;font-weight:600"><b style="color:#c2410c">ALLOWED-LIMITED</b> &mdash; ' + nDetail + conceptTag + '</div>';
+            meta = '<div class="tm" style="font-size:12.5px;margin-top:8px;padding-top:6px;border-top:1px solid rgba(234,88,12,0.35);color:#9a3412;font-weight:600"><b style="color:#c2410c">ALLOWED-LIMITED</b> &mdash; ' + nDetail + conceptTag + grantTag + '</div>';
           } else {
             var decText = esc(i.decision ? i.decision.toUpperCase() : (isDeny ? 'DENY' : 'ALLOW'));
             var reasonText = i.reason ? ' &mdash; ' + esc(i.reason) : '';
-            var grantTag = '';
-            if (i.grant_id) {
-              var isUsed = !isDeny;
-              var grantStatusLabel = isUsed ? '1x Used / Burned' : 'Unused / Pending';
-              var grantBg = isUsed ? 'rgba(16,185,129,0.1)' : 'rgba(234,88,12,0.1)';
-              var grantColor = isUsed ? '#047857' : '#c2410c';
-              var grantBorder = isUsed ? 'rgba(16,185,129,0.3)' : 'rgba(234,88,12,0.3)';
-              grantTag = ' <span class="chip" style="font-size:10px;padding:2px 7px;margin-left:6px;background:' + grantBg + ';color:' + grantColor + ';border:1px solid ' + grantBorder + '" title="ZSP Execution Grant Minted & Bound: ' + esc(i.grant_id) + ' (' + grantStatusLabel + ')">🔑 Grant: ' + esc(i.grant_id) + ' <b style="margin-left:4px">[' + grantStatusLabel + ']</b></span>';
-            }
             meta = '<div class="tm" style="font-size:12.5px;margin-top:8px;padding-top:6px;border-top:1px solid ' + (isDeny ? 'rgba(179,38,30,0.2)' : 'rgba(29,122,85,0.2)') + ';color:' + (isDeny ? 'var(--bad)' : 'var(--ok)') + ';font-weight:600"><b>' + decText + '</b>' + reasonText + conceptTag + grantTag + '</div>';
           }
         } else if (i.intent) {
@@ -1283,7 +1306,7 @@
     $('dSteps').innerHTML = [['Who', f.who], ['Latest action', f.did], ['Result', f.blocked ? 'Blocked' : (f.shadow ? 'Flagged, not stopped' : (f.unknown ? 'Not evaluated' : 'Allowed'))]].map(function (p) {
       return '<li><div class="k">' + esc(p[0]) + '</div><div class="v">' + esc(p[1] || '-') + '</div></li>'; }).join('');
     $('dTech').innerHTML = esc('Session: ' + (f.sessionId || 'not available')) + (f.t ? '<br>' + esc('Last event: ' + fmtTime(f.t)) : '');
-    loadConvo(f.sessionId);
+    loadConvo(f.sessionId, f);
     $('narrator').classList.add('shift');
     $('scrim').classList.add('on'); $('drawer').classList.add('on'); $('drawer').focus();
   }

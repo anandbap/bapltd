@@ -292,6 +292,16 @@ func resolveGroup(g *callGroup) CallRecord {
 	}
 	sort.Strings(layerList)
 
+	bestGrantID := rep.GrantID
+	if bestGrantID == "" {
+		for i := range g.events {
+			if g.events[i].GrantID != "" {
+				bestGrantID = g.events[i].GrantID
+				break
+			}
+		}
+	}
+
 	return CallRecord{
 		Timestamp:         rep.Timestamp,
 		Action:            rep.FullCommand,
@@ -299,7 +309,7 @@ func resolveGroup(g *callGroup) CallRecord {
 		Outcome:           outcome,
 		Reason:            rep.Reason,
 		ExitCode:          rep.ExitCode,
-		GrantID:           rep.GrantID,
+		GrantID:           bestGrantID,
 		CanonicalResource: rep.CanonicalResource,
 		NarrowingApplied:  rep.NarrowingApplied || outcome == outcomeAllowedLimited,
 		NarrowingReason:   rep.NarrowingReason,
