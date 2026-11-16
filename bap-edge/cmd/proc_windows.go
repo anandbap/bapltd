@@ -132,14 +132,17 @@ func findOtherBapEdgePIDs() ([]int, error) {
 
 	// Trace ancestors of currentPID to ignore any parent/grandparent broker
 	ancestors := make(map[int]bool)
-	for curr := parentOf[currentPID]; curr > 0 && len(ancestors) < 16; curr = parentOf[curr] {
+	curr := parentOf[currentPID]
+	for depth := 0; curr > 0 && !ancestors[curr] && curr != currentPID && depth < 16; depth++ {
 		ancestors[curr] = true
+		curr = parentOf[curr]
 	}
 
 	var pids []int
+	isTestRunner := strings.HasSuffix(currentExe, ".test.exe") || strings.HasSuffix(currentExe, ".test") || currentExe == "test.exe"
 	for pid, exeName := range nameOf {
 		if pid != currentPID && !ancestors[pid] && pid > 0 {
-			if exeName == "bapedge.exe" || exeName == "bap.exe" || exeName == "bap-daemon.exe" || exeName == currentExe {
+			if exeName == "bapedge.exe" || exeName == "bap.exe" || exeName == "bap-daemon.exe" || (!isTestRunner && exeName == currentExe) {
 				pids = append(pids, pid)
 			}
 		}

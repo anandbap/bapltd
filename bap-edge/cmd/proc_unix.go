@@ -103,7 +103,8 @@ func findOtherBapEdgePIDs() ([]int, error) {
 			continue
 		}
 		comm := strings.ToLower(strings.TrimSpace(string(commBytes)))
-		if comm == "bapedge" || comm == "bap" || comm == "bap-daemon" || comm == currentExe {
+		isTestRunner := strings.HasSuffix(currentExe, ".test") || currentExe == "test"
+		if comm == "bapedge" || comm == "bap" || comm == "bap-daemon" || (!isTestRunner && comm == currentExe) {
 			pids = append(pids, pid)
 		}
 	}
