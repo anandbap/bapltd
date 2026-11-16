@@ -1232,7 +1232,8 @@
           } else {
             var decText = esc(i.decision ? i.decision.toUpperCase() : (isDeny ? 'DENY' : 'ALLOW'));
             var reasonText = i.reason ? ' &mdash; ' + esc(i.reason) : '';
-            meta = '<div class="tm" style="font-size:12.5px;margin-top:8px;padding-top:6px;border-top:1px solid ' + (isDeny ? 'rgba(179,38,30,0.2)' : 'rgba(29,122,85,0.2)') + ';color:' + (isDeny ? 'var(--bad)' : 'var(--ok)') + ';font-weight:600"><b>' + decText + '</b>' + reasonText + conceptTag + '</div>';
+            var grantTag = i.grant_id ? ' <span class="chip" style="font-size:10px;padding:1px 6px;margin-left:6px;background:rgba(16,185,129,0.1);color:#047857;border:1px solid rgba(16,185,129,0.3)" title="ZSP Execution Grant Minted & Bound">🔑 Grant: ' + esc(i.grant_id) + '</span>' : '';
+            meta = '<div class="tm" style="font-size:12.5px;margin-top:8px;padding-top:6px;border-top:1px solid ' + (isDeny ? 'rgba(179,38,30,0.2)' : 'rgba(29,122,85,0.2)') + ';color:' + (isDeny ? 'var(--bad)' : 'var(--ok)') + ';font-weight:600"><b>' + decText + '</b>' + reasonText + conceptTag + grantTag + '</div>';
           }
         } else if (i.intent) {
           meta = '<div class="tm">' + esc('Kind of work: ' + i.intent) + '</div>';

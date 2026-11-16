@@ -328,6 +328,43 @@ All BAP components (`bap-edge`, `bap-controlplane`, `bap-gateway`, `python-agent
   - `scripts/test_manual_pilot_verification.ps1`: Interactive 6-phase manual instruction-by-instruction verification.
   - `scripts/test_agent_runtime.ps1`: Automated 10-scenario agent wire-protocol verification (Claude Code PreToolUse hooks, Glob subagent whitelisting, Sibling trust, Credential hard denial).
 
+---
+
+## 18. November 2026 Course Correction, Pilot Hardening & Capability Architecture (v1.13.18)
+
+### Core Discoveries & The November 2026 Reset
+Following intensive product reviews (`PRODUCT_READINESS_REVIEW_2026-11-13.md`, `PRODUCT_REVIEW_2026-11-14.md`, and the revised `JIRA_STORIES.md`), the engineering reality was aligned with the implementation:
+1. **Command Parsing Cannot Be The Security Boundary (ADR-001)**:
+   - Shells and interpreters are Turing-complete. Command parsing as a security boundary generated constant friction and edge cases (heredocs, lone `/`, quoted `&&`, relative path traversal, re-quoting in PowerShell, git identity stripping).
+   - **Decision**: Demote command parsing and text Cedar rules to advisory UX (early refusal, fast feedback). Migrate core security enforcement to **effects at boundaries** (OS AppContainer filesystem sandboxing, proxy network egress).
+2. **Policy Generation by Observation (ADR-002)**:
+   - Replace brittle hand-written rules with an automated closed loop: **Observe -> Complain Mode -> Learn (Deterministic Miners) -> Recommend -> Verify -> Apply**. Target: >80% of developer friction resolved without shipping code changes.
+
+### Key Technical Hardening Landed (v1.13.12–v1.13.18)
+- **BAP-1089 (Nonce-Bound Control Plane Authority & Rollback Resilience)**:
+   - Fixed the `policy rollback rejected` failure when edge compared incoming version with cached policy after server restarts.
+   - Live control plane issues higher or lower policy versions backed by a fresh 256-bit nonce-bound Ed25519 sync signature (`/api/v1/policy/sync`). Replay of older bundles or proofs is cryptographically rejected.
+- **BAP-1090 (Automatic Batch Granting for Routine Inspection)**:
+   - Agents naturally submit chained commands (e.g. `git status && git diff --stat && git log`). The broker automatically authorizes recognized inspection batches whose composite effects are policy-allowed under a single 30s scoped grant.
+- **Local File Sealing (Commit `5c8566a5`)**:
+   - Per-machine OS-keystore key sealing, sealed policy pins, encrypted prompts/spool, signed hook evidence, and verified strict-tools checks.
+- **Agent Immunity & Dev-Override Lockout (BAP-1006 / BAP-1078)**:
+   - Autonomous agents are strictly refused from invoking `bapedge dev-override on`. Dev override is paused, time-boxed, and compiled out of production releases.
+- **Independent Local Evidence Preservation (Commit `0b41ec00`)**:
+   - Preserves local audit receipts and session evidence locally across `.bapstate` and recovery archives, preventing dropped evidence even when remote telemetry or Render instances sleep.
+- **Dashboard v3 Lifecycle Clarity**:
+   - Sessions ending normally report `Ended`, reserving `Stopped` strictly for administrator-initiated terminations.
+
+### Executive & Technical Demonstration Tooling
+- **5-Minute Executive Story (`docs/DEMO_5_MINUTE_STORY.md`)**:
+   - Tight 4-scene narrative: Scene 1 (The agent asks, policy answers), Scene 2 (The boundary holds, including workarounds), Scene 3 (Administrator freeze/unfreeze), Scene 4 (Control plane outage resilience).
+- **Scene-Based Evidence Viewer (`scripts/Show-BapStory.ps1`)**:
+   - Read-only terminal tool formatting session data into human-readable grant cards, one-sentence receipts, and latency metrics.
+- **Programmatic Scenario Suite (`scripts/run_claude_scenarios.ps1`)**:
+   - 19 automated zero-trust scenario turns covering fail-closed baseline, single-use burn, credential FIM shield, egress blocking, and layered coverage.
+   - *Prerequisite*: Requires an authenticated, signed-in Claude Code CLI (`claude -p` must answer headless without auth prompt).
+
+
 
 
 

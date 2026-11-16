@@ -23,12 +23,16 @@ This is the story version. The full acceptance runbook, with every pass/fail che
 
 **Show:** the dashboard with one enrolled workstation and no active grants.
 
-## Scene 1: The agent asks, policy answers (90 seconds)
+## Scene 1: The agent asks, policy answers & JIT grant obtained (90 seconds)
 
-**Goal:** show zero standing privilege and useful work in the same scene.
+**Goal:** show zero standing privilege, automatic JIT grant acquisition for workspace modification, and useful work in the same scene.
 
 **Prompt to Claude:**
 
+```text
+execute command "git add GEMINI.md" and obtain grant if needed
+```
+*(Alternative for read & test):*
 ```text
 Inspect this repository with git status and git diff --stat. Summarize what
 changed and suggest one small test improvement. Obey workspace policy. Do not
@@ -37,15 +41,20 @@ read credential files.
 
 **What to point at:**
 
-1. Before the first command, the agent declares an intent and the requested actions. The system mints a short-lived grant limited to those actions, this workspace and a maximum number of uses.
+1. **Explicit JIT Grant Acquisition:** Before modifying workspace files or index (`git add GEMINI.md`), the agent or launcher asserts intent. Under BAP Zero Standing Privilege (ZSP), the local daemon mints a nonce-bound, single-use execution grant (`grant_id: zsp-grant-...` or batch grant).
+2. **Cockpit UI & Live Drawer:**
+   - In the Live Session drawer (`dConvo`), observe the action badge: **ALLOWED** accompanied by the green **`🔑 Grant: zsp-grant-...`** tag.
+   - In **STS & OBO Tokens** tab (`viewOBO`), view the session-bound token delegation and single-use lifecycle counter.
+3. **Execution Receipt:** The command completes with code 0. Open the receipt in the dashboard drawer. Point at the five core pillars:
+   - **1. Who initiated**: `claude-code` (or agent identity).
+   - **2. On Behalf Of (OBO)**: Attested human developer SSO identity (`user:developer -> agent:claude`).
+   - **3. What was done**: `git add GEMINI.md`.
+   - **4. What executed vs stopped**: Allowed & executed under authenticated grant, bounded to the workspace.
+   - **5. Prove**: Cryptographic SHA-256 tamper-evident receipt and policy version digest.
 
-   **Presenter note (verified against a live session):** read-only commands such as `git status` and `git diff --stat` run without consuming a grant by default, so a grant minted for them shows up as "never consumed". Either launch the session with `BAP_ZSP_STRICT_READS=1` (documented in `docs/CLI_REFERENCE.md`) so reads need a grant too, or use a workspace-changing step such as the stdlib unittest prompt in `claude-demo.md` for this beat.
-2. The commands run and return real output.
-3. Open one receipt. Point at five fields: **who** (agent identity and the human owner), **what** (the command), **policy** (version digest), **how** (process tree), **outcome**.
+**Say:** "The agent did real work modifying repository state. It never held standing ambient write privileges. It requested intent, held a short-lived single-use grant that names exactly what it could do, and both the grant ID and cryptographic receipt are surfaced immediately in the Cockpit UI."
 
-**Say:** "The agent did useful work. It never held standing access. It held a grant that names what it could do, where, and how many times."
-
-**Pass:** real command output, one receipt per action, receipt correlated to this session.
+**Pass:** Command succeeds, single-use grant appears in the session transcript drawer, and receipt is correlated to the live session.
 
 **Show the evidence** (read-only, run in your own terminal):
 

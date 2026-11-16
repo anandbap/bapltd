@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Presenter view of a governed agent session, organised by the demo scenes.
 .DESCRIPTION
@@ -107,7 +107,7 @@ function Get-LedgerFiles {
     $searched = New-Object System.Collections.Generic.List[string]
     foreach ($p in (Get-LedgerCandidates -Explicit $Explicit)) {
         $searched.Add($p)
-        if (Test-Path -LiteralPath $p -PathType Leaf) {
+        if (Test-Path -LiteralPath $p -PathType Leaf -ErrorAction SilentlyContinue) {
             if (-not $found.Contains($p)) { $found.Add($p) }
         }
         # Acknowledged records keep a full local copy in a recovery archive.
@@ -224,7 +224,9 @@ function Merge-Logical {
         if ($null -eq $rep) { $rep = $g.Events[$g.Events.Count - 1] }
         # Fill gaps from the other copies instead of discarding their evidence. The copy
         # with the richest process data is not always the one that recorded the grant.
-        foreach ($field in @('grant_id', 'duration_ms', 'process_tree', 'policy_eval_ms', 'pre_exec_ms', 'canonical_action', 'canonical_resource')) {
+        foreach ($field in @('grant_id', 'duration_ms', 'process_tree', 'policy_eval_ms', 'pre_exec_ms', 'canonical_action', 'canonical_resource',
+                             'spiffe_id', 'delegation', 'user_id', 'user_email', 'source', 'client_pid', 'lineage_tree', 'caller_binary',
+                             'caller_hash', 'receipt_id', 'request_hash', 'policy_version', 'policy_hash', 'entry_hash', 'previous_hash')) {
             $have = Get-Prop $rep $field
             $missing = ($null -eq $have) -or (($have -is [string]) -and $have -eq '') -or (($have -is [array]) -and @($have | Where-Object { $_ }).Count -eq 0)
             if ($missing) {
@@ -238,30 +240,96 @@ function Merge-Logical {
     }
 }
 
-function New-Receipt {
+function Get-PillarFields {
     param($E, [string]$Owner, [string]$Agent)
+    $spiffe = [string](Get-Prop $E 'spiffe_id')
+    $source = [string](Get-Prop $E 'source')
+    $cpid = Get-Prop $E 'client_pid'
+    $callerBin = [string](Get-Prop $E 'caller_binary')
+
+    # 1. WHO (Initiator)
+    $who = if ($spiffe) { $spiffe } elseif ($source) { "agent:$source" } else { $Agent }
+    if ($callerBin) {
+        $binLeaf = Split-Path $callerBin -Leaf
+        $who += " via $binLeaf"
+    }
+    if ($cpid) { $who += " (PID $cpid)" }
+
+    # 2. OBO (On Behalf Of whom / Delegation)
+    $del = [string](Get-Prop $E 'delegation')
+    $lin = [string](Get-Prop $E 'lineage_tree')
+    $uid = [string](Get-Prop $E 'user_id')
+    $obo = if ($del) { $del } elseif ($lin) { $lin } elseif ($uid) { "user:$uid -> agent:$source" } else { "user:$Owner" }
+
+    # 3. WHAT (Action & Target Resource)
+    $act = [string](Get-Prop $E 'canonical_action')
+    $res = [string](Get-Prop $E 'canonical_resource')
+    $cmd = Limit-Text (Get-Operation $E) 65
+    $what = if ($act -and $res) { "$act on $res ($cmd)" } elseif ($act) { "$act ($cmd)" } else { $cmd }
+
+    # 4. WHAT EXECUTED / STOPPED (Outcome)
     $denied = Test-Denied $E
-    $cmd = Limit-Text (Get-Operation $E) 70
-    $grant = [string](Get-Prop $E 'grant_id')
     $dur = Get-Prop $E 'duration_ms'
     $exit = Get-Prop $E 'exit_code'
-    $tree = @(@(Get-Prop $E 'process_tree') | Where-Object { $_ })
-    $parts = New-Object System.Collections.Generic.List[string]
-    if ($denied) {
-        $parts.Add("$Agent, acting for $Owner, tried ``$cmd``.")
-        $parts.Add('DENIED. The command did not run.')
-        $reason = Limit-Text (Get-Prop $E 'reason') 110
-        if ($reason) { $parts.Add("Reason: $reason") }
+    $status = if ($denied) { 'STOPPED (DENIED)' } else { 'ALLOWED & EXECUTED' }
+    $execDesc = if ($denied) {
+        $r = Limit-Text (Get-Prop $E 'reason') 80
+        "STOPPED before execution. Reason: $r"
     } else {
-        $g = if ($grant) { "under grant $(Get-ShortId $grant)" } else { 'with no grant recorded on this event' }
-        $parts.Add("$Agent, acting for $Owner, ran ``$cmd`` $g.")
-        $tail = @('ALLOWED')
+        $tail = @('EXECUTED')
         if ($null -ne $exit -and "$exit" -ne '') { $tail += "exit $exit" }
         if ($dur) { $tail += "$dur ms" }
-        if ($tree.Count -gt 0) { $tail += "$($tree.Count)-process sandboxed tree" }
-        $parts.Add(($tail -join ', ') + '.')
+        $tail -join ', '
     }
-    return ($parts -join ' ')
+
+    # 5. PROVE (Non-Repudiation, Receipt & Hash Chain)
+    $rcpt = [string](Get-Prop $E 'receipt_id')
+    if (-not $rcpt) { $rcpt = [string](Get-Prop $E 'event_id') }
+    $hash = [string](Get-Prop $E 'request_hash')
+    if (-not $hash) { $hash = [string](Get-Prop $E 'entry_hash') }
+    $pol = [string](Get-Prop $E 'policy_version')
+    if (-not $pol) { $pol = [string](Get-Prop $E 'policy_hash') }
+    $tree = @(@(Get-Prop $E 'process_tree') | Where-Object { $_ })
+    $prove = "Receipt: $(Get-ShortId $rcpt)"
+    if ($hash) { $prove += " | Hash: $(Get-ShortId $hash)" }
+    if ($pol) { $prove += " | Policy: $(Get-ShortId $pol)" }
+    if ($tree.Count -gt 0) { $prove += " | Tree: $($tree -join '>')" }
+
+    return [pscustomobject]@{
+        Who = $who
+        Obo = $obo
+        What = $what
+        Status = $status
+        ExecDesc = $execDesc
+        Prove = $prove
+        Denied = $denied
+        Command = $cmd
+        ReceiptId = $rcpt
+    }
+}
+
+function New-Receipt {
+    param($E, [string]$Owner, [string]$Agent, [switch]$Detailed)
+    $p = Get-PillarFields -E $E -Owner $Owner -Agent $Agent
+    $grant = [string](Get-Prop $E 'grant_id')
+
+    if ($Detailed) {
+        $lines = New-Object System.Collections.Generic.List[string]
+        $lines.Add("[$($p.Status)] $($p.Command)")
+        $lines.Add("       • 1. WHO (Initiator) : $($p.Who)")
+        $lines.Add("       • 2. OBO (Delegation): $($p.Obo)")
+        $lines.Add("       • 3. WHAT (Action)   : $($p.What)")
+        $lines.Add("       • 4. OUTCOME         : $($p.ExecDesc)")
+        $lines.Add("       • 5. PROVE           : $($p.Prove)")
+        return ($lines -join "`n")
+    }
+
+    $gText = if ($grant) { " [grant: $(Get-ShortId $grant)]" } else { '' }
+    if ($p.Denied) {
+        return "WHO: $($p.Who) | OBO: $($p.Obo) | WHAT: $($p.Command) -> $($p.ExecDesc) | PROVE: $(Get-ShortId $p.ReceiptId)"
+    } else {
+        return "WHO: $($p.Who) | OBO: $($p.Obo) | WHAT: $($p.Command)$gText -> $($p.ExecDesc) | PROVE: $(Get-ShortId $p.ReceiptId)"
+    }
 }
 
 # ----------------------------------------------------------------------------
@@ -362,14 +430,20 @@ $model = [ordered]@{
 if ($Json) { $model | ConvertTo-Json -Depth 6; exit 0 }
 
 # ----------------------------------------------------------------------------
-# Header
+# Header & 5-Pillar Executive Summary
 # ----------------------------------------------------------------------------
 Out-Rule '='
-Out-Line "  GOVERNED SESSION STORY    $Agent    session $(Get-ShortId $SessionId)" 'Cyan'
+Out-Line "  GOVERNED SESSION STORY — 5-PILLAR ZERO-TRUST AUDIT" 'Cyan'
 Out-Rule '='
 $s = $model.summary
-Out-Line ("  {0} distinct actions ({5} raw events across layers): {1} allowed ({6} consumed a grant, {7} needed none), {2} stopped beyond their grant, {3} stopped at a hard boundary, {4} human approval(s)." -f `
-        $s.operations_shown, $s.allowed_operations, $s.denied_no_grant, $s.denied_boundary, $s.human_approvals, $s.raw_events, $s.allowed_with_grant, $s.allowed_no_grant_needed) 'White'
+$delEvt = $session | Where-Object { Get-Prop $_ 'delegation' } | Select-Object -First 1
+$SessionDelegation = if ($delEvt) { [string](Get-Prop $delEvt 'delegation') } else { "user:$Owner -> agent:$($agentRaw)" }
+Out-Line ("  1. WHO INITIATED       : {0} (Session: {1})" -f $Agent, (Get-ShortId $SessionId)) 'White'
+Out-Line ("  2. ON BEHALF OF (OBO)  : {0}" -f $SessionDelegation) 'White'
+Out-Line ("  3. WHAT WAS DONE       : {0} distinct actions ({1} raw events across layers)" -f $s.operations_shown, $s.raw_events) 'White'
+Out-Line ("  4. EXECUTED vs STOPPED : {0} Allowed & Executed ({1} via grant, {2} read-exempt), {3} Stopped beyond grant, {4} Stopped at boundary" -f `
+        $s.allowed_operations, $s.allowed_with_grant, $s.allowed_no_grant_needed, $s.denied_no_grant, $s.denied_boundary) 'White'
+Out-Line ("  5. PROVE & INTEGRITY   : {0} grants minted, {1} ledgers read, tamper-evident hash chain active" -f $s.grants_minted, $ledger.Found.Count) 'White'
 if ($hidden -gt 0) { Out-Line "  ($hidden app-plumbing events hidden; use -IncludePlumbing to show them.)" 'DarkGray' }
 Out-Line ''
 
@@ -417,7 +491,7 @@ if ($Scene -in @('1', 'All')) {
         } else {
             Out-Line '    3. WITH the grant    : the same kind of command now runs' 'Green'
             foreach ($u in $uses) {
-                Out-Line ('       RECEIPT  ' + (New-Receipt -E $u -Owner $Owner -Agent $Agent)) 'White'
+                Out-Line ('       RECEIPT  ' + (New-Receipt -E $u -Owner $Owner -Agent $Agent -Detailed:$Detail)) 'White'
                 if ($Detail) {
                     Out-Line ("         event {0}  action {1}  resource {2}" -f (Get-Prop $u 'event_id'), (Get-Prop $u 'canonical_action'), (Get-Prop $u 'canonical_resource')) 'DarkGray'
                     Out-Line ("         process tree {0}  caller {1}" -f ((@(Get-Prop $u 'process_tree')) -join '>'), (Limit-Text (Get-Prop $u 'caller_binary') 60)) 'DarkGray'
@@ -470,7 +544,7 @@ if ($Scene -in @('2', 'All')) {
             default { 'Denied' }
         }
         Out-Line ("  [{0}] {1:HH:mm:ss}Z" -f $label, (ConvertTo-Utc (Get-Prop $d 'timestamp'))) 'Red'
-        Out-Line ('    RECEIPT  ' + (New-Receipt -E $d -Owner $Owner -Agent $Agent)) 'White'
+        Out-Line ('    RECEIPT  ' + (New-Receipt -E $d -Owner $Owner -Agent $Agent -Detailed:$Detail)) 'White'
         if ($Detail) {
             Out-Line ("      event {0}  concept {1}  action {2}" -f (Get-Prop $d 'event_id'), $concept, (Get-Prop $d 'canonical_action')) 'DarkGray'
         }
@@ -482,10 +556,10 @@ if ($Scene -in @('2', 'All')) {
     }
     if ($lastAllowed -and $denials.Count -gt 0) {
         Out-Line ''
-        Out-Line '  Side by side' 'White'
+        Out-Line '  Side by side (The 5 Core Pillars)' 'White'
         Out-Line ('    ALLOWED  ' + (New-Receipt -E $lastAllowed -Owner $Owner -Agent $Agent)) 'Green'
         Out-Line ('    DENIED   ' + (New-Receipt -E $denials[-1] -Owner $Owner -Agent $Agent)) 'Red'
-        Out-Line '  Ask: who acted, under what authority, on what, and what happened?' 'DarkGray'
+        Out-Line '  5-Pillar check: 1. Who initiated? 2. OBO of whom? 3. What was done? 4. What executed vs stopped? 5. Prove it.' 'DarkGray'
     }
     Out-Line ''
 }
@@ -502,7 +576,7 @@ if ($Scene -in @('3', 'All')) {
         Out-Line '  then run any governed command here and re-run this view to show the resulting block.' 'DarkGray'
     }
     foreach ($f in $freezeEvts) {
-        Out-Line ('  RECEIPT  ' + (New-Receipt -E $f -Owner $Owner -Agent $Agent)) 'White'
+        Out-Line ('  RECEIPT  ' + (New-Receipt -E $f -Owner $Owner -Agent $Agent -Detailed:$Detail)) 'White'
     }
     Out-Line ''
 }
