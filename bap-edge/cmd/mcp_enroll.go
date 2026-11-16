@@ -94,8 +94,19 @@ func sessionIsLive(serverURL, sessionID string) bool {
 // The id is derived from the parent (IDE) process so repeated MCP restarts inside one IDE run
 // share a single session, and a stale id from a previous run is never reused.
 func ensureMCPSession(sessionID, serverURL string) string {
-	if !strings.EqualFold(strings.TrimSpace(os.Getenv("LTD_SOURCE")), "antigravity") {
-		return sessionID
+	ltdSource := strings.TrimSpace(os.Getenv("LTD_SOURCE"))
+	if !strings.EqualFold(ltdSource, "antigravity") {
+		// Auto-detect if caller/parent process is Antigravity (agy.exe, antigravity.exe, language_server.exe)
+		if procs, err := listAgentProcesses(); err == nil {
+			if obs, ok := observedCaller(os.Getppid(), procs); ok && agentApp(obs.Name) == "antigravity" {
+				ltdSource = "antigravity"
+				_ = os.Setenv("LTD_SOURCE", "antigravity")
+			} else {
+				return sessionID
+			}
+		} else {
+			return sessionID
+		}
 	}
 	if mcpDevOverrideActive() {
 		fmt.Fprintln(os.Stderr, "[BAP DEV OVERRIDE ACTIVE] Antigravity self-enrollment skipped; this session is not governed or reported.")

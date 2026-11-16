@@ -298,6 +298,79 @@ func RunCodex(args []string) error {
 	return cmd.Run()
 }
 
+// RunAntigravity launches Google Antigravity CLI (agy) in active BAP Zero-Trust Governance.
+func RunAntigravity(args []string) error {
+	downstreamArgs, hooksDisabled, forceFix, serverURL, err := parseLauncherArgs(args)
+	if err != nil {
+		return err
+	}
+	_ = forceFix
+	_ = serverURL
+
+	if hooksDisabled {
+		_ = os.Setenv("BAP_HOOKS", "false")
+		_ = os.Setenv("BAP_DISABLE_HOOKS", "1")
+		fmt.Println("[!] BAP hooks disabled via CLI flag (--no-hooks). Running in unmonitored development mode.")
+	}
+
+	var script string
+	if runtime.GOOS == "windows" {
+		script = resolveLauncherScript([]string{"run_antigravity_cli_bap.ps1", "run_antigravity_cli_bap.bat"})
+	} else {
+		script = resolveLauncherScript([]string{"run_antigravity_cli_bap.sh"})
+	}
+
+	if script != "" {
+		var cmd *exec.Cmd
+		if strings.HasSuffix(strings.ToLower(script), ".ps1") {
+			psArgs := append([]string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script}, downstreamArgs...)
+			cmd = exec.Command("powershell.exe", psArgs...)
+		} else if strings.HasSuffix(strings.ToLower(script), ".bat") || strings.HasSuffix(strings.ToLower(script), ".cmd") {
+			cmd = exec.Command("cmd.exe", append([]string{"/c", script}, downstreamArgs...)...)
+		} else {
+			cmd = exec.Command("bash", append([]string{script}, downstreamArgs...)...)
+		}
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Env = os.Environ()
+		return cmd.Run()
+	}
+
+	// Fallback: look for agy binary on PATH
+	agyNames := []string{"agy"}
+	if runtime.GOOS == "windows" {
+		agyNames = []string{"agy.cmd", "agy.bat", "agy.exe", "agy"}
+	}
+	agyBin := findExecutable(agyNames)
+	if agyBin == "" {
+		return fmt.Errorf("Google Antigravity CLI ('agy') not found on PATH or standard directories.\nPlease install Antigravity CLI or run 'bap setup --app=antigravity'.")
+	}
+
+	sessionID := strings.TrimSpace(os.Getenv("BAP_SESSION_ID"))
+	if sessionID == "" {
+		sessionID = fmt.Sprintf("sess-antigravity-%d-%d", os.Getpid(), time.Now().Unix())
+	}
+	cmd := exec.Command(agyBin, downstreamArgs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmdEnv := os.Environ()
+	cmdEnv = append(cmdEnv,
+		"LTD_SOURCE=antigravity",
+		"BAP_SESSION_ID="+sessionID,
+	)
+	if hooksDisabled {
+		cmdEnv = append(cmdEnv, "BAP_HOOKS=false", "BAP_DISABLE_HOOKS=1")
+	}
+	cmd.Env = cmdEnv
+
+	_ = EnsureSessionStarted(sessionID, "antigravity", os.Getpid(), "")
+	runErr := cmd.Run()
+	_ = EnsureSessionEnded(sessionID, "cli process exited")
+	return runErr
+}
+
 // RunReview launches the interactive session reviewer and performance inspector.
 func RunReview(args []string) error {
 	var script string

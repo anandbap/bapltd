@@ -41,6 +41,7 @@ Zero-Trust Governance & HITL Authorization:
 Execution & Protocol Integration:
   claude       Launch Claude Code CLI in active zero-trust transactional sandbox
   codex        Launch OpenAI Codex CLI in active zero-trust transactional sandbox
+  antigravity  Launch Google Antigravity CLI (agy) in active zero-trust transactional sandbox
   review       Inspect recent agent sessions, policy decisions, and performance
   plugin       Manage native agent plugins for Claude Code & Copilot (BAP-806)
   exec         Evaluate command against Cedar policy and run in sandboxed kernel namespace
@@ -195,6 +196,11 @@ func main() {
 	case "codex", "openai-codex":
 		if err := cmd.RunCodex(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error running Codex: %v\n", err)
+			os.Exit(1)
+		}
+	case "antigravity", "agy":
+		if err := cmd.RunAntigravity(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error running Antigravity: %v\n", err)
 			os.Exit(1)
 		}
 	case "recommend":
@@ -396,6 +402,7 @@ func requiresEnrolledWorkstation(command string, args []string) bool {
 	switch command {
 	case "claude", "claude-code",
 		"codex", "openai-codex",
+		"antigravity", "agy",
 		"attest", "onboarding":
 		return true
 	}
