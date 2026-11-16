@@ -225,6 +225,11 @@ func EnsureSessionStarted(sessionID, appID string, clientPID int, initialPrompt 
 	// 6. Persist local session markers
 	writeSessionMarker(sessionID, serverURL, normAppID, username, hostname, initialPrompt, clientPID, instanceID)
 
+	// For Antigravity sessions, start continuous transcript prompt tailing
+	if normAppID == "antigravity" {
+		startAntigravityPromptTail(sessionID, serverURL)
+	}
+
 	// 7. Spawn detached background watcher (heartbeat monitor) if not in test env
 	if !isTestEnv() && !IsWatcherAlive(sessionID) {
 		exe, err := os.Executable()

@@ -1032,6 +1032,15 @@ func RunExec(args []string) {
 			*sourceFlag = discoveredAppID
 		}
 	}
+	if (*sourceFlag == "cli" || *sourceFlag == "") && discoveredAppID == "" {
+		if _, err := os.Stat("GEMINI.md"); err == nil {
+			*sourceFlag = "antigravity"
+		} else if ws := authz.GetWorkspaceRoot(); ws != "" {
+			if _, err := os.Stat(filepath.Join(ws, "GEMINI.md")); err == nil {
+				*sourceFlag = "antigravity"
+			}
+		}
+	}
 
 	if *sessionFlag == "" {
 		// Check if a native hook marker exists for ppid or ancestor agent process
@@ -1039,13 +1048,17 @@ func RunExec(args []string) {
 	}
 
 	if *sessionFlag == "" {
-		prefix := *sourceFlag
-		if prefix == "" {
-			prefix = "cli"
-		}
-		*sessionFlag = fmt.Sprintf("sess-%s-%d", prefix, os.Getpid())
-		if observed.PID > 0 {
-			*sessionFlag = observedSessionID(observationHost(), observed)
+		if *sourceFlag == "antigravity" {
+			*sessionFlag = "sess-antigravity-active"
+		} else {
+			prefix := *sourceFlag
+			if prefix == "" {
+				prefix = "cli"
+			}
+			*sessionFlag = fmt.Sprintf("sess-%s-%d", prefix, os.Getpid())
+			if observed.PID > 0 {
+				*sessionFlag = observedSessionID(observationHost(), observed)
+			}
 		}
 	}
 

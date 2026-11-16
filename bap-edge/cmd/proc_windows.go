@@ -115,19 +115,33 @@ func findOtherBapEdgePIDs() ([]int, error) {
 	currentPID := os.Getpid()
 	currentExe := strings.ToLower(filepath.Base(os.Args[0]))
 
-	var pids []int
+	parentOf := make(map[int]int)
+	nameOf := make(map[int]string)
 	for {
 		pid := int(entry.ProcessID)
-		if pid != currentPID && pid > 0 {
-			exeName := strings.ToLower(syscall.UTF16ToString(entry.ExeFile[:]))
-			if exeName == "bapedge.exe" || exeName == "bap.exe" || exeName == "bap-daemon.exe" || exeName == currentExe {
-				pids = append(pids, pid)
-			}
-		}
+		ppid := int(entry.ParentProcessID)
+		name := strings.ToLower(syscall.UTF16ToString(entry.ExeFile[:]))
+		parentOf[pid] = ppid
+		nameOf[pid] = name
 
 		err = syscall.Process32Next(snapshot, &entry)
 		if err != nil {
 			break
+		}
+	}
+
+	// Trace ancestors of currentPID to ignore any parent/grandparent broker
+	ancestors := make(map[int]bool)
+	for curr := parentOf[currentPID]; curr > 0 && len(ancestors) < 16; curr = parentOf[curr] {
+		ancestors[curr] = true
+	}
+
+	var pids []int
+	for pid, exeName := range nameOf {
+		if pid != currentPID && !ancestors[pid] && pid > 0 {
+			if exeName == "bapedge.exe" || exeName == "bap.exe" || exeName == "bap-daemon.exe" || exeName == currentExe {
+				pids = append(pids, pid)
+			}
 		}
 	}
 	return pids, nil

@@ -202,7 +202,7 @@ func runAntigravityPromptTailLoop(ctx context.Context, sessionID, serverURL stri
 			if err != nil {
 				continue
 			}
-			cutoff := time.Now().Add(-15 * time.Minute)
+			cutoff := time.Now().Add(-24 * time.Hour)
 			for _, e := range entries {
 				if !e.IsDir() {
 					continue

@@ -22,6 +22,7 @@ func TestPluginAllowsBrokerWrappedZSPAndCommandsButBlocksTampering(t *testing.T)
 	// This test exercises the task-grant flow with read-only git commands, which are exempt by
 	// default (local reads need no grant). Strict mode restores the grant requirement.
 	t.Setenv("BAP_ZSP_STRICT_READS", "1")
+	t.Setenv("BAP_ZSP_AUTO_GRANTS", "0")
 
 	sessID := "sess-plugin-zsp-1"
 

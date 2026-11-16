@@ -263,7 +263,17 @@ def get_running_bap_pids():
     """
     my_pid = os.getpid()
     running_pids = set()
-    bap_names = {"bapedge.exe", "bapedge", "bapgateway.exe", "bapgateway", "bapcontrolplane.exe", "bapcontrolplane", "cchook-interceptor.exe", "cchook-interceptor"}
+    bap_names = {
+        "bapedge.exe", "bapedge",
+        "bap.exe", "bap",
+        "bapgateway.exe", "bapgateway",
+        "bapcontrolplane.exe", "bapcontrolplane",
+        "bapdashboard.exe", "bapdashboard",
+        "bapmcp.exe", "bapmcp",
+        "interceptor.exe", "interceptor",
+        "cchook-interceptor.exe", "cchook-interceptor",
+        "copilot-interceptor.exe", "copilot-interceptor",
+    }
     if sys.platform == "win32":
         try:
             cmd = ["tasklist", "/FO", "CSV", "/NH"]
@@ -379,6 +389,21 @@ def stop_running_bap_processes(target_dir: str = None, portable: bool = False, p
                     print(f"  {TermColor.YELLOW}[!] Notice: {len(final_check)} process(es) could not be terminated: {final_check}{TermColor.RESET}")
             else:
                 print(f"  {TermColor.GREEN}[+] All BAP processes stopped cleanly.{TermColor.RESET}")
+
+    # Clean stale session markers so fresh installation starts completely clean
+    try:
+        state_dir = get_bapstate_dir(target_dir, portable=portable)
+        for s_dir in [os.path.join(state_dir, "sessions"), os.path.join(".bap", "sessions")]:
+            if os.path.isdir(s_dir):
+                for s_entry in os.listdir(s_dir):
+                    s_path = os.path.join(s_dir, s_entry)
+                    if os.path.isfile(s_path):
+                        try:
+                            os.remove(s_path)
+                        except Exception:
+                            pass
+    except Exception:
+        pass
 
     if sys.platform == "win32":
         time.sleep(0.2)

@@ -197,10 +197,6 @@ func AuthorizeSessionCommandBatch(zspDir, sessionID, clientType, command, worksp
 	if os.Getenv("BAP_ZSP_AUTO_GRANTS") == "0" {
 		return svid, grant, proof, originalErr
 	}
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("BAP_ZSP_STRICT_READS"))) {
-	case "1", "true", "on", "yes":
-		return svid, grant, proof, originalErr
-	}
 	derived, eligible := automaticBatchChecks(command, workspace)
 	if !eligible {
 		return svid, grant, proof, originalErr

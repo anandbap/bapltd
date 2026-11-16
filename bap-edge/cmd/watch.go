@@ -782,6 +782,14 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string, instanceIDOp
 	touchWatcherLiveness(livenessPath, watchPID)
 	defer os.Remove(livenessPath)
 
+	// For Antigravity sessions, start continuous transcript prompt tailing
+	if appID == "antigravity" || strings.Contains(strings.ToLower(appID), "antigravity") {
+		stopTail := startAntigravityPromptTail(sessionID, serverURL)
+		if stopTail != nil {
+			defer stopTail()
+		}
+	}
+
 	// 3. Continuous Heartbeat and Liveness Monitor
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()

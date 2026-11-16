@@ -80,6 +80,7 @@ func getSysProcAttrDetached() *syscall.SysProcAttr {
 
 func findOtherBapEdgePIDs() ([]int, error) {
 	currentPID := os.Getpid()
+	parentPID := os.Getppid()
 	currentExe := strings.ToLower(filepath.Base(os.Args[0]))
 
 	entries, err := os.ReadDir("/proc")
@@ -93,7 +94,7 @@ func findOtherBapEdgePIDs() ([]int, error) {
 			continue
 		}
 		pid, err := strconv.Atoi(entry.Name())
-		if err != nil || pid <= 0 || pid == currentPID {
+		if err != nil || pid <= 0 || pid == currentPID || pid == parentPID {
 			continue
 		}
 		commPath := filepath.Join("/proc", entry.Name(), "comm")
