@@ -93,6 +93,7 @@ func TestDevOverrideExecWithoutGrants(t *testing.T) {
 				"BAP_TEST_OVERRIDE_STATE_DIR": filepath.Join(root, "state"),
 				"BAP_SERVER_URL":              server.URL, "BAP_CONTROLPLANE_URL": server.URL,
 				"BAP_DEV_OVERRIDE": "", "BAP_DEV_MODE": "", "BAP_NON_INTERACTIVE": "1",
+				"BAP_ZSP_AUTO_GRANTS": "0",
 			} {
 				t.Setenv(key, value)
 			}
@@ -129,6 +130,7 @@ func TestDevOverrideExecWithoutGrants(t *testing.T) {
 
 func TestDevOverrideTaskGrantEnforcement(t *testing.T) {
 	t.Setenv("BAP_ZSP_STRICT_READS", "1") // see TestDevOverrideExecWithoutGrants
+	t.Setenv("BAP_ZSP_AUTO_GRANTS", "0")
 	// Keep developer markers and identity state isolated from the workstation.
 	root := t.TempDir()
 	wd, err := os.Getwd()
