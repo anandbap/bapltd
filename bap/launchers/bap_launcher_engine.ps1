@@ -1022,6 +1022,11 @@ function Invoke-BapGovernedSession {
 
             Write-RecoveryRecord -Record $RecoveryRecord -ManifestPath $ManifestPath
 
+            # Re-attest pinned instruction files so they match the governed content
+            if (-not [string]::IsNullOrWhiteSpace($BapEdgeBin) -and (Test-Path -LiteralPath $BapEdgeBin)) {
+                try { & $BapEdgeBin pin scan *> $null } catch { }
+            }
+
             # Start detached session guard
             $watchdog = Start-DetachedWatchdog -ScriptPath $CallingScript -ManifestPath $ManifestPath -MutexName $MutexName -ParentPid $PID -ParentTicks $ParentTicks
             $RecoveryRecord.watchdog_pid = [int]$watchdog.Id
@@ -1126,9 +1131,11 @@ function Invoke-BapGovernedSession {
             } catch { }
         }
 
-        # For Antigravity sessions, start background prompt tail to capture prompts typed interactively
+        # For Antigravity sessions, start background prompt tail to capture prompts typed interactively.
+        # If bapedge is available, 'watch --detach' already handles prompt tailing natively with zero lag and proper baselining.
         $transcriptJob = $null
-        if ($AgentId -eq 'antigravity' -and -not [string]::IsNullOrWhiteSpace($ServerUrl)) {
+        $bapEdgeHandlesTail = (-not [string]::IsNullOrWhiteSpace($BapEdgeBin) -and (Test-Path -LiteralPath $BapEdgeBin))
+        if ($AgentId -eq 'antigravity' -and -not [string]::IsNullOrWhiteSpace($ServerUrl) -and -not $bapEdgeHandlesTail) {
             $lockFile = Join-Path $BapStateDir "antigravity_prompt_tail.lock"
             $skipJob = $false
             if (Test-Path -LiteralPath $lockFile) {
@@ -1150,19 +1157,42 @@ function Invoke-BapGovernedSession {
                     (Join-Path $env:USERPROFILE ".gemini\antigravity\brain")
                 )
                 $seenHashes = @{}
+                $fileOffsets = @{}
                 $sha = [System.Security.Cryptography.SHA256]::Create()
+
+                # Baseline existing transcript files at session start so history from prior sessions is NEVER replayed
+                foreach ($root in $searchRoots) {
+                    if (Test-Path -LiteralPath $root) {
+                        $existing = @(
+                            (Get-ChildItem -Path "$root\*\.system_generated\logs\transcript.jsonl" -ErrorAction SilentlyContinue),
+                            (Get-ChildItem -Path "$root\*\transcript.jsonl" -ErrorAction SilentlyContinue)
+                        )
+                        foreach ($ef in $existing) {
+                            $fileOffsets[$ef.FullName] = $ef.Length
+                        }
+                    }
+                }
+
                 while ($true) {
-                    Start-Sleep -Milliseconds 800
+                    Start-Sleep -Milliseconds 2000
                     try {
                         foreach ($root in $searchRoots) {
                             if (Test-Path -LiteralPath $root) {
                                 $recentFiles = @(
                                     (Get-ChildItem -Path "$root\*\.system_generated\logs\transcript.jsonl" -ErrorAction SilentlyContinue),
                                     (Get-ChildItem -Path "$root\*\transcript.jsonl" -ErrorAction SilentlyContinue)
-                                ) | Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-10) } |
+                                ) | Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-5) } |
                                     Sort-Object LastWriteTime -Descending | Select-Object -First 3
                                 foreach ($f in $recentFiles) {
-                                    $lines = Get-Content -LiteralPath $f.FullName -ErrorAction SilentlyContinue | Select-Object -Last 10
+                                    $fPath = $f.FullName
+                                    $curLen = $f.Length
+                                    $prevOffset = if ($fileOffsets.ContainsKey($fPath)) { $fileOffsets[$fPath] } else { 0 }
+                                    if ($curLen -le $prevOffset) {
+                                        continue
+                                    }
+                                    $fileOffsets[$fPath] = $curLen
+
+                                    $lines = Get-Content -LiteralPath $fPath -ErrorAction SilentlyContinue | Select-Object -Last 10
                                     foreach ($l in $lines) {
                                         $userReq = $null
                                         if ($l -match '<USER_REQUEST>([\s\S]*?)</USER_REQUEST>') {

@@ -52,6 +52,8 @@ def find_audit_files(explicit_path=""):
         candidates.append(os.path.join(os.environ["BAP_STATE_DIR"], "audit.jsonl"))
 
     candidates.extend([
+        os.path.join(tempfile.gettempdir(), "bapstate", "audit.jsonl"),
+        os.path.join(tempfile.gettempdir(), ".bapstate", "audit.jsonl"),
         os.path.join(os.getcwd(), ".bapstate", "audit.jsonl"),
         os.path.join(os.getcwd(), "audit.jsonl"),
         os.path.join(os.getcwd(), "ltd-audit.jsonl"),

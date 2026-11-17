@@ -66,6 +66,8 @@ function Find-AuditLedgers {
         $candidates += (Join-Path $env:BAP_STATE_DIR "audit.jsonl")
     }
     $candidates += (Join-Path $env:USERPROFILE "bin\.bapstate\audit.jsonl")
+    $candidates += (Join-Path ([System.IO.Path]::GetTempPath()) "bapstate\audit.jsonl")
+    $candidates += (Join-Path ([System.IO.Path]::GetTempPath()) ".bapstate\audit.jsonl")
 
     $candidates += @(
         (Join-Path (Get-Location) ".bapstate\audit.jsonl"),
@@ -617,6 +619,12 @@ if (-not [string]::IsNullOrWhiteSpace($TargetSession)) {
         }
     } else {
         $match = $summaries | Where-Object { $_.SessionId -like "*$TargetSession*" } | Select-Object -First 1
+        if (-not $match) {
+            $matchedSid = $sessionsDict.Keys | Where-Object { $_ -like "*$TargetSession*" } | Select-Object -First 1
+            if ($matchedSid) {
+                $match = Summarize-Session -SessionId $matchedSid -Events ($sessionsDict[$matchedSid].ToArray())
+            }
+        }
     }
 
     if ($null -ne $match) {
