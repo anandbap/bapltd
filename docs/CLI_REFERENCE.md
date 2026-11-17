@@ -1,157 +1,364 @@
-# BAP command reference
+# BAP Command & Binary Reference
 
-Two audiences, kept apart on purpose:
-
-- **Part 1 – Everyone.** Commands that ship with `pip install bap-ltd` (`bap`, `bapedge`, `bap-install`, `bap-launch`, `bap-doctor`) and the administrator API on the control plane.
-- **Part 2 – Internal BAP developers only.** Build, test and repository-maintenance tooling. None of it is packaged in the wheel or the release archives. Do not run it on a managed workstation, and do not document it to end users.
-
-`bap` and `bapedge` are the same program. Run `bapedge help` for the authoritative list for your build.
+Comprehensive operational and reference documentation for the BAP (Bounded Authority Plane) Zero-Trust platform.
 
 ---
 
-## Part 1 – Everyone
+## 1. Architecture Overview: The 7 Core Binaries
 
-### Set up and sign in
+BAP delivers enterprise-grade defense-in-depth across 7 dedicated binaries:
 
-| Command | What it does |
-|---|---|
-| `pip install bap-ltd` | Installs the CLI and the platform binaries. No keys to generate; the policy-signing key is pinned automatically when you sign in. |
-| `bap-install` | One-time user-mode setup (no admin rights). Add `--debug` to also install the optional diagnostic tools (`review`, `watch_session`, `check_stale_copies`). |
-| `bap login` | Sign in with your company identity (OIDC device flow). Enrolls this machine, pins the control plane's policy key and fetches the first signed rules. `--verify-now` waits for the first sync. |
-| `bap register <code>` | Enroll with a one-time code from an administrator instead of OIDC. |
-| `bap logout` | Deregister this machine and clear the session. |
-| `bap-doctor` / `bapedge doctor` | Pre-flight health check. |
+| Binary | Alias / Package | Role & Responsibility |
+|---|---|---|
+| **`bap` / `bapedge`** | `bapedge.exe`, `ltd-agent` | Workstation Local Trusted Daemon (LTD), policy engine, execution broker sandbox, and agent launcher. |
+| **`bapcontrolplane`** | `bap-controlplane.exe` | Central policy authority, RFC 8693 STS token issuer, OTC enrollment authority, and audit aggregator. |
+| **`bapdashboard`** | `bapdashboard.exe` | Dedicated HTTPS operator console, cockpit telemetry UI, and OBO exchange inspector. |
+| **`bapgateway`** | `bapgateway.exe` | Egress Policy Enforcement Point (PEP), reverse proxy, and single-use credential consumer. |
+| **`bapmcp`** | `bapmcp.exe`, `bapedge mcp` | Model Context Protocol (MCP) server exposing zero-trust execution and task grant tools to AI agents. |
+| **`cchook` / `interceptor`** | `cchook-interceptor.exe` | Native hook interceptor (Layer 1A) for Claude Code, Copilot, Antigravity, and Codex. |
+| **`bap-hook-adapter`** | `bap-hook-adapter.exe` | Universal cross-agent plugin runtime adapter bridging in-harness events to the BAP broker. |
 
-### Day to day
+---
 
-| Command | What it does |
-|---|---|
-| `bapedge status` | Daemon state, policy version and digest, sessions, audit spool. The *defense-layer* section reports what was **observed**, not what is assumed (see [architecture boundaries](../ARCHITECTURE.md#4-execution-paths)). |
-| `bapedge why "<command>"` | Explain why a command would be allowed or blocked. |
-| `bapedge sync` | Fetch the latest signed rules now. Machines also sync on their own within seconds; if the control plane is unreachable the last signed rules stay in force. |
-| `bapedge check "<command>"` | Decision only: evaluate a command without running it. |
-| `bapedge trust --path <dir> --scope session\|project\|global` | Authorize writes or deletes in a folder outside the workspace. Never accepted for filesystem roots, the home directory, system folders or credential locations. |
-| `bapedge untrust --path <dir>` / `bapedge permissions` | Revoke / list those authorizations. |
-| `bapedge zsp authorize ...` | Ask for a task grant (zero standing privilege). Evaluated by policy; it does not approve itself. |
-| `bapedge zsp status [--all]` | Inspect ZSP Task Grants. Without `--all`, reports active in-memory grants. With `--all`, shows active grants, 1x burned grants (correlated with execution lineage, command text, and cryptographic receipt ID), and expired grants. |
-| `bapedge zsp grants [--all]` | Alias for full ZSP task grant inspection across automatic and manual grants. |
-| `bapedge sweep` | Remove orphaned session markers and flush the offline audit spool. |
-| `bapedge verify-log` | Verify the tamper-evident hash chain of the local audit log. |
-| `bapedge version [--json]` | Version, commit, build date. |
+## 2. `bap` / `bapedge` CLI Reference
 
-### Reducing friction: recommend a blocked call
+`bap` and `bapedge` are the primary workstation CLI.
 
-Most blocked work is harmless and should not keep asking. When BAP blocks something that is clearly part of normal development (for example `go test`), send it to your administrator instead of working around it.
+### 2.1 Set Up, Identity & Onboarding
 
-```
-bap recommend                  # list recent blocked calls, grouped by effect, then pick one to inspect
-bap recommend --pick 2 --justify "runs the project's unit tests"
-bap recommend --status         # what you recommended and what the administrator decided
-bap review recommend           # the same flow, from the session reviewer
-```
+| Command | Arguments / Flags | Description |
+|---|---|---|
+| `bap login` | `[--verify-now]` | Authenticate developer identity via enterprise OIDC/OAuth2 device flow (Google, GitHub, Okta, Microsoft Entra). Enrolls this machine, pins the policy signing key, and syncs initial signed rules. |
+| `bap register` | `<code>` | Enroll edge daemon with central control plane using an administrative One-Time Code (OTC). |
+| `bap logout` | *(none)* | Deregister workstation, clear credentials, and purge active session tokens (`alias: deregister`). |
+| `bap setup` | `--app <claude-code\|antigravity\|codex\|copilot\|all>` | 1-click workstation onboarding: writes local configs, injects boundary rules (`GEMINI.md`, `CLAUDE.md`, `AGENTS.md`), and registers native hooks. |
+| `bap enable` | *(none)* | Enable zero-trust workstation governance and configure local daemon. |
+| `bap doctor` | `[--repair-policy] [--hook-copies-json]` | Run comprehensive diagnostic health check verifying binaries, policy digest, certificates, and hook hooks. |
 
-- Only a **registered machine** can submit. The control plane rejects any other caller.
-- Only effects from the local development loop can be recommended (build, test, in-workspace edits, local git commits). Network access, deletion, publishing, databases, arbitrary interpreters and credentials can never be approved this way; use a task grant.
-- An approval applies to **that machine only** and to **work inside the workspace only**. It relaxes the grant requirement and nothing else: secrets, exfiltration and tamper protection are still enforced.
-- The command line sent to the administrator is truncated and has token/password-like values removed.
+### 2.2 Governed Agent Launchers (Layer 1A Sandbox)
 
-### Administrators (control plane)
-
-All admin calls need the administrator token. On a hosted control plane, remote admin must be enabled (`BAP_ALLOW_REMOTE_ADMIN=1`); otherwise only loopback callers are accepted.
+Launch coding agent CLIs wrapped in transactional zero-trust sandboxes. Injects environment variables (`BAP_SESSION_ID`, `LTD_SOURCE`), resolves the global control plane endpoint, enrolls the session, starts background prompt and grant tailers, and auto-cleans on exit.
 
 ```powershell
-$h = @{ Authorization = "Bearer $env:BAP_ADMIN_TOKEN" }
-$cp = "https://<your-control-plane>"
-
-# Enforcement settings: fleet default and per-machine overrides (reads need no grant when true)
-Invoke-RestMethod "$cp/api/v1/admin/policy/settings" -Headers $h
-Invoke-RestMethod -Method Post "$cp/api/v1/admin/policy/settings" -Headers $h -ContentType application/json `
-  -Body (@{ asset_id = '<asset id from enrolled_assets>'; zsp_read_exempt = $true } | ConvertTo-Json)
-Invoke-RestMethod -Method Delete "$cp/api/v1/admin/policy/settings?asset_id=<id>" -Headers $h
-
-# Review what developers recommended
-Invoke-RestMethod "$cp/api/v1/admin/policy/recommendations?status=pending" -Headers $h
-Invoke-RestMethod -Method Post "$cp/api/v1/admin/policy/recommendations/<id>/approve" -Headers $h -ContentType application/json -Body '{"note":"routine test run"}'
-Invoke-RestMethod -Method Post "$cp/api/v1/admin/policy/recommendations/<id>/reject"  -Headers $h -ContentType application/json -Body '{"note":"use a task grant"}'
-
-# Take an approval back
-Invoke-RestMethod -Method Delete "$cp/api/v1/admin/policy/approvals?asset_id=<id>&action=dev:go:test" -Headers $h
-
-# Rotate the policy-signing key (enrolled machines follow automatically)
-Invoke-RestMethod -Method Post "$cp/api/v1/admin/policy/rotate-key" -Headers $h
+bap agy [args...]             # Launch Google Antigravity CLI (agy) under active governance
+bap antigravity [args...]     # Alias for 'bap agy'
+bap claude [args...]          # Launch Claude Code CLI under active governance
+bap claude-code [args...]     # Alias for 'bap claude'
+bap codex [args...]           # Launch OpenAI Codex CLI under active governance
 ```
 
-Every change is signed per machine, bumps the policy version and is audited. Machines pick it up on their next sync. Overrides and approvals can only target a machine the control plane has enrolled.
+**Common Launcher Flags:**
+* `--server=<url>`: Override control plane URL for this session (defaults to global setting in `bap-config.json`).
+* `--no-hooks`: Launch in unmonitored development mode (only permitted if developer override is enabled).
 
-Hosted control planes with an ephemeral disk (Render, containers) must set `BAP_POLICY_SIGNING_SEED` (stable signing key across redeploys) and should set `BAP_POLICY_SYNC_REQUIRE_AUTH=1` (no anonymous policy sync).
+### 2.3 Daemon & Service Lifecycle
 
-### Process behavior you can rely on
+| Command | Arguments / Flags | Description |
+|---|---|---|
+| `bap start` | `[-foreground] [-server <url>]` | Start background supervisor daemon (`bap-daemon`). Runs unprivileged in user-space. |
+| `bap stop` | *(none)* | Gracefully terminate background supervisor daemon. |
+| `bap restart` | *(none)* | Restart background supervisor daemon. |
+| `bap status` | `[--all] [--json]` | Inspect local active sessions, daemon state, policy cache, spool backlog, and 5-layer compliance. |
+| `bap sweep` | *(none)* | Clean sweep orphaned sessions, purge stale process locks, and flush offline audit records to the control plane. |
+| `bap daemon` | `<start\|stop\|status\|restart>` | Low-level daemon subsystem management. |
 
-`bapedge watch` runs one watcher per session. It exits when its session ends (`SessionEnd`, `bapedge sweep`), when the watched process exits, or when the control plane closes or revokes the session, and a duplicate for the same session exits immediately. This is covered by an end-to-end test that fails if any process is left running (`tests/test_bapedge_process_lifecycle.py`).
+### 2.4 Policy, Inspection & Broker Sandbox
+
+| Command | Arguments / Flags | Description |
+|---|---|---|
+| `bap exec` | `"<command>" [--timeout <dur>] [--progress]` | Evaluate command against Cedar invariants and run inside sandboxed execution broker. |
+| `bap check` | `"<command>"` | Evaluate command against Cedar policy in decision-only mode (zero execution side effects; alias: `authorize`). |
+| `bap why` | `"<command>"` | Explain Cedar policy decision directly in terminal with matched rules and remediation advice (alias: `explain`). |
+| `bap sync` | `[--server <url>] [--policy-dir <path>]` | Force immediate synchronization of local signed Cedar policy bundle from the central control plane. |
+| `bap config` | `show` | Display resolved control plane, API gateway, trust domain, and enforcement mode. |
+| `bap config` | `set [--server <url>] [--gateway <url>] [--mode enforce\|audit] [--global]` | Update control plane URL or enforcement mode locally or globally (`~/.bap/config.json`). |
+
+### 2.5 Zero Standing Privilege (ZSP) & Playback
+
+BAP operates on Zero Standing Privileges: agents start with zero authority and acquire short-lived, least-privilege JIT TaskGrants.
+
+| Command | Arguments / Flags | Description |
+|---|---|---|
+| `bap zsp status` | `[--all] [--all-sessions]` | Inspect active and burned ephemeral JIT TaskGrants. `--all-sessions` aggregates across all agent sessions. |
+| `bap zsp grants` | `[--all] [--all-sessions]` | Alias for `bap zsp status`. Shows grant envelope, principal SVID, allowed scopes, and receipt proofs. |
+| `bap zsp playback` | `[--all-sessions]` | Replay chronological grant lifecycle events, distinguishing `[AUTOMATIC (Cedar Policy)]` from `[MANUAL (HITL Challenge)]`. Outputs automation velocity % for policy tuning. |
+| `bap zsp authorize` | `<action> <resource> [reason]` | Submit a 4-Tuple Task Authorization Envelope to mint an ephemeral JIT grant. |
+
+### 2.6 Human-in-the-Loop (HITL) Step-Up Escalations
+
+When an agent requests an action outside routine policy (e.g. interpreter execution `dev:python:exec`, network egress), it triggers a step-up challenge.
+
+| Command | Arguments / Flags | Description |
+|---|---|---|
+| `bap stepup list` | *(none)* | List pending out-of-scope escalation requests from the Central Control Plane. |
+| `bap stepup request` | `<task_id> <action> <resource> [reason]` | Submit an out-of-scope task escalation request to the control plane inbox. |
+| `bap stepup status` | `<task_id>` | Query approval state of an escalation request. |
+| `bap stepup approve` | `<task_id>` | Human developer interactive approval of an escalation request. |
+| `bap stepup reject` | `<task_id> [reason]` | Human developer interactive rejection of an escalation request. |
+
+### 2.7 Cross-Folder Authority & Permissions
+
+| Command | Arguments / Flags | Description |
+|---|---|---|
+| `bap trust` | `--path <dir> --scope session\|project\|global [--ops read,write,delete]` | Authorize mutations in an external directory outside the workspace root (e.g. `..\sibling-project`). Never permitted for filesystem roots, user home, or credential directories. |
+| `bap untrust` | `--path <dir>` | Revoke cross-folder mutation authorization. |
+| `bap permissions` | *(none)* | List all active cross-folder authorizations across session, project, and global scopes. |
+
+### 2.8 Native Plugin Management (Layer 1A)
+
+| Command | Arguments / Flags | Description |
+|---|---|---|
+| `bap plugin list` | `[workspace]` | List discovered and installed native plugins across Claude Code, Copilot, Antigravity, OpenCode, and Codex. |
+| `bap plugin install` | `<claude\|copilot\|antigravity\|opencode\|codex\|all>` | Install native in-harness hook extensions and adaptors. |
+| `bap plugin uninstall` | `<claude\|copilot\|antigravity\|opencode\|codex\|all>` | Safely remove native plugin registrations. |
+| `bap plugin verify` | `[client]` | Verify plugin hook execution, file integrity, and active enforcement. |
+| `bap plugin inspect` | `<client>` | Inspect detailed plugin health record, manifest, and adapter paths. |
+| `bap plugin layers` | *(none)* | Display the active 5-layer defense-in-depth security status. |
+
+### 2.9 Closed-Loop Policy Recommendations
+
+| Command | Arguments / Flags | Description |
+|---|---|---|
+| `bap recommend` | *(none)* | List recent blocked calls grouped by effect; prompts developer to pick one to inspect and justify. |
+| `bap recommend` | `--pick <n> --justify "<reason>"` | Submit a recommended policy relaxation for routine build/test commands to administrator. |
+| `bap recommend` | `--status` | Check status of recommendations submitted by this workstation. |
+| `bap review recommend` | *(none)* | Same recommendation flow accessible directly from the session reviewer. |
+
+### 2.10 Enterprise Security, Forensics & Integrity
+
+| Command | Arguments / Flags | Description |
+|---|---|---|
+| `bap rollback` | `--checkpoint-id <id> [--dry-run]` | Forensically revert filesystem mutations to pre-execution cryptographic checkpoints (BAP-538). |
+| `bap pin` | `<verify\|update\|status> [--all]` | Cryptographically pin, verify, and re-attest skills, prompts, and MCP tool schemas (BAP-531). |
+| `bap scan` | `[--dir <path>] [--strict]` | Audit workspace skills, prompt templates, and configs for prompt injection, leakage, and drift (BAP-536). |
+| `bap shield` | `<status\|canary\|sanitize>` | Ambient credential shielding, disk token virtualization, and canary traps (BAP-562). |
+| `bap antibypass` | `<status\|verify\|enforce>` | Multi-tier anti-bypass inspection and egress isolation engine (BAP-560). |
+| `bap delegate` | `[args...]` | Multi-agent hierarchical delegation & subagent envelope broker (BAP-532). |
+| `bap verify-log` | *(none)* | Verify the tamper-evident SHA-256 hash-chain of the local audit log. |
+| `bap dev-override` | `<on\|off\|status>` | Manage time-boxed developer override (interactive human only; strictly blocked for agents). |
+| `bap version` | `[-v] [--version] [--json]` | Display semantic version, git commit, build date, and architecture. |
 
 ---
 
-## Part 2 – Internal BAP developers only
+## 3. `bapcontrolplane` CLI Reference
 
-> **Not for end users, not packaged, not supported on managed workstations.**
-> These commands build, test and maintain this repository. They are not in the wheel or the release archives, several of them start throwaway servers or delete files, and some depend on the developer override, which is compiled out of release builds.
+The central policy authority, RFC 8693 STS token issuer, and audit repository (`bap-controlplane`).
 
-### Developer override
+### 3.1 Commands
 
-`bapedge dev-override on|off|status` opens a time-boxed window (4 h default, 12 h maximum) so BAP can be developed under BAP. It only exists in builds made with `AllowDevOverrides=true` and only when `BAP_ENVIRONMENT=development`. It suspends anti-tampering and task-grant checks; credentials, revocation and Cedar policy still apply. **A human must turn it on. Automated agents must never run it.**
+```powershell
+bapcontrolplane start [flags]       # Start the HTTP/TLS Central Control Plane server
+bapcontrolplane stop                # Gracefully terminate running background instance
+bapcontrolplane status              # Query status, health, port, uptime, and database metrics
+bapcontrolplane restart [flags]     # Restart the Central Control Plane instance
+bapcontrolplane enable              # Initialize environment, admin tokens, and state stores
+bapcontrolplane serve [flags]       # Run server in foreground (alias for 'start --foreground')
+bapcontrolplane version             # Display semantic version, git commit, and build info
+```
 
-### Build and package
+### 3.2 Flags & Options for `start` / `serve`
+
+| Flag | Default | Description |
+|---|---|---|
+| `--port <p>` | `8080` / `$PORT` | Port for HTTP/TLS server. |
+| `--detach`, `-d` | `false` | Run as detached background daemon. |
+| `--foreground`, `--fg` | `false` | Run in foreground. |
+| `--mode <dev\|prod>` | `dev` | Environment mode: `dev` (open self-service OTC) or `prod` (strict OTC, OIDC required). |
+| `--db <path>` | `bap-controlplane.db` | Path to persistent SQLite database (`memory` for in-memory). |
+| `--durable` | `false` | Commit authority and audit history to disk before acknowledging API calls (mandatory in prod). |
+| `--admin-token <token>` | auto-generated | Administrative secret token for control APIs (`$BAP_ADMIN_TOKEN`). |
+| `--allow-remote-admin` | `false` | Allow non-localhost callers with valid admin token to execute admin APIs. |
+| `--secret <key>` | auto-generated | HMAC signing secret for session tokens (`$BAP_SECRET_KEY`). |
+| `--policy <path>` | *(embedded)* | Path to authoritative Cedar policy file. |
+| `--schema <path>` | *(embedded)* | Path to authoritative Cedar schema file. |
+| `--trust-domain <dom>` | `bap.internal` | SPIFFE Trust Domain for agent workload identities. |
+| `--ttl <minutes>` | `30` | Default grant TTL in minutes. |
+| `--tls`, `--https` | `false` | Enable HTTPS/TLS (auto-generates dev certs if none provided). |
+| `--tls-cert <path>` | *(empty)* | Path to TLS certificate PEM file. |
+| `--tls-key <path>` | *(empty)* | Path to TLS private key PEM file. |
+| `--allowed-origins <origins>` | *(empty)* | Comma-separated browser origins for CORS (default: same-origin only). |
+| `--oidc-provider <prov>` | `entra` | Enterprise OIDC provider: `entra`, `okta`, or `generic`. |
+| `--oidc-issuer <url>` | *(empty)* | OIDC issuer / discovery URL. |
+| `--oidc-client-id <id>` | *(empty)* | OIDC application client ID. |
+| `--oidc-tenant-id <id>` | *(empty)* | Microsoft Entra tenant ID or Okta org. |
+| `--oidc-allowed-domains <doms>`| *(empty)* | Comma-separated corporate email domains permitted. |
+| `--min-edge-version <ver>` | *(empty)* | Enforce minimum edge client version. |
+| `--pilot-roster <path>` | *(empty)* | Path to operator-assigned pilot roster JSON file. |
+| `--initialize-authority` | `false` | Explicitly initialize a new durable authority (first start only). |
+| `--policy-max-age <duration>` | `0` | Signed offline policy budget (e.g. `24h`; mandatory in prod). |
+
+---
+
+## 4. `bapdashboard` CLI Reference
+
+Dedicated operator web console and telemetry inspector (`bapdashboard`).
+
+### 4.1 Flags & Options
+
+```powershell
+bapdashboard [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `-port <p>` | `8444` | HTTPS port for the standalone dashboard server. |
+| `-control-plane <url>` | `https://localhost:8443` | Upstream BAP Control Plane base URL. |
+| `-ca-cert <path>` | `$BAP_CA_CERT` | CA certificate file used to verify control plane TLS. |
+| `-tls-cert <path>` | `dashboard-cert.pem` | Dashboard HTTPS server certificate. |
+| `-tls-key <path>` | `dashboard-key.pem` | Dashboard HTTPS private key. |
+| `-client-cert <path>` | *(empty)* | Optional mTLS client certificate presented to control plane. |
+| `-client-key <path>` | *(empty)* | Optional mTLS client private key presented to control plane. |
+| `-allow-remote-admin` | `false` | Allow remote dashboard clients to invoke administrative APIs. |
+
+---
+
+## 5. `bapgateway` CLI Reference
+
+Zero-Trust Policy Enforcement Point (PEP) and egress reverse proxy (`bapgateway`).
+
+### 5.1 Commands
+
+```powershell
+bapgateway start [flags]       # Start the Gateway PEP HTTP server
+bapgateway stop                # Gracefully terminate running background instance
+bapgateway status              # Query status, health, port, and upstream control plane
+bapgateway restart [flags]     # Restart the Gateway PEP instance
+bapgateway enable              # Validate configuration and connectivity
+bapgateway serve [flags]       # Run in foreground (alias for 'start --foreground')
+bapgateway version             # Display version and build info
+```
+
+### 5.2 Flags & Options for `start` / `serve`
+
+| Flag | Default | Description |
+|---|---|---|
+| `--port <p>` | `9090` / `$BAP_GATEWAY_PORT` | Port for Gateway PEP server. |
+| `--detach`, `-d` | `false` | Run as detached background daemon. |
+| `--controlplane <url>` | `http://localhost:8080` | BAP Control Plane base URL. |
+| `--secret <key>` | *(empty)* | HMAC secret key for offline JWT verification. |
+| `--consume` | `true` | Atomically consume single-use task grants via control plane on egress. |
+
+---
+
+## 6. `bapmcp` CLI Reference
+
+Model Context Protocol (MCP) broker for Claude Code, Antigravity, Cursor, and Copilot (`bapmcp` / `bapedge mcp`).
+
+### 6.1 Usage & Commands
+
+```powershell
+bapmcp --stdio                # Run stdio JSON-RPC 2.0 server (default when launched by agent)
+bapmcp status                 # Inspect MCP configuration, policy rules, and audit status
+bapmcp help                   # Display onboarding instructions and sample configs
+```
+
+### 6.2 Flags & Options
+
+| Flag | Default | Description |
+|---|---|---|
+| `--stdio` | `false` | Run in stdio JSON-RPC 2.0 protocol mode. |
+| `--server <url>` | from config | Central control plane URL for telemetry streaming. |
+| `--session-id <id>` | auto-detected | Session identifier for grouping agent actions. |
+| `--mode <enforce\|audit>` | from config | Enforcement mode: `enforce` (block violations) or `audit` (log violations). |
+| `--policy <path>` | `./policy.cedar` | Path to local Cedar policy file. |
+| `--audit-log <path>` | `.bapstate/audit.jsonl` | Path to audit log file in JSON Lines format. |
+
+### 6.3 Exposed MCP Tools
+
+* **`bap_execute`**: Evaluate command against Cedar invariants and execute inside sandboxed broker.
+* **`bap_explain_policy`**: Dry-run evaluate Cedar policy without execution; returns decision and suggestions.
+* **`bap_status`**: Inspect edge daemon health, active sessions, and local policy cache.
+* **`bap_request_task_grant`**: Submit 4-Tuple Task Authorization Envelope (Who, AuthorizedBy, Intent, Ask) to mint ephemeral JIT TaskGrants.
+* **`bap_zsp_status`**: Inspect agent's SPIFFE SVID principal, human owner binding, and active grants.
+* **`bap_read_file`**, **`bap_write_file`**, **`bap_edit_file`**, **`bap_list_dir`**: Policy-governed workspace filesystem tools.
+* **`bap_report_request`**: User turn prompt fallback reporting.
+
+### 6.4 Client Configurations
+
+**Claude Code (`~/.claude/settings.json`):**
+```json
+{
+  "mcpServers": {
+    "bap-zero-trust": {
+      "command": "bapmcp",
+      "args": ["--stdio"]
+    }
+  }
+}
+```
+
+**Google Antigravity (`.antigravity/mcp_config.json`):**
+```json
+{
+  "mcpServers": {
+    "bap-zero-trust": {
+      "command": "bapmcp.exe",
+      "args": ["--stdio"],
+      "env": {
+        "LTD_SOURCE": "antigravity",
+        "BAP_SESSION_ID": "sess-antigravity-active"
+      }
+    }
+  }
+}
+```
+
+**Cursor IDE (`~/.cursor/mcp.json`):**
+```json
+{
+  "mcpServers": {
+    "bap-zero-trust": {
+      "command": "bapmcp",
+      "args": ["--stdio"]
+    }
+  }
+}
+```
+
+---
+
+## 7. `cchook` & `bap-hook-adapter` Reference
+
+Layer 1A In-Harness Native Hook Extensions (`cchook`, `interceptor`, `bap-hook-adapter`).
+
+### 7.1 Architecture & Interception Events
+
+`cchook` and `bap-hook-adapter` receive JSON payloads on standard input from agent harnesses during execution lifecycle events:
+
+1. **`PreInvocation` / `UserPrompt`**: Captures user intent and prompts for continuous telemetry.
+2. **`PreToolUse` / `PreToolExecution`**: Intercepts shell and filesystem tool calls (`Bash`, `exec`, `write_file`, `git`, etc.) *before* execution.
+3. **`PostToolUse`**: Records exit code, output hash, and execution duration.
+4. **`SessionStart` / `SessionEnd`**: Manages session enrollment, heartbeat monitors, and cryptographic cleanup.
+
+### 7.2 `bap-hook-adapter` Execution
+
+```powershell
+bap-hook-adapter --client <claude|copilot|antigravity|opencode|codex> --event <PreToolUse|PostToolUse|PreInvocation|SessionStart|SessionEnd>
+```
+
+*(Or via edge CLI: `bapedge plugin adapter --client antigravity --event PreToolUse`)*
+
+---
+
+## 8. Part 2 – Internal BAP Developer Tooling
+
+> **Note:** The commands below are for BAP core contributors and maintainers building from source.
+
+### 8.1 Build & Package
 
 | Script | Purpose |
 |---|---|
-| `build_binaries.bat` | Build all Windows binaries and copy them to the places the launchers and tests expect. |
-| `update_binaries.ps1 -AllowDevOverrides false` | The build step CI uses. `false` is what release builds use. |
-| `build_all_platforms.ps1` | Cross-platform release-style build and role packages (`dist/`). |
-| `python scripts/build_wheel.py [--universal]` | Build the PyPI wheel and sdist. |
-| `install_bap_client.bat` | Install the locally built client for this developer. |
-| `install_bap_global.bat` | One-click universal global deployment (`~/.bap/bin`), rotates in-use binaries safely (`.old`), synchronizes Python Scripts legacy locations, and configures global hooks for Claude Code and Antigravity. |
-| `scripts/bump_version.py` | Bump the version everywhere. |
+| `build_binaries.bat` | Build all Windows binaries (`bap.exe`, `bapcontrolplane.exe`, `bapgateway.exe`, `bapmcp.exe`, `cchook.exe`) and deploy to testing paths. |
+| `update_binaries.ps1 -AllowDevOverrides false` | CI release build step without developer override immunity. |
+| `build_all_platforms.ps1` | Cross-compile release packages for Windows (`amd64`, `arm64`), Linux (`amd64`, `arm64`), and macOS (`darwin-arm64`, `darwin-amd64`). |
+| `python scripts/build_wheel.py [--universal]` | Package Python wheel and source distribution (`bap-ltd`). |
 
-After any rebuild, confirm the hook binaries match (a stale copy under `dist/` once denied what the current build allowed):
-
-```powershell
-Get-FileHash cchook\interceptor.exe, dist\windows-amd64\claude-client\cchook\interceptor.exe, $env:USERPROFILE\bin\interceptor.exe
-```
-
-### Test and verify
+### 8.2 Test Suites
 
 | Command | Purpose |
 |---|---|
-| `go test ./...` in `bap-edge`, `bap-controlplane`, `cchook`, `bap-gateway`, `copilot` | Go unit and integration tests. |
-| `python -m unittest discover -v tests` | Python integration and end-to-end suites (CI uses this form; it does not load `conftest.py`, so set `BAP_STATE_DIR` to an empty directory). |
-| `python -m unittest tests.test_bapedge_process_lifecycle` | Process lifecycle: no leaked or duplicate `bapedge` processes. `BAP_TEST_BAPEDGE=<path>` tests a specific binary. |
-| `.\scripts\run_pilot.ps1 [-Quick] [-SkipPlugins]` | Automated pilot: starts an isolated control plane and gateway and exercises every feature. See [PILOT_RUNBOOK.md](PILOT_RUNBOOK.md). |
-| `python scripts/check_capability_claims.py` | Fails if a document claims a capability the code does not have. |
-| `BAP_ZSP_STRICT_READS=1` | Require grants even for reads (used by tests that count grant use). |
-
-Tests must never touch a real state directory or a production control plane. Use `BAP_STATE_DIR` and a local control plane.
-
-### Repository maintenance
-
-| Script | Purpose |
-|---|---|
-| `scripts/prune_repo.ps1 [-Apply] [-IncludeLegacyDemos] [-IncludeStaleDocs]` | Remove tracked debris, duplicates and stale documents. Dry run unless `-Apply`; never commits. |
-| `scripts/check_stale_copies.*` | Find stale UI/policy copies across workspaces. |
-| `scripts/bap_harness.py` | Multi-session harness for concurrency work. |
-| `scripts/supervise_controlplane.*`, `start_controlplane_supervisor.*` | Run a local control plane under a supervisor. |
-| `demo_*.py`, `run_*_demo.*`, `cio_demo.bat`, `tech_demo.bat` | Presenter demos. |
-# Pilot qualification additions
-
-`bapedge exec --timeout 30m --progress "<command>"` runs a bounded long job. Default: 30 minutes (or `BAP_EXEC_TIMEOUT_SEC`); maximum: 24 hours. Progress reports elapsed time on stderr. Output is captured and bounded to 4 MiB; this is not an interactive terminal stream. Ctrl+C requests cancellation and process-tree cleanup. Invalid timeout configuration fails explicitly.
-
-Broker JSON `timings_ms` separates the shell authorizer call, pre-execution work, and elapsed broker work before final reporting. Child execution, identity/bootstrap, grant checks and network delivery have different costs; do not describe total command time as local policy latency.
-
-`bapedge doctor --hook-copies-json --expected-hook-sha256 <approved-hash> --hook-copy <path> ...` compares explicitly supplied configured hook copies. It does not discover unknown vendor locations or verify publisher authenticity.
-
-`bapedge doctor --repair-policy` requests a fresh authenticated signed policy from the enrolled/locked origin. It preserves identity and trust; unavailable/rejected authority remains a failure.
-
-`bap recommend` submission requires a human terminal; agent/non-interactive submissions and the former `--yes` bypass are refused. V3 now exposes the per-machine recommendation review queue separately from temporary escalation approvals.
-
-The control plane accepts `--durable`, `--initialize-authority` (first start only), and `--policy-max-age <duration>`. Production requires durable single-node SQLite at an absolute persistent path, stable token/policy signing configuration and an explicit offline policy budget. Remove `--initialize-authority` from regular service configuration after first initialization. Missing checkpoints then fail closed. See [pilot runbook](PILOT_RUNBOOK.md).
-
-New Go edge/hook telemetry defaults to metadata mode; `BAP_TELEMETRY_CONTENT=redacted` explicitly opts into content and may transmit source code. This setting is not a complete DLP system. See [telemetry privacy](TELEMETRY_PRIVACY.md).
+| `go test ./...` in `bap-edge`, `bap-controlplane`, `bap-gateway`, `cchook` | Unit and integration suites. |
+| `go test -v -run TestZSP ./...` | Zero Standing Privilege and task grant tests. |
+| `go test -v -run TestStepUp ./cmd` | Endpoint resolution and HITL step-up tests. |
+| `python -m unittest discover -v tests` | Python integration and end-to-end regression suites. |
+| `.\scripts\run_pilot.ps1 [-Quick]` | Automated end-to-end pilot runbook verifying all 5 defense layers. |

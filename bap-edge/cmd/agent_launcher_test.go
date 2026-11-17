@@ -79,3 +79,16 @@ func TestParseLauncherArgs_ProductionModeRejection(t *testing.T) {
 		t.Errorf("expected security violation error message, got: %v", err)
 	}
 }
+
+func TestParseLauncherArgs_ServerURL(t *testing.T) {
+	downstream, _, _, srv, err := parseLauncherArgs([]string{"--server=https://bap-controlplane.onrender.com", "-p", "task"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if srv != "https://bap-controlplane.onrender.com" {
+		t.Errorf("expected server URL to be parsed, got: %s", srv)
+	}
+	if len(downstream) != 2 || downstream[0] != "-p" || downstream[1] != "task" {
+		t.Errorf("expected downstream args to preserve ['-p', 'task'], got %v", downstream)
+	}
+}

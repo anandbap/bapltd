@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"bap-edge/internal/httptransport"
+	"bap-edge/internal/state"
 	"bap-edge/pkg/version"
 )
 
@@ -115,12 +116,19 @@ func ensureMCPSession(sessionID, serverURL string) string {
 	if sessionID == "" {
 		sessionID = strings.TrimSpace(os.Getenv("BAP_SESSION_ID"))
 	}
-	if sessionID != "" && sessionIsLive(serverURL, sessionID) {
+	if sessionID != "" && (IsSessionActive(sessionID) || sessionIsLive(serverURL, sessionID)) {
 		startAntigravityPromptTail(sessionID, serverURL)
 		return sessionID
 	}
-	targetID := sessionID
 	ppid := os.Getppid()
+	if sessionID == "" {
+		if existing := findActiveNativeSession("antigravity", ppid); existing != "" {
+			_ = os.Setenv("BAP_SESSION_ID", existing)
+			startAntigravityPromptTail(existing, serverURL)
+			return existing
+		}
+	}
+	targetID := sessionID
 	if targetID == "" {
 		targetID = fmt.Sprintf("sess-antigravity-%d", ppid)
 	}
@@ -144,6 +152,74 @@ var (
 	promptTailCancel context.CancelFunc
 )
 
+func promptTailLockPath() string {
+	return filepath.Join(state.Dir(), "antigravity_prompt_tail.lock")
+}
+
+func isPromptTailerRunningElsewhere() bool {
+	lockFile := promptTailLockPath()
+	data, err := os.ReadFile(lockFile)
+	if err != nil {
+		return false
+	}
+	var lockInfo struct {
+		PID       int       `json:"pid"`
+		SessionID string    `json:"session_id"`
+		UpdatedAt time.Time `json:"updated_at"`
+	}
+	if json.Unmarshal(data, &lockInfo) != nil || lockInfo.PID <= 0 {
+		return false
+	}
+	if lockInfo.PID == os.Getpid() {
+		return false
+	}
+	if isProcessAlive(lockInfo.PID) && time.Since(lockInfo.UpdatedAt) < 15*time.Second {
+		return true
+	}
+	return false
+}
+
+func updatePromptTailLock(sessionID string) {
+	lockFile := promptTailLockPath()
+	lockInfo := map[string]any{
+		"pid":        os.Getpid(),
+		"session_id": sessionID,
+		"updated_at": time.Now().UTC(),
+	}
+	if data, err := json.Marshal(lockInfo); err == nil {
+		_ = os.WriteFile(lockFile, data, 0600)
+	}
+}
+
+func releasePromptTailLock() {
+	lockFile := promptTailLockPath()
+	if data, err := os.ReadFile(lockFile); err == nil {
+		var lockInfo struct {
+			PID int `json:"pid"`
+		}
+		if json.Unmarshal(data, &lockInfo) == nil && lockInfo.PID == os.Getpid() {
+			_ = os.Remove(lockFile)
+		}
+	}
+}
+
+func isPromptHashSent(pHash string) bool {
+	if pHash == "" {
+		return false
+	}
+	p := filepath.Join(state.PromptsDir(), fmt.Sprintf("hash-%s.sent", pHash))
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+func markPromptHashSent(pHash string) {
+	if pHash == "" {
+		return
+	}
+	p := filepath.Join(state.PromptsDir(), fmt.Sprintf("hash-%s.sent", pHash))
+	_ = os.WriteFile(p, []byte(time.Now().UTC().Format(time.RFC3339)), 0600)
+}
+
 func isTestEnv() bool {
 	if flag.Lookup("test.v") != nil {
 		return true
@@ -161,6 +237,9 @@ func startAntigravityPromptTail(sessionID, serverURL string) func() {
 	if serverURL == "" || sessionID == "" || isTestEnv() {
 		return nil
 	}
+	if isPromptTailerRunningElsewhere() {
+		return nil
+	}
 	promptTailMu.Lock()
 	defer promptTailMu.Unlock()
 	if promptTailActive {
@@ -175,7 +254,9 @@ func startAntigravityPromptTail(sessionID, serverURL string) func() {
 }
 
 func runAntigravityPromptTailLoop(ctx context.Context, sessionID, serverURL string) {
+	updatePromptTailLock(sessionID)
 	defer func() {
+		releasePromptTailLock()
 		promptTailMu.Lock()
 		promptTailActive = false
 		promptTailCancel = nil
@@ -201,6 +282,7 @@ func runAntigravityPromptTailLoop(ctx context.Context, sessionID, serverURL stri
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			updatePromptTailLock(sessionID)
 		}
 
 		for _, root := range searchRoots {
@@ -235,10 +317,11 @@ func runAntigravityPromptTailLoop(ctx context.Context, sessionID, serverURL stri
 						}
 						h := sha256.Sum256([]byte(userReq))
 						pHash := fmt.Sprintf("%x", h[:])
-						if seenHashes[pHash] {
+						if seenHashes[pHash] || isPromptHashSent(pHash) {
 							continue
 						}
 						seenHashes[pHash] = true
+						markPromptHashSent(pHash)
 
 						payload := map[string]any{
 							"session_id":             sessionID,

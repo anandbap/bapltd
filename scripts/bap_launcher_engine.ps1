@@ -437,23 +437,28 @@ function Ensure-ControlPlaneRunning {
     if ($isLocal) {
         $portOpen = Test-TcpPortOpen -HostName $uri.Host -Port $uri.Port
         if (-not $portOpen) {
-            $cpCandidates = @(
-                (Join-Path $env:ProgramFiles 'BAP\bin\bapcontrolplane.exe'),
-                (Join-Path $env:ProgramFiles 'BAP\bapcontrolplane.exe'),
-                (Join-Path $env:USERPROFILE '.bap\bin\bapcontrolplane.exe'),
-                (Join-Path $env:USERPROFILE '.bap\bapcontrolplane.exe'),
-                (Join-Path $RepoRoot 'dist\windows-amd64\bapcontrolplane.exe'),
-                (Join-Path $RepoRoot 'dist\windows-amd64\controlplane\bapcontrolplane.exe'),
-                (Join-Path $RepoRoot 'bap-controlplane\bapcontrolplane.exe'),
-                (Join-Path $RepoRoot 'bapcontrolplane.exe')
-            )
-            $cpBin = Resolve-BinaryPath -Paths $cpCandidates -Commands @('bapcontrolplane.exe')
-            if (-not [string]::IsNullOrWhiteSpace($cpBin)) {
-                Write-Host "[*] Auto-starting local BAP Control Plane on port $($uri.Port)..." -ForegroundColor Yellow
-                $cpArgs = @('-port', [string]$uri.Port, '-ttl', '30', '-trust-domain', 'bap.internal')
-                if ($uri.Scheme -eq 'https') { $cpArgs += '-https' }
-                Start-Process -FilePath $cpBin -ArgumentList $cpArgs -WindowStyle Hidden | Out-Null
-                Start-Sleep -Seconds 2
+            # Only auto-start local control plane if explicitly requested via BAP_AUTO_START_CP=1
+            if ($env:BAP_AUTO_START_CP -eq '1' -or $env:BAP_STANDALONE_DEV -eq '1') {
+                $cpCandidates = @(
+                    (Join-Path $env:ProgramFiles 'BAP\bin\bapcontrolplane.exe'),
+                    (Join-Path $env:ProgramFiles 'BAP\bapcontrolplane.exe'),
+                    (Join-Path $env:USERPROFILE '.bap\bin\bapcontrolplane.exe'),
+                    (Join-Path $env:USERPROFILE '.bap\bapcontrolplane.exe'),
+                    (Join-Path $RepoRoot 'dist\windows-amd64\bapcontrolplane.exe'),
+                    (Join-Path $RepoRoot 'dist\windows-amd64\controlplane\bapcontrolplane.exe'),
+                    (Join-Path $RepoRoot 'bap-controlplane\bapcontrolplane.exe'),
+                    (Join-Path $RepoRoot 'bapcontrolplane.exe')
+                )
+                $cpBin = Resolve-BinaryPath -Paths $cpCandidates -Commands @('bapcontrolplane.exe')
+                if (-not [string]::IsNullOrWhiteSpace($cpBin)) {
+                    Write-Host "[*] Auto-starting local BAP Control Plane on port $($uri.Port)..." -ForegroundColor Yellow
+                    $cpArgs = @('-port', [string]$uri.Port, '-ttl', '30', '-trust-domain', 'bap.internal')
+                    if ($uri.Scheme -eq 'https') { $cpArgs += '-https' }
+                    Start-Process -FilePath $cpBin -ArgumentList $cpArgs -WindowStyle Hidden | Out-Null
+                    Start-Sleep -Seconds 2
+                }
+            } else {
+                Write-Host "[*] Local BAP Control Plane on port $($uri.Port) is offline (auto-start disabled; set BAP_AUTO_START_CP=1 for standalone local dev)." -ForegroundColor Gray
             }
         }
     }
@@ -802,7 +807,11 @@ function Invoke-BapGovernedSession {
     $ManifestPath = Join-Path $SessionsStateDir "recovery-$AgentId-$AgentMode-$wsHash.json"
     $MirrorPath = Get-RecoveryMirrorPath -ManifestPath $ManifestPath
     $MutexName = Get-WorkspaceMutexName -Workspace $Workspace -AgentPrefix "$AgentId-$AgentMode"
-    $SessionId = "sess-$AgentId-$AgentMode-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
+    if (-not [string]::IsNullOrWhiteSpace($env:BAP_SESSION_ID)) {
+        $SessionId = $env:BAP_SESSION_ID
+    } else {
+        $SessionId = "sess-$AgentId-$AgentMode-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
+    }
 
     $parentProc = Get-Process -Id $PID
     $ParentTicks = $parentProc.StartTime.ToUniversalTime().Ticks
@@ -812,7 +821,51 @@ function Invoke-BapGovernedSession {
         $ServerUrl = $env:BAP_SERVER_URL
     }
     if ([string]::IsNullOrWhiteSpace($ServerUrl)) {
-        $ServerUrl = 'http://localhost:8080'
+        $ServerUrl = $env:BAP_CONTROL_PLANE_URL
+    }
+    if ([string]::IsNullOrWhiteSpace($ServerUrl)) {
+        # Check global and local BAP configuration files for controlplane_url
+        $cfgCandidates = @(
+            (Join-Path $Workspace 'bap-config.json'),
+            (Join-Path $Workspace '.bap\config.json'),
+            (Join-Path $RepoRoot 'bap-config.json'),
+            (Join-Path $RepoRoot '.bap\config.json'),
+            (Join-Path $env:USERPROFILE '.bapstate\config.json'),
+            (Join-Path $env:USERPROFILE '.bap\config.json'),
+            (Join-Path $env:USERPROFILE '.bap\bap-config.json'),
+            (Join-Path $env:USERPROFILE 'bin\.bapstate\config.json'),
+            (Join-Path $env:USERPROFILE 'bin\bap-config.json')
+        )
+        if ($env:BAP_STATE_DIR) {
+            $cfgCandidates = @(
+                (Join-Path $env:BAP_STATE_DIR 'config.json'),
+                (Join-Path $env:BAP_STATE_DIR 'bap-config.json')
+            ) + $cfgCandidates
+        }
+        foreach ($cfgPath in $cfgCandidates) {
+            if (-not [string]::IsNullOrWhiteSpace($cfgPath) -and (Test-Path -LiteralPath $cfgPath)) {
+                try {
+                    $jsonContent = Get-Content -LiteralPath $cfgPath -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+                    if ($jsonContent) {
+                        if ($jsonContent.controlplane_url) {
+                            $ServerUrl = [string]$jsonContent.controlplane_url
+                            break
+                        }
+                        if ($jsonContent.control_plane_url) {
+                            $ServerUrl = [string]$jsonContent.control_plane_url
+                            break
+                        }
+                        if ($jsonContent.server_url) {
+                            $ServerUrl = [string]$jsonContent.server_url
+                            break
+                        }
+                    }
+                } catch { }
+            }
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($ServerUrl)) {
+        $ServerUrl = 'https://bap-controlplane.onrender.com'
     }
     $ServerUrl = $ServerUrl.TrimEnd('/')
 
@@ -1076,7 +1129,21 @@ function Invoke-BapGovernedSession {
         # For Antigravity sessions, start background prompt tail to capture prompts typed interactively
         $transcriptJob = $null
         if ($AgentId -eq 'antigravity' -and -not [string]::IsNullOrWhiteSpace($ServerUrl)) {
-            $transcriptJob = Start-Job -ScriptBlock {
+            $lockFile = Join-Path $BapStateDir "antigravity_prompt_tail.lock"
+            $skipJob = $false
+            if (Test-Path -LiteralPath $lockFile) {
+                try {
+                    $lInfo = Get-Content -LiteralPath $lockFile -Raw | ConvertFrom-Json
+                    if ($null -ne $lInfo -and $lInfo.pid -gt 0) {
+                        $tailProc = Get-Process -Id $lInfo.pid -ErrorAction SilentlyContinue
+                        if ($null -ne $tailProc) {
+                            $skipJob = $true
+                        }
+                    }
+                } catch { }
+            }
+            if (-not $skipJob) {
+                $transcriptJob = Start-Job -ScriptBlock {
                 param($SessionId, $ServerUrl, $BapEdgeBin)
                 $searchRoots = @(
                     (Join-Path $env:USERPROFILE ".gemini\antigravity-cli\brain"),

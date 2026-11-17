@@ -122,6 +122,71 @@ broader capability roadmap or cross-platform acceptance is closed by this story.
 
 ---
 
+### BAP-1094 — Antigravity & Agent Launcher Global Control Plane Resolution & Comprehensive 7-Binary CLI Reference
+
+**Status: DONE — implementation and documentation verified, 2026-11-16.**
+**Deployment: local code fix and verified suite.** This is a local backlog record, not an external Jira issue.
+
+**Problem:** 
+1. **Rogue Local Control Plane Auto-Start (`bap agy` / `run_antigravity_cli_bap`):** When invoking `bap agy` on an enrolled workstation, `bap_launcher_engine.ps1` failed to inspect `bap-config.json` or the global control plane setting, checking only raw `$env:BAP_SERVER_URL`. Failing that, it defaulted to `http://localhost:8080`. `Ensure-ControlPlaneRunning` then observed port 8080 was closed and automatically spawned a local `bapcontrolplane.exe` background process instead of connecting to the configured remote Control Plane (`https://bap-controlplane.onrender.com`).
+2. **Missing Pass-Through in Agent Launcher Go Wrappers:** `RunClaude`, `RunCodex`, and `RunAntigravity` in `bap-edge/cmd/agent_launcher.go` parsed launcher arguments but discarded `serverURL`, neglecting to resolve `config.ResolveEndpoints().ControlPlaneURL` and failing to pass `--server` and `BAP_SERVER_URL` down to launcher scripts and subprocesses.
+3. **Incomplete CLI Documentation (`docs/CLI_REFERENCE.md`):** The CLI reference document previously lacked coverage for `bap agy` / `bap antigravity`, `bap codex`, `bapedge stepup`, `bapedge zsp playback`, `bapedge plugin`, `bapedge daemon`, `bapedge config`, and omitted the full reference manual for the other 6 platform binaries (`bapcontrolplane`, `bapdashboard`, `bapgateway`, `bapmcp`, `cchook`/`interceptor`, and `bap-hook-adapter`).
+
+**Delivered:**
+1. **Config-Aware Control Plane Resolution in Launcher Engine:** Updated `scripts/bap_launcher_engine.ps1` (and synchronized copies in `bap/` and `bap/launchers/`) to resolve `$ServerUrl` by checking `$env:BAP_SERVER_URL`, `$env:BAP_CONTROL_PLANE_URL`, and searching candidate configuration files (`bap-config.json`, `.bap/config.json`, `~/.bapstate/config.json`, `~/.bap/config.json`) before falling back.
+2. **Disabled Rogue Control Plane Auto-Start:** Modified `Ensure-ControlPlaneRunning` in `bap_launcher_engine.ps1` to never auto-spawn `bapcontrolplane.exe` unless explicitly commanded via `BAP_AUTO_START_CP=1` or `BAP_STANDALONE_DEV=1`.
+3. **CLI Wrapper Global Endpoint Resolution & Subprocess Wiring:** Updated `RunClaude`, `RunCodex`, and `RunAntigravity` in `bap-edge/cmd/agent_launcher.go` to invoke `config.ResolveEndpoints()`, pass `--server=<ControlPlaneURL>` to launcher scripts, and export `BAP_SERVER_URL` and `BAP_CONTROL_PLANE_URL` to child processes.
+4. **Antigravity MCP Server Config Sync:** Enriched `run_antigravity_cli_bap.ps1` to write `BAP_SERVER_URL` and `BAP_CONTROL_PLANE_URL` into `.antigravity/mcp_config.json`.
+5. **Comprehensive 7-Binary CLI Reference (`docs/CLI_REFERENCE.md`):** Completely overhauled and rewrote `docs/CLI_REFERENCE.md` into an authoritative guide detailing all 7 binaries:
+   - `bap` / `bapedge`: full command matrix across identity, agent sandboxes, daemon lifecycle, Cedar policy broker, ZSP playback, step-up challenges, cross-folder trust, recommendations, and plugins.
+   - `bapcontrolplane`: all commands (`start`, `stop`, `status`, `restart`, `enable`, `serve`) and complete flags reference (`--port`, `--db`, `--durable`, `--mode`, `--admin-token`, `--policy-max-age`, etc.).
+   - `bapdashboard`: full HTTPS operator cockpit flags (`-port`, `-control-plane`, `-ca-cert`, `-tls-cert`, `-allow-remote-admin`).
+   - `bapgateway`: full Egress PEP commands and options (`start`, `stop`, `status`, `--port`, `--controlplane`, `--consume`, `--secret`).
+   - `bapmcp`: full MCP stdio protocol reference, flags, exposed tools (`bap_execute`, `bap_explain_policy`, `bap_request_task_grant`, `bap_zsp_status`), and agent client configs.
+   - `cchook` / `interceptor` / `bap-hook-adapter`: Layer 1A native hook JSON contract and cross-agent execution lifecycle adapters.
+   - Internal developer tooling: build, test, and maintenance workflows.
+
+**Acceptance checked:**
+- [x] `bap agy` resolves `config.ResolveEndpoints().ControlPlaneURL` (e.g. `https://bap-controlplane.onrender.com`) and passes `--server` and `BAP_SERVER_URL` down to `run_antigravity_cli_bap.ps1`.
+- [x] `bap_launcher_engine.ps1` discovers `bap-config.json` and does not default to `http://localhost:8080`.
+- [x] `Ensure-ControlPlaneRunning` does not auto-spawn a local `bapcontrolplane.exe` process on enrolled workstations.
+- [x] `docs/CLI_REFERENCE.md` documents all 7 core executables with exhaustive subcommand, flag, and configuration references.
+- [x] Unit test `TestParseLauncherArgs_ServerURL` verifies `--server` flag parsing and pass-through.
+
+---
+
+### BAP-1095 — Antigravity Canonical Session Resolution, Multi-Session Deduplication, and Single-Flight Prompt Tailing
+
+**Status: DONE — implementation and tests verified, 2026-11-16.**
+**Deployment: local code fix and verified suite.** This is a local backlog record, not an external Jira issue.
+
+**Problem:**
+1. **Duplicate Active Sessions in `bap status`:** When running Google Antigravity (either invoked directly via `agy` or launched via `bap agy`), two distinct active sessions were registered and displayed in `bap status`. The MCP server self-enrollment (`ensureMCPSession` in `mcp_enroll.go`), the native hook adapter (`bap-hook-adapter` / `plugin.go`), and the launcher script (`bap_launcher_engine.ps1`) generated conflicting session identifiers (`sess-antigravity-<pid>`, `sess-antigravity-pid-<pid>`, `observed-antigravity-...`, and `sess-antigravity-cli-<guid>`) on different related PIDs (e.g. PowerShell launcher wrapper vs `agy.exe` vs child tool runner).
+2. **False Non-Liveness in `ensureMCPSession`:** In `mcp_enroll.go`, `sessionIsLive` queried the remote control plane without checking local state. When offline, unenrolled, or experiencing network latency, `sessionIsLive` returned false, causing `ensureMCPSession` to discard an active inherited session and mint a second session.
+3. **Double-Counting Prompts in Telemetry & Status:** Both `bapedge watch` and `bapmcp` (as well as the launcher background job) initiated separate transcript tailing loops for each generated session ID. Every prompt extracted from `transcript.jsonl` was posted once per session ID, causing both sessions to record `Prompts: 1`, doubling the total prompt count observed in `bap status` (`Prompts Count: 2 observed across active sessions`) and duplicating entries in the Central Control Plane.
+
+**Delivered:**
+1. **Canonical Active Session Adoption (`findActiveNativeSession`):** Implemented `findActiveNativeSession(appID, ppid)` in `bap-edge/cmd/session_lifecycle.go`. It scans `state.SessionsDir()` and workspace fallback markers for live sessions belonging to the same application workload and process lineage (matching PID, parent, child, or ancestor/descendant tree).
+2. **Unified Hook & MCP Session Resolution:** Updated `resolvePluginSessionID` in `bap-edge/cmd/plugin.go` and `ensureMCPSession` in `bap-edge/cmd/mcp_enroll.go` to invoke `findActiveNativeSession` before generating new session IDs. Existing native sessions are reused across hooks and MCP bridges instead of creating competing sessions or adopting `observed-` IDs.
+3. **Harmonized Session ID Format:** Standardized default session ID naming to `sess-%s-%d` across `session_lifecycle.go`, `mcp_enroll.go`, `watch.go`, and `plugin.go`, eliminating the `-pid-` formatting discrepancy.
+4. **Local Liveness Guard:** Enhanced `ensureMCPSession` to check `IsSessionActive(sessionID)` locally before falling back to network queries. Active sessions avoid redundant re-enrollment and watcher spawning.
+5. **Cross-Process Single-Flight Prompt Tailing & Hash Deduplication:**
+   - Introduced file-backed prompt tailer locking (`antigravity_prompt_tail.lock` in `state.Dir()`) to ensure only one active process tails transcript logs per workstation.
+   - Added persistent prompt hash tracking (`isPromptHashSent` / `markPromptHashSent` in `state.PromptsDir()`) so duplicate transmissions are rejected across processes and restarts.
+   - Updated `bap_launcher_engine.ps1` to honor the active tailer lock before spawning background jobs, and to inherit `$env:BAP_SESSION_ID` when provided.
+6. **Workload Lineage Deduplication in `bap status` (`cli_tools.go`):** Added lineage resolution in `cli_tools.go` that inspects the process hierarchy for active sessions of the same application. Subordinate launcher wrappers or child runners are marked `SUPERSEDED (Inactive)`. `totalPrompts` is computed strictly from canonical active sessions, eliminating double-counted prompt tallies.
+7. **Automated Regression Tests (`antigravity_dedup_test.go`):** Added tests verifying:
+   - Canonical session adoption across `findActiveNativeSession`, `resolvePluginSessionID`, and `ensureMCPSession`.
+   - Prompt hash deduplication and cross-process single-flight tail locking.
+
+**Acceptance checked:**
+- [x] Antigravity produces exactly 1 canonical active session in `bap status` when running.
+- [x] Hook executions bind to the canonical session without spawning secondary sessions.
+- [x] Prompts are transmitted once and prompt counts in `bap status` are not doubled.
+- [x] Unit tests in `antigravity_dedup_test.go` and `mcp_enroll_test.go` pass.
+
+---
+
 - **Hooks-first prompt fallback follow-up (2026-11-14):** MCP reporting is default-on, unrelated hook heartbeats cannot suppress it, and session/turn correlation now owns prompt counting and source priority across audit and prompt ingestion. Late hooks supersede fallback text/classification without adding a turn; canonical transcript deduplicates corroboration while raw audit evidence remains immutable. Added native/broker turn-ID propagation and SQLite/checkpoint correlation persistence. Identical repeated turns require distinct native IDs; legacy hash-only correlation is qualified. Per-session telemetry batches prevent a refused old session from blocking live sessions. Fresh sign-in is acknowledged, but live historical backlog reconciliation and deployment remain open. See `docs/POLICY_AND_REPORTING_HEALTH.md`.
 
 - **Policy/reporting resilience follow-up (2026-11-14; BAP-1080/1085, BAP-1004):** added the missing daemon signed-policy poller (three seconds, independent of native hooks/watchers), daemon prompt-spool replay, reporting-only heartbeat enrollment guidance, runtime/CLI skew diagnostics and stale-daemon replacement on start. Cache files use unique staged replacement with bounded Windows sharing retries. Explicit state installations no longer import/discover/purge another installation's credentials during logout. A broad regression exposed the old cleanup touching live enrollment; fresh browser sign-in was initiated and remains an external acceptance step. Edge cmd/policystore/state and control-plane API/registry suites pass; next-poll kill-switch regression passes. No fleet-wide latency SLA, plaintext-policy encryption or hook-free automatic prompt source is claimed. See `docs/POLICY_AND_REPORTING_HEALTH.md`. Source changes require deployment.

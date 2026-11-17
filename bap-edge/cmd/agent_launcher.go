@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"bap-edge/internal/authz"
+	"bap-edge/internal/config"
 	"bap-edge/pkg/version"
 )
 
@@ -134,7 +135,15 @@ func RunClaude(args []string) error {
 		return err
 	}
 	_ = forceFix
-	_ = serverURL
+
+	if serverURL == "" {
+		ep := config.ResolveEndpoints()
+		serverURL = ep.ControlPlaneURL
+	}
+	if serverURL == "" {
+		serverURL = config.DefaultControlPlaneURL
+	}
+	serverURL = strings.TrimRight(serverURL, "/")
 
 	if hooksDisabled {
 		_ = os.Setenv("BAP_HOOKS", "false")
@@ -152,18 +161,24 @@ func RunClaude(args []string) error {
 
 	if script != "" {
 		var cmd *exec.Cmd
+		scriptArgs := append([]string{"--server=" + serverURL}, downstreamArgs...)
 		if strings.HasSuffix(strings.ToLower(script), ".ps1") {
-			psArgs := append([]string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script}, args...)
+			psArgs := append([]string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script}, scriptArgs...)
 			cmd = exec.Command("powershell.exe", psArgs...)
 		} else if strings.HasSuffix(strings.ToLower(script), ".bat") || strings.HasSuffix(strings.ToLower(script), ".cmd") {
-			cmd = exec.Command("cmd.exe", append([]string{"/c", script}, args...)...)
+			cmd = exec.Command("cmd.exe", append([]string{"/c", script}, scriptArgs...)...)
 		} else {
-			cmd = exec.Command("bash", append([]string{script}, args...)...)
+			cmd = exec.Command("bash", append([]string{script}, scriptArgs...)...)
 		}
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		cmd.Env = os.Environ()
+		cmdEnv := os.Environ()
+		cmdEnv = append(cmdEnv,
+			"BAP_SERVER_URL="+serverURL,
+			"BAP_CONTROL_PLANE_URL="+serverURL,
+		)
+		cmd.Env = cmdEnv
 		return cmd.Run()
 	}
 
@@ -239,7 +254,15 @@ func RunCodex(args []string) error {
 		return err
 	}
 	_ = forceFix
-	_ = serverURL
+
+	if serverURL == "" {
+		ep := config.ResolveEndpoints()
+		serverURL = ep.ControlPlaneURL
+	}
+	if serverURL == "" {
+		serverURL = config.DefaultControlPlaneURL
+	}
+	serverURL = strings.TrimRight(serverURL, "/")
 
 	if hooksDisabled {
 		_ = os.Setenv("BAP_HOOKS", "false")
@@ -256,18 +279,24 @@ func RunCodex(args []string) error {
 
 	if script != "" {
 		var cmd *exec.Cmd
+		scriptArgs := append([]string{"--server=" + serverURL}, downstreamArgs...)
 		if strings.HasSuffix(strings.ToLower(script), ".ps1") {
-			psArgs := append([]string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script}, args...)
+			psArgs := append([]string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script}, scriptArgs...)
 			cmd = exec.Command("powershell.exe", psArgs...)
 		} else if strings.HasSuffix(strings.ToLower(script), ".bat") || strings.HasSuffix(strings.ToLower(script), ".cmd") {
-			cmd = exec.Command("cmd.exe", append([]string{"/c", script}, args...)...)
+			cmd = exec.Command("cmd.exe", append([]string{"/c", script}, scriptArgs...)...)
 		} else {
-			cmd = exec.Command("bash", append([]string{script}, args...)...)
+			cmd = exec.Command("bash", append([]string{script}, scriptArgs...)...)
 		}
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		cmd.Env = os.Environ()
+		cmdEnv := os.Environ()
+		cmdEnv = append(cmdEnv,
+			"BAP_SERVER_URL="+serverURL,
+			"BAP_CONTROL_PLANE_URL="+serverURL,
+		)
+		cmd.Env = cmdEnv
 		return cmd.Run()
 	}
 
@@ -305,7 +334,15 @@ func RunAntigravity(args []string) error {
 		return err
 	}
 	_ = forceFix
-	_ = serverURL
+
+	if serverURL == "" {
+		ep := config.ResolveEndpoints()
+		serverURL = ep.ControlPlaneURL
+	}
+	if serverURL == "" {
+		serverURL = config.DefaultControlPlaneURL
+	}
+	serverURL = strings.TrimRight(serverURL, "/")
 
 	if hooksDisabled {
 		_ = os.Setenv("BAP_HOOKS", "false")
@@ -322,18 +359,24 @@ func RunAntigravity(args []string) error {
 
 	if script != "" {
 		var cmd *exec.Cmd
+		scriptArgs := append([]string{"--server=" + serverURL}, downstreamArgs...)
 		if strings.HasSuffix(strings.ToLower(script), ".ps1") {
-			psArgs := append([]string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script}, downstreamArgs...)
+			psArgs := append([]string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script}, scriptArgs...)
 			cmd = exec.Command("powershell.exe", psArgs...)
 		} else if strings.HasSuffix(strings.ToLower(script), ".bat") || strings.HasSuffix(strings.ToLower(script), ".cmd") {
-			cmd = exec.Command("cmd.exe", append([]string{"/c", script}, downstreamArgs...)...)
+			cmd = exec.Command("cmd.exe", append([]string{"/c", script}, scriptArgs...)...)
 		} else {
-			cmd = exec.Command("bash", append([]string{script}, downstreamArgs...)...)
+			cmd = exec.Command("bash", append([]string{script}, scriptArgs...)...)
 		}
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		cmd.Env = os.Environ()
+		cmdEnv := os.Environ()
+		cmdEnv = append(cmdEnv,
+			"BAP_SERVER_URL="+serverURL,
+			"BAP_CONTROL_PLANE_URL="+serverURL,
+		)
+		cmd.Env = cmdEnv
 		return cmd.Run()
 	}
 
@@ -359,6 +402,8 @@ func RunAntigravity(args []string) error {
 	cmdEnv = append(cmdEnv,
 		"LTD_SOURCE=antigravity",
 		"BAP_SESSION_ID="+sessionID,
+		"BAP_SERVER_URL="+serverURL,
+		"BAP_CONTROL_PLANE_URL="+serverURL,
 	)
 	if hooksDisabled {
 		cmdEnv = append(cmdEnv, "BAP_HOOKS=false", "BAP_DISABLE_HOOKS=1")

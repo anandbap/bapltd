@@ -102,12 +102,10 @@ func resolveDefaultZSPSessionID(explicit string) string {
 	if sid := resolveSessionIDFromPIDMarkers(collectAncestorPIDs(ppid, processes)...); sid != "" {
 		return sid
 	}
-	if hasObserved && observed.PID > 0 {
-		if sid := observedSessionID(observationHost(), observed); sid != "" {
-			return sid
-		}
+	if existing := findActiveNativeSession("", ppid); existing != "" {
+		return existing
 	}
-	for _, cand := range []string{".bap-session.json", "../.bap-session.json"} {
+	for _, cand := range []string{state.WorkspaceSessionPath(), filepath.Join(".bap", "session.json"), ".bap-session.json", "../.bap-session.json"} {
 		if data, err := os.ReadFile(cand); err == nil {
 			var info struct {
 				SessionID string `json:"session_id"`
@@ -117,7 +115,12 @@ func resolveDefaultZSPSessionID(explicit string) string {
 			}
 		}
 	}
-	return fmt.Sprintf("sess-agent-pid-%d", ppid)
+	if hasObserved && observed.PID > 0 {
+		if sid := observedSessionID(observationHost(), observed); sid != "" {
+			return sid
+		}
+	}
+	return fmt.Sprintf("sess-agent-%d", ppid)
 }
 
 func splitCSVFlags(raw string) []string {

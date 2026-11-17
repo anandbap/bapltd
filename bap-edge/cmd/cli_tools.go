@@ -504,6 +504,12 @@ func RunStatus(args []string) error {
 	}
 	var sessionList []sessionDetail
 
+	procs, _ := listAgentProcesses()
+	byPID := make(map[int]agentProcess, len(procs))
+	for _, p := range procs {
+		byPID[p.PID] = p
+	}
+
 	// Build map of current active session per PID from all pid-*.json markers
 	activeSessionByPID := make(map[int]string)
 	for _, sDir := range sessionDirs {
@@ -750,6 +756,92 @@ func RunStatus(args []string) error {
 					PromptCount: 0,
 				})
 			}
+		}
+	}
+
+	// 5b. Lineage & duplicate resolution for active sessions of the same application workload.
+	// If multiple sessions for the same AppID are marked ACTIVE and their PIDs belong to the same
+	// process tree (e.g. PowerShell launcher wrapper vs spawned agy.exe vs child bash tool runner),
+	// or if an observed session coexists with a native session, elect the canonical agent session
+	// and mark the subordinate wrapper as SUPERSEDED.
+	for i := 0; i < len(sessionList); i++ {
+		if sessionList[i].Status != "ACTIVE" && !strings.HasPrefix(sessionList[i].Status, "ACTIVE") {
+			continue
+		}
+		for j := 0; j < len(sessionList); j++ {
+			if i == j {
+				continue
+			}
+			if sessionList[j].Status != "ACTIVE" && !strings.HasPrefix(sessionList[j].Status, "ACTIVE") {
+				continue
+			}
+			sameApp := strings.EqualFold(sessionList[i].AppID, sessionList[j].AppID) ||
+				(normalizeClientAppID(sessionList[i].AppID) != "" && normalizeClientAppID(sessionList[i].AppID) == normalizeClientAppID(sessionList[j].AppID))
+			if !sameApp {
+				continue
+			}
+			pidI, pidJ := sessionList[i].PID, sessionList[j].PID
+			isRelated := (pidI == pidJ) ||
+				(pidI > 0 && pidJ > 0 && (isDescendantOf(pidI, pidJ, byPID) || isDescendantOf(pidJ, pidI, byPID))) ||
+				(strings.HasPrefix(sessionList[i].SessionID, "observed-") != strings.HasPrefix(sessionList[j].SessionID, "observed-"))
+
+			if isRelated {
+				jIsObserved := strings.HasPrefix(sessionList[j].SessionID, "observed-")
+				iIsObserved := strings.HasPrefix(sessionList[i].SessionID, "observed-")
+
+				if jIsObserved && !iIsObserved {
+					sessionList[j].Status = "SUPERSEDED (Inactive)"
+					activeCount--
+					staleCount++
+				} else if !jIsObserved && iIsObserved {
+					sessionList[i].Status = "SUPERSEDED (Inactive)"
+					activeCount--
+					staleCount++
+					break
+				} else {
+					nameI := ""
+					nameJ := ""
+					if p, ok := byPID[pidI]; ok {
+						nameI = strings.ToLower(p.Name)
+					}
+					if p, ok := byPID[pidJ]; ok {
+						nameJ = strings.ToLower(p.Name)
+					}
+					iIsAgent := agentApp(nameI) != ""
+					jIsAgent := agentApp(nameJ) != ""
+
+					if iIsAgent && !jIsAgent {
+						sessionList[j].Status = "SUPERSEDED (Inactive)"
+						activeCount--
+						staleCount++
+					} else if !iIsAgent && jIsAgent {
+						sessionList[i].Status = "SUPERSEDED (Inactive)"
+						activeCount--
+						staleCount++
+						break
+					} else if pidI > 0 && pidJ > 0 && isDescendantOf(pidJ, pidI, byPID) && strings.Contains(sessionList[i].SessionID, "-cli-") {
+						sessionList[i].Status = "SUPERSEDED (Inactive)"
+						activeCount--
+						staleCount++
+						break
+					} else if sessionList[j].PromptCount < sessionList[i].PromptCount {
+						sessionList[j].Status = "SUPERSEDED (Inactive)"
+						activeCount--
+						staleCount++
+					} else {
+						sessionList[j].Status = "SUPERSEDED (Inactive)"
+						activeCount--
+						staleCount++
+					}
+				}
+			}
+		}
+	}
+
+	totalPrompts = 0
+	for _, s := range sessionList {
+		if s.Status == "ACTIVE" || strings.HasPrefix(s.Status, "ACTIVE") {
+			totalPrompts += s.PromptCount
 		}
 	}
 

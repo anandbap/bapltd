@@ -63,8 +63,10 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
                 command = $mcpBin
                 args    = @()
                 env     = [ordered]@{
-                    "LTD_SOURCE"     = "antigravity"
-                    "BAP_SESSION_ID" = $SessionId
+                    "LTD_SOURCE"             = "antigravity"
+                    "BAP_SESSION_ID"         = $SessionId
+                    "BAP_SERVER_URL"         = $ServerUrl
+                    "BAP_CONTROL_PLANE_URL" = $ServerUrl
                 }
             }
         }

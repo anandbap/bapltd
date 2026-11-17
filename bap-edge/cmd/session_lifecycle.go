@@ -54,6 +54,118 @@ func IsSessionActive(sessionID string) bool {
 	return false
 }
 
+// findActiveNativeSession searches local session state for an existing active, live native session
+// matching the given appID (e.g. "antigravity") and process hierarchy.
+func findActiveNativeSession(appID string, ppid int) string {
+	normApp := normalizeClientAppID(appID)
+	sessionDirs := []string{state.SessionsDir(), filepath.Join(".bap", "sessions")}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		sessionDirs = append(sessionDirs,
+			filepath.Join(home, "bin", ".bapstate", "sessions"),
+			filepath.Join(home, ".bapstate", "sessions"),
+		)
+	}
+
+	procs, _ := listAgentProcesses()
+	byPID := make(map[int]agentProcess, len(procs))
+	for _, p := range procs {
+		byPID[p.PID] = p
+	}
+
+	// 1. First check if any active session is an exact PID match or in the ancestor/descendant tree
+	for _, dir := range sessionDirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") || strings.HasPrefix(e.Name(), "pid-") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				continue
+			}
+			var sInfo struct {
+				SessionID string    `json:"session_id"`
+				PID       int       `json:"pid"`
+				AppID     string    `json:"app_id"`
+				StartedAt time.Time `json:"started_at"`
+			}
+			if json.Unmarshal(data, &sInfo) == nil && sInfo.SessionID != "" {
+				if strings.HasPrefix(sInfo.SessionID, "observed-") {
+					continue
+				}
+				if normApp != "" && normalizeClientAppID(sInfo.AppID) != normApp && !strings.EqualFold(sInfo.AppID, appID) {
+					continue
+				}
+				if !isProcessAlive(sInfo.PID) {
+					continue
+				}
+				if ppid > 0 && sInfo.PID > 0 {
+					if sInfo.PID == ppid || isDescendantOf(ppid, sInfo.PID, byPID) || isDescendantOf(sInfo.PID, ppid, byPID) {
+						return sInfo.SessionID
+					}
+				}
+			}
+		}
+	}
+
+	// 2. Check workspace session fallback file
+	for _, cand := range []string{state.WorkspaceSessionPath(), filepath.Join(".bap", "session.json")} {
+		if data, err := os.ReadFile(cand); err == nil {
+			var sInfo struct {
+				SessionID string `json:"session_id"`
+				PID       int    `json:"pid"`
+				AppID     string `json:"app_id"`
+			}
+			if json.Unmarshal(data, &sInfo) == nil && sInfo.SessionID != "" {
+				if normApp == "" || normalizeClientAppID(sInfo.AppID) == normApp || strings.EqualFold(sInfo.AppID, appID) {
+					if isProcessAlive(sInfo.PID) || IsWatcherAlive(sInfo.SessionID) {
+						return sInfo.SessionID
+					}
+				}
+			}
+		}
+	}
+
+	// 3. Check for any active live session for this app
+	for _, dir := range sessionDirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") || strings.HasPrefix(e.Name(), "pid-") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				continue
+			}
+			var sInfo struct {
+				SessionID string    `json:"session_id"`
+				PID       int       `json:"pid"`
+				AppID     string    `json:"app_id"`
+				StartedAt time.Time `json:"started_at"`
+			}
+			if json.Unmarshal(data, &sInfo) == nil && sInfo.SessionID != "" {
+				if strings.HasPrefix(sInfo.SessionID, "observed-") {
+					continue
+				}
+				if normApp != "" && normalizeClientAppID(sInfo.AppID) != normApp && !strings.EqualFold(sInfo.AppID, appID) {
+					continue
+				}
+				if isProcessAlive(sInfo.PID) && time.Since(sInfo.StartedAt) < 30*time.Minute {
+					return sInfo.SessionID
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
 // EnsureSessionStarted registers the session with the Central Control Plane if not already active.
 // It links the session to workstation enrollment, mints/derives the Session SVID,
 // writes local session markers, and spawns the background heartbeat monitor.
@@ -68,11 +180,15 @@ func EnsureSessionStarted(sessionID, appID string, clientPID int, initialPrompt 
 	}
 
 	if sessionID == "" {
-		sessionID = fmt.Sprintf("sess-%s-pid-%d", normAppID, clientPID)
+		if existing := findActiveNativeSession(normAppID, clientPID); existing != "" {
+			sessionID = existing
+		} else {
+			sessionID = fmt.Sprintf("sess-%s-%d", normAppID, clientPID)
+		}
 	}
 
-	// 1. If watcher is alive and marker exists, it's already running cleanly
-	if IsWatcherAlive(sessionID) {
+	// 1. If watcher is alive or session is already active locally, it's already running cleanly
+	if IsWatcherAlive(sessionID) || IsSessionActive(sessionID) {
 		return nil
 	}
 

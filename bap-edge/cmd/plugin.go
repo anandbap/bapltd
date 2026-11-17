@@ -1732,16 +1732,23 @@ func resolvePluginSessionID(client string, payload map[string]any) string {
 	if s, ok := payload["session_id"].(string); ok && s != "" {
 		return s
 	}
-	if s, ok := payload["conversation_id"].(string); ok && s != "" {
+	if s, ok := payload["conversation_id"].(string); ok && s != "" && !strings.Contains(s, " ") {
 		return s
 	}
-	if s := os.Getenv("BAP_SESSION_ID"); s != "" {
+	if s := strings.TrimSpace(os.Getenv("BAP_SESSION_ID")); s != "" {
 		return s
 	}
-	if s := resolveDefaultZSPSessionID(""); s != "" && !strings.HasPrefix(s, "sess-agent-pid-") {
+	if s := strings.TrimSpace(os.Getenv("LTD_SESSION_ID")); s != "" {
 		return s
 	}
-	return fmt.Sprintf("sess-%s-pid-%d", client, os.Getppid())
+	ppid := os.Getppid()
+	if existing := findActiveNativeSession(client, ppid); existing != "" {
+		return existing
+	}
+	if s := resolveDefaultZSPSessionID(""); s != "" && !strings.HasPrefix(s, "sess-agent-") && !strings.HasPrefix(s, "observed-") {
+		return s
+	}
+	return fmt.Sprintf("sess-%s-%d", client, ppid)
 }
 
 func evaluateWithBapedge(sessionID, client, command, filePath string) types.ExecResponse {
