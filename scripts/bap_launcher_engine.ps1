@@ -1212,6 +1212,7 @@ function Invoke-BapGovernedSession {
                     } catch { }
                 }
             } -ArgumentList $SessionId, $ServerUrl, $BapEdgeBin
+            }
         }
 
         # For Copilot sessions, start background tail to capture prompts, outputs, and token usage

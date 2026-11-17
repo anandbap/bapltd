@@ -1392,7 +1392,9 @@
     lastFocus = document.activeElement;
     S.activeSessionId = f.sessionId;
     $('drawer').classList.remove('list'); $('drawer').classList.add('convo');
-    $('dTitle').textContent = f.ask || 'Session activity';
+    var rawAsk = f.ask || 'Session activity';
+    $('dTitle').textContent = rawAsk.length > 300 ? rawAsk.slice(0, 300) + '…' : rawAsk;
+    $('dTitle').title = rawAsk.length > 300 ? rawAsk : '';
     $('dSteps').innerHTML = [['Who', f.who], ['Latest action', f.did], ['Result', f.blocked ? 'Blocked' : (f.shadow ? 'Flagged, not stopped' : (f.unknown ? 'Not evaluated' : 'Allowed'))]].map(function (p) {
       return '<li><div class="k">' + esc(p[0]) + '</div><div class="v">' + esc(p[1] || '-') + '</div></li>'; }).join('');
     $('dTech').innerHTML = esc('Session: ' + (f.sessionId || 'not available')) + (f.t ? '<br>' + esc('Last event: ' + fmtTime(f.t)) : '');
@@ -1694,7 +1696,9 @@
     S.activeSessionId = sessionId;
     $('drawer').classList.remove('convo', 'list');
     loadConvo(sessionId);
-    $('dTitle').textContent = s.title;
+    var rawTitle = s.title || 'What happened';
+    $('dTitle').textContent = rawTitle.length > 300 ? rawTitle.slice(0, 300) + '…' : rawTitle;
+    $('dTitle').title = rawTitle.length > 300 ? rawTitle : '';
     $('dSteps').innerHTML = s.steps.map(function (st) {
       return '<li class="' + (st.cls || '') + '"><div class="k">' + esc(st.k) + '</div><div class="v">' + esc(st.v) + '</div></li>';
     }).join('');
