@@ -77,7 +77,8 @@ type Server struct {
 	adminToken          string
 	allowRemoteAdmin    bool
 	demoMode            bool
-	adminThrottleOnce   sync.Once
+	simulatedEndpoints  bool
+	adminThrottleOnce  sync.Once
 	adminThrottleState  *authFailureThrottle
 	lastDemoMu          sync.RWMutex
 	lastDemoAction      *DemoActionRecord
@@ -253,6 +254,23 @@ func (s *Server) SetAdminSecurity(token string, allowRemote bool) {
 // default so a normal control plane can never reset live state through /demo.
 func (s *Server) SetDemoMode(enabled bool) {
 	s.demoMode = enabled
+}
+
+// SetSimulatedEndpoints opts in to the simulated SPIFFE/TPM/Landlock/eBPF endpoints without the
+// rest of demo mode (BAP-1098). Off by default.
+func (s *Server) SetSimulatedEndpoints(enabled bool) {
+	s.simulatedEndpoints = enabled
+}
+
+// requireSimulatedEndpoints serves a simulation only when explicitly enabled or in demo mode.
+func (s *Server) requireSimulatedEndpoints(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.simulatedEndpoints && !s.demoMode {
+			http.NotFound(w, r)
+			return
+		}
+		next(w, r)
+	}
 }
 
 func (s *Server) requireDemoMode(next http.HandlerFunc) http.HandlerFunc {
@@ -479,11 +497,11 @@ func (s *Server) registerRoutes() {
 	// TPM quote is an HMAC over a published default secret, and the Landlock/eBPF checks evaluate
 	// paths in this process. None of them is an attestation or enforcement boundary, so they are
 	// served only in explicit demo mode and only to an authenticated administrator.
-	s.mux.HandleFunc("/api/v1/spiffe/issue-svid", s.requireDemoMode(s.requireAdminAuth(s.handleIssueSVID)))
-	s.mux.HandleFunc("/api/v1/spiffe/validate", s.requireDemoMode(s.requireAdminAuth(s.handleValidateSVID)))
-	s.mux.HandleFunc("/api/v1/attestation/tpm-quote", s.requireDemoMode(s.requireAdminAuth(s.handleVerifyTPMQuote)))
-	s.mux.HandleFunc("/api/v1/sandbox/landlock/check", s.requireDemoMode(s.requireAdminAuth(s.handleLandlockCheck)))
-	s.mux.HandleFunc("/api/v1/sandbox/ebpf/execve", s.requireDemoMode(s.requireAdminAuth(s.handleEBPFExecve)))
+	s.mux.HandleFunc("/api/v1/spiffe/issue-svid", s.requireSimulatedEndpoints(s.requireAdminAuth(s.handleIssueSVID)))
+	s.mux.HandleFunc("/api/v1/spiffe/validate", s.requireSimulatedEndpoints(s.requireAdminAuth(s.handleValidateSVID)))
+	s.mux.HandleFunc("/api/v1/attestation/tpm-quote", s.requireSimulatedEndpoints(s.requireAdminAuth(s.handleVerifyTPMQuote)))
+	s.mux.HandleFunc("/api/v1/sandbox/landlock/check", s.requireSimulatedEndpoints(s.requireAdminAuth(s.handleLandlockCheck)))
+	s.mux.HandleFunc("/api/v1/sandbox/ebpf/execve", s.requireSimulatedEndpoints(s.requireAdminAuth(s.handleEBPFExecve)))
 
 	// Shadow IT & Unmanaged Asset Discovery (Rogue MCP Servers & Environment Variables)
 	s.mux.HandleFunc("/api/v1/discovery/shadow-it/scan", s.handleShadowITScan)

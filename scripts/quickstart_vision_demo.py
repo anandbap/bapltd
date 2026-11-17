@@ -63,6 +63,10 @@ def print_banner(step_num, title):
 
 def http_req(url, method="GET", data=None, headers=None, retries=2):
     hdrs = dict(headers or {})
+    # BAP-1098: simulated identity/attestation/sandbox endpoints and audit lists are admin-only.
+    if any(p in url for p in ("/api/v1/spiffe/", "/api/v1/attestation/", "/api/v1/sandbox/",
+                              "/api/v1/audit/notarizations", "/api/v1/audit/worm/manifests")):
+        hdrs.setdefault("X-BAP-Admin-Token", TEST_ADMIN_TOKEN)
     if "Connection" not in hdrs:
         hdrs["Connection"] = "close"
     body_bytes = None

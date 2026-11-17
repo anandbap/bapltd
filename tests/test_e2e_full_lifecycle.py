@@ -40,11 +40,20 @@ CP_PORT = 19250
 CP_URL = f"http://127.0.0.1:{CP_PORT}"
 
 
+ADMIN_ONLY_PATHS = (
+    "/api/v1/spiffe/", "/api/v1/attestation/", "/api/v1/sandbox/",
+    "/api/v1/audit/notarizations", "/api/v1/audit/worm/manifests", "/api/v1/audit/export/siem",
+)
+
+
 def http_req(url, method="GET", data=None, headers=None, retries=2):
     hdrs = dict(headers or {})
     if method == "POST" and url.startswith(CP_URL + "/api/v1/") and (
         "/sessions/" in url or url.endswith("/audit/ingest")
     ):
+        hdrs.setdefault("X-BAP-Admin-Token", TEST_ADMIN_TOKEN)
+    # BAP-1098: simulated identity/attestation/sandbox endpoints and audit read lists are admin-only.
+    if any(p in url for p in ADMIN_ONLY_PATHS):
         hdrs.setdefault("X-BAP-Admin-Token", TEST_ADMIN_TOKEN)
     if "Connection" not in hdrs:
         hdrs["Connection"] = "close"
@@ -112,6 +121,7 @@ class TestE2EFullMissionLifecycle(unittest.TestCase):
                 "-secret", TEST_SECRET,
                 "-admin-token", TEST_ADMIN_TOKEN,
                 "-allow-remote-admin",
+                "-enable-simulated-endpoints",  # BAP-1098: simulations are opt-in (admin only)
                 "-db", db_path,
             ],
             stdout=subprocess.DEVNULL,

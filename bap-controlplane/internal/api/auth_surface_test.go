@@ -59,7 +59,8 @@ func TestSimulatedEndpointsAreDemoOnlyAndAdminOnly(t *testing.T) {
 		}
 	}
 
-	s.SetDemoMode(true)
+	// The dedicated opt-in is enough; demo mode is not required.
+	s.SetSimulatedEndpoints(true)
 	for _, p := range paths {
 		if w := authSurfaceRequest(s,http.MethodPost, p, ""); w.Code != http.StatusUnauthorized {
 			t.Fatalf("POST %s in demo mode without credential = %d, want 401", p, w.Code)

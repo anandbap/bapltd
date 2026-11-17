@@ -808,5 +808,10 @@ Subcommands:
   playback   Replay full chronological grant lifecycle, modes (auto vs HITL) and policy recommendations
   authorize  Submit signed 4-Tuple Task Authorization Envelope and mint least-privilege JIT TaskGrant
   check      Verify (or consume) a TaskGrant for a specific action & resource
-  revoke     Immediately burn one or all TaskGrants in a session`)
+  revoke     Immediately burn one or all TaskGrants in a session
+  approvals  List pending human-approval requests (alias: requests)
+  approve    Approve a pending request by id (human only, one-time code)
+  deny       Deny a pending request by id (human only)
+  autoapprove on|off|status   Optional bounded auto-approve of approve-tier requests (on is human only)
+  policy-sign  Validate, sign and install a permission-policy override (human only)`)
 }

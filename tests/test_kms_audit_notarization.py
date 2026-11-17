@@ -38,6 +38,9 @@ def http_req(url, method="GET", data=None, headers=None):
     hdrs = dict(headers or {})
     if method == "POST" and url.endswith("/api/v1/audit/ingest"):
         hdrs.setdefault("X-BAP-Admin-Token", TEST_ADMIN_TOKEN)
+    # BAP-1098: notarization and WORM manifest lists are admin-only.
+    if "/api/v1/audit/notarizations" in url or "/api/v1/audit/worm/manifests" in url:
+        hdrs.setdefault("X-BAP-Admin-Token", TEST_ADMIN_TOKEN)
     body_bytes = None
     if data is not None:
         if isinstance(data, (dict, list)):

@@ -50,6 +50,7 @@ type Info struct {
 	OS                string `json:"os"`
 	Arch              string `json:"arch"`
 	AllowDevOverrides bool   `json:"allow_dev_overrides"`
+	HeadlessStepUp    bool   `json:"headless_stepup"`
 }
 
 func Get(component string) Info {
@@ -62,6 +63,7 @@ func Get(component string) Info {
 		OS:                runtime.GOOS,
 		Arch:              runtime.GOARCH,
 		AllowDevOverrides: DevOverridesAllowed(),
+		HeadlessStepUp:    HeadlessStepUpAllowed(),
 	}
 }
 

@@ -41,8 +41,9 @@ state is follow-up work.
 - `/api/v1/audit/export/siem`, `/audit/notarizations`, `/audit/worm/manifests` now require the admin credential.
   The SIEM export returned every audit event, including command lines, to any caller.
 - The SPIFFE issue/validate, TPM quote, Landlock and eBPF endpoints are simulations (placeholder certificate, HMAC
-  over a published default secret, in-process path checks). They are served only with `--demo-mode` and only to an
-  authenticated administrator, and are not evidence of attestation or enforcement.
+  over a published default secret, in-process path checks). They are served only with the explicit opt-in
+  `--enable-simulated-endpoints` (or `BAP_ENABLE_SIMULATED_ENDPOINTS=1`; `--demo-mode` also enables them) and only
+  to an authenticated administrator, and are not evidence of attestation or enforcement.
 - The admin token is accepted in a URL only on `/stream` routes (EventSource cannot set headers). Everything else
   needs the `Authorization` header or the dashboard cookie. A short-lived single-use stream ticket is follow-up work.
 - Invalid administrative credentials are throttled per client address (10 per minute, then HTTP 429 with

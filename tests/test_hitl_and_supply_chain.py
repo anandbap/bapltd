@@ -27,6 +27,19 @@ CCHOOK_BIN = os.path.join(REPO_ROOT, "cchook", "interceptor.exe")
 class TestHitlAndSupplyChain(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # BAP-1096: BAP_STEPUP_DECISION is honored only by test-harness binaries built with
+        # -tags headlessstepup. Fail fast with instructions instead of a confusing deny.
+        try:
+            info = json.loads(subprocess.run([BAPEDGE_BIN, "version", "--json"],
+                                             capture_output=True, text=True, timeout=30).stdout)
+        except Exception:
+            info = {}
+        if not info.get("headless_stepup"):
+            raise RuntimeError(
+                "These HITL tests need test-harness binaries. Rebuild with: "
+                ".\\update_binaries.ps1 -AllowDevOverrides \"false\" -HeadlessStepUp \"true\" -SkipUserInstall "
+                "(never install or ship those binaries; rebuild without -HeadlessStepUp afterwards)."
+            )
         cls.test_state_dir = tempfile.mkdtemp(prefix="bap-test-hitl-")
         os.environ["BAP_STATE_DIR"] = cls.test_state_dir
 
