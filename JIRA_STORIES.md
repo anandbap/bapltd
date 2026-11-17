@@ -2,6 +2,78 @@
 
 ## Pilot hardening implementation update (candidate work)
 
+### BAP-1100 — Optional ZSP step-up auto-approve (on/off) (P1)
+
+**Status: IMPLEMENTED — automated verification pending run, 2026-11-17.**
+
+**Problem:** approve-tier ZSP requests need a human decision every time, which is friction on a trusted workstation.
+
+**Delivered:** `bapedge zsp autoapprove on [--duration 1h] | off | status`. OFF by default. Turning it ON is human-only
+(refused inside the agent broker, blocked by the hook, terminal one-time-code challenge). The window is HMAC-signed, capped
+at 8h, and re-checked on every request. It satisfies the approve tier only: policy denies, policy:/grant:/admin: escalations
+and Cedar invariants are unchanged. Grants carry delegation type `auto_approve` (audit concept `ZSP_AUTO_APPROVE_GRANT`).
+
+**Acceptance:**
+- [ ] Off by default; tampered or expired record = off; duration capped at 8h.
+- [ ] Approve-tier request refused without the window, granted with it; `policy:edit` refused either way.
+- [ ] `autoapprove on` classified human-only for the hook; `off`/`status` are not.
+
+**Open:** control-plane (admin) switch and dashboard toggle; per-machine managed default.
+
+### BAP-1096 — An agent must not be able to approve its own step-up (P0)
+
+**Status: IMPLEMENTED — automated verification pending run, 2026-11-17.** Local backlog record, not an external Jira issue.
+
+**Problem:** `bapedge exec --stepup-decision …` and `BAP_STEPUP_DECISION` resolved a human step-up approval without a human;
+`global` persisted a machine-wide trust entry. The broker's denial text advertised the variable; the interceptor honored it too.
+
+**Delivered:** both inputs exist only in `-tags headlessstepup` test-harness builds; shipped builds ignore them and the
+denial text no longer advertises them. CI builds the tagged binaries for the Python suite only and restores shipped binaries.
+
+**Acceptance:**
+- [ ] Shipped `bapedge` and interceptor ignore every `BAP_STEPUP_DECISION` value and refuse the flag (Go tests).
+- [ ] Tagged harness build still honors it so existing HITL suites run.
+- [ ] Release, `build_all_platforms.ps1` and default `update_binaries.ps1` never set the tag.
+- [ ] Live repro on a release-built binary: cross-folder write with the flag/variable is denied.
+
+See [ADMIN_PLANE_HARDENING_BAP-1096-1098.md](docs/ADMIN_PLANE_HARDENING_BAP-1096-1098.md).
+
+### BAP-1097 — Single-use grants stay single-use across linked sessions (P0)
+
+**Status: IMPLEMENTED — automated verification pending run, 2026-11-17.**
+
+**Problem:** linked sessions each hold a replica of a grant; consumption locked per session, so two sessions could both spend the
+last use. Revocation burned one replica; consumption write errors were ignored.
+
+**Delivered:** per-grant workstation-wide spend lock, merge of most-consumed replica state, burn tombstones, fail-closed on
+unrecorded consumption, revocation burns all replicas.
+
+**Acceptance:**
+- [ ] Concurrent spend by two linked sessions succeeds exactly once (15 rounds).
+- [ ] Sibling session sees a burn; revocation burns linked replicas; a restored stale replica cannot revive a burned grant.
+- [ ] Substituted replica (different authority signature) does not alter merged state.
+
+**Open:** per-replica signed/hash-chained state; same-user file-write threat model (BAP-1099 proposed).
+
+### BAP-1098 — Control-plane read surface, simulated endpoints, URL credentials, auth throttling (P0)
+
+**Status: IMPLEMENTED — automated verification pending run, 2026-11-17.**
+
+**Problem:** SIEM export, notarization and WORM manifest lists were unauthenticated; SPIFFE/TPM/Landlock/eBPF stubs were served
+to anyone and overstated attestation; the master admin token was accepted in any URL; no throttling of invalid credentials.
+
+**Delivered:** admin auth on the three read routes; stubs demo-mode + admin only; URL token accepted on `/stream` only; per-address
+throttle (10/min → 429 + Retry-After) that never blocks a valid credential; dev-mode startup warning.
+
+**Acceptance:**
+- [ ] Routes return 401/403 without/with wrong credential and reach the handler with the admin credential.
+- [ ] Simulated endpoints 404 outside demo mode, 401 unauthenticated in demo mode.
+- [ ] URL credential honored only on `/stream`; header always honored.
+- [ ] 15 bad credentials throttled with Retry-After; valid credential unaffected.
+
+**Open / proposed follow-ups:** BAP-1099 signed grant state and storage threat model; short-lived SSE stream ticket; make `prod`
+the default mode; rate limits on unauthenticated enrollment and ingest; managed-policy hook installation.
+
 ### BAP-1090 — Automatic authorization for routine command batches
 
 **Status: DONE — implementation and automated verification, 2026-11-14.**

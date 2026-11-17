@@ -33,6 +33,14 @@ func DevOverridesAllowed() bool {
 	return devOverridesCompiledIn && strings.EqualFold(strings.TrimSpace(AllowDevOverrides), "true")
 }
 
+// HeadlessStepUpAllowed reports whether the BAP_STEPUP_DECISION environment variable and the
+// `--stepup-decision` flag may resolve a human step-up approval without a human (BAP-1096).
+// Both are agent-controllable inputs, so the capability exists only in binaries compiled with
+// `-tags headlessstepup` (automated test harnesses). Release builds always return false.
+func HeadlessStepUpAllowed() bool {
+	return headlessStepUpCompiledIn
+}
+
 type Info struct {
 	Component         string `json:"component"`
 	Version           string `json:"version"`

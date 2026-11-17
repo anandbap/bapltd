@@ -32,7 +32,9 @@ CP_URL = f"http://127.0.0.1:{CP_PORT}"
 
 
 def http_req(url, method="GET", data=None, headers=None):
-    hdrs = headers or {}
+    hdrs = dict(headers or {})
+    # BAP-1098: the simulated identity/attestation/sandbox endpoints are demo-mode + admin only.
+    hdrs.setdefault("Authorization", f"Bearer {TEST_ADMIN_TOKEN}")
     body_bytes = None
     if data is not None:
         if isinstance(data, (dict, list)):

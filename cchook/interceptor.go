@@ -3426,7 +3426,7 @@ func main() {
 
 		// Mutating tools (Edit, Write) outside workspace are strictly forbidden unless step-up approved
 		if (payload.ToolName == "Edit" || payload.ToolName == "Write") && isPathOutsideWorkspace(workspaceRoot, targetFile) {
-			stepUpDec := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_STEPUP_DECISION")))
+			stepUpDec := headlessStepUpDecision()
 			if stepUpDec == "approve" || stepUpDec == "once" || stepUpDec == "allow" || isSessionTrustGranted(sessionID, targetFile, payload.ToolName) {
 				outputDecision("allow", "", fmt.Sprintf("[STEP-UP AUTHORIZED] Human operator authorized modifying file outside workspace: %s", targetFile))
 				return
@@ -3627,7 +3627,7 @@ func main() {
 		target := extractCommandTarget(command)
 		if isMutating && target != "" {
 			if auth, _ := isTargetAuthorized(workspaceRoot, sessionID, target, "write"); !auth {
-				stepUpDec := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_STEPUP_DECISION")))
+				stepUpDec := headlessStepUpDecision()
 				if stepUpDec == "approve" || stepUpDec == "once" || stepUpDec == "allow" {
 					// allowed to proceed to bapedge check
 				} else if stepUpDec == "project" || stepUpDec == "p" {
@@ -3841,7 +3841,7 @@ func main() {
 			if target == "" {
 				target = command
 			}
-			stepUpDec := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_STEPUP_DECISION")))
+			stepUpDec := headlessStepUpDecision()
 			if stepUpDec == "" && os.Getenv("BAP_NON_INTERACTIVE") != "1" && os.Getenv("CI") == "" {
 				hitlDecision := promptTerminalHITL(workspaceRoot, sessionID, target, payload.ToolName)
 				switch hitlDecision {

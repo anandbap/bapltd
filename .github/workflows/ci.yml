@@ -164,6 +164,14 @@ jobs:
         run: |
           python scripts/build_wheel.py --universal
 
+      # BAP-1096: BAP_STEPUP_DECISION / --stepup-decision let a caller approve its own step-up, so
+      # they exist only in binaries built with -tags headlessstepup. The wheel above was built from
+      # the normal binaries; this swap is for the test run only and is reverted afterwards.
+      - name: Rebuild test-harness binaries (headless step-up, tests only)
+        shell: powershell
+        run: |
+          & .\update_binaries.ps1 -AllowDevOverrides "false" -HeadlessStepUp "true" -SkipUserInstall
+
       - name: Run Full Python Test Suite (100+ Tests)
         timeout-minutes: 10
         env:
@@ -177,6 +185,12 @@ jobs:
           BAP_STATE_DIR: ${{ runner.temp }}\bap-ci-state
         run: |
           python -X faulthandler -m unittest discover -v tests
+
+      - name: Restore shipped binaries (no headless step-up)
+        if: always()
+        shell: powershell
+        run: |
+          & .\update_binaries.ps1 -AllowDevOverrides "false" -SkipUserInstall
 
       - name: Check product capability claims
         run: python scripts/check_capability_claims.py

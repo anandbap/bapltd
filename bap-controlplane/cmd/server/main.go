@@ -297,6 +297,9 @@ func runStart(args []string) {
 		}
 		*policyMaxAge = parsed
 	}
+	if !production {
+		log.Printf("[bapcontrolplane] WARNING: mode=%q is a development mode (open self-service OTC enrollment, relaxed startup checks). Never expose it to a network you do not control; use --mode prod (BAP_MODE=prod) for a pilot or hosted deployment.", *mode)
+	}
 	if production {
 		*durable = true
 		if *policyMaxAge == 0 {

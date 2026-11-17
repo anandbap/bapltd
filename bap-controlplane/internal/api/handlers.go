@@ -77,6 +77,8 @@ type Server struct {
 	adminToken          string
 	allowRemoteAdmin    bool
 	demoMode            bool
+	adminThrottleOnce   sync.Once
+	adminThrottleState  *authFailureThrottle
 	lastDemoMu          sync.RWMutex
 	lastDemoAction      *DemoActionRecord
 	envMode             string
@@ -347,7 +349,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/health", s.handleHealth)
 	s.mux.HandleFunc("/.well-known/jwks.json", s.handleJWKS)
 	s.mux.HandleFunc("/api/v1/auth/jwks", s.handleJWKS)
-	s.mux.HandleFunc("/api/v1/audit/export/siem", s.handleExportSIEM)
+	// BAP-1098: the SIEM export carries every audit event, including full command lines.
+	s.mux.HandleFunc("/api/v1/audit/export/siem", s.requireAdminAuth(s.handleExportSIEM))
 	s.mux.HandleFunc("/api/v1/agents/pre-register", s.requireAdminAuth(s.handlePreRegister))
 	s.mux.HandleFunc("/api/v1/agents/register", s.handleRegisterEdge)
 	s.mux.HandleFunc("/api/v1/agents/register-edge", s.handleRegisterEdge)
@@ -468,18 +471,19 @@ func (s *Server) registerRoutes() {
 
 	// Epic 13: Cloud KMS Audit Notarization & Immutable Cold Storage (BAP-1301, BAP-1302)
 	s.mux.HandleFunc("/api/v1/audit/notarize", s.requireAdminAuth(s.handleNotarizeAuditChain))
-	s.mux.HandleFunc("/api/v1/audit/notarizations", s.handleListNotarizations)
+	s.mux.HandleFunc("/api/v1/audit/notarizations", s.requireAdminAuth(s.handleListNotarizations))
 	s.mux.HandleFunc("/api/v1/audit/worm/export", s.requireAdminAuth(s.handleExportWORMArchive))
-	s.mux.HandleFunc("/api/v1/audit/worm/manifests", s.handleListWORMArchives)
+	s.mux.HandleFunc("/api/v1/audit/worm/manifests", s.requireAdminAuth(s.handleListWORMArchives))
 
-	// Epic 11: Distributed SPIFFE/SPIRE Identity Mesh & Hardware Attestation (BAP-1101, BAP-1102)
-	s.mux.HandleFunc("/api/v1/spiffe/issue-svid", s.handleIssueSVID)
-	s.mux.HandleFunc("/api/v1/spiffe/validate", s.handleValidateSVID)
-	s.mux.HandleFunc("/api/v1/attestation/tpm-quote", s.handleVerifyTPMQuote)
-
-	// Epic 12: Kernel-Level System Call Sandboxing — eBPF / Landlock (BAP-1201, BAP-1202)
-	s.mux.HandleFunc("/api/v1/sandbox/landlock/check", s.handleLandlockCheck)
-	s.mux.HandleFunc("/api/v1/sandbox/ebpf/execve", s.handleEBPFExecve)
+	// Epics 11 and 12 below are SIMULATIONS (BAP-1098): the "SVID" is an unsigned placeholder, the
+	// TPM quote is an HMAC over a published default secret, and the Landlock/eBPF checks evaluate
+	// paths in this process. None of them is an attestation or enforcement boundary, so they are
+	// served only in explicit demo mode and only to an authenticated administrator.
+	s.mux.HandleFunc("/api/v1/spiffe/issue-svid", s.requireDemoMode(s.requireAdminAuth(s.handleIssueSVID)))
+	s.mux.HandleFunc("/api/v1/spiffe/validate", s.requireDemoMode(s.requireAdminAuth(s.handleValidateSVID)))
+	s.mux.HandleFunc("/api/v1/attestation/tpm-quote", s.requireDemoMode(s.requireAdminAuth(s.handleVerifyTPMQuote)))
+	s.mux.HandleFunc("/api/v1/sandbox/landlock/check", s.requireDemoMode(s.requireAdminAuth(s.handleLandlockCheck)))
+	s.mux.HandleFunc("/api/v1/sandbox/ebpf/execve", s.requireDemoMode(s.requireAdminAuth(s.handleEBPFExecve)))
 
 	// Shadow IT & Unmanaged Asset Discovery (Rogue MCP Servers & Environment Variables)
 	s.mux.HandleFunc("/api/v1/discovery/shadow-it/scan", s.handleShadowITScan)
@@ -4985,11 +4989,16 @@ func telemetryViewerCredential(r *http.Request) string {
 	if cred := adminCredential(r); cred != "" {
 		return cred
 	}
-	if q := r.URL.Query().Get("token"); q != "" {
-		return q
-	}
-	if q := r.URL.Query().Get("admin_token"); q != "" {
-		return q
+	// A credential in a URL lands in access logs, proxies and browser history. Only the
+	// server-sent-event streams, whose EventSource API cannot set headers, may still carry it
+	// there (BAP-1098); every other route needs the Authorization header or the dashboard cookie.
+	if strings.HasSuffix(r.URL.Path, "/stream") {
+		if q := r.URL.Query().Get("token"); q != "" {
+			return q
+		}
+		if q := r.URL.Query().Get("admin_token"); q != "" {
+			return q
+		}
 	}
 	if c, err := r.Cookie("bap_admin_token"); err == nil && c.Value != "" {
 		return c.Value
@@ -5034,8 +5043,20 @@ func (s *Server) requireAdminAuth(next http.HandlerFunc) http.HandlerFunc {
 			writeError(w, http.StatusForbidden, "Remote administration is disabled")
 			return
 		}
-		if !s.isAdminCaller(r) {
+		if s.isAdminCaller(r) {
+			s.adminThrottle().reset(clientAddress(r))
+		} else {
 			drainSmallRequestBody(r)
+			// Throttle repeated invalid credentials and stop each one from writing an audit
+			// event once the client is over the limit; a valid credential is never throttled.
+			// Only a presented-but-wrong credential is a guess; an absent one is not counted.
+			if adminCredential(r) != "" {
+				if over, retry := s.adminThrottle().recordFailure(clientAddress(r)); over {
+					w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retry.Seconds())+1))
+					writeError(w, http.StatusTooManyRequests, "Too many invalid administrative credentials")
+					return
+				}
+			}
 			s.logSecurityAlert(r, "UNAUTHORIZED_ADMIN", "Administrative credential missing or invalid")
 			if adminCredential(r) == "" {
 				w.Header().Set("WWW-Authenticate", `Bearer realm="bap-controlplane-admin"`)

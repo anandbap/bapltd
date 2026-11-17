@@ -962,12 +962,22 @@ func VerifyOrConsumeSessionZSPChecks(
 			return checked, nil
 		}
 
-		for _, g := range grants {
+		// tryGrant evaluates one grant while holding a workstation-wide lock for that grant ID.
+		// A grant is replicated into every linked session directory, so the per-session lock
+		// above cannot serialize two sessions spending the same single-use grant (BAP-1097).
+		// Under the grant lock the freshest (most consumed) on-disk state, including a burn
+		// tombstone, is loaded before the check, and consumption is persisted before success
+		// is reported. It returns true when the search is finished.
+		tryGrant := func(g *types.TaskGrant) bool {
+			if fresh := freshestGrantState(zspDir, sessionID, g); fresh != nil {
+				g = fresh
+				_ = engine.LoadGrant(fresh)
+			}
 			checked, checkErr := checkGrantCoversAll(g)
 			if checkErr == nil {
 				if !consume {
 					matchedGrant = checked
-					return nil
+					return true
 				}
 				primaryRes := resolveZSPCheckResource(checks[0], workspaceRoot, sessionID)
 				proof, consumeErr := engine.ConsumeTaskGrant(g.GrantID, checks[0].Action, primaryRes, fullCommand, processAncestry)
@@ -978,43 +988,54 @@ func VerifyOrConsumeSessionZSPChecks(
 						if proof != nil {
 							updated.ReceiptID = proof.ProofID
 						}
-						for _, sDir := range allLinkedDirs(sessionID, g) {
-							if sDir != "" {
-								_ = saveSessionGrant(zspDir, sDir, updated)
+						if persistErr := persistGrantEverywhere(zspDir, sessionID, updated); persistErr != nil {
+							// An unrecorded consumption could be replayed: fail closed.
+							if firstErr == nil {
+								firstErr = fmt.Errorf("%w: could not record grant consumption: %v", ErrZeroStandingPrivilegeViolation, persistErr)
 							}
+							return false
 						}
 					}
 					matchedGrant = updated
 					consumedProof = proof
-					return nil
+					return true
 				}
 				if errors.Is(consumeErr, ErrGrantExpired) {
 					if updated, ok := engine.GetGrant(g.GrantID); ok {
-						for _, sDir := range allLinkedDirs(sessionID, g) {
-							if sDir != "" {
-								_ = saveSessionGrant(zspDir, sDir, updated)
-							}
-						}
+						_ = persistGrantEverywhere(zspDir, sessionID, updated)
 					}
 				}
 				if firstErr == nil {
 					firstErr = consumeErr
 				}
-				continue
+				return false
 			}
 			if errors.Is(checkErr, ErrGrantExpired) {
 				if updated, ok := engine.GetGrant(g.GrantID); ok {
 					updated.IsBurned = true
 					updated.BurnReason = "TTL Expired"
-					for _, sDir := range allLinkedDirs(sessionID, g) {
-						if sDir != "" {
-							_ = saveSessionGrant(zspDir, sDir, updated)
-						}
-					}
+					_ = persistGrantEverywhere(zspDir, sessionID, updated)
 				}
 			}
 			if firstErr == nil {
 				firstErr = checkErr
+			}
+			return false
+		}
+
+		for _, g := range grants {
+			finished := false
+			if spendErr := withZSPStoreLock(zspDir, "grantspend-"+g.GrantID, func() error {
+				finished = tryGrant(g)
+				return nil
+			}); spendErr != nil {
+				if firstErr == nil {
+					firstErr = spendErr
+				}
+				continue
+			}
+			if finished {
+				return nil
 			}
 		}
 		return nil
@@ -1167,9 +1188,14 @@ func RevokeSessionZSPGrants(zspDir, sessionID, grantID string) (int, error) {
 				g.IsBurned = true
 				g.RemainingUses = 0
 				g.BurnReason = "Revoked by operator"
-				if saveErr := saveSessionGrant(zspDir, sessionID, g); saveErr == nil {
-					revoked++
-				}
+				// Burn every linked replica and write the tombstone, otherwise a linked
+				// session could keep spending a grant the operator just revoked (BAP-1097).
+				_ = withZSPStoreLock(zspDir, "grantspend-"+g.GrantID, func() error {
+					if saveErr := persistGrantEverywhere(zspDir, sessionID, g); saveErr == nil {
+						revoked++
+					}
+					return nil
+				})
 			}
 		}
 		return nil

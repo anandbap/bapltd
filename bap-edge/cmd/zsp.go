@@ -501,6 +501,10 @@ func RunZSP(args []string) error {
 				if active, banner := devOverrideActive(); active {
 					fmt.Fprintln(os.Stderr, banner)
 					delegationType = authz.DelegationDevOverride
+				} else if on, until, _ := authz.AutoApproveStatus(authz.ResolveZSPDir()); on {
+					// BAP-1100: a human enabled step-up auto-approve for a bounded window.
+					fmt.Fprintf(os.Stderr, "[BAP ZSP AUTO-APPROVE ON until %s] Approve-tier requests are granted without a prompt; policy denies and governance escalations still apply.\n", until.Format(time.RFC3339))
+					delegationType = authz.DelegationAutoApprove
 				}
 			}
 			var pendingReq *authz.PendingApproval
@@ -582,6 +586,9 @@ func RunZSP(args []string) error {
 			if delegationType == authz.DelegationDevOverride {
 				zspConcept = "ZSP_DEV_OVERRIDE_GRANT"
 			}
+			if delegationType == authz.DelegationAutoApprove {
+				zspConcept = "ZSP_AUTO_APPROVE_GRANT"
+			}
 		if reusedApprovedGrant {
 			zspConcept = "ZSP_APPROVED_GRANT_REUSED"
 		}
@@ -638,6 +645,9 @@ func RunZSP(args []string) error {
 
 	case "deny":
 		return runZSPDecide(false, rest)
+
+	case "autoapprove":
+		return runZSPAutoApprove(rest)
 
 	case "policy-sign":
 		// BAP-925: install an administrator permission-policy override, HMAC-signed with the PEP secret.

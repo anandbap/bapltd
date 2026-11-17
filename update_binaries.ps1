@@ -1,6 +1,10 @@
 param(
     [string]$Version = "",
     [string]$AllowDevOverrides = "true",
+    # "true" compiles the test-harness-only BAP_STEPUP_DECISION/--stepup-decision path (BAP-1096).
+    # Never use it for a binary that is installed, packaged or published; CI rebuilds with it only
+    # for the Python test run.
+    [string]$HeadlessStepUp = "false",
     [switch]$SkipUserInstall
 )
 $ErrorActionPreference = "Stop"
@@ -31,8 +35,11 @@ try {
     $ldflags = "-s -w -X bap-edge/pkg/version.Version=$Version -X bap-edge/pkg/version.GitCommit=$gitCommit -X bap-edge/pkg/version.BuildDate=$buildDate -X bap-edge/pkg/version.AllowDevOverrides=$AllowDevOverrides"
     Remove-Item -Force "bapedge.exe" -ErrorAction SilentlyContinue
     # Developer override is compiled in only with -tags devoverride (local developer machine). CI passes "false".
+    $tagList = @()
+    if ($AllowDevOverrides -eq "true") { $tagList += "devoverride" }
+    if ($HeadlessStepUp -eq "true") { $tagList += "headlessstepup" }
     $tagArgs = @()
-    if ($AllowDevOverrides -eq "true") { $tagArgs = @("-tags", "devoverride") }
+    if ($tagList.Count -gt 0) { $tagArgs = @("-tags", ($tagList -join ",")) }
     go build @tagArgs -ldflags $ldflags -o bapedge.exe .
 } finally {
     Pop-Location
@@ -61,7 +68,9 @@ try {
 Push-Location "cchook"
 try {
     $ldflags = "-s -w -X 'main.AllowDevOverrides=$AllowDevOverrides'"
-    go build -ldflags $ldflags -o interceptor.exe .
+    $hookTags = @()
+    if ($HeadlessStepUp -eq "true") { $hookTags = @("-tags", "headlessstepup") }
+    go build @hookTags -ldflags $ldflags -o interceptor.exe .
 } finally {
     Pop-Location
 }

@@ -40,6 +40,10 @@ func humanOnlyBAPCommand(command string) (string, bool) {
 			if i+2 < len(toks) && (toks[i+2] == "policy-sign" || toks[i+2] == "approve" || toks[i+2] == "deny") {
 				return "zsp " + toks[i+2], true
 			}
+			// Turning step-up auto-approve ON is a human decision (BAP-1100); off/status are harmless.
+			if i+3 < len(toks) && toks[i+2] == "autoapprove" && toks[i+3] == "on" {
+				return "zsp autoapprove on", true
+			}
 		}
 	}
 	return "", false

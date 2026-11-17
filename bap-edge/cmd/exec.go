@@ -258,7 +258,7 @@ func promptHumanStepUpApproval(ec *execContext, fullCommand, executable, reason 
 	}
 
 	// 3. Automated / Environment Override for CI/CD, headless pipelines, or test harnesses
-	envDecision := strings.ToLower(strings.TrimSpace(os.Getenv("BAP_STEPUP_DECISION")))
+	envDecision := headlessStepUpDecision()
 	if envDecision == "approve" || envDecision == "once" || envDecision == "allow" || envDecision == "o" {
 		return "approve_once"
 	}
@@ -1078,9 +1078,7 @@ func RunExec(args []string) {
 		}
 	}
 
-	if *stepUpFlag != "" {
-		os.Setenv("BAP_STEPUP_DECISION", *stepUpFlag)
-	}
+	applyStepUpFlag(*stepUpFlag)
 
 	bootRes, bootErr := config.BootstrapControlPlane(*serverFlag)
 	if bootErr != nil {
@@ -1467,7 +1465,7 @@ func RunExec(args []string) {
 			if isCrossFolder && targetPath != "" {
 				suggestion = authz.FormatOutOfWorkspaceSuggestion(targetPath, "fs:file:"+authz.CrossFolderAccessType(decomp.ActionType, fullCommand), authz.GetWorkspaceRoot())
 			} else {
-				suggestion = "Action requires Human Step-Up Approval (HITL). In non-interactive environments, authorize via BAP_STEPUP_DECISION=approve or request a BAP Gateway Grant."
+				suggestion = "Action requires Human Step-Up Approval (HITL). Ask the user to approve it (terminal prompt, `bapedge trust`, or the control-plane approval inbox); an agent cannot approve its own escalation."
 			}
 		} else if isCrossFolder && targetPath != "" {
 			suggestion = authz.FormatOutOfWorkspaceSuggestion(targetPath, "fs:file:"+authz.CrossFolderAccessType(decomp.ActionType, fullCommand), authz.GetWorkspaceRoot())

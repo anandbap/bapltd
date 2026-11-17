@@ -51,6 +51,9 @@ func isOutOfBandApproved(env *types.TaskAuthorizationEnvelope) bool {
 		return true
 	case DelegationDevOverride:
 		return DevOverrideActive != nil && DevOverrideActive()
+	case DelegationAutoApprove:
+		// BAP-1100: re-checked on every evaluation; never satisfies the governance gate.
+		return AutoApproveActive != nil && AutoApproveActive()
 	}
 	return false
 }
