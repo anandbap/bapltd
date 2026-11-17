@@ -153,12 +153,25 @@ var (
 	promptTailCancel context.CancelFunc
 )
 
-func promptTailLockPath() string {
-	return filepath.Join(state.Dir(), "antigravity_prompt_tail.lock")
+func promptTailLockPath(sessionIDs ...string) string {
+	sess := ""
+	if len(sessionIDs) > 0 && sessionIDs[0] != "" {
+		sess = "_" + cleanSessionID(sessionIDs[0])
+	}
+	return filepath.Join(state.Dir(), fmt.Sprintf("antigravity_prompt_tail%s.lock", sess))
 }
 
-func isPromptTailerRunningElsewhere() bool {
-	lockFile := promptTailLockPath()
+func cleanSessionID(sessionID string) string {
+	return strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			return r
+		}
+		return '_'
+	}, sessionID)
+}
+
+func isPromptTailerRunningElsewhere(sessionIDs ...string) bool {
+	lockFile := promptTailLockPath(sessionIDs...)
 	data, err := os.ReadFile(lockFile)
 	if err != nil {
 		return false
@@ -181,7 +194,7 @@ func isPromptTailerRunningElsewhere() bool {
 }
 
 func updatePromptTailLock(sessionID string) {
-	lockFile := promptTailLockPath()
+	lockFile := promptTailLockPath(sessionID)
 	lockInfo := map[string]any{
 		"pid":        os.Getpid(),
 		"session_id": sessionID,
@@ -192,8 +205,8 @@ func updatePromptTailLock(sessionID string) {
 	}
 }
 
-func releasePromptTailLock() {
-	lockFile := promptTailLockPath()
+func releasePromptTailLock(sessionIDs ...string) {
+	lockFile := promptTailLockPath(sessionIDs...)
 	if data, err := os.ReadFile(lockFile); err == nil {
 		var lockInfo struct {
 			PID int `json:"pid"`
@@ -238,7 +251,7 @@ func startAntigravityPromptTail(sessionID, serverURL string) func() {
 	if serverURL == "" || sessionID == "" || isTestEnv() {
 		return nil
 	}
-	if isPromptTailerRunningElsewhere() {
+	if isPromptTailerRunningElsewhere(sessionID) {
 		return nil
 	}
 	promptTailMu.Lock()
@@ -257,7 +270,7 @@ func startAntigravityPromptTail(sessionID, serverURL string) func() {
 func runAntigravityPromptTailLoop(ctx context.Context, sessionID, serverURL string) {
 	updatePromptTailLock(sessionID)
 	defer func() {
-		releasePromptTailLock()
+		releasePromptTailLock(sessionID)
 		promptTailMu.Lock()
 		promptTailActive = false
 		promptTailCancel = nil
@@ -268,9 +281,30 @@ func runAntigravityPromptTailLoop(ctx context.Context, sessionID, serverURL stri
 	if err != nil || home == "" {
 		return
 	}
-	searchRoots := []string{
-		filepath.Join(home, ".gemini", "antigravity-cli", "brain"),
-		filepath.Join(home, ".gemini", "antigravity", "brain"),
+
+	isIDE := strings.Contains(strings.ToLower(sessionID), "ide")
+	isCLI := strings.Contains(strings.ToLower(sessionID), "cli")
+
+	searchRoots := []string{}
+	if isCLI {
+		cliRoot := filepath.Join(home, ".gemini", "antigravity-cli", "brain")
+		if fi, err := os.Stat(cliRoot); err == nil && fi.IsDir() {
+			searchRoots = append(searchRoots, cliRoot)
+		} else {
+			searchRoots = append(searchRoots, filepath.Join(home, ".gemini", "antigravity", "brain"))
+		}
+	} else if isIDE {
+		searchRoots = append(searchRoots, filepath.Join(home, ".gemini", "antigravity", "brain"))
+	} else {
+		searchRoots = []string{
+			filepath.Join(home, ".gemini", "antigravity-cli", "brain"),
+			filepath.Join(home, ".gemini", "antigravity", "brain"),
+		}
+	}
+
+	producer := "antigravity-cli"
+	if isIDE {
+		producer = "antigravity-ide"
 	}
 
 	// Only prompts typed after this tailer started belong to this session. Everything already in
@@ -326,7 +360,7 @@ func runAntigravityPromptTailLoop(ctx context.Context, sessionID, serverURL stri
 						payload := map[string]any{
 							"session_id":             sessionID,
 							"user_prompt":            userReq,
-							"producer":               "antigravity-cli",
+							"producer":               producer,
 							"prompt_hash":            pHash,
 							"prompt_capture_enabled": true,
 							"intent": map[string]any{
@@ -447,8 +481,8 @@ func readNewTranscriptPrompts(path string, offsets map[string]int64) (prompts []
 }
 
 // baselineTranscripts records the current end of every existing transcript so history is never
-// replayed. A transcript touched in the last minute is the conversation that triggered this
-// session, so its final prompt (only) is reported through report.
+// replayed into a new session. A transcript touched in the last minute is the conversation that
+// triggered this session, so its final prompt (only) is reported through report if not already claimed.
 func baselineTranscripts(roots []string, offsets map[string]int64, now time.Time, report func(prompt string)) {
 	for _, root := range roots {
 		entries, err := os.ReadDir(root)

@@ -172,7 +172,37 @@ func decomposeGit(tokens []string) DecomposedAction {
 	}
 
 	switch sub {
-	case "status", "log", "diff", "show", "branch", "rev-parse", "describe", "tag":
+	case "status", "log", "diff", "show", "branch", "rev-parse", "describe", "tag",
+		"remote", "symbolic-ref", "merge-base", "rev-list", "cat-file", "ls-remote",
+		"ls-files", "ls-tree", "check-ref-format", "var", "name-rev":
+		if sub == "remote" && len(tokens) > 2 {
+			remoteVerb := strings.ToLower(tokens[2])
+			switch remoteVerb {
+			case "add", "rename", "remove", "rm", "set-head", "set-branches", "set-url", "prune":
+				return DecomposedAction{
+					CanonicalAction:   "git:remote:write",
+					CanonicalResource: "repo:local",
+					ActionType:        "write",
+					TargetEntity:      remoteVerb,
+				}
+			}
+		}
+		if sub == "symbolic-ref" {
+			nonFlags := []string{}
+			for _, t := range tokens[2:] {
+				if !strings.HasPrefix(t, "-") {
+					nonFlags = append(nonFlags, t)
+				}
+			}
+			if len(nonFlags) >= 2 {
+				return DecomposedAction{
+					CanonicalAction:   "git:symbolic-ref:write",
+					CanonicalResource: "repo:local",
+					ActionType:        "write",
+					TargetEntity:      nonFlags[0],
+				}
+			}
+		}
 		return DecomposedAction{
 			CanonicalAction:   "git:inspect:read",
 			CanonicalResource: "repo:local",

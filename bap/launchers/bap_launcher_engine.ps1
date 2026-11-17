@@ -959,10 +959,10 @@ function Invoke-BapGovernedSession {
         Write-Host "[+] Target Executable: $TargetBin" -ForegroundColor Gray
 
         # 7. Take Transactional Custody of Configuration Files (Primary Session)
-        if (-not $isSecondary) {
-            $filesSpec = & $ConfigureFiles $Workspace $SessionId
-            $trackedList = @()
+        $filesSpec = & $ConfigureFiles $Workspace $SessionId
+        $trackedList = @()
 
+        if (-not $isSecondary) {
             foreach ($spec in $filesSpec) {
                 $targetFile = [string]$spec.Path
                 $bapContent = [string]$spec.Content
@@ -993,6 +993,23 @@ function Invoke-BapGovernedSession {
                     bap_content_b64  = [Convert]::ToBase64String($bapBytes)
                 }
             }
+        } else {
+            # For secondary sessions (e.g. IDE running alongside CLI), ensure mode-specific configs exist
+            foreach ($spec in $filesSpec) {
+                $targetFile = [string]$spec.Path
+                $bapContent = [string]$spec.Content
+                $isSharedPolicy = ($targetFile -like "*GEMINI.md*" -or $targetFile -like "*AGENTS.md*" -or $targetFile -like "*CLAUDE.md*")
+                if (-not $isSharedPolicy) {
+                    $fDir = Split-Path -Parent $targetFile
+                    if (-not [string]::IsNullOrWhiteSpace($fDir) -and -not (Test-Path -LiteralPath $fDir)) {
+                        New-Item -ItemType Directory -Path $fDir -Force | Out-Null
+                    }
+                    if (-not (Test-Path -LiteralPath $targetFile)) {
+                        Write-AtomicText -Path $targetFile -Text $bapContent
+                    }
+                }
+            }
+        }
 
             $RecoveryRecord = [ordered]@{
                 version              = 2

@@ -121,43 +121,13 @@ func findActiveNativeSession(appID string, ppid int) string {
 			}
 			if json.Unmarshal(data, &sInfo) == nil && sInfo.SessionID != "" {
 				if normApp == "" || normalizeClientAppID(sInfo.AppID) == normApp || strings.EqualFold(sInfo.AppID, appID) {
-					if isProcessAlive(sInfo.PID) || IsWatcherAlive(sInfo.SessionID) {
+					if ppid > 0 && sInfo.PID > 0 {
+						if sInfo.PID == ppid || isDescendantOf(ppid, sInfo.PID, byPID) || isDescendantOf(sInfo.PID, ppid, byPID) {
+							return sInfo.SessionID
+						}
+					} else if isProcessAlive(sInfo.PID) || IsWatcherAlive(sInfo.SessionID) {
 						return sInfo.SessionID
 					}
-				}
-			}
-		}
-	}
-
-	// 3. Check for any active live session for this app
-	for _, dir := range sessionDirs {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") || strings.HasPrefix(e.Name(), "pid-") {
-				continue
-			}
-			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
-			if err != nil {
-				continue
-			}
-			var sInfo struct {
-				SessionID string    `json:"session_id"`
-				PID       int       `json:"pid"`
-				AppID     string    `json:"app_id"`
-				StartedAt time.Time `json:"started_at"`
-			}
-			if json.Unmarshal(data, &sInfo) == nil && sInfo.SessionID != "" {
-				if strings.HasPrefix(sInfo.SessionID, "observed-") {
-					continue
-				}
-				if normApp != "" && normalizeClientAppID(sInfo.AppID) != normApp && !strings.EqualFold(sInfo.AppID, appID) {
-					continue
-				}
-				if isProcessAlive(sInfo.PID) && time.Since(sInfo.StartedAt) < 30*time.Minute {
-					return sInfo.SessionID
 				}
 			}
 		}

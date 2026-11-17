@@ -133,6 +133,32 @@ func automaticGitInspection(args []string) bool {
 				}
 			}
 		}
+	case "remote":
+		if len(args) > 2 {
+			switch strings.ToLower(args[2]) {
+			case "add", "rename", "remove", "rm", "set-head", "set-branches", "set-url", "prune":
+				return false
+			}
+		}
+		return true
+	case "symbolic-ref":
+		nonFlags := 0
+		for _, arg := range args[2:] {
+			if !strings.HasPrefix(arg, "-") {
+				nonFlags++
+			}
+		}
+		if nonFlags > 1 {
+			return false
+		}
+		return true
+	case "rev-parse", "merge-base", "describe":
+		for _, arg := range args[2:] {
+			if strings.HasPrefix(arg, "--output") || strings.HasPrefix(arg, "-O") {
+				return false
+			}
+		}
+		return true
 	case "branch":
 		for _, arg := range args[2:] {
 			switch arg {

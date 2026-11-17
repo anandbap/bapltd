@@ -1048,17 +1048,13 @@ func RunExec(args []string) {
 	}
 
 	if *sessionFlag == "" {
-		if *sourceFlag == "antigravity" {
-			*sessionFlag = "sess-antigravity-active"
-		} else {
-			prefix := *sourceFlag
-			if prefix == "" {
-				prefix = "cli"
-			}
-			*sessionFlag = fmt.Sprintf("sess-%s-%d", prefix, os.Getpid())
-			if observed.PID > 0 {
-				*sessionFlag = observedSessionID(observationHost(), observed)
-			}
+		prefix := *sourceFlag
+		if prefix == "" {
+			prefix = "cli"
+		}
+		*sessionFlag = fmt.Sprintf("sess-%s-%d", prefix, os.Getpid())
+		if observed.PID > 0 {
+			*sessionFlag = observedSessionID(observationHost(), observed)
 		}
 	}
 

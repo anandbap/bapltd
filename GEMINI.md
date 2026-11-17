@@ -1,4 +1,4 @@
-# BAP Zero-Trust Policy & Enterprise Governance for Antigravity (Governed Session: $SessionId)
+# BAP Zero-Trust Policy & Enterprise Governance for Antigravity
 
 This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (bapedge.exe).
 
@@ -14,9 +14,28 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
 4. **Network Egress & Execution Broker**:
    - All shell executions MUST run through the BAP Edge Execution Broker: `bapedge.exe exec "<command>"`.
    - Raw network exfiltration utilities (`curl`, `wget`, `nc`, raw sockets) are strictly prohibited; external API access must route through the BAP Gateway PEP.
-5. **Zero-Trust Policy Enforcement**:
+5. **Zero-Trust Policy Enforcement & JIT Task Grants**:
    - Commands are evaluated against Cedar invariants before execution.
-   - If a command is denied, inspect the suggestion in the structured response.
-6. **Identity & Audit Logging**:
+   - **Zero Standing Privileges (ZSP)**: The agent starts with zero standing execution permissions.
+   - **Read-Only Inspection**: Local read-only project inspection (`git status`, `git log`, `git diff`, directory listing, file viewing) is permitted automatically.
+   - **Mutating Operations**: When executing modifying operations (edits, builds, commits, package installs) or if a command returns `ZeroStandingPrivilegeViolation`:
+     1. Do **NOT** search for workaround shells or evasion techniques.
+     2. Request a policy-evaluated JIT TaskGrant:
+        ```bash
+        bapedge.exe zsp authorize --session-id "${env:BAP_SESSION_ID}" --mission TASK_EXECUTION --goal "<intent summary>" --actions "<action>" --resources workspace://current
+        ```
+        *(Or invoke the native `bap_request_task_grant` MCP tool).*
+     3. Requesting a grant is **NOT** a self-approval or override—it submits your envelope to the BAP Policy Enforcement Point (PEP) for automated Cedar verification.
+     4. Once granted, execute through the broker: `bapedge.exe exec "<command>"`.
+6. **Multi-Layer Defense-in-Depth & Policy Protection**:
+   - Instruction and policy files (`GEMINI.md`, `CLAUDE.md`, `AGENTS.md`, `policy.cedar`, `.bap/pins.json`) are tamper-proof and actively defended across 5 layers:
+     - **Layer 1 (In-Harness Tool Hooks)**: Tool write/edit attempts targeting policy files are blocked before execution.
+     - **Layer 2 (Execution Broker)**: `bapedge exec` evaluates commands against Cedar invariants, blocking file overwrites or redirects to policy files.
+     - **Layer 3 (Cryptographic FIM & Pinning)**: `.bap/pins.json` verifies SHA-256 hashes in real time. Any unverified drift immediately halts execution fail-closed with `HashMismatchError`.
+     - **Layer 4 (Anomaly Risk Engine)**: Tampering attempts trigger `DENIED_TAMPER` alerts and escalate the session threat score to CRITICAL.
+     - **Layer 5 (Control Plane Attestation)**: The central control plane validates cryptographic attestation and revokes compromised sessions.
+7. **Identity & Audit Logging**:
    - LTD_SOURCE=antigravity
-   - BAP_SESSION_ID=$SessionId
+   - BAP_SESSION_ID=${env:BAP_SESSION_ID:-sess-antigravity-active}
+8. **Developer Override & Agent Immunity**:
+   - Autonomous agents are **STRICTLY FORBIDDEN** from executing `bapedge dev-override on`. That command requires interactive human authorization.
