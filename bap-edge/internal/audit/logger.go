@@ -43,11 +43,13 @@ type AuditEntry struct {
 	CanonicalResource string          `json:"canonical_resource,omitempty"`
 	ContentHash       string          `json:"content_hash,omitempty"`
 	// Delegation Lineage & Attenuation (BAP-532)
-	Lineage       []string `json:"lineage,omitempty"`
-	LineageTree   string   `json:"lineage_tree,omitempty"`
-	RootAgentID   string   `json:"root_agent_id,omitempty"`
-	ParentGrantID string   `json:"parent_grant_id,omitempty"`
-	GrantID       string   `json:"grant_id,omitempty"`
+	Lineage             []string `json:"lineage,omitempty"`
+	LineageTree         string   `json:"lineage_tree,omitempty"`
+	RootAgentID         string   `json:"root_agent_id,omitempty"`
+	ParentGrantID       string   `json:"parent_grant_id,omitempty"`
+	GrantID             string   `json:"grant_id,omitempty"`
+	RequestingSessionID string   `json:"requesting_session_id,omitempty"`
+	LinkedSessionIDs    []string `json:"linked_session_ids,omitempty"`
 	// ZSP Scope Attenuation & Concept Telemetry
 	NarrowingApplied bool     `json:"narrowing_applied,omitempty"`
 	NarrowingReason  string   `json:"narrowing_reason,omitempty"`

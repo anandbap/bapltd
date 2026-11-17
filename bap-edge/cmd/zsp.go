@@ -123,6 +123,30 @@ func resolveDefaultZSPSessionID(explicit string) string {
 	return fmt.Sprintf("sess-agent-%d", ppid)
 }
 
+func resolveRequestingSessionID(targetSession, clientType string) string {
+	if s := strings.TrimSpace(os.Getenv("BAP_SESSION_ID")); s != "" && s != targetSession {
+		return s
+	}
+	if s := strings.TrimSpace(os.Getenv("LTD_SESSION_ID")); s != "" && s != targetSession {
+		return s
+	}
+	ppid := os.Getppid()
+	if existing := findActiveNativeSession(clientType, ppid); existing != "" && existing != targetSession {
+		return existing
+	}
+	for _, cand := range []string{state.WorkspaceSessionPath(), filepath.Join(".bap", "session.json")} {
+		if data, err := os.ReadFile(cand); err == nil {
+			var info struct {
+				SessionID string `json:"session_id"`
+			}
+			if json.Unmarshal(data, &info) == nil && info.SessionID != "" && info.SessionID != targetSession {
+				return info.SessionID
+			}
+		}
+	}
+	return targetSession
+}
+
 func splitCSVFlags(raw string) []string {
 	var out []string
 	for _, part := range strings.Split(raw, ",") {
@@ -220,6 +244,12 @@ func RunZSP(args []string) error {
 				}
 				fmt.Printf("  [%d] %s [%s]\n", idx+1, g.GrantID, mode)
 				fmt.Printf("      Session/Agent: %s (%s)\n", g.SessionID, g.ClientType)
+				if g.RequestingSessionID != "" && g.RequestingSessionID != g.SessionID {
+					fmt.Printf("      Requesting:    %s\n", g.RequestingSessionID)
+				}
+				if len(g.LinkedSessionIDs) > 1 {
+					fmt.Printf("      Linked:        %v\n", g.LinkedSessionIDs)
+				}
 				fmt.Printf("      Scopes:        actions=%v, resources=%v\n", g.AllowedActions, g.AllowedResources)
 				fmt.Printf("      Lifecycle:     %s\n", statusStr)
 				if g.ConsumedCmd != "" {
@@ -408,6 +438,7 @@ func RunZSP(args []string) error {
 	case "authorize", "request":
 		fs := flag.NewFlagSet("zsp authorize", flag.ContinueOnError)
 		sessFlag := fs.String("session-id", "", "Session ID")
+		reqSessFlag := fs.String("requesting-session-id", "", "Requesting agent session ID")
 		clientFlag := fs.String("client", "claude-code", "Agent client type")
 		missionFlag := fs.String("mission", "TASK_EXECUTION", "Primary mission (e.g. CODE_INSPECTION, BUG_FIX)")
 		goalFlag := fs.String("goal", "", "Declared task goal")
@@ -433,6 +464,10 @@ func RunZSP(args []string) error {
 			}
 		})
 		sessionID := resolveDefaultZSPSessionID(*sessFlag)
+		requestingSessionID := strings.TrimSpace(*reqSessFlag)
+		if requestingSessionID == "" {
+			requestingSessionID = resolveRequestingSessionID(sessionID, *clientFlag)
+		}
 		clientType := normalizeZSPClientType(*clientFlag)
 		actions := splitCSVFlags(*actionsFlag)
 		resources := splitCSVFlags(*resourcesFlag)
@@ -482,6 +517,7 @@ func RunZSP(args []string) error {
 			delegationType,
 			maxUses,
 			*ttlFlag,
+			requestingSessionID,
 		)
 		if err != nil && errors.Is(err, authz.ErrHighRiskApprovalRequired) && !inBroker && isTerminal(os.Stdin) {
 			fmt.Fprintf(os.Stderr, "\n[BAP HITL ESCALATION] %v\n", err)
@@ -499,6 +535,7 @@ func RunZSP(args []string) error {
 					"human_interactive_oob",
 					maxUses,
 					*ttlFlag,
+					requestingSessionID,
 				)
 			}
 		}
@@ -552,7 +589,7 @@ func RunZSP(args []string) error {
 			decision = "ALLOWED-LIMITED"
 			zspConcept = "ZSP_SCOPE_NARROWED"
 		}
-		recordZSPAuditEvent(sessionID, clientType, grant.RequestedActions, grant.AllowedActions, grant.NarrowingApplied, grant.NarrowingReason, grant.GrantID, decision, grant.NarrowingReason, zspConcept)
+		recordZSPAuditEvent(sessionID, clientType, grant.RequestedActions, grant.AllowedActions, grant.NarrowingApplied, grant.NarrowingReason, grant.GrantID, decision, grant.NarrowingReason, zspConcept, requestingSessionID, grant.LinkedSessionIDs)
 		if *jsonFlag {
 			data, _ := json.MarshalIndent(map[string]any{
 				"allowed":           true,
@@ -579,6 +616,13 @@ func RunZSP(args []string) error {
 		}
 		fmt.Printf("  Grant ID:          %s\n", grant.GrantID)
 		fmt.Printf("  Envelope ID:       %s\n", grant.EnvelopeID)
+		fmt.Printf("  Session ID:        %s\n", grant.SessionID)
+		if grant.RequestingSessionID != "" && grant.RequestingSessionID != grant.SessionID {
+			fmt.Printf("  Requesting Session:%s\n", grant.RequestingSessionID)
+		}
+		if len(grant.LinkedSessionIDs) > 1 {
+			fmt.Printf("  Linked Sessions:   %v\n", grant.LinkedSessionIDs)
+		}
 		fmt.Printf("  Principal SVID:    %s\n", grant.PrincipalSVID)
 		fmt.Printf("  Human Owner:       %s\n", grant.HumanOwner)
 		fmt.Printf("  Allowed Actions:   %v\n", grant.AllowedActions)
@@ -669,36 +713,58 @@ func recordZSPAuditEvent(
 	requestedActions, allowedActions []string,
 	narrowingApplied bool,
 	narrowingReason, grantID, decision, reason, zspConcept string,
+	optSess ...any,
 ) {
+	requestingSessionID := ""
+	var linkedSessions []string
+	if len(optSess) > 0 {
+		if s, ok := optSess[0].(string); ok {
+			requestingSessionID = s
+		}
+	}
+	if len(optSess) > 1 {
+		if ls, ok := optSess[1].([]string); ok {
+			linkedSessions = ls
+		}
+	}
+
 	fullCmd := fmt.Sprintf("bapedge zsp authorize --actions %s", strings.Join(requestedActions, ","))
 	if narrowingApplied {
 		fullCmd = fmt.Sprintf("bapedge zsp authorize --actions %s [NARROWED -> %s]", strings.Join(requestedActions, ","), strings.Join(allowedActions, ","))
 	}
 	entry := audit.AuditEntry{
-		EventID:           fmt.Sprintf("zsp-%d", time.Now().UnixNano()),
-		ReportingLayer:    "broker",
-		SessionID:         sessionID,
-		Timestamp:         time.Now().UTC(),
-		Source:            clientType,
-		ClientPID:         os.Getppid(),
-		Executable:        "bapedge",
-		Arguments:         "zsp authorize",
-		FullCommand:       fullCmd,
-		Decision:          decision,
-		Reason:            reason,
-		CanonicalAction:   "zsp:authorize",
-		CanonicalResource: "workspace://current",
-		GrantID:           grantID,
-		NarrowingApplied:  narrowingApplied,
-		NarrowingReason:   narrowingReason,
-		RequestedActions:  requestedActions,
-		AllowedActions:    allowedActions,
-		ZSPConcept:        zspConcept,
+		EventID:             fmt.Sprintf("zsp-%d", time.Now().UnixNano()),
+		ReportingLayer:      "broker",
+		SessionID:           sessionID,
+		RequestingSessionID: requestingSessionID,
+		LinkedSessionIDs:    linkedSessions,
+		Timestamp:           time.Now().UTC(),
+		Source:              clientType,
+		ClientPID:           os.Getppid(),
+		Executable:          "bapedge",
+		Arguments:           "zsp authorize",
+		FullCommand:         fullCmd,
+		Decision:            decision,
+		Reason:              reason,
+		CanonicalAction:     "zsp:authorize",
+		CanonicalResource:   "workspace://current",
+		GrantID:             grantID,
+		NarrowingApplied:    narrowingApplied,
+		NarrowingReason:     narrowingReason,
+		RequestedActions:    requestedActions,
+		AllowedActions:      allowedActions,
+		ZSPConcept:          zspConcept,
 	}
 	if reason == "" {
 		entry.Reason = fmt.Sprintf("TaskGrant %s minted (%v)", grantID, allowedActions)
 	}
 	_ = audit.Log(&entry, "")
+	if requestingSessionID != "" && requestingSessionID != sessionID {
+		reqEntry := entry
+		reqEntry.EventID = fmt.Sprintf("zsp-req-%d", time.Now().UnixNano())
+		reqEntry.SessionID = requestingSessionID
+		_ = audit.Log(&reqEntry, "")
+	}
 	ep := config.ResolveEndpoints()
 	if ep.ControlPlaneURL != "" {
 		_, _, _ = audit.Transmit(entry, ep.ControlPlaneURL, "")

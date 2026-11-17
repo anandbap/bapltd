@@ -358,11 +358,11 @@ func handleRequest(w *bufio.Writer, req JSONRPCRequest, authorizer *authz.Author
 			sendResult(w, req.ID, res)
 
 		case "bap_request_task_grant":
-			res := handleRequestTaskGrant(params.Arguments)
+			res := handleRequestTaskGrant(params.Arguments, cfg)
 			sendResult(w, req.ID, res)
 
 		case "bap_zsp_status":
-			res := handleZSPStatus(params.Arguments)
+			res := handleZSPStatus(params.Arguments, cfg)
 			sendResult(w, req.ID, res)
 
 		case reportRequestTool:
@@ -593,9 +593,12 @@ func getStatus(cfg ServerConfig) CallToolResult {
 	}
 }
 
-func resolveMCPSessionID(args map[string]interface{}) string {
+func resolveMCPSessionID(args map[string]interface{}, cfg ServerConfig) string {
 	if s, ok := args["session_id"].(string); ok && strings.TrimSpace(s) != "" {
 		return strings.TrimSpace(s)
+	}
+	if cfg.SessionID != "" {
+		return cfg.SessionID
 	}
 	if s := strings.TrimSpace(os.Getenv("BAP_SESSION_ID")); s != "" {
 		return s
@@ -606,8 +609,12 @@ func resolveMCPSessionID(args map[string]interface{}) string {
 	return fmt.Sprintf("sess-mcp-%d", os.Getpid())
 }
 
-func handleRequestTaskGrant(args map[string]interface{}) CallToolResult {
-	sessionID := resolveMCPSessionID(args)
+func handleRequestTaskGrant(args map[string]interface{}, cfg ServerConfig) CallToolResult {
+	sessionID := resolveMCPSessionID(args, cfg)
+	requestingSessionID := cfg.SessionID
+	if requestingSessionID == "" {
+		requestingSessionID = sessionID
+	}
 	mission, _ := args["mission"].(string)
 	goal, _ := args["goal"].(string)
 	actionsStr, _ := args["actions"].(string)
@@ -632,9 +639,10 @@ func handleRequestTaskGrant(args map[string]interface{}) CallToolResult {
 			resources = append(resources, t)
 		}
 	}
-	grant, env, err := authz.SubmitTaskEnvelope(
+	grant, env, err := authz.SubmitTaskEnvelopeWithDelegation(
 		authz.ResolveZSPDir(), sessionID, "mcp-agent", mission, goal, goal,
-		actions, resources, "", maxUses, 300*time.Second,
+		actions, resources, "", "mcp_tool_invocation", maxUses, 300*time.Second,
+		requestingSessionID,
 	)
 	if err != nil {
 		return CallToolResult{
@@ -653,8 +661,8 @@ func handleRequestTaskGrant(args map[string]interface{}) CallToolResult {
 	}
 }
 
-func handleZSPStatus(args map[string]interface{}) CallToolResult {
-	sessionID := resolveMCPSessionID(args)
+func handleZSPStatus(args map[string]interface{}, cfg ServerConfig) CallToolResult {
+	sessionID := resolveMCPSessionID(args, cfg)
 	rep, err := authz.ListSessionZSPStatus(authz.ResolveZSPDir(), sessionID, "mcp-agent")
 	if err != nil {
 		return CallToolResult{

@@ -223,25 +223,29 @@ type PermissionAsk struct {
 // TaskAuthorizationEnvelope represents the atomic 4-tuple zero-trust request contract (BAP-916).
 // Tuple: (Who, AuthorizedBy, Intent, PermissionAsk) signed by the agent's cryptographic key.
 type TaskAuthorizationEnvelope struct {
-	EnvelopeID     string                 `json:"envelope_id"`
-	Identity       CryptographicAgentSVID `json:"identity"`        // 1. Who you are
-	AuthorizedBy   DelegationIdentity     `json:"authorized_by"`   // 2. Who authorized this
-	Intent         TaskIntent             `json:"intent"`          // 3. What is the declared intent
-	PermissionAsk  PermissionAsk          `json:"permission_ask"`  // 4. Asked permissions (starting set = 0)
-	EnvelopeHash   string                 `json:"envelope_hash"`   // SHA-256 of canonical fields
-	AgentSignature string                 `json:"agent_signature"` // Ed25519 signature by Agent private key
-	Timestamp      time.Time              `json:"timestamp"`
+	EnvelopeID          string                 `json:"envelope_id"`
+	Identity            CryptographicAgentSVID `json:"identity"`                 // 1. Who you are
+	AuthorizedBy        DelegationIdentity     `json:"authorized_by"`            // 2. Who authorized this
+	Intent              TaskIntent             `json:"intent"`                   // 3. What is the declared intent
+	PermissionAsk       PermissionAsk          `json:"permission_ask"`           // 4. Asked permissions (starting set = 0)
+	RequestingSessionID string                 `json:"requesting_session_id,omitempty"` // Session that requested this grant
+	LinkedSessionIDs    []string               `json:"linked_session_ids,omitempty"`    // Cross-session links
+	EnvelopeHash        string                 `json:"envelope_hash"`            // SHA-256 of canonical fields
+	AgentSignature      string                 `json:"agent_signature"`          // Ed25519 signature by Agent private key
+	Timestamp           time.Time              `json:"timestamp"`
 }
 
 // TaskGrant represents an ephemeral, task-scoped grant token with zero standing privilege (BAP-917).
 type TaskGrant struct {
-	CommandHash        string    `json:"command_hash,omitempty"`
-	WorkspaceRoot      string    `json:"workspace_root,omitempty"`
-	PolicyHash         string    `json:"policy_hash,omitempty"`
-	GrantID            string    `json:"grant_id"`
-	EnvelopeID         string    `json:"envelope_id"`
-	SessionID          string    `json:"session_id"`
-	PrincipalSVID      string    `json:"principal_svid"`
+	CommandHash         string    `json:"command_hash,omitempty"`
+	WorkspaceRoot       string    `json:"workspace_root,omitempty"`
+	PolicyHash          string    `json:"policy_hash,omitempty"`
+	GrantID             string    `json:"grant_id"`
+	EnvelopeID          string    `json:"envelope_id"`
+	SessionID           string    `json:"session_id"`
+	RequestingSessionID string    `json:"requesting_session_id,omitempty"`
+	LinkedSessionIDs    []string  `json:"linked_session_ids,omitempty"`
+	PrincipalSVID       string    `json:"principal_svid"`
 	HumanOwner         string    `json:"human_owner"`
 	AllowedActions     []string  `json:"allowed_actions"`
 	AllowedResources   []string  `json:"allowed_resources"`

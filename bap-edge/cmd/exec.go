@@ -1048,6 +1048,26 @@ func RunExec(args []string) {
 	}
 
 	if *sessionFlag == "" {
+		if existing := findActiveNativeSession(*sourceFlag, ppid); existing != "" {
+			*sessionFlag = existing
+		}
+	}
+
+	if *sessionFlag == "" {
+		for _, cand := range []string{state.WorkspaceSessionPath(), filepath.Join(".bap", "session.json"), ".bap-session.json", "../.bap-session.json"} {
+			if data, err := os.ReadFile(cand); err == nil {
+				var info struct {
+					SessionID string `json:"session_id"`
+				}
+				if json.Unmarshal(data, &info) == nil && info.SessionID != "" {
+					*sessionFlag = info.SessionID
+					break
+				}
+			}
+		}
+	}
+
+	if *sessionFlag == "" {
 		prefix := *sourceFlag
 		if prefix == "" {
 			prefix = "cli"

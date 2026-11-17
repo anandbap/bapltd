@@ -473,18 +473,42 @@ func SubmitTaskEnvelopeWithDelegation(
 	authorizedBy, delegationType string,
 	maxUses int,
 	ttl time.Duration,
+	requestingSessionIDOpt ...string,
 ) (*types.TaskGrant, *types.TaskAuthorizationEnvelope, error) {
-	return submitTaskEnvelopeBound(zspDir, sessionID, clientType, mission, goal, promptText, actions, resources, authorizedBy, delegationType, maxUses, ttl, nil)
+	return submitTaskEnvelopeBound(zspDir, sessionID, clientType, mission, goal, promptText, actions, resources, authorizedBy, delegationType, maxUses, ttl, nil, requestingSessionIDOpt...)
 }
 
 func submitTaskEnvelopeBound(
 	zspDir, sessionID, clientType, mission, goal, promptText string,
 	actions, resources []string, authorizedBy, delegationType string,
 	maxUses int, ttl time.Duration, binding *types.TaskGrant,
+	requestingSessionIDOpt ...string,
 ) (*types.TaskGrant, *types.TaskAuthorizationEnvelope, error) {
 	if zspDir == "" {
 		zspDir = ResolveZSPDir()
 	}
+	requestingSessionID := ""
+	if len(requestingSessionIDOpt) > 0 {
+		requestingSessionID = strings.TrimSpace(requestingSessionIDOpt[0])
+	}
+	if requestingSessionID == "" {
+		requestingSessionID = sessionID
+	}
+	var linkedSessions []string
+	if len(requestingSessionIDOpt) > 1 {
+		for _, s := range requestingSessionIDOpt[1:] {
+			if trimmed := strings.TrimSpace(s); trimmed != "" && !containsExact(linkedSessions, trimmed) {
+				linkedSessions = append(linkedSessions, trimmed)
+			}
+		}
+	}
+	if requestingSessionID != "" && requestingSessionID != sessionID && !containsExact(linkedSessions, requestingSessionID) {
+		linkedSessions = append(linkedSessions, requestingSessionID)
+	}
+	if sessionID != "" && !containsExact(linkedSessions, sessionID) {
+		linkedSessions = append(linkedSessions, sessionID)
+	}
+
 	svid, kp, minter, pepSecret, err := EnsureSessionPrincipal(zspDir, sessionID, clientType)
 	if err != nil {
 		return nil, nil, err
@@ -542,14 +566,16 @@ func submitTaskEnvelopeBound(
 	sig := hex.EncodeToString(kp.Sign(hashBytes))
 
 	env := &types.TaskAuthorizationEnvelope{
-		EnvelopeID:     envID,
-		Identity:       *svid,
-		AuthorizedBy:   deleg,
-		Intent:         intent,
-		PermissionAsk:  perms,
-		EnvelopeHash:   envHash,
-		AgentSignature: sig,
-		Timestamp:      time.Now().UTC(),
+		EnvelopeID:          envID,
+		Identity:            *svid,
+		AuthorizedBy:        deleg,
+		Intent:              intent,
+		PermissionAsk:       perms,
+		RequestingSessionID: requestingSessionID,
+		LinkedSessionIDs:    linkedSessions,
+		EnvelopeHash:        envHash,
+		AgentSignature:      sig,
+		Timestamp:           time.Now().UTC(),
 	}
 
 	pol, polErr := LoadPermissionPolicy(zspDir, pepSecret)
@@ -571,7 +597,15 @@ func submitTaskEnvelopeBound(
 		if n := countSessionGrants(zspDir, sessionID); n >= pol.Ceiling.MaxMintsPerSession {
 			return fmt.Errorf("%w: %d grants already minted for session (cap %d)", ErrMintCapExceeded, n, pol.Ceiling.MaxMintsPerSession)
 		}
-		return saveSessionGrant(zspDir, sessionID, grant)
+		if err := saveSessionGrant(zspDir, sessionID, grant); err != nil {
+			return err
+		}
+		for _, linkedID := range linkedSessions {
+			if linkedID != "" && linkedID != sessionID {
+				_ = saveSessionGrant(zspDir, linkedID, grant)
+			}
+		}
+		return nil
 	}); err != nil {
 		return nil, env, err
 	}
@@ -880,6 +914,18 @@ func VerifyOrConsumeSessionZSPChecks(
 			return loadErr
 		}
 		if len(grants) == 0 {
+			if allG, err := CollectAllWorkstationGrants(zspDir); err == nil {
+				for _, cg := range allG {
+					if isGrantSessionMatched(cg, sessionID) && cg.RemainingUses > 0 && !cg.IsBurned && time.Now().Before(cg.ExpiresAt) {
+						if engine != nil {
+							_ = engine.LoadGrant(cg)
+						}
+						grants = append(grants, cg)
+					}
+				}
+			}
+		}
+		if len(grants) == 0 {
 			firstErr = fmt.Errorf(
 				"%w: agent principal %s has ZERO standing privileges (signed 4-tuple TaskAuthorizationEnvelope required)",
 				ErrZeroStandingPrivilegeViolation, svid.Subject,
@@ -888,7 +934,8 @@ func VerifyOrConsumeSessionZSPChecks(
 		}
 
 		checkGrantCoversAll := func(g *types.TaskGrant) (*types.TaskGrant, error) {
-			if g.SessionID != sessionID || g.PrincipalSVID != svid.Subject {
+			sessionMatches := isGrantSessionMatched(g, sessionID)
+			if !sessionMatches && g.PrincipalSVID != svid.Subject {
 				return nil, fmt.Errorf("%w: grant belongs to a different session or principal", ErrZeroStandingPrivilegeViolation)
 			}
 			var checked *types.TaskGrant
@@ -931,8 +978,10 @@ func VerifyOrConsumeSessionZSPChecks(
 						if proof != nil {
 							updated.ReceiptID = proof.ProofID
 						}
-						if err := saveSessionGrant(zspDir, sessionID, updated); err != nil {
-							return err
+						for _, sDir := range allLinkedDirs(sessionID, g) {
+							if sDir != "" {
+								_ = saveSessionGrant(zspDir, sDir, updated)
+							}
 						}
 					}
 					matchedGrant = updated
@@ -941,7 +990,11 @@ func VerifyOrConsumeSessionZSPChecks(
 				}
 				if errors.Is(consumeErr, ErrGrantExpired) {
 					if updated, ok := engine.GetGrant(g.GrantID); ok {
-						_ = saveSessionGrant(zspDir, sessionID, updated)
+						for _, sDir := range allLinkedDirs(sessionID, g) {
+							if sDir != "" {
+								_ = saveSessionGrant(zspDir, sDir, updated)
+							}
+						}
 					}
 				}
 				if firstErr == nil {
@@ -953,7 +1006,11 @@ func VerifyOrConsumeSessionZSPChecks(
 				if updated, ok := engine.GetGrant(g.GrantID); ok {
 					updated.IsBurned = true
 					updated.BurnReason = "TTL Expired"
-					_ = saveSessionGrant(zspDir, sessionID, updated)
+					for _, sDir := range allLinkedDirs(sessionID, g) {
+						if sDir != "" {
+							_ = saveSessionGrant(zspDir, sDir, updated)
+						}
+					}
 				}
 			}
 			if firstErr == nil {
@@ -1203,4 +1260,43 @@ func SyncWorkstationGrants(serverURL string, zspDir string) (int, error) {
 		return 0, fmt.Errorf("control plane returned status %d", resp.StatusCode)
 	}
 	return len(grants), nil
+}
+
+func isGrantSessionMatched(g *types.TaskGrant, sessionID string) bool {
+	if g == nil || sessionID == "" {
+		return false
+	}
+	if g.SessionID == sessionID || g.RequestingSessionID == sessionID {
+		return true
+	}
+	for _, l := range g.LinkedSessionIDs {
+		if l == sessionID {
+			return true
+		}
+	}
+	return false
+}
+
+func allLinkedDirs(currentSession string, g *types.TaskGrant) []string {
+	seen := make(map[string]struct{})
+	var dirs []string
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			dirs = append(dirs, s)
+		}
+	}
+	add(currentSession)
+	if g != nil {
+		add(g.SessionID)
+		add(g.RequestingSessionID)
+		for _, l := range g.LinkedSessionIDs {
+			add(l)
+		}
+	}
+	return dirs
 }
