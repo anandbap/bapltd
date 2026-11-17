@@ -993,23 +993,6 @@ function Invoke-BapGovernedSession {
                     bap_content_b64  = [Convert]::ToBase64String($bapBytes)
                 }
             }
-        } else {
-            # For secondary sessions (e.g. IDE running alongside CLI), ensure mode-specific configs exist
-            foreach ($spec in $filesSpec) {
-                $targetFile = [string]$spec.Path
-                $bapContent = [string]$spec.Content
-                $isSharedPolicy = ($targetFile -like "*GEMINI.md*" -or $targetFile -like "*AGENTS.md*" -or $targetFile -like "*CLAUDE.md*")
-                if (-not $isSharedPolicy) {
-                    $fDir = Split-Path -Parent $targetFile
-                    if (-not [string]::IsNullOrWhiteSpace($fDir) -and -not (Test-Path -LiteralPath $fDir)) {
-                        New-Item -ItemType Directory -Path $fDir -Force | Out-Null
-                    }
-                    if (-not (Test-Path -LiteralPath $targetFile)) {
-                        Write-AtomicText -Path $targetFile -Text $bapContent
-                    }
-                }
-            }
-        }
 
             $RecoveryRecord = [ordered]@{
                 version              = 2
@@ -1050,6 +1033,22 @@ function Invoke-BapGovernedSession {
             $RecoveryRecord.state = 'Guarded'
             Write-RecoveryRecord -Record $RecoveryRecord -ManifestPath $ManifestPath
             Write-Host "[+] Detached session guard active (PID $($watchdog.Id))." -ForegroundColor Green
+        } else {
+            # For secondary sessions (e.g. IDE running alongside CLI), ensure mode-specific configs exist
+            foreach ($spec in $filesSpec) {
+                $targetFile = [string]$spec.Path
+                $bapContent = [string]$spec.Content
+                $isSharedPolicy = ($targetFile -like "*GEMINI.md*" -or $targetFile -like "*AGENTS.md*" -or $targetFile -like "*CLAUDE.md*")
+                if (-not $isSharedPolicy) {
+                    $fDir = Split-Path -Parent $targetFile
+                    if (-not [string]::IsNullOrWhiteSpace($fDir) -and -not (Test-Path -LiteralPath $fDir)) {
+                        New-Item -ItemType Directory -Path $fDir -Force | Out-Null
+                    }
+                    if (-not (Test-Path -LiteralPath $targetFile)) {
+                        Write-AtomicText -Path $targetFile -Text $bapContent
+                    }
+                }
+            }
         }
 
         # 8. Enroll BAP Session with Local Edge / Control Plane
