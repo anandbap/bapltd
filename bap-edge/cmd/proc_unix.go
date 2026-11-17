@@ -3,14 +3,21 @@
 package cmd
 
 import (
+	"bufio"
+	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
 )
 
 func listAgentProcesses() ([]agentProcess, error) {
+	if runtime.GOOS == "darwin" {
+		return listAgentProcessesDarwin()
+	}
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return nil, err
@@ -44,7 +51,46 @@ func listAgentProcesses() ([]agentProcess, error) {
 	return result, nil
 }
 
+func listAgentProcessesDarwin() ([]agentProcess, error) {
+	out, err := exec.Command("ps", "-axo", "pid=,ppid=,comm=").Output()
+	if err != nil {
+		return nil, err
+	}
+	var result []agentProcess
+	scanner := bufio.NewScanner(bytes.NewReader(out))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		pid, err1 := strconv.Atoi(fields[0])
+		ppid, err2 := strconv.Atoi(fields[1])
+		if err1 != nil || err2 != nil || pid <= 0 {
+			continue
+		}
+		comm := fields[2]
+		result = append(result, agentProcess{
+			PID:       pid,
+			ParentPID: ppid,
+			Name:      filepath.Base(comm),
+			Birth:     "",
+		})
+	}
+	return result, nil
+}
+
 func processBirth(pid int) string {
+	if runtime.GOOS == "darwin" {
+		out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "lstart=").Output()
+		if err == nil {
+			return strings.TrimSpace(string(out))
+		}
+		return ""
+	}
 	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
 	if err != nil {
 		return ""
@@ -83,6 +129,35 @@ func findOtherBapEdgePIDs() ([]int, error) {
 	parentPID := os.Getppid()
 	currentExe := strings.ToLower(filepath.Base(os.Args[0]))
 
+	if runtime.GOOS == "darwin" {
+		out, err := exec.Command("ps", "-axo", "pid=,comm=").Output()
+		if err != nil {
+			return nil, err
+		}
+		var pids []int
+		scanner := bufio.NewScanner(bytes.NewReader(out))
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) < 2 {
+				continue
+			}
+			pid, err := strconv.Atoi(fields[0])
+			if err != nil || pid <= 0 || pid == currentPID || pid == parentPID {
+				continue
+			}
+			comm := strings.ToLower(filepath.Base(fields[1]))
+			isTestRunner := strings.HasSuffix(currentExe, ".test") || currentExe == "test"
+			if comm == "bapedge" || comm == "bap" || comm == "bap-daemon" || (!isTestRunner && comm == currentExe) {
+				pids = append(pids, pid)
+			}
+		}
+		return pids, nil
+	}
+
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return nil, err
@@ -114,6 +189,13 @@ func findOtherBapEdgePIDs() ([]int, error) {
 // getProcessExecutablePath inspects a PID and returns its full executable image path.
 func getProcessExecutablePath(pid int) string {
 	if pid <= 0 {
+		return ""
+	}
+	if runtime.GOOS == "darwin" {
+		out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
+		if err == nil {
+			return strings.TrimSpace(string(out))
+		}
 		return ""
 	}
 	if link, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "exe")); err == nil {

@@ -103,7 +103,7 @@ func findActiveNativeSession(appID string, ppid int) string {
 					continue
 				}
 				if ppid > 0 && sInfo.PID > 0 {
-					if sInfo.PID == ppid || isDescendantOf(ppid, sInfo.PID, byPID) || isDescendantOf(sInfo.PID, ppid, byPID) {
+					if sInfo.PID == ppid || sInfo.PID == os.Getpid() || isDescendantOf(ppid, sInfo.PID, byPID) || isDescendantOf(sInfo.PID, ppid, byPID) {
 						return sInfo.SessionID
 					}
 				}
@@ -122,7 +122,7 @@ func findActiveNativeSession(appID string, ppid int) string {
 			if json.Unmarshal(data, &sInfo) == nil && sInfo.SessionID != "" {
 				if normApp == "" || normalizeClientAppID(sInfo.AppID) == normApp || strings.EqualFold(sInfo.AppID, appID) {
 					if ppid > 0 && sInfo.PID > 0 {
-						if sInfo.PID == ppid || isDescendantOf(ppid, sInfo.PID, byPID) || isDescendantOf(sInfo.PID, ppid, byPID) {
+						if sInfo.PID == ppid || sInfo.PID == os.Getpid() || isDescendantOf(ppid, sInfo.PID, byPID) || isDescendantOf(sInfo.PID, ppid, byPID) {
 							return sInfo.SessionID
 						}
 					} else if isProcessAlive(sInfo.PID) || IsWatcherAlive(sInfo.SessionID) {
