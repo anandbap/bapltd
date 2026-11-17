@@ -1903,10 +1903,10 @@ func checkContentPinning(ec *execContext, skillName string) (string, error) {
 								continue
 							}
 						}
-						// If the drifted asset is a primary agent instruction file (gemini.md, claude.md, agents.md),
+						// If the drifted asset is a primary agent instruction file (gemini.md, claude.md, agents.md, codex.md),
 						// verify whether the file on disk is an authorized BAP zero-trust policy instruction file.
 						// If authentic, auto-reconcile the pin so agents are not blocked.
-						if base == "gemini.md" || base == "claude.md" || base == "agents.md" {
+						if base == "gemini.md" || base == "claude.md" || base == "agents.md" || base == "codex.md" {
 							if pData, pErr := os.ReadFile(a.Path); pErr == nil {
 								pStr := string(pData)
 								if strings.Contains(pStr, "BAP Zero-Trust Policy") &&

@@ -1251,18 +1251,34 @@ function Invoke-BapGovernedSession {
                 param($SessionId, $ServerUrl, $BapEdgeBin)
                 $copilotDir = Join-Path $env:USERPROFILE ".copilot\session-state"
                 $seenHashes = @{}
+                $fileOffsets = @{}
                 $sha = [System.Security.Cryptography.SHA256]::Create()
                 $curl = 'curl.exe'
 
+                # Baseline existing events.jsonl files so prior sessions are NEVER replayed into new session
+                if (Test-Path -LiteralPath $copilotDir) {
+                    $existing = Get-ChildItem -Path "$copilotDir\*\events.jsonl" -ErrorAction SilentlyContinue
+                    foreach ($ef in $existing) {
+                        $fileOffsets[$ef.FullName] = $ef.Length
+                    }
+                }
+
                 while ($true) {
-                    Start-Sleep -Milliseconds 800
+                    Start-Sleep -Milliseconds 1500
                     try {
                         if (Test-Path -LiteralPath $copilotDir) {
                             $recentFile = Get-ChildItem -Path "$copilotDir\*\events.jsonl" -ErrorAction SilentlyContinue |
-                                Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-10) } |
+                                Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-5) } |
                                 Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
                             if ($null -ne $recentFile) {
+                                $curLen = $recentFile.Length
+                                $prevOffset = if ($fileOffsets.ContainsKey($recentFile.FullName)) { $fileOffsets[$recentFile.FullName] } else { 0 }
+                                if ($curLen -le $prevOffset) {
+                                    continue
+                                }
+                                $fileOffsets[$recentFile.FullName] = $curLen
+
                                 $lines = Get-Content -LiteralPath $recentFile.FullName -ErrorAction SilentlyContinue | Select-Object -Last 25
                                 foreach ($l in $lines) {
                                     if ([string]::IsNullOrWhiteSpace($l)) { continue }
