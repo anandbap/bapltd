@@ -3527,7 +3527,14 @@ func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
 			req.Intent.ClassifierVersion = "v1.0"
 		}
 	}
-	if req.PromptHash == "" && req.UserPrompt != "" {
+	// Producers disagree on what the "prompt" is: Antigravity hooks send the raw
+	// <USER_REQUEST>-wrapped payload while the transcript tailer sends the extracted
+	// text. Derive the identity hash from the cleaned prompt so every layer reporting
+	// the same user turn collapses into one prompt record and one dedup key.
+	if cleaned := session.CleanUserPrompt(req.UserPrompt); cleaned != "" {
+		h := sha256.Sum256([]byte(cleaned))
+		req.PromptHash = hex.EncodeToString(h[:])
+	} else if req.PromptHash == "" && req.UserPrompt != "" {
 		h := sha256.Sum256([]byte(req.UserPrompt))
 		req.PromptHash = hex.EncodeToString(h[:])
 	}
