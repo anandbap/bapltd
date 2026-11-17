@@ -6,7 +6,7 @@
                                            "hooks":  [
                                                          {
                                                              "type":  "command",
-                                                             "command":  "C:\\Users\\User\\pyprj\\bapltd\\dist\\windows-amd64\\claude-client\\cchook\\interceptor.exe",
+                                                             "command":  "C:\\Users\\User\\bin\\interceptor.exe",
                                                              "args":  [
 
                                                                       ]
@@ -19,7 +19,7 @@
                                                "hooks":  [
                                                              {
                                                                  "type":  "command",
-                                                                 "command":  "C:\\Users\\User\\pyprj\\bapltd\\dist\\windows-amd64\\claude-client\\cchook\\interceptor.exe",
+                                                                 "command":  "C:\\Users\\User\\bin\\interceptor.exe",
                                                                  "args":  [
 
                                                                           ]
@@ -33,7 +33,7 @@
                                          "hooks":  [
                                                        {
                                                            "type":  "command",
-                                                           "command":  "C:\\Users\\User\\pyprj\\bapltd\\dist\\windows-amd64\\claude-client\\cchook\\interceptor.exe",
+                                                           "command":  "C:\\Users\\User\\bin\\interceptor.exe",
                                                            "args":  [
 
                                                                     ]
@@ -46,7 +46,7 @@
                                    "hooks":  [
                                                  {
                                                      "type":  "command",
-                                                     "command":  "C:\\Users\\User\\pyprj\\bapltd\\dist\\windows-amd64\\claude-client\\cchook\\interceptor.exe",
+                                                     "command":  "C:\\Users\\User\\bin\\interceptor.exe",
                                                      "args":  [
 
                                                               ]
@@ -59,7 +59,7 @@
                                          "hooks":  [
                                                        {
                                                            "type":  "command",
-                                                           "command":  "C:\\Users\\User\\pyprj\\bapltd\\dist\\windows-amd64\\claude-client\\cchook\\interceptor.exe",
+                                                           "command":  "C:\\Users\\User\\bin\\interceptor.exe",
                                                            "args":  [
 
                                                                     ]
@@ -79,7 +79,7 @@
                                                                           "-ExecutionPolicy",
                                                                           "Bypass",
                                                                           "-File",
-                                                                          "C:\\Users\\User\\AppData\\Roaming\\Python\\Python312\\Scripts\\run_claude_bap.ps1",
+                                                                          "C:\\Users\\User\\bin\\run_claude_bap.ps1",
                                                                           "--bap-config-guard"
                                                                       ]
                                                          }

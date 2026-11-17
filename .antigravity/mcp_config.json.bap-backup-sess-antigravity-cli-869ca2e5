@@ -1,0 +1,16 @@
+{
+    "mcpServers":  {
+                       "bap-zero-trust":  {
+                                              "command":  "C:\\Users\\User\\.bap\\bin\\bapmcp.exe",
+                                              "args":  [
+
+                                                       ],
+                                              "env":  {
+                                                          "LTD_SOURCE":  "antigravity",
+                                                          "BAP_SESSION_ID":  "sess-antigravity-cli-d622fd1d",
+                                                          "BAP_SERVER_URL":  "https://bap-controlplane.onrender.com",
+                                                          "BAP_CONTROL_PLANE_URL":  "https://bap-controlplane.onrender.com"
+                                                      }
+                                          }
+                   }
+}

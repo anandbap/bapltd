@@ -120,8 +120,10 @@ def find_bapedge() -> str:
         os.path.join(os.getcwd(), binary_name),
         # User directories
         os.path.join(home, "bin", binary_name),
-        os.path.join(os.environ.get("LOCALAPPDATA", ""), "BAP", "bin", binary_name),
-        os.path.join(os.environ.get("APPDATA", ""), "BAP", "bin", binary_name),
+        # Windows-only locations: skip when the variable is unset (macOS/Linux), otherwise
+        # join("", "BAP", ...) yields a cwd-relative "BAP/bin/bapedge" that must not be trusted.
+        os.path.join(os.environ["LOCALAPPDATA"], "BAP", "bin", binary_name) if os.environ.get("LOCALAPPDATA") else "",
+        os.path.join(os.environ["APPDATA"], "BAP", "bin", binary_name) if os.environ.get("APPDATA") else "",
         os.path.expanduser(f"~/.local/bin/{binary_name}"),
         os.path.expanduser(f"~/.bap/bin/{binary_name}"),
     ]
@@ -201,6 +203,57 @@ def bapedge_proxy():
         print("    Please run 'bap install' to download and set up the local BAP Edge engine.")
         sys.exit(1)
 
+def _launcher_runs_here(path: str) -> bool:
+    """True if a launcher script can execute on this OS.
+
+    PowerShell / batch launchers are Windows-only; .sh launchers are for
+    macOS / Linux / WSL. Picking the wrong flavour (e.g. powershell.exe on
+    macOS) is what made `bap claude` fail on non-Windows hosts.
+    """
+    low = path.lower()
+    if sys.platform == "win32":
+        return low.endswith((".ps1", ".bat", ".cmd"))
+    return low.endswith(".sh")
+
+def _run_launcher_candidates(candidates, args):
+    """Run the first launcher script that exists and is valid for this OS (never returns if one runs)."""
+    for c in candidates:
+        if not (os.path.isfile(c) and _launcher_runs_here(c)):
+            continue
+        low = c.lower()
+        if low.endswith(".ps1"):
+            ps = shutil.which("powershell.exe") or shutil.which("pwsh") or "powershell.exe"
+            sys.exit(subprocess.call([ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", c] + args))
+        elif low.endswith(".sh"):
+            sys.exit(subprocess.call([shutil.which("bash") or "sh", c] + args))
+        else:
+            sys.exit(subprocess.call([c] + args))
+
+def _find_agent_binary(*names):
+    """Locate an agent CLI on PATH, then in install dirs a non-login shell may not have on PATH."""
+    for n in names:
+        found = shutil.which(n)
+        if found:
+            return found
+    home = os.path.expanduser("~")
+    extra = [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        os.path.join(home, ".local", "bin"),
+        os.path.join(home, ".claude", "local"),
+        os.path.join(home, ".npm-global", "bin"),
+        os.path.join(home, ".bun", "bin"),
+        os.path.join(home, ".volta", "bin"),
+    ]
+    if sys.platform == "win32" and os.environ.get("APPDATA"):
+        extra.append(os.path.join(os.environ["APPDATA"], "npm"))
+    for d in extra:
+        for n in names:
+            p = os.path.join(d, n)
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                return p
+    return None
+
 def run_claude_fallback(args):
     cwd = os.getcwd()
     candidates = [
@@ -211,15 +264,8 @@ def run_claude_fallback(args):
         os.path.join(cwd, "run_claude_bap.sh"),
         os.path.join(cwd, "bap", "launchers", "run_claude_bap.sh"),
     ]
-    for c in candidates:
-        if os.path.isfile(c):
-            if c.endswith(".ps1"):
-                sys.exit(subprocess.call(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", c] + args))
-            elif c.endswith(".sh"):
-                sys.exit(subprocess.call(["bash", c] + args))
-            else:
-                sys.exit(subprocess.call([c] + args))
-    claude = shutil.which("claude") or shutil.which("claude.cmd")
+    _run_launcher_candidates(candidates, args)
+    claude = _find_agent_binary("claude", "claude.cmd")
     if not claude:
         print("[!] Claude Code CLI not found. Please install with 'npm install -g @anthropic-ai/claude-code'")
         sys.exit(1)
@@ -242,21 +288,33 @@ def run_codex_fallback(args):
         os.path.join(cwd, "run_codex_cli_bap.sh"),
         os.path.join(cwd, "bap", "launchers", "run_codex_cli_bap.sh"),
     ]
-    for c in candidates:
-        if os.path.isfile(c):
-            if c.endswith(".ps1"):
-                sys.exit(subprocess.call(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", c] + args))
-            elif c.endswith(".sh"):
-                sys.exit(subprocess.call(["bash", c] + args))
-            else:
-                sys.exit(subprocess.call([c] + args))
-    codex = shutil.which("codex") or shutil.which("codex.cmd")
+    _run_launcher_candidates(candidates, args)
+    codex = _find_agent_binary("codex", "codex.cmd")
     if not codex:
         print("[!] OpenAI Codex CLI not found. Please install with 'npm install -g @openai/codex'")
         sys.exit(1)
     env = os.environ.copy()
     env["LTD_SOURCE"] = "codex"
     sys.exit(subprocess.call([codex] + args, env=env))
+
+def run_antigravity_fallback(args):
+    cwd = os.getcwd()
+    candidates = [
+        os.path.join(cwd, "run_antigravity_cli_bap.ps1"),
+        os.path.join(cwd, "run_antigravity_cli_bap.bat"),
+        os.path.join(cwd, "bap", "launchers", "run_antigravity_cli_bap.ps1"),
+        os.path.join(cwd, "bap", "launchers", "run_antigravity_cli_bap.bat"),
+        os.path.join(cwd, "run_antigravity_cli_bap.sh"),
+        os.path.join(cwd, "bap", "launchers", "run_antigravity_cli_bap.sh"),
+    ]
+    _run_launcher_candidates(candidates, args)
+    agy = _find_agent_binary("agy", "agy.cmd")
+    if not agy:
+        print("[!] Google Antigravity CLI ('agy') not found. Please install Antigravity CLI or run 'bap setup --app=antigravity'.")
+        sys.exit(1)
+    env = os.environ.copy()
+    env["LTD_SOURCE"] = "antigravity"
+    sys.exit(subprocess.call([agy] + args, env=env))
 
 def run_review_fallback(args):
     cwd = os.getcwd()
@@ -322,6 +380,12 @@ def main():
             sys.exit(subprocess.call([bapedge, "codex"] + rest))
         else:
             run_codex_fallback(rest)
+    elif cmd in ["agy", "antigravity"]:
+        bapedge = find_bapedge()
+        if os.path.isfile(bapedge):
+            sys.exit(subprocess.call([bapedge, "agy"] + rest))
+        else:
+            run_antigravity_fallback(rest)
     elif cmd in ["review", "sessions", "history"]:
         bapedge = find_bapedge()
         if os.path.isfile(bapedge):

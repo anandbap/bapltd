@@ -92,6 +92,46 @@ func resolveLauncherScript(scriptNames []string) string {
 	return ""
 }
 
+// firstInPath returns the first of names found on PATH, or "" if none is.
+func firstInPath(names ...string) string {
+	for _, n := range names {
+		if p, err := exec.LookPath(n); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+// buildLauncherCommand builds the OS-appropriate command for a BAP launcher script.
+//
+// PowerShell and cmd launchers (Windows only) understand the --server flag. POSIX
+// shell launchers receive the control-plane URL through the environment instead:
+// anything placed in argv is forwarded to the agent CLI (claude / codex / agy),
+// which rejects an unknown "--server=..." option and exits with an error.
+func buildLauncherCommand(script, serverURL string, downstreamArgs []string) *exec.Cmd {
+	lower := strings.ToLower(script)
+	serverArg := "--server=" + serverURL
+
+	switch {
+	case strings.HasSuffix(lower, ".ps1"):
+		// powershell.exe is Windows PowerShell; pwsh covers PowerShell 7-only hosts.
+		ps := firstInPath("powershell.exe", "pwsh.exe", "pwsh")
+		if ps == "" {
+			ps = "powershell.exe"
+		}
+		args := append([]string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, serverArg}, downstreamArgs...)
+		return exec.Command(ps, args...)
+	case strings.HasSuffix(lower, ".bat"), strings.HasSuffix(lower, ".cmd"):
+		return exec.Command("cmd.exe", append([]string{"/c", script, serverArg}, downstreamArgs...)...)
+	default:
+		sh := firstInPath("bash", "bash.exe", "sh")
+		if sh == "" {
+			sh = "bash"
+		}
+		return exec.Command(sh, append([]string{script}, downstreamArgs...)...)
+	}
+}
+
 // findExecutable searches for a command across candidate names and paths.
 func findExecutable(names []string) string {
 	for _, name := range names {
@@ -107,13 +147,27 @@ func findExecutable(names []string) string {
 		extraPaths = []string{
 			filepath.Join(appData, "npm"),
 			filepath.Join(localAppData, "Programs"),
+			filepath.Join(home, ".local", "bin"),
+			filepath.Join(home, ".claude", "local"),
 			filepath.Join(home, ".cargo", "bin"),
 		}
 	} else {
+		// A GUI-launched or non-login shell on macOS often lacks Homebrew / npm-global /
+		// native-installer directories on PATH, so probe them explicitly.
 		extraPaths = []string{
+			"/opt/homebrew/bin",
 			"/usr/local/bin",
+			"/usr/bin",
 			filepath.Join(home, ".local", "bin"),
+			filepath.Join(home, ".claude", "local"),
+			filepath.Join(home, ".npm-global", "bin"),
+			filepath.Join(home, ".bun", "bin"),
+			filepath.Join(home, ".volta", "bin"),
 			filepath.Join(home, ".cargo", "bin"),
+		}
+		// nvm-managed Node installs global CLIs under a per-version bin directory.
+		if nvmBins, err := filepath.Glob(filepath.Join(home, ".nvm", "versions", "node", "*", "bin")); err == nil {
+			extraPaths = append(extraPaths, nvmBins...)
 		}
 	}
 
@@ -128,8 +182,43 @@ func findExecutable(names []string) string {
 	return ""
 }
 
+// reexecUnderWinpty re-runs "bapedge <subcmd> <args>" under winpty when started from Git Bash's
+// default terminal (mintty). Mintty hands native Windows programs a pipe instead of a console, so
+// Node-based agent CLIs (claude / codex / agy) think they are non-interactive and drop into
+// --print mode ("Input must be provided either through stdin or as a prompt argument").
+// winpty ships with Git for Windows and supplies a real console. It is a no-op everywhere else
+// (PowerShell, cmd, Windows Terminal, macOS, Linux) and can be disabled with BAP_NO_WINPTY=1.
+func reexecUnderWinpty(subcmd string, args []string) (handled bool, err error) {
+	if runtime.GOOS != "windows" || os.Getenv("BAP_NO_WINPTY") != "" || os.Getenv("BAP_UNDER_WINPTY") != "" {
+		return false, nil
+	}
+	if os.Getenv("MSYSTEM") == "" || !strings.EqualFold(os.Getenv("TERM_PROGRAM"), "mintty") {
+		return false, nil
+	}
+	if fi, statErr := os.Stdin.Stat(); statErr == nil && fi.Mode()&os.ModeCharDevice != 0 {
+		return false, nil // already a real console
+	}
+	winpty, lookErr := exec.LookPath("winpty")
+	if lookErr != nil {
+		return false, nil
+	}
+	exe, exeErr := os.Executable()
+	if exeErr != nil {
+		return false, nil
+	}
+	cmd := exec.Command(winpty, append([]string{exe, subcmd}, args...)...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(), "BAP_UNDER_WINPTY=1")
+	return true, cmd.Run()
+}
+
 // RunClaude launches Claude Code in active BAP Zero-Trust Governance.
 func RunClaude(args []string) error {
+	if handled, werr := reexecUnderWinpty("claude", args); handled {
+		return werr
+	}
 	downstreamArgs, hooksDisabled, forceFix, serverURL, err := parseLauncherArgs(args)
 	if err != nil {
 		return err
@@ -160,16 +249,7 @@ func RunClaude(args []string) error {
 	}
 
 	if script != "" {
-		var cmd *exec.Cmd
-		scriptArgs := append([]string{"--server=" + serverURL}, downstreamArgs...)
-		if strings.HasSuffix(strings.ToLower(script), ".ps1") {
-			psArgs := append([]string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script}, scriptArgs...)
-			cmd = exec.Command("powershell.exe", psArgs...)
-		} else if strings.HasSuffix(strings.ToLower(script), ".bat") || strings.HasSuffix(strings.ToLower(script), ".cmd") {
-			cmd = exec.Command("cmd.exe", append([]string{"/c", script}, scriptArgs...)...)
-		} else {
-			cmd = exec.Command("bash", append([]string{script}, scriptArgs...)...)
-		}
+		cmd := buildLauncherCommand(script, serverURL, downstreamArgs)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -249,6 +329,9 @@ func RunClaude(args []string) error {
 
 // RunCodex launches OpenAI Codex CLI in active BAP Zero-Trust Governance.
 func RunCodex(args []string) error {
+	if handled, werr := reexecUnderWinpty("codex", args); handled {
+		return werr
+	}
 	downstreamArgs, hooksDisabled, forceFix, serverURL, err := parseLauncherArgs(args)
 	if err != nil {
 		return err
@@ -278,16 +361,7 @@ func RunCodex(args []string) error {
 	}
 
 	if script != "" {
-		var cmd *exec.Cmd
-		scriptArgs := append([]string{"--server=" + serverURL}, downstreamArgs...)
-		if strings.HasSuffix(strings.ToLower(script), ".ps1") {
-			psArgs := append([]string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script}, scriptArgs...)
-			cmd = exec.Command("powershell.exe", psArgs...)
-		} else if strings.HasSuffix(strings.ToLower(script), ".bat") || strings.HasSuffix(strings.ToLower(script), ".cmd") {
-			cmd = exec.Command("cmd.exe", append([]string{"/c", script}, scriptArgs...)...)
-		} else {
-			cmd = exec.Command("bash", append([]string{script}, scriptArgs...)...)
-		}
+		cmd := buildLauncherCommand(script, serverURL, downstreamArgs)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -329,6 +403,9 @@ func RunCodex(args []string) error {
 
 // RunAntigravity launches Google Antigravity CLI (agy) in active BAP Zero-Trust Governance.
 func RunAntigravity(args []string) error {
+	if handled, werr := reexecUnderWinpty("agy", args); handled {
+		return werr
+	}
 	downstreamArgs, hooksDisabled, forceFix, serverURL, err := parseLauncherArgs(args)
 	if err != nil {
 		return err
@@ -358,16 +435,7 @@ func RunAntigravity(args []string) error {
 	}
 
 	if script != "" {
-		var cmd *exec.Cmd
-		scriptArgs := append([]string{"--server=" + serverURL}, downstreamArgs...)
-		if strings.HasSuffix(strings.ToLower(script), ".ps1") {
-			psArgs := append([]string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script}, scriptArgs...)
-			cmd = exec.Command("powershell.exe", psArgs...)
-		} else if strings.HasSuffix(strings.ToLower(script), ".bat") || strings.HasSuffix(strings.ToLower(script), ".cmd") {
-			cmd = exec.Command("cmd.exe", append([]string{"/c", script}, scriptArgs...)...)
-		} else {
-			cmd = exec.Command("bash", append([]string{script}, scriptArgs...)...)
-		}
+		cmd := buildLauncherCommand(script, serverURL, downstreamArgs)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr

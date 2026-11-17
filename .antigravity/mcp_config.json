@@ -7,7 +7,7 @@
                                                        ],
                                               "env":  {
                                                           "LTD_SOURCE":  "antigravity",
-                                                          "BAP_SESSION_ID":  "sess-antigravity-cli-51e4ed8f",
+                                                          "BAP_SESSION_ID":  "sess-antigravity-cli-dda4f5b3",
                                                           "BAP_SERVER_URL":  "https://bap-controlplane.onrender.com",
                                                           "BAP_CONTROL_PLANE_URL":  "https://bap-controlplane.onrender.com"
                                                       }

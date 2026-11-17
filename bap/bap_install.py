@@ -910,14 +910,17 @@ def install_core_binaries(target_dir: str, portable: bool = False):
                 elif "gemini" in name:
                     target_cmd = "gemini"
 
+                # newline="" writes the embedded \r\n / \n verbatim. Text-mode "w" on Windows would
+                # expand "\n" to "\r\n" (turning "\r\n" into "\r\r\n" and giving POSIX shims a
+                # "#!/bin/sh\r" shebang that Git Bash / macOS / Linux cannot execute).
                 if name.endswith(".bat"):
-                    with open(dst, "w", encoding="utf-8") as f:
+                    with open(dst, "w", encoding="utf-8", newline="") as f:
                         f.write(f"@echo off\r\nsetlocal EnableExtensions\r\nif exist \"%~dp0{base_no_ext}.ps1\" (\r\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0{base_no_ext}.ps1\" %*\r\n  exit /b %ERRORLEVEL%\r\n)\r\n{target_cmd} %*\r\n")
                 elif name.endswith(".ps1"):
-                    with open(dst, "w", encoding="utf-8") as f:
+                    with open(dst, "w", encoding="utf-8", newline="") as f:
                         f.write(f"& {target_cmd} $args\r\n")
                 elif name.endswith(".sh"):
-                    with open(dst, "w", encoding="utf-8") as f:
+                    with open(dst, "w", encoding="utf-8", newline="") as f:
                         f.write(f"#!/bin/sh\nexec {target_cmd} \"$@\"\n")
                     os.chmod(dst, 0o755)
                 print(f"  {TermColor.GREEN}[+] Agent Launcher: {name:<26}{TermColor.RESET}")
@@ -927,7 +930,8 @@ def install_core_binaries(target_dir: str, portable: bool = False):
     # Deploy unified 'bap' CLI wrapper so the 'bap' command is immediately available in target_dir
     bap_wrapper = os.path.join(target_dir, "bap")
     try:
-        py_exe = sys.executable or "python3"
+        # Forward slashes: backslashes inside a double-quoted POSIX string are fragile (Git Bash).
+        py_exe = (sys.executable or "python3").replace("\\", "/")
         with open(bap_wrapper, "w", encoding="utf-8", newline="\n") as f:
             f.write(f'#!/bin/sh\nexec "{py_exe}" -m bap.cli "$@"\n')
         if sys.platform != "win32":
@@ -941,9 +945,9 @@ def install_core_binaries(target_dir: str, portable: bool = False):
         bap_ps1 = os.path.join(target_dir, "bap.ps1")
         try:
             py_exe = sys.executable or "python"
-            with open(bap_cmd, "w", encoding="utf-8") as f:
+            with open(bap_cmd, "w", encoding="utf-8", newline="") as f:
                 f.write(f'@echo off\r\n"{py_exe}" -m bap.cli %*\r\n')
-            with open(bap_ps1, "w", encoding="utf-8") as f:
+            with open(bap_ps1, "w", encoding="utf-8", newline="") as f:
                 f.write(f'& "{py_exe}" -m bap.cli $args\r\n')
         except Exception:
             pass
@@ -951,7 +955,7 @@ def install_core_binaries(target_dir: str, portable: bool = False):
     # For Windows, also deploy extensionless POSIX shims so Git Bash and WSL can run bare commands (bap, bapedge, interceptor)
     if sys.platform == "win32":
         shims = [
-            ("bap", "#!/bin/sh\nSCRIPT_DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nif [ -f \"$SCRIPT_DIR/bapedge.exe\" ]; then\n    case \"$1\" in\n        version|--version|-v|doctor|launch|install)\n            exec bap.exe \"$@\" 2>/dev/null || python -m bap.cli \"$@\"\n            ;;\n        *)\n            exec \"$SCRIPT_DIR/bapedge.exe\" \"$@\"\n            ;;\n    esac\nelse\n    exec bap.exe \"$@\"\nfi\n"),
+            ("bap", _GIT_BASH_BAP_SHIM),
             ("bapedge", "#!/bin/sh\nexec \"$(dirname \"$0\")/bapedge.exe\" \"$@\"\n"),
             ("interceptor", "#!/bin/sh\nexec \"$(dirname \"$0\")/interceptor.exe\" \"$@\"\n"),
             ("cchook-interceptor", "#!/bin/sh\nexec \"$(dirname \"$0\")/cchook-interceptor.exe\" \"$@\"\n"),
@@ -967,6 +971,59 @@ def install_core_binaries(target_dir: str, portable: bool = False):
                 pass
 
     return deployed
+
+
+# POSIX `bap` shim for Git Bash / MSYS / Cygwin on Windows. Written with LF endings.
+# Python-implemented commands go to the Python CLI; everything else goes straight to bapedge.exe.
+# (The previous shim did `exec bap.exe ... || python ...`: a failed `exec` terminates the shell,
+# so the Python fallback could never run and the real error was hidden by 2>/dev/null.)
+_GIT_BASH_BAP_SHIM = r'''#!/bin/sh
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+run_python() {
+    for py in python3 python py; do
+        if command -v "$py" >/dev/null 2>&1; then
+            exec "$py" -m bap.cli "$@"
+        fi
+    done
+    echo "[BAP] Python was not found on PATH; cannot run 'bap $*'." >&2
+    exit 127
+}
+
+case "${1:-}" in
+    ""|version|--version|-v|help|-h|--help|doctor|launch|install|uninstall|remove)
+        if command -v bap.exe >/dev/null 2>&1; then
+            exec bap.exe "$@"
+        fi
+        run_python "$@"
+        ;;
+esac
+
+# Git Bash's default terminal (mintty) hands native Windows programs a pipe instead of a
+# console, so Node-based agent CLIs (claude/codex/agy) conclude they are non-interactive and
+# fall into --print mode ("Input must be provided either through stdin or as a prompt
+# argument"). winpty (bundled with Git for Windows) supplies a real console. Opt out with
+# BAP_NO_WINPTY=1.
+WINPTY=""
+case "${1:-}" in
+    claude|claude-code|codex|openai-codex|agy|antigravity)
+        if [ -z "${BAP_NO_WINPTY:-}" ] && [ -t 0 ] && [ -t 1 ] && command -v winpty >/dev/null 2>&1; then
+            WINPTY="winpty"
+        fi
+        ;;
+esac
+
+if [ -f "$SCRIPT_DIR/bapedge.exe" ]; then
+    exec $WINPTY "$SCRIPT_DIR/bapedge.exe" "$@"
+fi
+if command -v bapedge.exe >/dev/null 2>&1; then
+    exec bapedge.exe "$@"
+fi
+if command -v bap.exe >/dev/null 2>&1; then
+    exec bap.exe "$@"
+fi
+run_python "$@"
+'''
 
 
 def install_debug_scripts(target_dir: str) -> int:

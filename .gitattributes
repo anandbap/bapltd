@@ -1,0 +1,11 @@
+# Line-ending policy
+# -----------------------------------------------------------------------------
+# Scripts executed by POSIX shells MUST be LF. A CRLF checkout turns the shebang
+# into "bash\r" and macOS / Linux / Git Bash fail with:
+#   env: bash\r: No such file or directory
+#
+# Intentionally narrow: do NOT add *.json, *.cedar or *.md here. Those files are
+# content-pinned by .bap/pins.json and their bytes must not be re-normalised.
+*.sh                              text eol=lf
+*.bash                            text eol=lf
+**/scripts/bap-hook-adapter       text eol=lf
