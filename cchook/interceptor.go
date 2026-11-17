@@ -2338,24 +2338,93 @@ func resolveSessionID(payload HookPayload) string {
 	return ""
 }
 
+// The revocation check runs inside every tool hook, so it must never be able to stall the
+// host's wait for a decision. A slow control plane (cold start, network) previously blocked the
+// hook for the full 10s client timeout on every call; the host then reported "hook gave no usable
+// answer" and the action went unchecked. Bound the remote call, cache the snapshot briefly, and
+// back off after a failure, answering from the last known snapshot meanwhile.
+const (
+	revocationFreshTTL      = 15 * time.Second
+	revocationBackoff       = 20 * time.Second
+	revocationRemoteTimeout = 1500 * time.Millisecond
+)
+
+type revocationState struct {
+	KillSwitch      bool      `json:"kill_switch"`
+	RevokedSessions []string  `json:"revoked_sessions"`
+	RevokedUsers    []string  `json:"revoked_users"`
+	ServerURL       string    `json:"server_url,omitempty"`
+	FetchedAt       time.Time `json:"fetched_at,omitempty"`
+	FailedAt        time.Time `json:"failed_at,omitempty"`
+}
+
+func revocationCachePath() string {
+	return filepath.Join(bapUserDir(), "revocation-cache.json")
+}
+
+func loadRevocationState(serverURL string) (revocationState, bool) {
+	var cached revocationState
+	if data, err := os.ReadFile(revocationCachePath()); err == nil {
+		if json.Unmarshal(data, &cached) != nil || cached.ServerURL != serverURL {
+			cached = revocationState{}
+		}
+	}
+	now := time.Now()
+	hasSnapshot := !cached.FetchedAt.IsZero()
+	if hasSnapshot && now.Sub(cached.FetchedAt) < revocationFreshTTL {
+		return cached, true
+	}
+	if !cached.FailedAt.IsZero() && now.Sub(cached.FailedAt) < revocationBackoff {
+		return cached, hasSnapshot
+	}
+
+	fail := func() (revocationState, bool) {
+		cached.ServerURL = serverURL
+		cached.FailedAt = now
+		saveRevocationState(cached)
+		hookLog("revocation poll unavailable (server %s); using %s snapshot", serverURL, map[bool]string{true: "cached", false: "no"}[hasSnapshot])
+		return cached, hasSnapshot
+	}
+	client := getHTTPClient()
+	client.Timeout = revocationRemoteTimeout
+	resp, err := client.Get(strings.TrimRight(serverURL, "/") + "/api/v1/control/revocations")
+	if err != nil || resp == nil {
+		return fail()
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fail()
+	}
+	var fresh revocationState
+	if json.NewDecoder(resp.Body).Decode(&fresh) != nil {
+		return fail()
+	}
+	fresh.ServerURL = serverURL
+	fresh.FetchedAt = now
+	saveRevocationState(fresh)
+	return fresh, true
+}
+
+func saveRevocationState(st revocationState) {
+	_ = os.MkdirAll(bapUserDir(), 0700)
+	data, err := json.Marshal(st)
+	if err != nil {
+		return
+	}
+	tmp := revocationCachePath() + fmt.Sprintf(".%d.tmp", os.Getpid())
+	if os.WriteFile(tmp, data, 0600) == nil {
+		if os.Rename(tmp, revocationCachePath()) != nil {
+			_ = os.Remove(tmp)
+		}
+	}
+}
+
 func remotelyRevoked(serverURL, sessionID string) (bool, string) {
 	if serverURL == "" || sessionID == "" {
 		return false, ""
 	}
-	resp, err := getHTTPClient().Get(strings.TrimRight(serverURL, "/") + "/api/v1/control/revocations")
-	if err != nil || resp == nil {
-		return false, ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return false, ""
-	}
-	var state struct {
-		KillSwitch      bool     `json:"kill_switch"`
-		RevokedSessions []string `json:"revoked_sessions"`
-		RevokedUsers    []string `json:"revoked_users"`
-	}
-	if json.NewDecoder(resp.Body).Decode(&state) != nil {
+	state, ok := loadRevocationState(serverURL)
+	if !ok {
 		return false, ""
 	}
 	if state.KillSwitch {

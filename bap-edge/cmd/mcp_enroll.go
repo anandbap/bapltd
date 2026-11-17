@@ -1,14 +1,15 @@
 package cmd
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -272,7 +273,13 @@ func runAntigravityPromptTailLoop(ctx context.Context, sessionID, serverURL stri
 		filepath.Join(home, ".gemini", "antigravity", "brain"),
 	}
 
-	seenHashes := make(map[string]bool)
+	// Only prompts typed after this tailer started belong to this session. Everything already in
+	// the transcripts is history: baseline it instead of replaying it into the session.
+	offsets := make(map[string]int64)
+	tailStart := time.Now()
+	baselineTranscripts(searchRoots, offsets, tailStart, func(prompt string) {
+		postTailedPrompt(httptransport.New(2*time.Second), sessionID, serverURL, "", 0, prompt)
+	})
 	client := httptransport.New(2 * time.Second)
 	ticker := time.NewTicker(800 * time.Millisecond)
 	defer ticker.Stop()
@@ -295,33 +302,26 @@ func runAntigravityPromptTailLoop(ctx context.Context, sessionID, serverURL stri
 			if err != nil {
 				continue
 			}
-			cutoff := time.Now().Add(-24 * time.Hour)
 			for _, e := range entries {
 				if !e.IsDir() {
 					continue
 				}
-				candidatePaths := []string{
-					filepath.Join(root, e.Name(), ".system_generated", "logs", "transcript.jsonl"),
-					filepath.Join(root, e.Name(), "transcript.jsonl"),
-				}
-				for _, p := range candidatePaths {
-					info, err := os.Stat(p)
-					if err != nil || !info.ModTime().After(cutoff) {
+				for _, p := range transcriptCandidates(root, e.Name()) {
+					prompts, spans, next, ok := readNewTranscriptPrompts(p, offsets)
+					if !ok {
 						continue
 					}
-					prompts := extractPromptsFromTranscript(p)
-					for _, userReq := range prompts {
-						userReq = strings.TrimSpace(userReq)
-						if userReq == "" {
+					offsets[p] = next
+					for i, userReq := range prompts {
+						// Claim by file position, not prompt text: repeating "continue" is a new turn,
+						// while two tailers looking at the same line must not both report it.
+						claim := promptClaimKey(p, spans[i])
+						if isPromptHashSent(claim) {
 							continue
 						}
+						markPromptHashSent(claim)
 						h := sha256.Sum256([]byte(userReq))
 						pHash := fmt.Sprintf("%x", h[:])
-						if seenHashes[pHash] || isPromptHashSent(pHash) {
-							continue
-						}
-						seenHashes[pHash] = true
-						markPromptHashSent(pHash)
 
 						payload := map[string]any{
 							"session_id":             sessionID,
@@ -352,58 +352,167 @@ func runAntigravityPromptTailLoop(ctx context.Context, sessionID, serverURL stri
 	}
 }
 
-func extractPromptsFromTranscript(path string) []string {
+// transcriptCandidates lists the transcript files a conversation directory may contain.
+func transcriptCandidates(root, conv string) []string {
+	return []string{
+		filepath.Join(root, conv, ".system_generated", "logs", "transcript.jsonl"),
+		filepath.Join(root, conv, "transcript.jsonl"),
+	}
+}
+
+// promptClaimKey identifies one transcript line (file + byte offset), independent of its text.
+func promptClaimKey(path string, offset int64) string {
+	h := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d", filepath.Clean(path), offset)))
+	return hex.EncodeToString(h[:])
+}
+
+// parsePromptLine extracts the user's prompt from one transcript line, or "" when the line is
+// not a user turn. JSON lines carrying a type other than USER_INPUT (assistant text, tool output
+// that merely quotes a <USER_REQUEST> block) are never prompts.
+func parsePromptLine(l string) string {
+	l = strings.TrimSpace(l)
+	if l == "" {
+		return ""
+	}
+	isUserInput := strings.Contains(l, `"type":"USER_INPUT"`) || strings.Contains(l, `"type": "USER_INPUT"`)
+	var prompt string
+	if strings.HasPrefix(l, "{") {
+		var obj struct {
+			Type    string `json:"type"`
+			Content string `json:"content"`
+		}
+		if json.Unmarshal([]byte(l), &obj) != nil || (obj.Type != "" && obj.Type != "USER_INPUT") || obj.Content == "" {
+			return ""
+		}
+		raw := obj.Content
+		if start := strings.Index(raw, "<USER_REQUEST>"); start != -1 {
+			start += len("<USER_REQUEST>")
+			if end := strings.Index(raw[start:], "</USER_REQUEST>"); end != -1 {
+				prompt = raw[start : start+end]
+			}
+		} else if isUserInput {
+			prompt = raw
+		}
+	} else if start := strings.Index(l, "<USER_REQUEST>"); start != -1 {
+		start += len("<USER_REQUEST>")
+		if end := strings.Index(l[start:], "</USER_REQUEST>"); end != -1 {
+			prompt = l[start : start+end]
+		}
+	}
+	return strings.TrimSpace(prompt)
+}
+
+// readNewTranscriptPrompts returns prompts appended to the transcript since the recorded offset,
+// with the byte offset of each prompt's line. Only complete (newline-terminated) lines are consumed
+// so a half-written line is picked up on the next poll. A path never seen before starts at 0: it is
+// a conversation that began after the tailer's baseline.
+func readNewTranscriptPrompts(path string, offsets map[string]int64) (prompts []string, spans []int64, next int64, ok bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return nil, nil, 0, false
 	}
 	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	buf := make([]byte, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
-
-	var lines []string
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-		if len(lines) > 50 {
-			lines = lines[1:]
-		}
+	info, err := f.Stat()
+	if err != nil {
+		return nil, nil, 0, false
 	}
+	start := offsets[path]
+	if info.Size() < start {
+		start = 0 // truncated or rotated
+	}
+	if info.Size() == start {
+		return nil, nil, start, true
+	}
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return nil, nil, 0, false
+	}
+	data, err := io.ReadAll(io.LimitReader(f, 8<<20))
+	if err != nil {
+		return nil, nil, 0, false
+	}
+	next = start
+	for len(data) > 0 {
+		nl := bytes.IndexByte(data, '\n')
+		if nl < 0 {
+			break
+		}
+		if p := parsePromptLine(string(data[:nl])); p != "" {
+			prompts = append(prompts, p)
+			spans = append(spans, next)
+		}
+		next += int64(nl + 1)
+		data = data[nl+1:]
+	}
+	return prompts, spans, next, true
+}
 
-	var results []string
-	for _, l := range lines {
-		l = strings.TrimSpace(l)
-		if l == "" {
+// baselineTranscripts records the current end of every existing transcript so history is never
+// replayed. A transcript touched in the last minute is the conversation that triggered this
+// session, so its final prompt (only) is reported through report.
+func baselineTranscripts(roots []string, offsets map[string]int64, now time.Time, report func(prompt string)) {
+	for _, root := range roots {
+		entries, err := os.ReadDir(root)
+		if err != nil {
 			continue
 		}
-		var prompt string
-		if strings.Contains(l, "<USER_REQUEST>") {
-			start := strings.Index(l, "<USER_REQUEST>") + len("<USER_REQUEST>")
-			if end := strings.Index(l[start:], "</USER_REQUEST>"); end != -1 {
-				prompt = l[start : start+end]
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
 			}
-		} else if strings.Contains(l, `"type":"USER_INPUT"`) || strings.Contains(l, `"type": "USER_INPUT"`) {
-			var obj struct {
-				Content string `json:"content"`
-			}
-			if json.Unmarshal([]byte(l), &obj) == nil && obj.Content != "" {
-				raw := obj.Content
-				if start := strings.Index(raw, "<USER_REQUEST>"); start != -1 {
-					start += len("<USER_REQUEST>")
-					if end := strings.Index(raw[start:], "</USER_REQUEST>"); end != -1 {
-						prompt = raw[start : start+end]
-					}
-				} else {
-					prompt = raw
+			for _, p := range transcriptCandidates(root, e.Name()) {
+				info, err := os.Stat(p)
+				if err != nil {
+					continue
 				}
+				offsets[p] = info.Size()
+				if now.Sub(info.ModTime()) > time.Minute || report == nil {
+					continue
+				}
+				prompts, spans, _, ok := readNewTranscriptPrompts(p, map[string]int64{})
+				if !ok || len(prompts) == 0 {
+					continue
+				}
+				claim := promptClaimKey(p, spans[len(spans)-1])
+				if isPromptHashSent(claim) {
+					continue
+				}
+				markPromptHashSent(claim)
+				report(prompts[len(prompts)-1])
 			}
-		}
-		prompt = strings.TrimSpace(prompt)
-		if prompt != "" {
-			results = append(results, prompt)
 		}
 	}
+}
+
+// postTailedPrompt reports one transcript prompt to the control plane.
+func postTailedPrompt(client *http.Client, sessionID, serverURL, conv string, offset int64, userReq string) {
+	h := sha256.Sum256([]byte(userReq))
+	payload := map[string]any{
+		"session_id":             sessionID,
+		"user_prompt":            userReq,
+		"producer":               "antigravity-cli",
+		"prompt_hash":            hex.EncodeToString(h[:]),
+		"prompt_capture_enabled": true,
+		"intent": map[string]any{
+			"primary":            "INVESTIGATION",
+			"confidence":         0.90,
+			"classifier_version": "bap-edge-rules-v1",
+			"source":             "antigravity-transcript-tail",
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	resp, err := client.Post(strings.TrimRight(serverURL, "/")+"/api/v1/sessions/prompt", "application/json", bytes.NewReader(data))
+	if err == nil && resp != nil {
+		_ = resp.Body.Close()
+	}
+}
+
+func extractPromptsFromTranscript(path string) []string {
+	prompts, _, _, _ := readNewTranscriptPrompts(path, map[string]int64{})
+	var results []string
+	results = append(results, prompts...)
 	return results
 }
 
