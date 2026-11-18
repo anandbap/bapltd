@@ -104,6 +104,51 @@ func TestRemovedSimulationEndpointsAreNotServed(t *testing.T) {
 	}
 }
 
+// Self-asserted identity (a typed email, or an OAuth callback that never verified one) must not
+// authorize a device session in production. Development keeps the placeholder flow.
+func TestUnverifiedLoginIsRejectedInProduction(t *testing.T) {
+	for _, k := range []string{"BAP_GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_ID", "BAP_GOOGLE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET",
+		"BAP_GITHUB_CLIENT_ID", "GITHUB_CLIENT_ID", "BAP_GITHUB_CLIENT_SECRET", "GITHUB_CLIENT_SECRET"} {
+		t.Setenv(k, "")
+	}
+	post := func(s *Server, path string) int {
+		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader("user_code=ABCD-1234&email=attacker%40example.com"))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		return w.Code
+	}
+	get := func(s *Server, path string) int {
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		return w.Code
+	}
+
+	prod := setupTestServer()
+	prod.SetEnvironmentMode("prod")
+	for _, p := range []string{"/api/v1/auth/oauth/google-complete", "/api/v1/auth/oauth/github-complete"} {
+		if code := post(prod, p); code != http.StatusForbidden {
+			t.Fatalf("prod POST %s = %d, want 403", p, code)
+		}
+	}
+	for _, p := range []string{"/api/v1/auth/callback/google?code=x&state=ABCD-1234", "/api/v1/auth/callback/github?code=x&state=ABCD-1234"} {
+		if code := get(prod, p); code != http.StatusForbidden {
+			t.Fatalf("prod GET %s = %d, want 403 (identity not verified)", p, code)
+		}
+	}
+
+	// Development still reaches the normal device-code validation (unknown code -> 400), not the prod 403.
+	dev := setupTestServer()
+	dev.SetEnvironmentMode("dev")
+	if code := post(dev, "/api/v1/auth/oauth/google-complete"); code == http.StatusForbidden {
+		t.Fatalf("dev POST google-complete = 403, want the dev flow to be reachable")
+	}
+	if code := get(dev, "/api/v1/auth/callback/google?code=x&state=ABCD-1234"); code == http.StatusForbidden {
+		t.Fatalf("dev GET google callback = 403, want the dev flow to be reachable")
+	}
+}
+
 func TestStreamTicketIsSingleUseAndShortLived(t *testing.T) {
 	s := setupTestServer()
 	s.SetAdminSecurity("test-admin", true)

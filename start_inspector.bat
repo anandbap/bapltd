@@ -70,13 +70,13 @@ set "ADMIN_TOK="
 if exist ".bap-admin-token" (
     set /p ADMIN_TOK=<.bap-admin-token
 )
-set "TOKEN_QUERY="
-if not "%ADMIN_TOK%"=="" (
-    set "TOKEN_QUERY=?token=%ADMIN_TOK%"
-)
-
+REM The control plane no longer accepts the admin token in a URL (it lands in browser history, proxy
+REM and access logs). Open the dashboard without it and paste the token at its admin login prompt.
 echo [*] Opening Inspector Dashboard in your default browser (%TARGET_PATH%)...
-start %CP_URL%%TARGET_PATH%%TOKEN_QUERY%
+start %CP_URL%%TARGET_PATH%
+if not "%ADMIN_TOK%"=="" (
+    echo [*] Admin token is in .bap-admin-token. Paste it at the dashboard's admin login prompt.
+)
 
 echo.
 echo ===============================================================================

@@ -199,7 +199,7 @@ bapcontrolplane version             # Display semantic version, git commit, and 
 | `--detach`, `-d` | `false` | Run as detached background daemon. |
 | `--foreground`, `--fg` | `false` | Run in foreground. |
 | `--mode <prod\|dev>` | `prod` | Environment mode: `prod` (default; strict OTC, OIDC required) or `dev` (open self-service OTC, local development only). An explicit `--mode` overrides `BAP_MODE` / `BAP_ENVIRONMENT`. Prod requires `BAP_SECRET_KEY` (32+ chars), `BAP_POLICY_SIGNING_SEED` (64 hex), `--policy-max-age` / `BAP_POLICY_MAX_AGE` and an absolute `--db`; otherwise startup fails. |
-| `--demo-mode` | `false` | Enable synthetic demo data and the destructive demo endpoints (`/sessions/reset`, `/demo/*`). Also `BAP_DEMO_MODE=1`. Never in production. |
+| `--demo-mode` | `false` | Enable synthetic demo data in the activity views (`?demo=true`). Also `BAP_DEMO_MODE=1`. Never in production. The destructive demo endpoints (`/sessions/reset`, `/demo/*`) were removed. |
 | `--enable-simulated-endpoints` | *(no-op)* | **Deprecated.** The simulated SPIFFE/TPM/Landlock/eBPF endpoints were removed; the flag is accepted so old launch scripts still start. |
 | `--db <path>` | `bap-controlplane.db` | Path to persistent SQLite database (`memory` for in-memory). |
 | `--durable` | `false` | Commit authority and audit history to disk before acknowledging API calls (mandatory in prod). |
@@ -244,7 +244,12 @@ Invoke-RestMethod -Method Post -Uri "$cp/api/v1/auth/stream-ticket" -Headers @{ 
 * **Intentionally unauthenticated** (called by edge agents): `/health`, `/policy/bundle`, `/sessions/{id}`,
   `/escalation/{id}`, enrollment and session-telemetry routes.
 * **Removed:** `/api/v1/spiffe/*`, `/attestation/tpm-quote`, `/sandbox/landlock/check`, `/sandbox/ebpf/execve`,
+  the destructive demo endpoints (`/sessions/reset`, `/demo/exec-safe`, `/demo/exec-attack`, `/demo/fleet-scale`),
   and the simulated Google/GitHub login pages. `/auth/oauth/start` returns `503` when no provider client ID is configured.
+* **Identity must be verified in prod.** In `--mode prod`, `/auth/oauth/google-complete` and `/github-complete`
+  (typed-email forms) return `403`, and the Google/GitHub callbacks return `403` unless the provider returned a
+  verified email. In `--mode dev` the placeholder identities (`developer@gmail.com` / `developer@github.com`) still work.
+* **Dashboard token.** `start_inspector.bat` no longer puts the admin token in the URL; paste it at the dashboard's admin login prompt.
 
 ---
 

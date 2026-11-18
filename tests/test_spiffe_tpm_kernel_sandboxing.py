@@ -66,6 +66,8 @@ def http_req(url, method="GET", data=None, headers=None):
         return e.code, parsed, raw
 
 
+@unittest.skip("The simulated SPIFFE/TPM/Landlock/eBPF endpoints were removed; "
+               "TestRemovedSimulationEndpointsAreNotServed (Go) asserts they stay gone.")
 class TestSpiffeTpmKernelSandboxing(unittest.TestCase):
     proc = None
     tmpdir = None

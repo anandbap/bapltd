@@ -202,6 +202,10 @@ jobs:
         timeout-minutes: 10
         env:
           BAP_REQUIRE_WHEEL_TESTS: '1'
+          # The control plane defaults to --mode prod, which refuses to start without a stable
+          # secret, signing seed, policy budget and absolute DB path. These integration fixtures
+          # launch throwaway servers with no such configuration, so run them in dev mode.
+          BAP_MODE: dev
           # Legacy integration fixtures explicitly qualify content-enabled capture. Default
           # metadata privacy has separate Go transport, spool, replay and ingress regressions.
           BAP_TELEMETRY_CONTENT: redacted

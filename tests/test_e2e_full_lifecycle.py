@@ -173,6 +173,7 @@ class TestE2EFullMissionLifecycle(unittest.TestCase):
             if os.path.exists(p):
                 shutil.rmtree(p, ignore_errors=True)
 
+    @unittest.skip("Uses the removed simulated SPIFFE/TPM endpoints")
     def test_01_workload_identity_and_hardware_attestation(self):
         """Stage 1: Verify SPIFFE SVID issuance, SVID validation, and TPM 2.0 quote generation."""
         # 1. Issue SPIFFE SVID
@@ -430,6 +431,7 @@ when {
         self.assertEqual(status, 200)
         self.assertEqual(orig_check.get("state"), "DENIED")
 
+    @unittest.skip("Uses the removed simulated Landlock/eBPF endpoints")
     def test_06_bounded_grant_issuance_and_kernel_sandboxing(self):
         """Stage 6: Bounded Grant Issuance and Kernel-Level Sandboxing (Landlock + eBPF)."""
         # 1. Acquire bounded grant using enrolled session token

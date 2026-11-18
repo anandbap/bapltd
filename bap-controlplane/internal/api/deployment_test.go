@@ -53,8 +53,7 @@ func TestAdministrativeRoutesRejectMissingCredentials(t *testing.T) {
 	for _, path := range []string{
 		"/api/v1/control/kill-switch", "/api/v1/control/agent/kill",
 		"/api/v1/control/agent/revoke", "/api/v1/sessions/revoke",
-		"/api/v1/sessions/reset", "/api/v1/agents/revoke", "/api/v1/apps/revoke",
-		"/api/v1/demo/exec-safe", "/api/v1/demo/exec-attack", "/api/v1/demo/fleet-scale",
+		"/api/v1/agents/revoke", "/api/v1/apps/revoke",
 	} {
 		t.Run(path, func(t *testing.T) {
 			s := setupTestServer()
@@ -70,21 +69,28 @@ func TestAdministrativeRoutesRejectMissingCredentials(t *testing.T) {
 	}
 }
 
-func TestDemoRoutesAreDisabledByDefault(t *testing.T) {
+// The destructive demo endpoints were removed; they must not be served in any mode, even with demo
+// mode on and a valid administrator credential.
+func TestRemovedDemoRoutesAreNotServed(t *testing.T) {
 	for _, path := range []string{
 		"/api/v1/sessions/reset", "/api/v1/demo/exec-safe", "/api/v1/demo/exec-attack", "/api/v1/demo/fleet-scale",
 	} {
-		t.Run(path, func(t *testing.T) {
-			s := setupTestServer()
-			s.SetAdminSecurity("test-admin", true)
-			r := httptest.NewRequest(http.MethodPost, path, nil)
-			r.Header.Set("Authorization", "Bearer test-admin")
-			w := httptest.NewRecorder()
-			s.Handler().ServeHTTP(w, r)
-			if w.Code != http.StatusNotFound {
-				t.Fatalf("status = %d, want 404 while demo mode is disabled", w.Code)
-			}
-		})
+		for _, demo := range []bool{false, true} {
+			t.Run(path, func(t *testing.T) {
+				s := setupTestServer()
+				s.SetAdminSecurity("test-admin", true)
+				s.SetDemoMode(demo)
+				r := httptest.NewRequest(http.MethodPost, path, nil)
+				r.Header.Set("Authorization", "Bearer test-admin")
+				w := httptest.NewRecorder()
+				s.Handler().ServeHTTP(w, r)
+				// /sessions/reset now falls through to the generic /sessions/{id} route, which rejects
+				// POST with 405; either way the reset action no longer exists.
+				if w.Code != http.StatusNotFound && w.Code != http.StatusMethodNotAllowed {
+					t.Fatalf("demo=%v: status = %d, want 404 or 405 (endpoint removed)", demo, w.Code)
+				}
+			})
+		}
 	}
 }
 

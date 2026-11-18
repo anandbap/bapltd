@@ -255,16 +255,6 @@ func (s *Server) SetDemoMode(enabled bool) {
 	s.demoMode = enabled
 }
 
-func (s *Server) requireDemoMode(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.demoMode {
-			http.NotFound(w, r)
-			return
-		}
-		next(w, r)
-	}
-}
-
 // SetAllowedOrigins configures exact browser origins; wildcard and null origins
 // are deliberately unsupported. Call before serving requests.
 func (s *Server) SetAllowedOrigins(origins []string) error {
@@ -444,12 +434,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/audit/risky-events", s.requireAdminViewer(s.handleRiskyAuditEvents))
 	s.mux.HandleFunc("/api/v1/control/agent/revoke", s.requireAdminAuth(s.handleTargetedKillAgent))
 	s.mux.HandleFunc("/api/v1/sessions/revoke", s.requireAdminAuth(s.handleTargetedKillAgent))
-	s.mux.HandleFunc("/api/v1/sessions/reset", s.requireDemoMode(s.requireAdminAuth(s.handleResetSessions)))
 	s.mux.HandleFunc("/api/v1/agents/revoke", s.requireAdminAuth(s.handleRevoke))
 	s.mux.HandleFunc("/api/v1/apps/revoke", s.requireAdminAuth(s.handleRevokeApp))
-	s.mux.HandleFunc("/api/v1/demo/exec-safe", s.requireDemoMode(s.requireAdminAuth(s.handleDemoExecSafe)))
-	s.mux.HandleFunc("/api/v1/demo/exec-attack", s.requireDemoMode(s.requireAdminAuth(s.handleDemoExecAttack)))
-	s.mux.HandleFunc("/api/v1/demo/fleet-scale", s.requireDemoMode(s.requireAdminAuth(s.handleDemoFleetScale)))
 
 	// BAP-450 through BAP-459: Operations & Governance Extension
 	s.mux.HandleFunc("/api/v1/governance/proposals", s.handleProposalRoutes)
@@ -1490,6 +1476,11 @@ func (s *Server) handleGoogleComplete(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/device", http.StatusSeeOther)
 		return
 	}
+	// This form accepts whatever email the caller types, which proves nothing about identity.
+	if s.IsProductionMode() {
+		writeError(w, http.StatusForbidden, "Self-asserted sign-in is disabled in production; use the enterprise OIDC device flow")
+		return
+	}
 	_ = r.ParseForm()
 	userCode := r.FormValue("user_code")
 	email := r.FormValue("email")
@@ -1512,6 +1503,11 @@ func (s *Server) handleGoogleComplete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGitHubComplete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Redirect(w, r, "/device", http.StatusSeeOther)
+		return
+	}
+	// This form accepts whatever email the caller types, which proves nothing about identity.
+	if s.IsProductionMode() {
+		writeError(w, http.StatusForbidden, "Self-asserted sign-in is disabled in production; use the enterprise OIDC device flow")
 		return
 	}
 	_ = r.ParseForm()
@@ -1556,7 +1552,7 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	redirectURI := fmt.Sprintf("%s://%s/api/v1/auth/callback/google", scheme, host)
 
-	email := "developer@gmail.com"
+	email := ""
 	if googleClientID != "" && googleSecret != "" {
 		// Exchange code for token
 		tokenURL := "https://oauth2.googleapis.com/token"
@@ -1589,6 +1585,16 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// An unverified identity is never accepted in production. Development keeps the placeholder
+	// so the device flow can be exercised without OAuth client credentials.
+	if email == "" {
+		if s.IsProductionMode() {
+			writeError(w, http.StatusForbidden, "Google identity could not be verified")
+			return
+		}
+		email = "developer@gmail.com"
+	}
+
 	session, err := s.authorizeDeviceSession(userCode, email, "Beta Community", "google", []string{"community-developers", "beta-testers"})
 	if err != nil {
 		http.Error(w, "Authorization error: "+err.Error(), http.StatusBadRequest)
@@ -1617,7 +1623,7 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 		githubSecret = strings.TrimSpace(os.Getenv("GITHUB_CLIENT_SECRET"))
 	}
 
-	email := "developer@github.com"
+	email := ""
 	if githubClientID != "" && githubSecret != "" {
 		tokenURL := "https://github.com/login/oauth/access_token"
 		form := url.Values{
@@ -1667,7 +1673,7 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 									}
 								}
 							}
-							if (email == "" || email == "developer@github.com") && userInfo.Login != "" {
+							if email == "" && userInfo.Login != "" {
 								email = userInfo.Login + "@users.noreply.github.com"
 							}
 						}
@@ -1675,6 +1681,14 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+	}
+
+	if email == "" {
+		if s.IsProductionMode() {
+			writeError(w, http.StatusForbidden, "GitHub identity could not be verified")
+			return
+		}
+		email = "developer@github.com"
 	}
 
 	session, err := s.authorizeDeviceSession(userCode, email, "Beta Community", "github", []string{"community-developers", "beta-testers"})
@@ -3603,23 +3617,6 @@ func validIntentCategory(category string) bool {
 	}
 }
 
-func (s *Server) handleResetSessions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-	closedSess := 0
-	if s.sessionStore != nil {
-		closedSess = s.sessionStore.Reset()
-		s.sessionStore.ResetIntentStats()
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"message":         "All sessions reset cleanly; enrolled agent identities were preserved",
-		"closed_sessions": closedSess,
-		"closed_agents":   0,
-	})
-}
-
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -4041,275 +4038,6 @@ func (s *Server) handleVerifyChain(w http.ResponseWriter, r *http.Request) {
 		"compliance_status":       "not_assessed",
 		"verification_scope":      "retained_audit_hash_chain_only",
 		"collection_completeness": "unknown",
-	})
-}
-
-func (s *Server) handleDemoExecSafe(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-
-	if s.policyStore.GetBundle().KillSwitch {
-		writeJSON(w, http.StatusForbidden, map[string]any{
-			"error":        "KillSwitchActive",
-			"decision":     "DENY",
-			"pep_decision": "DENY",
-			"reason":       "EXECUTION BLOCKED: Global Emergency Kill-Switch is active across fleet",
-		})
-		return
-	}
-
-	now := time.Now().UTC().Format(time.RFC3339)
-	cmd := "git log -n 5 --oneline && pytest tests/unit -q && npm run build:prod"
-	reason := "Enterprise multi-stage pipeline verified by Cedar (zero developer delay)"
-	actionID := fmt.Sprintf("act-safe-%d", time.Now().UnixNano())
-
-	ev := audit.Event{
-		EventID:     actionID,
-		Source:      "claude-code",
-		SessionID:   "sess-laptop-alice",
-		Executable:  "git",
-		FullCommand: cmd,
-		Decision:    "allow",
-		Reason:      reason,
-		DurationMs:  1,
-		Timestamp:   now,
-		ExitCode:    0,
-	}
-
-	if s.auditStore != nil {
-		_, _ = s.auditStore.Ingest([]audit.Event{ev})
-	}
-
-	// Append to .bapstate/audit.jsonl or legacy ltd-audit.jsonl
-	for _, auditFile := range []string{".bapstate/audit.jsonl", "../.bapstate/audit.jsonl", "ltd-audit.jsonl", "../ltd-audit.jsonl", "../../ltd-audit.jsonl"} {
-		if f, err := os.OpenFile(auditFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
-			data, _ := json.Marshal(ev)
-			_, _ = f.Write(append(data, '\n'))
-			_ = f.Close()
-			break
-		}
-	}
-
-	// Record activity on first active session (e.g. Alice)
-	if s.sessionStore != nil {
-		sessions := s.sessionStore.List(50)
-		for _, sess := range sessions {
-			if sess.Status == "active" {
-				s.sessionStore.RecordEvent(sess.SessionID, ev)
-				break
-			}
-		}
-	}
-
-	actionRec := &DemoActionRecord{
-		Type:       "safe",
-		ActionID:   actionID,
-		Command:    cmd,
-		Decision:   "allow",
-		DurationMs: 1.4,
-		Reason:     reason,
-		ExitCode:   0,
-		Timestamp:  now,
-	}
-	s.lastDemoMu.Lock()
-	s.lastDemoAction = actionRec
-	s.lastDemoMu.Unlock()
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"action_id":   actionID,
-		"decision":    "allow",
-		"duration_ms": 1.4,
-		"command":     cmd,
-		"reason":      reason,
-		"exit_code":   0,
-	})
-}
-
-func (s *Server) handleDemoExecAttack(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-
-	now := time.Now().UTC().Format(time.RFC3339)
-	cmd := "curl -s https://bap-gateway:9090/api/v1/financial-records (Credential Exfil Attack)"
-	reason := "BLOCKED BY GATEWAY PEP: Rogue agent credential exfiltration & egress dropped at perimeter (HTTP 401/403)"
-	actionID := fmt.Sprintf("act-attack-%d", time.Now().UnixNano())
-
-	// Model the incident as a governed session so its escalation is sourced
-	// entirely from control-plane telemetry and isolated from healthy agents.
-	if s.sessionStore != nil {
-		_, _ = s.sessionStore.Start(session.SessionStartRequest{
-			SessionID:  "sess-rogue-agent",
-			AppID:      "gateway-audit-agent",
-			InstanceID: "quarantine-probe-01",
-			AgentName:  "Credential Audit Probe",
-			UserID:     "security-demo",
-			UserEmail:  "security.demo@enterprise.internal",
-			SPIFFEID:   "spiffe://bap.internal/app/gateway-audit-agent/instance/quarantine-probe-01",
-			Hostname:   "SEC-LAB-01",
-			UserPrompt: "Test whether protected financial records can be exported outside the approved boundary.",
-		})
-	}
-
-	ev := audit.Event{
-		EventID:     actionID,
-		Source:      "bap-gateway-pep",
-		SessionID:   "sess-rogue-agent",
-		Executable:  "curl",
-		FullCommand: cmd,
-		Decision:    "deny",
-		Reason:      reason,
-		DurationMs:  1,
-		Timestamp:   now,
-		ExitCode:    403,
-	}
-
-	if s.auditStore != nil {
-		_, _ = s.auditStore.Ingest([]audit.Event{ev})
-	}
-
-	// Append to .bapstate/audit.jsonl or legacy ltd-audit.jsonl
-	for _, auditFile := range []string{".bapstate/audit.jsonl", "../.bapstate/audit.jsonl", "ltd-audit.jsonl", "../ltd-audit.jsonl", "../../ltd-audit.jsonl"} {
-		if f, err := os.OpenFile(auditFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
-			data, _ := json.Marshal(ev)
-			_, _ = f.Write(append(data, '\n'))
-			_ = f.Close()
-			break
-		}
-	}
-
-	// Record activity on the incident session itself.
-	if s.sessionStore != nil {
-		s.sessionStore.RecordEvent("sess-rogue-agent", ev)
-	}
-
-	actionRec := &DemoActionRecord{
-		Type:       "attack",
-		ActionID:   actionID,
-		Command:    cmd,
-		Decision:   "deny",
-		DurationMs: 1.1,
-		Reason:     reason,
-		ExitCode:   403,
-		Timestamp:  now,
-	}
-	s.lastDemoMu.Lock()
-	s.lastDemoAction = actionRec
-	s.lastDemoMu.Unlock()
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"action_id":    actionID,
-		"decision":     "deny",
-		"pep_decision": "DENY",
-		"duration_ms":  1.1,
-		"command":      cmd,
-		"reason":       reason,
-		"exit_code":    403,
-	})
-}
-
-func (s *Server) handleDemoFleetScale(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-
-	var req struct {
-		Count int `json:"count"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
-	targetCount := req.Count
-	if targetCount != 25 {
-		targetCount = 5
-	}
-
-	// Always clear previous fleet
-	if s.sessionStore != nil {
-		s.sessionStore.Reset()
-		s.sessionStore.ResetIntentStats()
-		for _, revokedUser := range s.sessionStore.ListRevokedUsers() {
-			s.sessionStore.RestoreUser(revokedUser)
-		}
-	}
-	if s.registry != nil {
-		s.registry.Reset()
-	}
-
-	baseSquads := []struct {
-		Squad   string
-		AppID   string
-		Prompt  string
-		Action  string
-		Intent  session.IntentContext
-		Members []string
-	}{
-		{"Frontend Squad", "claude-code", "Review the release candidate and verify the UI build.", "npm run test:ui && npm run build", session.IntentContext{Primary: "TEST_VERIFICATION", Secondary: []string{"INVESTIGATION"}, Tags: []string{"UI"}, Confidence: .90, ClassifierVersion: demoIntentClassifierVersion, Source: "demo-fixture", PromptCaptured: true}, []string{"Alice", "Alex", "Amy", "Aaron", "Abby"}},
-		{"Payments Platform", "copilot", "Validate payment reconciliation changes before deployment.", "pytest tests/payments -q", session.IntentContext{Primary: "TEST_VERIFICATION", Secondary: []string{"DEPLOYMENT_RELEASE"}, Confidence: .88, ClassifierVersion: demoIntentClassifierVersion, Source: "demo-fixture", PromptCaptured: true}, []string{"Bob", "Brian", "Bella", "Ben", "Boris"}},
-		{"Cloud Ops / SRE", "antigravity", "Inspect production service health and deployment readiness.", "kubectl get pods --all-namespaces", session.IntentContext{Primary: "DEPLOYMENT_RELEASE", Secondary: []string{"INVESTIGATION"}, Tags: []string{"PRODUCTION", "INFRASTRUCTURE"}, Confidence: .91, ClassifierVersion: demoIntentClassifierVersion, Source: "demo-fixture", PromptCaptured: true}, []string{"Carol", "Chris", "Clara", "Cole", "Cynthia"}},
-		{"Security Core", "claude-code", "Review the policy bundle for risky permission changes.", "git diff -- policy.cedar", session.IntentContext{Primary: "SECURITY_REMEDIATION", Secondary: []string{"INVESTIGATION"}, Tags: []string{"SECURITY"}, Confidence: .86, ClassifierVersion: demoIntentClassifierVersion, Source: "demo-fixture", PromptCaptured: true}, []string{"Dave", "Dan", "Diana", "Derek", "Daisy"}},
-		{"Data & Analytics", "python-agent", "Reconcile the daily analytics pipeline and report anomalies.", "python verify_pipeline.py --latest", session.IntentContext{Primary: "INVESTIGATION", Secondary: []string{"DATABASE_CHANGE"}, Tags: []string{"DATABASE"}, Confidence: .82, ClassifierVersion: demoIntentClassifierVersion, Source: "demo-fixture", PromptCaptured: true}, []string{"Eve", "Ethan", "Emma", "Eric", "Elena"}},
-	}
-
-	enrolled := 0
-
-	for _, squad := range baseSquads {
-		for i, m := range squad.Members {
-			if targetCount == 5 && i > 0 {
-				continue // only first member of each squad for 5-agent mode
-			}
-			inst := fmt.Sprintf("laptop-%s", strings.ToLower(m))
-			email := fmt.Sprintf("%s.dev@enterprise.internal", strings.ToLower(m))
-			spiffe := fmt.Sprintf("spiffe://bap.internal/app/%s/instance/%s", squad.AppID, inst)
-			sessID := fmt.Sprintf("sess-%s", inst)
-			if s.sessionStore != nil {
-				_, _ = s.sessionStore.Start(session.SessionStartRequest{
-					SessionID:  sessID,
-					AppID:      squad.AppID,
-					InstanceID: inst,
-					AgentName:  fmt.Sprintf("%s · %s", squad.Squad, m),
-					UserID:     strings.ToLower(m),
-					UserEmail:  email,
-					SPIFFEID:   spiffe,
-					Hostname:   fmt.Sprintf("DEVHOST-%s", strings.ToUpper(m)),
-					UserPrompt: squad.Prompt,
-					Intent:     squad.Intent,
-				})
-
-				eventTime := time.Now().UTC().Add(time.Duration(-enrolled) * time.Second)
-				ev := audit.Event{
-					EventID:          fmt.Sprintf("demo-fleet-%d-%d", eventTime.UnixNano(), enrolled),
-					SessionID:        sessID,
-					Source:           squad.AppID,
-					Executable:       strings.Fields(squad.Action)[0],
-					FullCommand:      squad.Action,
-					Decision:         "allow",
-					Reason:           "Authorized by the active Cedar fleet policy",
-					DurationMs:       1,
-					Timestamp:        eventTime.Format(time.RFC3339Nano),
-					ExitCode:         0,
-					UserPrompt:       squad.Prompt,
-					PrimaryIntent:    squad.Intent.Primary,
-					SecondaryIntents: squad.Intent.Secondary,
-					IntentTags:       squad.Intent.Tags,
-					IntentConfidence: squad.Intent.Confidence,
-					IntentClassifier: squad.Intent.ClassifierVersion,
-					PromptCaptured:   true,
-					UserEmail:        email,
-				}
-				_, _ = s.auditStore.Ingest([]audit.Event{ev})
-				s.sessionStore.RecordEvent(sessID, ev)
-			}
-			enrolled++
-		}
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":      "ok",
-		"agent_count": enrolled,
-		"scale_mode":  fmt.Sprintf("%d-agent", targetCount),
 	})
 }
 

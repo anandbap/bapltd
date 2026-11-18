@@ -186,6 +186,7 @@ class TestE2EAdversarialHardening(unittest.TestCase):
         if cls.tmp_dir and os.path.exists(cls.tmp_dir):
             shutil.rmtree(cls.tmp_dir, ignore_errors=True)
 
+    @unittest.skip("Uses the removed simulated TPM endpoint")
     def test_01_forged_tpm_quote_and_tampered_pcr_rejection(self):
         """BAP-1102: Attacker submitting forged or tampered TPM quote is rejected with 403."""
         nonce = "nonce-anti-replay-555"
@@ -214,6 +215,7 @@ class TestE2EAdversarialHardening(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertFalse(body.get("verified"))
 
+    @unittest.skip("Uses the removed simulated SPIFFE endpoint")
     def test_02_spiffe_trust_domain_impersonation_rejection(self):
         """BAP-1101: SPIFFE SVID from external or invalid trust domain is rejected."""
         status, body, _ = http_req(
@@ -325,6 +327,7 @@ class TestE2EAdversarialHardening(unittest.TestCase):
         )
         self.assertEqual(status, 403)
 
+    @unittest.skip("Uses the removed simulated Landlock endpoint")
     def test_07_landlock_directory_traversal_containment(self):
         """BAP-1201: Landlock LSM blocks parent directory escape attempts with EACCES."""
         ws = os.path.abspath(WORKSPACE_ROOT)
@@ -344,6 +347,7 @@ class TestE2EAdversarialHardening(unittest.TestCase):
         self.assertFalse(body.get("allowed"))
         self.assertIn("EACCES", body.get("error", ""))
 
+    @unittest.skip("Uses the removed simulated eBPF endpoint")
     def test_08_ebpf_unauthorized_process_termination(self):
         """BAP-1202: eBPF probe intercepts unapproved shell and returns KILL action."""
         status, body, _ = http_req(

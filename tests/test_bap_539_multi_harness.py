@@ -342,6 +342,8 @@ class TestBAP539MultiHarness(unittest.TestCase):
         status, body, _ = http_req(
             f"{CP_URL}/api/v1/saas/tokens",
             method="GET",
+            # The binding list is an admin read route; it no longer answers unauthenticated callers.
+            headers={"Authorization": f"Bearer {TEST_ADMIN_TOKEN}"},
         )
         self.assertEqual(status, 200)
         self.assertGreaterEqual(body.get("count", 0), 1)
