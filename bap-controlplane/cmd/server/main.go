@@ -50,7 +50,7 @@ Available Commands:
 Common Flags for 'start' / 'serve':
   --port <p>                 Port for HTTP server (default: 8080 or $PORT)
   --detach, -d               Run as detached background process
-  --mode <dev|prod>          Environment mode: 'dev' (open OTC) or 'prod' (strict OTC / OIDC)
+  --mode <prod|dev>          Environment mode: 'prod' (default; strict OTC / OIDC) or 'dev' (open OTC, local development only)
   --min-edge-version <ver>   Enforce minimum supported edge client version (e.g. 1.0.0)
   --db <path>                Path to SQLite database file (default: bap-controlplane.db)
   --secret <key>             HMAC signing secret for tokens (or $BAP_SECRET_KEY)
@@ -153,7 +153,7 @@ func runStart(args []string) {
 	allowedOrigins := fs.String("allowed-origins", os.Getenv("BAP_ALLOWED_ORIGINS"), "Comma-separated exact browser origins; same-origin only by default")
 	demoMode := fs.Bool("demo-mode", false, "Enable destructive synthetic demo endpoints (or set BAP_DEMO_MODE=true)")
 	simulated := fs.Bool("enable-simulated-endpoints", os.Getenv("BAP_ENABLE_SIMULATED_ENDPOINTS") == "1", "Serve the simulated SPIFFE/TPM/Landlock/eBPF endpoints to administrators (demo/test only; they are not attestation or enforcement)")
-	mode := fs.String("mode", "dev", "Control plane environment mode: 'dev' (open self-service OTC token request) or 'prod' (strictly locked offline OTC, enterprise OIDC required)")
+	mode := fs.String("mode", "prod", "Control plane environment mode: 'prod' (default; strictly locked offline OTC, enterprise OIDC required) or 'dev' (open self-service OTC token request; local development only)")
 	oidcProvider := fs.String("oidc-provider", "entra", "Enterprise OIDC provider: 'entra', 'okta', or 'generic'")
 	oidcIssuer := fs.String("oidc-issuer", "", "OIDC issuer / discovery URL")
 	oidcClientID := fs.String("oidc-client-id", "", "OIDC application client ID")
@@ -166,6 +166,12 @@ func runStart(args []string) {
 	policyMaxAge := fs.Duration("policy-max-age", 0, "Signed offline policy budget, e.g. 24h (mandatory in production; 1m to 168h)")
 
 	_ = fs.Parse(args)
+	modeFlagSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "mode" {
+			modeFlagSet = true
+		}
+	})
 
 	if *detach && !*fg {
 		exe, err := os.Executable()
@@ -213,10 +219,12 @@ func runStart(args []string) {
 	if envDemo := strings.TrimSpace(os.Getenv("BAP_DEMO_MODE")); envDemo != "" {
 		*demoMode = envDemo == "1" || strings.EqualFold(envDemo, "true")
 	}
-	if envMode := strings.TrimSpace(os.Getenv("BAP_MODE")); envMode != "" && *mode == "dev" {
+	// An explicit --mode always wins; otherwise the environment may select a mode, and the default is prod.
+	if envMode := strings.TrimSpace(os.Getenv("BAP_MODE")); envMode != "" && !modeFlagSet {
 		*mode = envMode
+		modeFlagSet = true
 	}
-	if envMode := strings.TrimSpace(os.Getenv("BAP_ENVIRONMENT")); envMode != "" && *mode == "dev" {
+	if envMode := strings.TrimSpace(os.Getenv("BAP_ENVIRONMENT")); envMode != "" && !modeFlagSet {
 		*mode = envMode
 	}
 	// First line a deploy prints, before any startup check can exit: lets an operator confirm from the

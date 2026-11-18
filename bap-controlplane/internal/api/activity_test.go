@@ -18,7 +18,7 @@ func TestActivityEndpoints(t *testing.T) {
 	t.Run("DemoModeSimulation", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/activity/summary?demo=true", nil)
 		rec := httptest.NewRecorder()
-		s.mux.ServeHTTP(rec, req)
+		serveAsAdmin(s,rec, req)
 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d", rec.Code)
@@ -39,7 +39,7 @@ func TestActivityEndpoints(t *testing.T) {
 		// Demo topology
 		reqTopo := httptest.NewRequest(http.MethodGet, "/api/activity/topology?demo=true", nil)
 		recTopo := httptest.NewRecorder()
-		s.mux.ServeHTTP(recTopo, reqTopo)
+		serveAsAdmin(s,recTopo, reqTopo)
 		var tree types.BusinessUnitTopologyNode
 		if err := json.Unmarshal(recTopo.Body.Bytes(), &tree); err != nil {
 			t.Fatalf("failed to decode demo topology: %v", err)
@@ -56,7 +56,7 @@ func TestActivityEndpoints(t *testing.T) {
 	t.Run("LiveUnsimulatedZeroState", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/activity/summary", nil)
 		rec := httptest.NewRecorder()
-		s.mux.ServeHTTP(rec, req)
+		serveAsAdmin(s,rec, req)
 
 		var summary types.ActivitySummary
 		if err := json.Unmarshal(rec.Body.Bytes(), &summary); err != nil {
@@ -73,7 +73,7 @@ func TestActivityEndpoints(t *testing.T) {
 		// Live topology clean state
 		reqTopo := httptest.NewRequest(http.MethodGet, "/api/activity/topology", nil)
 		recTopo := httptest.NewRecorder()
-		s.mux.ServeHTTP(recTopo, reqTopo)
+		serveAsAdmin(s,recTopo, reqTopo)
 		var tree types.BusinessUnitTopologyNode
 		if err := json.Unmarshal(recTopo.Body.Bytes(), &tree); err != nil {
 			t.Fatalf("failed to decode live topology: %v", err)
@@ -117,7 +117,7 @@ func TestActivityEndpoints(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/activity/ingest", bytes.NewReader(body))
 		req.Header.Set("X-BAP-Admin-Token", "test-admin")
 		rec := httptest.NewRecorder()
-		s.mux.ServeHTTP(rec, req)
+		serveAsAdmin(s,rec, req)
 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
@@ -126,7 +126,7 @@ func TestActivityEndpoints(t *testing.T) {
 		// Now verify GET /api/activity/live returns the real ingested event
 		reqLive := httptest.NewRequest(http.MethodGet, "/api/activity/live?limit=5", nil)
 		recLive := httptest.NewRecorder()
-		s.mux.ServeHTTP(recLive, reqLive)
+		serveAsAdmin(s,recLive, reqLive)
 
 		var resp map[string]any
 		_ = json.Unmarshal(recLive.Body.Bytes(), &resp)
@@ -138,7 +138,7 @@ func TestActivityEndpoints(t *testing.T) {
 		// Verify GET /api/activity/intents computed dynamically
 		reqIntents := httptest.NewRequest(http.MethodGet, "/api/activity/intents", nil)
 		recIntents := httptest.NewRecorder()
-		s.mux.ServeHTTP(recIntents, reqIntents)
+		serveAsAdmin(s,recIntents, reqIntents)
 		var intentsResp map[string]any
 		_ = json.Unmarshal(recIntents.Body.Bytes(), &intentsResp)
 		intentsList, ok := intentsResp["intents"].([]any)
@@ -152,7 +152,7 @@ func TestActivityEndpoints(t *testing.T) {
 		// Out-of-intent test: Production diagnosis attempting Customer DB write
 		req := httptest.NewRequest(http.MethodGet, "/api/activity/deviation?intent=PRODUCTION_DIAGNOSIS&action=UPDATE+accounts+SET+balance%3D0&tool=postgres_client&target_resource=db://prod/customers", nil)
 		rec := httptest.NewRecorder()
-		s.mux.ServeHTTP(rec, req)
+		serveAsAdmin(s,rec, req)
 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d", rec.Code)
@@ -176,7 +176,7 @@ func TestActivityEndpoints(t *testing.T) {
 		// In-intent test: Refactor attempting workspace test execution
 		reqOk := httptest.NewRequest(http.MethodGet, "/api/activity/deviation?intent=CODE_REFACTOR&action=pytest+tests/unit&tool=pytest&target_resource=fs://workspace", nil)
 		recOk := httptest.NewRecorder()
-		s.mux.ServeHTTP(recOk, reqOk)
+		serveAsAdmin(s,recOk, reqOk)
 
 		var repOk types.IntentDeviationReport
 		if err := json.Unmarshal(recOk.Body.Bytes(), &repOk); err != nil {

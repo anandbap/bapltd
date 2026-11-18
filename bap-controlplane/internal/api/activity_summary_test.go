@@ -24,7 +24,7 @@ func TestLiveSummarySeparatesObservedRecordsFromUnverifiedWork(t *testing.T) {
 	s.IngestActivity(&types.AgentActivityEvent{SessionID: "coding", PolicyDecision: "ALLOW", ActionStatus: "completed", IntentCategory: "Bug Fix"})
 	s.IngestActivity(&types.AgentActivityEvent{SessionID: "external", PolicyDecision: "UNKNOWN", ActionStatus: "completed"})
 	w := httptest.NewRecorder()
-	s.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/api/activity/summary", nil))
+	serveAsAdmin(s, w, httptest.NewRequest("GET", "/api/activity/summary", nil))
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body)
 	}

@@ -93,7 +93,7 @@ func TestZSPGrants_API_SyncAndQuery(t *testing.T) {
 	// 4. Query STS inspector and verify zsp_grants includes this grant
 	reqSTS := httptest.NewRequest(http.MethodGet, "/api/v1/sts/tokens", nil)
 	wSTS := httptest.NewRecorder()
-	srv.mux.ServeHTTP(wSTS, reqSTS)
+	serveAsAdmin(srv, wSTS, reqSTS)
 
 	if wSTS.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK for /api/v1/sts/tokens, got: %d", wSTS.Code)

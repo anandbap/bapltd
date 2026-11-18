@@ -251,7 +251,7 @@ func TestAPILineageAndTopology(t *testing.T) {
 	// Query /api/activity/lineage
 	rLin := httptest.NewRequest(http.MethodGet, "/api/activity/lineage", nil)
 	wLin := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(wLin, rLin)
+	serveAsAdmin(srv, wLin, rLin)
 
 	if wLin.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK for lineage endpoint, got %d: %s", wLin.Code, wLin.Body.String())
@@ -281,7 +281,7 @@ func TestAPILineageAndTopology(t *testing.T) {
 	// Query /api/activity/topology
 	rTop := httptest.NewRequest(http.MethodGet, "/api/activity/topology", nil)
 	wTop := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(wTop, rTop)
+	serveAsAdmin(srv, wTop, rTop)
 
 	if wTop.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK for topology endpoint, got %d: %s", wTop.Code, wTop.Body.String())

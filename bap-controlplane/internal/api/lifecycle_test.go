@@ -72,7 +72,7 @@ func TestInspectorReadDoesNotExpireSessions(t *testing.T) {
 	}
 	t.Setenv("BAP_SESSION_TIMEOUT", "1ns")
 	w := httptest.NewRecorder()
-	s.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/inspector/data", nil))
+	serveAsAdmin(s, w, httptest.NewRequest("GET", "/api/v1/inspector/data", nil))
 	if w.Code != 200 {
 		t.Fatalf("inspector response: %d", w.Code)
 	}

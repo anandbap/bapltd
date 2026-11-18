@@ -74,7 +74,7 @@ func TestLiveSessionUsesLatestDecisionRatherThanAllow(t *testing.T) {
 	check := func(want string) {
 		t.Helper()
 		w := httptest.NewRecorder()
-		s.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/api/activity/live", nil))
+		serveAsAdmin(s, w, httptest.NewRequest("GET", "/api/activity/live", nil))
 		var result struct {
 			Activities []types.AgentActivityEvent `json:"activities"`
 		}

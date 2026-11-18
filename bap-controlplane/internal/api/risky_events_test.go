@@ -29,7 +29,7 @@ func TestRiskyAuditPaginationIncludesOlderActionsAndStableSnapshot(t *testing.T)
 	url := "/api/v1/audit/risky-events?limit=100"
 	for page := 0; ; page++ {
 		w := httptest.NewRecorder()
-		s.Handler().ServeHTTP(w, httptest.NewRequest("GET", url, nil))
+		serveAsAdmin(s, w, httptest.NewRequest("GET", url, nil))
 		if w.Code != 200 {
 			t.Fatalf("%d: %s", w.Code, w.Body.String())
 		}

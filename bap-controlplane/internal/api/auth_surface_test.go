@@ -21,6 +21,16 @@ func authSurfaceRequest(s *Server, method, path, token string) *httptest.Respons
 	return w
 }
 
+// serveAsAdmin serves a request through the full handler with the test administrator credential,
+// for tests of routes that now require admin authentication.
+func serveAsAdmin(s *Server, w http.ResponseWriter, r *http.Request) {
+	s.SetAdminSecurity("test-admin", true)
+	if r.Header.Get("X-BAP-Admin-Token") == "" && r.Header.Get("Authorization") == "" {
+		r.Header.Set("X-BAP-Admin-Token", "test-admin")
+	}
+	s.Handler().ServeHTTP(w, r)
+}
+
 func TestSensitiveReadRoutesRequireAdmin(t *testing.T) {
 	s := setupTestServer()
 	s.SetAdminSecurity("test-admin", true)
@@ -38,6 +48,33 @@ func TestSensitiveReadRoutesRequireAdmin(t *testing.T) {
 		}
 		if w := authSurfaceRequest(s,http.MethodGet, path, "test-admin"); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {
 			t.Fatalf("GET %s with admin credential = %d, want it to reach the handler", path, w.Code)
+		}
+	}
+}
+
+func TestTelemetryReadRoutesRequireAdmin(t *testing.T) {
+	s := setupTestServer()
+	s.SetAdminSecurity("test-admin", true)
+	for _, path := range []string{
+		"/api/v1/agents",
+		"/api/v1/sessions",
+		"/api/v1/audit/events",
+		"/api/v1/audit/risky-events",
+		"/api/v1/inspector/data",
+		"/api/v1/sts/tokens",
+		"/api/activity/live",
+		"/api/v1/activity/summary",
+		"/api/v1/activity/stream",
+	} {
+		if w := authSurfaceRequest(s, http.MethodGet, path, ""); w.Code != http.StatusUnauthorized {
+			t.Fatalf("GET %s without credential = %d, want 401", path, w.Code)
+		}
+		// Streams may carry the token in the URL (EventSource); invoking one with a valid token would block.
+		if strings.HasSuffix(path, "/stream") {
+			continue
+		}
+		if w := authSurfaceRequest(s, http.MethodGet, path+"?token=test-admin", ""); w.Code != http.StatusUnauthorized {
+			t.Fatalf("GET %s with URL token = %d, want 401", path, w.Code)
 		}
 	}
 }

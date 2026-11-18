@@ -382,7 +382,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/grants/revoke", s.requireAdminAuth(s.handleRevokeGrant))
 	s.mux.HandleFunc("/api/v1/instances/heartbeat", s.requireSessionIdentity(s.handleHeartbeat))
 	s.mux.HandleFunc("/api/v1/control/heartbeat", s.requireSessionIdentity(s.handleHeartbeat))
-	s.mux.HandleFunc("/api/v1/agents", s.handleListAgents)
+	s.mux.HandleFunc("/api/v1/agents", s.requireAdminViewer(s.handleListAgents))
 	s.mux.HandleFunc("/api/v1/policy/bundle", s.handleGetPolicyBundle)
 	s.mux.HandleFunc("/api/v1/policy/sync", s.handlePolicySync)
 	s.mux.HandleFunc("/api/v1/policy/pubkey", s.handlePolicyPubKey)
@@ -395,7 +395,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/policy/tier", s.handleEnforcementTier)
 	s.mux.HandleFunc("/api/v1/control/tier", s.handleEnforcementTier)
 	s.mux.HandleFunc("/api/v1/audit/ingest", s.handleAuditIngest)
-	s.mux.HandleFunc("/api/v1/audit/events", s.handleListAuditEvents)
+	s.mux.HandleFunc("/api/v1/audit/events", s.requireAdminViewer(s.handleListAuditEvents))
 	s.mux.HandleFunc("/api/v1/sessions/start", s.requireSessionIdentity(s.handleSessionStart))
 	s.mux.HandleFunc("/api/v1/sessions/resume", s.handleSessionResume)
 	s.mux.HandleFunc("/api/v1/sessions/heartbeat", s.requireSessionIdentity(s.handleHeartbeat))
@@ -403,13 +403,13 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/sessions/prompt", s.requireSessionIdentity(s.handleSessionPrompt))
 	s.mux.HandleFunc("/api/v1/sessions/response", s.requireSessionIdentity(s.handleSessionResponse))
 	s.mux.HandleFunc("/api/v1/sessions/transcript", s.handleSessionTranscript)
-	s.mux.HandleFunc("/api/v1/sessions", s.handleListSessions)
+	s.mux.HandleFunc("/api/v1/sessions", s.requireAdminViewer(s.handleListSessions))
 	s.mux.HandleFunc("/api/v1/sessions/", s.handleGetSession)
 	s.mux.HandleFunc("/api/v1/principals", s.handlePrincipals)
 	s.mux.HandleFunc("/api/v1/principals/", s.handlePrincipalByID)
 	s.mux.HandleFunc("/api/v1/auth/envoy", s.handleEnvoyExtAuthz)
 	s.mux.HandleFunc("/api/v1/financial-records", s.handleFinancialRecords)
-	s.mux.HandleFunc("/api/v1/inspector/data", s.handleInspectorData)
+	s.mux.HandleFunc("/api/v1/inspector/data", s.requireAdminViewer(s.handleInspectorData))
 	s.mux.HandleFunc("/api/v1/control/revocations", s.handleGetRevocations)
 	s.mux.HandleFunc("/api/v1/control/chain/verify", s.handleVerifyChain)
 	s.mux.HandleFunc("/api/v1/control/sweep", s.handleControlSweep)
@@ -422,8 +422,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/sts/token", s.handleSTSToken)
 	s.mux.HandleFunc("/api/v1/oauth/token", s.handleSTSToken)
 	s.mux.HandleFunc("/oauth/token", s.handleSTSToken)
-	s.mux.HandleFunc("/api/v1/sts/tokens", s.handleSTSInspector)
-	s.mux.HandleFunc("/api/v1/sts/inspector", s.handleSTSInspector)
+	s.mux.HandleFunc("/api/v1/sts/tokens", s.requireAdminViewer(s.handleSTSInspector))
+	s.mux.HandleFunc("/api/v1/sts/inspector", s.requireAdminViewer(s.handleSTSInspector))
 	s.mux.HandleFunc("/api/v1/intent/attest", s.handleAttestIntent)
 	s.mux.HandleFunc("/api/v1/intent/verify", s.handleVerifyIntent)
 	s.mux.HandleFunc("/api/v1/intent/", s.handleGetIntent)
@@ -460,7 +460,7 @@ func (s *Server) registerRoutes() {
 	// Administrative & Mutating Operations (Protected by Admin Token)
 	s.mux.HandleFunc("/api/v1/control/kill-switch", s.requireAdminAuth(s.handleKillSwitch))
 	s.mux.HandleFunc("/api/v1/control/agent/kill", s.requireAdminAuth(s.handleTargetedKillAgent))
-	s.mux.HandleFunc("/api/v1/audit/risky-events", s.handleRiskyAuditEvents)
+	s.mux.HandleFunc("/api/v1/audit/risky-events", s.requireAdminViewer(s.handleRiskyAuditEvents))
 	s.mux.HandleFunc("/api/v1/control/agent/revoke", s.requireAdminAuth(s.handleTargetedKillAgent))
 	s.mux.HandleFunc("/api/v1/sessions/revoke", s.requireAdminAuth(s.handleTargetedKillAgent))
 	s.mux.HandleFunc("/api/v1/sessions/reset", s.requireDemoMode(s.requireAdminAuth(s.handleResetSessions)))
@@ -526,27 +526,27 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/endpoint/offline/classify", s.handleEndpointOfflineClassify)
 
 	// Epic 28: Canonical Activity Telemetry, Live Stream, Topology & Intent Deviation (BAP-520 - BAP-525)
-	s.mux.HandleFunc("/api/activity/live", s.handleActivityLive)
-	s.mux.HandleFunc("/api/activity/summary", s.handleActivitySummary)
-	s.mux.HandleFunc("/api/activity/intents", s.handleActivityIntents)
-	s.mux.HandleFunc("/api/activity/business-units", s.handleActivityBusinessUnits)
-	s.mux.HandleFunc("/api/activity/topology", s.handleActivityTopology)
-	s.mux.HandleFunc("/api/activity/stream", s.handleActivityStream)
+	s.mux.HandleFunc("/api/activity/live", s.requireAdminViewer(s.handleActivityLive))
+	s.mux.HandleFunc("/api/activity/summary", s.requireAdminViewer(s.handleActivitySummary))
+	s.mux.HandleFunc("/api/activity/intents", s.requireAdminViewer(s.handleActivityIntents))
+	s.mux.HandleFunc("/api/activity/business-units", s.requireAdminViewer(s.handleActivityBusinessUnits))
+	s.mux.HandleFunc("/api/activity/topology", s.requireAdminViewer(s.handleActivityTopology))
+	s.mux.HandleFunc("/api/activity/stream", s.requireAdminViewer(s.handleActivityStream))
 	s.mux.HandleFunc("/api/activity/ingest", s.requireSessionIdentity(s.handleActivityIngest))
-	s.mux.HandleFunc("/api/activity/deviation", s.handleActivityDeviation)
-	s.mux.HandleFunc("/api/activity/categories", s.handleActivityCategories)
-	s.mux.HandleFunc("/api/activity/lineage", s.handleActivityLineage)
+	s.mux.HandleFunc("/api/activity/deviation", s.requireAdminViewer(s.handleActivityDeviation))
+	s.mux.HandleFunc("/api/activity/categories", s.requireAdminViewer(s.handleActivityCategories))
+	s.mux.HandleFunc("/api/activity/lineage", s.requireAdminViewer(s.handleActivityLineage))
 
-	s.mux.HandleFunc("/api/v1/activity/live", s.handleActivityLive)
-	s.mux.HandleFunc("/api/v1/activity/summary", s.handleActivitySummary)
-	s.mux.HandleFunc("/api/v1/activity/intents", s.handleActivityIntents)
-	s.mux.HandleFunc("/api/v1/activity/business-units", s.handleActivityBusinessUnits)
-	s.mux.HandleFunc("/api/v1/activity/topology", s.handleActivityTopology)
-	s.mux.HandleFunc("/api/v1/activity/stream", s.handleActivityStream)
+	s.mux.HandleFunc("/api/v1/activity/live", s.requireAdminViewer(s.handleActivityLive))
+	s.mux.HandleFunc("/api/v1/activity/summary", s.requireAdminViewer(s.handleActivitySummary))
+	s.mux.HandleFunc("/api/v1/activity/intents", s.requireAdminViewer(s.handleActivityIntents))
+	s.mux.HandleFunc("/api/v1/activity/business-units", s.requireAdminViewer(s.handleActivityBusinessUnits))
+	s.mux.HandleFunc("/api/v1/activity/topology", s.requireAdminViewer(s.handleActivityTopology))
+	s.mux.HandleFunc("/api/v1/activity/stream", s.requireAdminViewer(s.handleActivityStream))
 	s.mux.HandleFunc("/api/v1/activity/ingest", s.requireSessionIdentity(s.handleActivityIngest))
-	s.mux.HandleFunc("/api/v1/activity/deviation", s.handleActivityDeviation)
-	s.mux.HandleFunc("/api/v1/activity/categories", s.handleActivityCategories)
-	s.mux.HandleFunc("/api/v1/activity/lineage", s.handleActivityLineage)
+	s.mux.HandleFunc("/api/v1/activity/deviation", s.requireAdminViewer(s.handleActivityDeviation))
+	s.mux.HandleFunc("/api/v1/activity/categories", s.requireAdminViewer(s.handleActivityCategories))
+	s.mux.HandleFunc("/api/v1/activity/lineage", s.requireAdminViewer(s.handleActivityLineage))
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
@@ -5097,6 +5097,42 @@ func (s *Server) requireAdminAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		next(w, r)
+	}
+}
+
+// requireAdminViewer protects control-plane read routes. It accepts the same credential sources as
+// telemetryViewerCredential (Authorization header, dashboard cookie, and the token query parameter
+// on /stream routes only) and shares the invalid-credential throttle with requireAdminAuth.
+func (s *Server) requireAdminViewer(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.adminToken == "" {
+			writeError(w, http.StatusServiceUnavailable, "Administrative authentication is not configured")
+			return
+		}
+		if !s.allowRemoteAdmin && !isLoopbackAddress(r.RemoteAddr) {
+			writeError(w, http.StatusForbidden, "Remote administration is disabled")
+			return
+		}
+		if s.isAdminViewer(r) {
+			s.adminThrottle().reset(clientAddress(r))
+			next(w, r)
+			return
+		}
+		cred := telemetryViewerCredential(r)
+		if cred != "" {
+			if over, retry := s.adminThrottle().recordFailure(clientAddress(r)); over {
+				w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retry.Seconds())+1))
+				writeError(w, http.StatusTooManyRequests, "Too many invalid administrative credentials")
+				return
+			}
+		}
+		s.logSecurityAlert(r, "UNAUTHORIZED_ADMIN", "Administrative credential missing or invalid")
+		if cred == "" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="bap-controlplane-admin"`)
+			writeError(w, http.StatusUnauthorized, "Administrative credential required")
+		} else {
+			writeError(w, http.StatusForbidden, "Invalid administrative credential")
+		}
 	}
 }
 

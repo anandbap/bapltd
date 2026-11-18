@@ -69,7 +69,13 @@ func TestPromptRedactionAcrossReadRoutes(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 			s.Handler().ServeHTTP(w, r)
-			if w.Code != 200 {
+			// Telemetry list routes now reject unauthenticated callers outright; the per-session
+			// route still answers them with a redacted view.
+			if !authenticated && path != "/api/v1/sessions/private-session" {
+				if w.Code != http.StatusUnauthorized {
+					t.Fatalf("%s unauthenticated: %d, want 401", path, w.Code)
+				}
+			} else if w.Code != 200 {
 				t.Fatalf("%s: %d", path, w.Code)
 			}
 			for _, privateValue := range []string{"private prompt", "private-session", "private-instance", "private-user", "private@example.test", "spiffe://private", "private-host", "987654"} {
