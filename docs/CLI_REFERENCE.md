@@ -66,12 +66,30 @@ bap codex [args...]           # Launch OpenAI Codex CLI under active governance
 
 | Command | Arguments / Flags | Description |
 |---|---|---|
-| `bap exec` | `"<command>" [--timeout <dur>] [--progress]` | Evaluate command against Cedar invariants and run inside sandboxed execution broker. |
+| `bap exec` | `"<command>" [--timeout <dur>] [--progress] [--shell auto\|cmd\|powershell\|pwsh]` | Evaluate command against Cedar invariants and run inside sandboxed execution broker. See [Quoting rules for `bap exec`](#24a-quoting-rules-for-bap-exec). |
 | `bap check` | `"<command>"` | Evaluate command against Cedar policy in decision-only mode (zero execution side effects; alias: `authorize`). |
 | `bap why` | `"<command>"` | Explain Cedar policy decision directly in terminal with matched rules and remediation advice (alias: `explain`). |
 | `bap sync` | `[--server <url>] [--policy-dir <path>]` | Force immediate synchronization of local signed Cedar policy bundle from the central control plane. |
 | `bap config` | `show` | Display resolved control plane, API gateway, trust domain, and enforcement mode. |
 | `bap config` | `set [--server <url>] [--gateway <url>] [--mode enforce\|audit] [--global]` | Update control plane URL or enforcement mode locally or globally (`~/.bap/config.json`). |
+
+### 2.4a Quoting rules for `bap exec`
+
+The command is one string. On Windows, PowerShell parses that string first, so the escape character is the
+backtick (or a doubled quote), **not** a backslash. `bapedge exec "git commit -m \"msg\""` is split by
+PowerShell before BAP sees it and is rejected or mangled. Prefer single quotes *inside* the double-quoted string.
+
+| Situation | Behaviour |
+|---|---|
+| `bapedge exec "git commit -m 'Fix a; b'"` | Works. Operators inside quotes (`; \| & > <`) are data, not shell operators. |
+| `bapedge exec "git commit -m 'Co-Authored-By: X <x@y.com>'"` | Works (build v1.13.39 / `ebc22faa` or later). Older builds fail with `exit status 1`. |
+| `git status && echo done`, `git status ; calc`, `a \| b`, `a > file` | Unquoted operators still run through `cmd.exe /c` and every sub-command is evaluated by policy. |
+| Unterminated quote | Never guessed at; falls back to the conservative `cmd.exe` path. |
+| Unquoted commands and `cmd` builtins (`echo`, `dir`) | Unchanged, run through `cmd.exe /c`. |
+| Long or multi-paragraph messages | Use a file: `git commit -F <file>`. This avoids quoting entirely and works on every build. |
+
+A quoted command with no unquoted operator runs directly with an exact argument list when the program is on
+`PATH`. Implementation: `bap-edge/internal/sandbox/argv.go` (`hasUnquotedShellOperator`, `splitArgv`).
 
 ### 2.5 Zero Standing Privilege (ZSP) & Playback
 
@@ -82,7 +100,24 @@ BAP operates on Zero Standing Privileges: agents start with zero authority and a
 | `bap zsp status` | `[--all] [--all-sessions]` | Inspect active and burned ephemeral JIT TaskGrants. `--all-sessions` aggregates across all agent sessions. |
 | `bap zsp grants` | `[--all] [--all-sessions]` | Alias for `bap zsp status`. Shows grant envelope, principal SVID, allowed scopes, and receipt proofs. |
 | `bap zsp playback` | `[--all-sessions]` | Replay chronological grant lifecycle events, distinguishing `[AUTOMATIC (Cedar Policy)]` from `[MANUAL (HITL Challenge)]`. Outputs automation velocity % for policy tuning. |
-| `bap zsp authorize` | `<action> <resource> [reason]` | Submit a 4-Tuple Task Authorization Envelope to mint an ephemeral JIT grant. |
+| `bap zsp authorize` | `--session-id <id> --mission <m> --goal "<text>" --actions <a,b> [--resources <r>] [--max-uses N] [--ttl <dur>] [--authorized-by <email>] [--client <c>] [--json]` | Submit a 4-Tuple Task Authorization Envelope to the policy engine. Defaults: `--mission TASK_EXECUTION`, `--resources workspace://current`, `--max-uses 1`, `--ttl 300s`. Run it as a **standalone** command (no `&&`, `;` or `\|`). A grant is minted, **or** a human-approval request id is raised, **or** the request is denied. |
+| `bap zsp approvals` | *(none)* | Human only: list pending high-risk approval requests. Blocked for agents. |
+| `bap zsp approve` | `<req-id>` | Human only: approve a pending request. Requires a one-time code typed in the developer's own terminal. Blocked for agents. |
+| `bap zsp deny` | `<req-id>` | Human only: deny a pending request. Blocked for agents. |
+
+**Grant classes.** The class is chosen by the actions requested, and `--max-uses` is clamped to the class ceiling.
+
+| Class | Actions | Uses / TTL |
+|---|---|---|
+| `workspace_edit` | `fs:file:write` only | Honors `--max-uses N` (request one grant sized for a batch of edits). |
+| `single_use` | Anything mixed or executable (`cli:bash:exec`, `git:commit:write`, `dev:go:-C`, …) | 1 use, 300 s. One command per grant. |
+
+**Approval flow.** A request returns one of: `JIT TaskGrant Minted` (proceed through `bapedge exec`);
+`High-Risk Escalation Blocked … HITL REQUEST RAISED: req-…` (stop, tell the developer, wait for
+`bap zsp approve`); or a policy denial. An approval covers only the action requested. Approving
+`cli:bash:exec` does not cover `dev:go:-C`. When `BAP ZSP AUTO-APPROVE ON` appears, routine (approve-tier)
+requests are granted without a prompt; push, publishing, destructive operations, credential access and network
+egress are never auto-approved. See [ZSP_APPROVAL_FLOW.md](../ZSP_APPROVAL_FLOW.md) for the full explanation.
 
 ### 2.6 Human-in-the-Loop (HITL) Step-Up Escalations
 
@@ -135,7 +170,7 @@ When an agent requests an action outside routine policy (e.g. interpreter execut
 | `bap antibypass` | `<status\|verify\|enforce>` | Multi-tier anti-bypass inspection and egress isolation engine (BAP-560). |
 | `bap delegate` | `[args...]` | Multi-agent hierarchical delegation & subagent envelope broker (BAP-532). |
 | `bap verify-log` | *(none)* | Verify the tamper-evident SHA-256 hash-chain of the local audit log. |
-| `bap dev-override` | `<on\|off\|status>` | Manage time-boxed developer override (interactive human only; strictly blocked for agents). |
+| `bap dev-override` | `<on\|off\|status>` | Manage time-boxed developer override (interactive human only; strictly blocked for agents). Only works in a binary built with dev overrides (`allow_dev_overrides=true` in `bap version --json`). See [Build modes](#81-build--package). |
 | `bap version` | `[-v] [--version] [--json]` | Display semantic version, git commit, build date, and architecture. |
 
 ---
@@ -163,7 +198,9 @@ bapcontrolplane version             # Display semantic version, git commit, and 
 | `--port <p>` | `8080` / `$PORT` | Port for HTTP/TLS server. |
 | `--detach`, `-d` | `false` | Run as detached background daemon. |
 | `--foreground`, `--fg` | `false` | Run in foreground. |
-| `--mode <dev\|prod>` | `dev` | Environment mode: `dev` (open self-service OTC) or `prod` (strict OTC, OIDC required). |
+| `--mode <prod\|dev>` | `prod` | Environment mode: `prod` (default; strict OTC, OIDC required) or `dev` (open self-service OTC, local development only). An explicit `--mode` overrides `BAP_MODE` / `BAP_ENVIRONMENT`. Prod requires `BAP_SECRET_KEY` (32+ chars), `BAP_POLICY_SIGNING_SEED` (64 hex), `--policy-max-age` / `BAP_POLICY_MAX_AGE` and an absolute `--db`; otherwise startup fails. |
+| `--demo-mode` | `false` | Enable synthetic demo data and the destructive demo endpoints (`/sessions/reset`, `/demo/*`). Also `BAP_DEMO_MODE=1`. Never in production. |
+| `--enable-simulated-endpoints` | *(no-op)* | **Deprecated.** The simulated SPIFFE/TPM/Landlock/eBPF endpoints were removed; the flag is accepted so old launch scripts still start. |
 | `--db <path>` | `bap-controlplane.db` | Path to persistent SQLite database (`memory` for in-memory). |
 | `--durable` | `false` | Commit authority and audit history to disk before acknowledging API calls (mandatory in prod). |
 | `--admin-token <token>` | auto-generated | Administrative secret token for control APIs (`$BAP_ADMIN_TOKEN`). |
@@ -186,6 +223,28 @@ bapcontrolplane version             # Display semantic version, git commit, and 
 | `--pilot-roster <path>` | *(empty)* | Path to operator-assigned pilot roster JSON file. |
 | `--initialize-authority` | `false` | Explicitly initialize a new durable authority (first start only). |
 | `--policy-max-age <duration>` | `0` | Signed offline policy budget (e.g. `24h`; mandatory in prod). |
+
+### 3.3 Read-API authentication & stream tickets
+
+* **Admin-only read routes** (header `Authorization: Bearer <token>`, `X-BAP-Admin-Token`, or the dashboard cookie):
+  `/api/v1/agents`, `/sessions`, `/audit/events`, `/audit/risky-events`, `/inspector/data`, `/sts/tokens`,
+  `/sts/inspector`, `/principals`, `/saas/tokens`, and all `/api/activity/*` and `/api/v1/activity/*` reads.
+  Missing credential: `401`. Wrong credential: `403`. Repeated bad credentials from one address: `429` with `Retry-After`.
+* **No credential in the URL.** `?token=` and `?admin_token=` are not accepted on any route.
+* **Streams** (`/api/activity/stream`, `/api/v1/activity/stream`): exchange the admin credential for a
+  single-use ticket, then pass only the ticket.
+
+```powershell
+# 1. admin credential -> ticket (valid 30 s, single use)
+Invoke-RestMethod -Method Post -Uri "$cp/api/v1/auth/stream-ticket" -Headers @{ Authorization = "Bearer $tok" }
+# 2. open the stream with the ticket
+"$cp/api/activity/stream?ticket=bap_stk_..."
+```
+
+* **Intentionally unauthenticated** (called by edge agents): `/health`, `/policy/bundle`, `/sessions/{id}`,
+  `/escalation/{id}`, enrollment and session-telemetry routes.
+* **Removed:** `/api/v1/spiffe/*`, `/attestation/tpm-quote`, `/sandbox/landlock/check`, `/sandbox/ebpf/execve`,
+  and the simulated Google/GitHub login pages. `/auth/oauth/start` returns `503` when no provider client ID is configured.
 
 ---
 
@@ -349,9 +408,23 @@ bap-hook-adapter --client <claude|copilot|antigravity|opencode|codex> --event <P
 | Script | Purpose |
 |---|---|
 | `build_binaries.bat` | Build all Windows binaries (`bap.exe`, `bapcontrolplane.exe`, `bapgateway.exe`, `bapmcp.exe`, `cchook.exe`) and deploy to testing paths. |
-| `update_binaries.ps1 -AllowDevOverrides false` | CI release build step without developer override immunity. |
+| `update_binaries.ps1` | `[-Version vX.Y.Z] [-AllowDevOverrides "true"\|"false"] [-HeadlessStepUp "true"\|"false"] [-SkipUserInstall]`. Builds `bapedge.exe`, `cchook` and the other binaries. **`-AllowDevOverrides` defaults to `"true"`**, which compiles in the `devoverride` tag so `bap dev-override on` works (local developer machines). Pass `"false"` for a release-style build. `-HeadlessStepUp "true"` compiles the test-harness-only step-up bypass (BAP-1096); never install or publish that build. |
+| `install_bap_global.bat` / `scripts/install_bap_global.ps1` | `[-AllowDevBuild] [-Debug]`. Installs binaries and global hooks for all agents. It reads `bapedge version --json` and **refuses** a build with `allow_dev_overrides=true` or `headless_stepup=true` (exit 3) unless `-AllowDevBuild` is passed. `-AllowDevBuild` belongs to the installer, not to `update_binaries.ps1`. |
 | `build_all_platforms.ps1` | Cross-compile release packages for Windows (`amd64`, `arm64`), Linux (`amd64`, `arm64`), and macOS (`darwin-arm64`, `darwin-amd64`). |
 | `python scripts/build_wheel.py [--universal]` | Package Python wheel and source distribution (`bap-ltd`). |
+
+**Build modes and which command to use**
+
+| You want | Build | Install |
+|---|---|---|
+| Local dev machine, with `bap dev-override` available | `.\update_binaries.ps1` (default) | `.\scripts\install_bap_global.ps1 -AllowDevBuild` (run the `.ps1` directly if the `.bat` does not forward the flag) |
+| Machine that runs real agents, approvals always enforced | `.\update_binaries.ps1 -AllowDevOverrides "false"` | `.\install_bap_global.bat` |
+| Python end-to-end tests that need headless step-up | `.\update_binaries.ps1 -HeadlessStepUp "true"` | Do not install |
+
+Why the installer refuses a dev build: a dev-override or test-harness build can be told to skip approvals,
+and a global install puts that binary under every agent hook on the workstation, including agents. Check any
+binary with `bapedge version --json` (`allow_dev_overrides`, `headless_stepup`). Agents may never run
+`bap dev-override on`; it needs an interactive human.
 
 ### 8.2 Test Suites
 
