@@ -17,6 +17,8 @@ Verifies:
 import base64
 import json
 import os
+from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -25,8 +27,43 @@ import time
 import unittest
 
 WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-BAPEDGE_BIN = os.path.join(WORKSPACE_ROOT, "bapedge.exe")
-INTERCEPTOR_BIN = os.path.join(WORKSPACE_ROOT, "cchook", "interceptor.exe")
+BAPEDGE_BIN = os.environ.get("BAP_EDGE_TEST_BIN", os.path.join(WORKSPACE_ROOT, "bapedge.exe"))
+INTERCEPTOR_BIN = os.environ.get("BAP_INTERCEPTOR_TEST_BIN", os.path.join(WORKSPACE_ROOT, "cchook", "interceptor.exe"))
+
+
+def python_command_for_shell(argv, shell):
+    """Encode argv for the actual tool language, not the host's default shell."""
+    if shell in ("bash", "sh", "zsh"):
+        # Git Bash treats unquoted Windows backslashes as escape characters.
+        # Forward slashes also avoid MSYS interpreting the executable spelling.
+        return shlex.join([argv[0].replace("\\", "/"), *argv[1:]])
+    if shell in ("powershell", "pwsh"):
+        return "& " + " ".join("'" + arg.replace("'", "''") + "'" for arg in argv)
+    if shell == "cmd":
+        return subprocess.list2cmdline(argv)
+    raise ValueError("unsupported fixture shell: " + shell)
+
+
+def fixture_shell(shell):
+    """Find a native shell to simulate the client, without silently substituting."""
+    if shell in ("bash", "sh", "zsh"):
+        if os.name == "nt":
+            git = shutil.which("git")
+            if git:
+                root = Path(git).parent.parent
+                for directory in ("usr/bin", "bin"):
+                    candidate = root / directory / (shell + ".exe")
+                    if candidate.is_file():
+                        return [str(candidate), "-c"]
+        binary = shutil.which(shell)
+        return [binary, "-c"] if binary else None
+    if shell in ("powershell", "pwsh"):
+        binary = shutil.which(shell)
+        return [binary, "-NoProfile", "-NonInteractive", "-Command"] if binary else None
+    if shell == "cmd" and os.name == "nt":
+        binary = shutil.which("cmd.exe")
+        return [binary, "/d", "/s", "/c"] if binary else None
+    return None
 
 
 def run_interceptor(payload: dict, env=None) -> dict:
@@ -118,54 +155,50 @@ class TestBAP200SoleExecutor(unittest.TestCase):
     # AC1: Allowed non-idempotent operation occurs exactly once
     # -------------------------------------------------------------------------
     def test_ac1_non_idempotent_operation_occurs_exactly_once(self):
-        counter_file = os.path.join(WORKSPACE_ROOT, "tests", "scratch_counter.txt")
-        if os.path.exists(counter_file):
-            os.remove(counter_file)
-
-        # Non-idempotent command: Appends a line with timestamp/counter to file
-        cmd_str = f'{sys.executable} -c "with open(r\'{counter_file}\', \'a\') as f: f.write(\'1\\n\')"'
-
-        # 1. Claude Code PreToolUse Hook interceptor runs
-        hook_payload = {
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_input": {"command": cmd_str},
-            "session_id": "sess-bap200-test-ac1",
-        }
-        hook_resp = run_interceptor(hook_payload)
-
-        # Verify hook returns 'allow' with updatedInput routing to bapedge exec
-        self.assertEqual(hook_resp["hookSpecificOutput"]["permissionDecision"], "allow")
-        updated_input = hook_resp["hookSpecificOutput"].get("updatedInput", {})
-        self.assertIn("command", updated_input)
-        rewritten_cmd = updated_input["command"]
-        self.assertIn("bapedge", rewritten_cmd)
-        self.assertIn("exec", rewritten_cmd)
-
-        # Verify the counter file was NOT touched during the hook evaluation
-        self.assertFalse(os.path.exists(counter_file), "Hook should not execute the command directly")
-
-        # 2. Simulated agent platform executes the rewritten command exactly once
-        # Claude Code runs the rewritten command via child process
-        proc = subprocess.run(
-            rewritten_cmd,
-            shell=True,
-            cwd=WORKSPACE_ROOT,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(proc.returncode, 0, f"BAPEdge exec failed: {proc.stderr}")
-
-        # 3. Verify the non-idempotent file write occurred EXACTLY ONCE
-        self.assertTrue(os.path.exists(counter_file))
-        with open(counter_file, "r") as f:
-            lines = [l.strip() for l in f.readlines() if l.strip()]
-        self.assertEqual(len(lines), 1, f"Expected exactly 1 execution, found {len(lines)}")
-        self.assertEqual(lines[0], "1")
-
-        # Cleanup
-        if os.path.exists(counter_file):
-            os.remove(counter_file)
+        shells = ("bash", "sh", "zsh", "powershell", "pwsh", "cmd")
+        script = "import sys; open(sys.argv[1], 'a', encoding='utf-8').write('1\\n')"
+        for shell in shells:
+            with self.subTest(shell=shell):
+                host = fixture_shell(shell)
+                if host is None:
+                    if shell == "bash" or (os.name == "nt" and shell in ("powershell", "cmd")):
+                        self.fail("required native fixture shell unavailable: " + shell)
+                    self.skipTest("optional native fixture shell unavailable: " + shell)
+                with tempfile.TemporaryDirectory(prefix="bap200-ac1-", dir=os.path.join(WORKSPACE_ROOT, "tests")) as fixture:
+                    counter_file = os.path.join(fixture, "counter with spaces.txt")
+                    session = "sess-bap200-test-ac1-" + shell
+                    # No detached watcher or real-user state is needed to test
+                    # execution count. Both hook and broker see this fake home.
+                    home = os.path.join(fixture, "home")
+                    watchers = os.path.join(home, ".bap", "watchers")
+                    os.makedirs(watchers)
+                    Path(watchers, session + ".watcher").write_text("fixture", encoding="utf-8")
+                    env = dict(os.environ, HOME=home, USERPROFILE=home,
+                               BAP_STATE_DIR=self.test_state_dir, BAP_SESSION_ID=session,
+                               BAP_EDGE_BIN=BAPEDGE_BIN, BAP_WORKSPACE_ROOT=WORKSPACE_ROOT,
+                               BAP_OFFLINE="1", BAP_TEST_MODE="1", BAP_CREDENTIALS="",
+                               BAP_SERVER_URL="http://127.0.0.1:1",
+                               BAP_CONTROL_PLANE_URL="http://127.0.0.1:1")
+                    cmd_str = python_command_for_shell([sys.executable, "-c", script, counter_file], shell)
+                    hook_resp = run_interceptor({
+                        "hook_event_name": "PreToolUse", "tool_name": shell,
+                        "tool_input": {"command": cmd_str}, "session_id": session,
+                    }, env=env)
+                    self.assertEqual(hook_resp["hookSpecificOutput"]["permissionDecision"], "allow", hook_resp)
+                    updated = hook_resp["hookSpecificOutput"].get("updatedInput", {})
+                    rewritten = updated.get("command", "")
+                    self.assertIn("exec", rewritten)
+                    self.assertIn("--shell " + shell, rewritten)
+                    self.assertFalse(os.path.exists(counter_file), "Hook executed a side effect during precheck")
+                    # Execute as the declared native tool, never shell=True's
+                    # implicit CMD selection for a payload labeled Bash.
+                    proc = subprocess.run(host + [rewritten], cwd=WORKSPACE_ROOT,
+                                          env=env, capture_output=True, text=True, timeout=45)
+                    self.assertEqual(proc.returncode, 0,
+                                     f"{shell} broker execution failed:\nstdout={proc.stdout}\nstderr={proc.stderr}")
+                    self.assertTrue(os.path.exists(counter_file), proc.stdout)
+                    self.assertEqual(Path(counter_file).read_text(encoding="utf-8"), "1\n",
+                                     "Expected exactly one append after execution, and zero during precheck")
 
     # -------------------------------------------------------------------------
     # AC2: Denied operation produces zero side effects

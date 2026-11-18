@@ -237,6 +237,14 @@ func ConfigureSandbox(cmd *exec.Cmd) func() {
 	if len(cmd.Args) >= 3 && strings.EqualFold(filepath.Base(cmd.Path), "cmd.exe") && cmd.Args[1] == "/c" {
 		cmd.SysProcAttr.CmdLine = fmt.Sprintf(`cmd.exe /c %s`, cmd.Args[2])
 	}
+	// Explicit CMD uses /d /s /c. Go's ordinary argv escaping is for CRT
+	// programs, not CMD: it inserts backslashes before the payload's quotes,
+	// corrupting e.g. Python -c and executable/file paths containing spaces.
+	// /s strips this one outer quote pair, leaving the authorized text intact.
+	if len(cmd.Args) == 5 && strings.EqualFold(filepath.Base(cmd.Path), "cmd.exe") &&
+		cmd.Args[1] == "/d" && cmd.Args[2] == "/s" && cmd.Args[3] == "/c" {
+		cmd.SysProcAttr.CmdLine = fmt.Sprintf(`%s /d /s /c "%s"`, syscall.EscapeArg(cmd.Path), cmd.Args[4])
+	}
 
 	return func() {
 		if token != 0 {
