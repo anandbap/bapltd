@@ -307,7 +307,11 @@ class TestPersonaAndActivityService(unittest.TestCase):
             "color": "#10b981",
             "icon": "shield-check"
         }
-        code, post_resp, _ = http_req(f"{CP_URL}/api/activity/categories", method="POST", data=new_cat)
+        # Registering a category changes shared configuration, so it requires admin credentials.
+        code, post_resp, _ = http_req(
+            f"{CP_URL}/api/activity/categories", method="POST", data=new_cat,
+            headers={"X-BAP-Admin-Token": TEST_ADMIN_TOKEN},
+        )
         self.assertEqual(code, 201)
         self.assertEqual(post_resp.get("status"), "registered")
 
