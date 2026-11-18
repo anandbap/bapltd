@@ -260,6 +260,7 @@ type TaskGrant struct {
 	IsBurned           bool      `json:"is_burned"`
 	BurnReason         string    `json:"burn_reason,omitempty"`
 	DelegationType     string    `json:"delegation_type,omitempty"`
+	GrantClass         string    `json:"grant_class,omitempty"` // BAP-1102: single_use, workspace_edit, inspection, ...
 	ClientType         string    `json:"client_type,omitempty"`
 	ConsumedCmd        string    `json:"consumed_cmd,omitempty"`
 	ReceiptID          string    `json:"receipt_id,omitempty"`

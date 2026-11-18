@@ -37,7 +37,7 @@ func TestPermissionPolicy_ParseRejectsUnsafeDocuments(t *testing.T) {
 		"unknown field":   strings.Replace(good, `"version": 1,`, `"version": 1, "backdoor": true,`, 1),
 		"bad tier":        strings.Replace(good, `"tier": "deny"`, `"tier": "maybe"`, 1),
 		"bad pattern":     strings.Replace(good, `"credential:*"`, `"credential:[*"`, 1),
-		"zero ceiling":    strings.Replace(good, `"max_mints_per_session": 100`, `"max_mints_per_session": 0`, 1),
+		"zero ceiling":    strings.Replace(good, `"max_mints_per_session": 200`, `"max_mints_per_session": 0`, 1),
 		"wildcard output": strings.Replace(good, `"repo:*": ["repo:read"]`, `"repo:*": ["repo:*"]`, 1),
 		"garbage":         "{not json",
 	}
@@ -141,7 +141,7 @@ func TestPermissionPolicy_SignedOverrideLifecycle(t *testing.T) {
 	}
 
 	src := filepath.Join(t.TempDir(), "p.json")
-	custom := strings.Replace(string(defaultPermissionPolicyJSON), `"max_mints_per_session": 100`, `"max_mints_per_session": 3`, 1)
+	custom := strings.Replace(string(defaultPermissionPolicyJSON), `"max_mints_per_session": 200`, `"max_mints_per_session": 3`, 1)
 	if err := os.WriteFile(src, []byte(custom), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestPermissionPolicy_OverrideDrivesMintCapEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := filepath.Join(t.TempDir(), "p.json")
-	custom := strings.Replace(string(defaultPermissionPolicyJSON), `"max_mints_per_session": 100`, `"max_mints_per_session": 2`, 1)
+	custom := strings.Replace(string(defaultPermissionPolicyJSON), `"max_mints_per_session": 200`, `"max_mints_per_session": 2`, 1)
 	if err := os.WriteFile(src, []byte(custom), 0600); err != nil {
 		t.Fatal(err)
 	}

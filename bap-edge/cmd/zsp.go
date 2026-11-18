@@ -635,6 +635,9 @@ func RunZSP(args []string) error {
 		fmt.Printf("  Allowed Actions:   %v\n", grant.AllowedActions)
 		fmt.Printf("  Allowed Resources: %v\n", grant.AllowedResources)
 		fmt.Printf("  Max Uses / TTL:    %d uses | expires %s\n", grant.MaxUses, grant.ExpiresAt.Format(time.RFC3339))
+		if grant.GrantClass != "" {
+			fmt.Printf("  Grant Class:       %s (delegation: %s)\n", grant.GrantClass, grant.DelegationType)
+		}
 		return nil
 
 	case "approvals", "requests":

@@ -362,6 +362,15 @@ func (s *Server) handleSTSInspector(w http.ResponseWriter, r *http.Request) {
 		Command   string   `json:"command,omitempty"`
 		Timestamp string   `json:"timestamp"`
 		ReceiptID string   `json:"receipt_id,omitempty"`
+		// BAP-1102: how the grant was approved, which ceiling class applied, and its uses.
+		DelegationType string `json:"delegation_type,omitempty"`
+		GrantClass     string `json:"grant_class,omitempty"`
+		MaxUses        int    `json:"max_uses,omitempty"`
+		UsesConsumed   int    `json:"uses_consumed,omitempty"`
+		RemainingUses  int    `json:"remaining_uses,omitempty"`
+		ExpiresAt      string `json:"expires_at,omitempty"`
+		Narrowed       bool   `json:"narrowing_applied,omitempty"`
+		NarrowingNote  string `json:"narrowing_reason,omitempty"`
 	}
 
 	var zspGrants []ZSPGrantSummary
@@ -425,16 +434,9 @@ func (s *Server) handleSTSInspector(w http.ResponseWriter, r *http.Request) {
 				grantMap[zspGrants[i].GrantID] = &zspGrants[i]
 			}
 			for _, dg := range dbGrants {
-				mode := "AUTOMATIC"
-				if dg.DelegationType == "manual_hitl" || strings.Contains(strings.ToLower(dg.DelegationType), "oob") || strings.Contains(strings.ToLower(dg.DelegationType), "step_up") {
-					mode = "MANUAL"
-				}
-				status := "USED"
-				if !dg.IsBurned && dg.RemainingUses > 0 && time.Now().Before(dg.ExpiresAt) {
-					status = "ACTIVE"
-				} else if time.Now().After(dg.ExpiresAt) && !dg.IsBurned {
-					status = "EXPIRED"
-				}
+				mode := grantMode(dg.DelegationType)
+				status := grantStatus(dg, time.Now())
+				maxUses, usesConsumed := grantUses(dg)
 				agentName := dg.ClientType
 				if agentName == "" {
 					agentName = "agent"
@@ -450,6 +452,15 @@ func (s *Server) handleSTSInspector(w http.ResponseWriter, r *http.Request) {
 					Command:   dg.ConsumedCmd,
 					Timestamp: dg.IssuedAt.Format(time.RFC3339),
 					ReceiptID: dg.ReceiptID,
+
+					DelegationType: dg.DelegationType,
+					GrantClass:     grantClassLabel(dg),
+					MaxUses:        maxUses,
+					UsesConsumed:   usesConsumed,
+					RemainingUses:  dg.RemainingUses,
+					ExpiresAt:      dg.ExpiresAt.Format(time.RFC3339),
+					Narrowed:       dg.NarrowingApplied,
+					NarrowingNote:  dg.NarrowingReason,
 				}
 			}
 			zspGrants = make([]ZSPGrantSummary, 0, len(grantMap))

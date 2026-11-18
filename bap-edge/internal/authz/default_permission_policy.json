@@ -8,9 +8,28 @@
     "fs:*": ["fs:read"]
   },
   "ceiling": {
-    "max_uses_per_grant": 1000,
-    "max_ttl_seconds": 3600,
-    "max_mints_per_session": 100
+    "max_uses_per_grant": 1,
+    "max_ttl_seconds": 300,
+    "max_mints_per_session": 200,
+    "classes": [
+      {
+        "id": "inspection",
+        "match": [
+          "inspect:read", "git:status", "git:log", "git:branch", "git:diff", "git:show",
+          "git:inspect:read", "git:read", "fs:read", "fs:list", "fs:search",
+          "fs:file:read", "fs:dir:read", "repo:read", "repo:status"
+        ],
+        "max_uses_per_grant": 10,
+        "max_ttl_seconds": 300
+      },
+      {
+        "id": "workspace_edit",
+        "match": ["fs:write", "fs:file:write", "fs:file:edit"],
+        "resource_match": ["workspace://current", "workspace://."],
+        "max_uses_per_grant": 25,
+        "max_ttl_seconds": 600
+      }
+    ]
   },
   "rules": [
     {

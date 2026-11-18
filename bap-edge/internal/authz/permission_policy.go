@@ -70,11 +70,28 @@ type PermissionRule struct {
 }
 
 // Ceiling bounds every grant minted in a session; mints can only be clamped down to it.
+// MaxUsesPerGrant / MaxTTLSeconds are the DEFAULT class (single-use by default). Classes carve out
+// bounded exceptions for specific actions, for example multiple uses for in-workspace edits (BAP-1102).
 type Ceiling struct {
-	MaxUsesPerGrant    int `json:"max_uses_per_grant"`
-	MaxTTLSeconds      int `json:"max_ttl_seconds"`
-	MaxMintsPerSession int `json:"max_mints_per_session"`
+	MaxUsesPerGrant    int            `json:"max_uses_per_grant"`
+	MaxTTLSeconds      int            `json:"max_ttl_seconds"`
+	MaxMintsPerSession int            `json:"max_mints_per_session"`
+	Classes            []CeilingClass `json:"classes,omitempty"`
 }
+
+// CeilingClass is a named ceiling that applies to grants whose actions all match Match (and, when
+// ResourceMatch is set, whose resources all match it). A grant that mixes classes gets the strictest
+// limits of the classes involved, so a class can never be used to widen another action.
+type CeilingClass struct {
+	ID              string   `json:"id"`
+	Match           []string `json:"match"`
+	ResourceMatch   []string `json:"resource_match,omitempty"`
+	MaxUsesPerGrant int      `json:"max_uses_per_grant"`
+	MaxTTLSeconds   int      `json:"max_ttl_seconds"`
+}
+
+// DefaultGrantClass labels grants that fall under the default ceiling.
+const DefaultGrantClass = "single_use"
 
 // PermissionPolicy is the full data-driven policy document.
 type PermissionPolicy struct {
@@ -140,6 +157,17 @@ func ParsePermissionPolicy(data []byte) (*PermissionPolicy, error) {
 	}
 	if p.Ceiling.MaxUsesPerGrant <= 0 || p.Ceiling.MaxTTLSeconds <= 0 || p.Ceiling.MaxMintsPerSession <= 0 {
 		return nil, fmt.Errorf("%w: ceiling values must be positive", ErrPermissionPolicyInvalid)
+	}
+	for i := range p.Ceiling.Classes {
+		c := &p.Ceiling.Classes[i]
+		if c.ID == "" || len(c.Match) == 0 || c.MaxUsesPerGrant <= 0 || c.MaxTTLSeconds <= 0 {
+			return nil, fmt.Errorf("%w: ceiling class %d needs an id, match patterns and positive limits", ErrPermissionPolicyInvalid, i)
+		}
+		for _, pat := range append(append([]string{}, c.Match...), c.ResourceMatch...) {
+			if _, err := path.Match(strings.ToLower(pat), ""); err != nil {
+				return nil, fmt.Errorf("%w: ceiling class %s has bad pattern %q: %v", ErrPermissionPolicyInvalid, c.ID, pat, err)
+			}
+		}
 	}
 	for i := range p.Rules {
 		r := &p.Rules[i]
@@ -306,6 +334,74 @@ func (p *PermissionPolicy) ClampCeiling(maxUses int, ttl time.Duration) (int, ti
 		clamped = true
 	}
 	return maxUses, ttl, clamped
+}
+
+// classFor returns the ceiling class an action falls in for the given resources, or nil for the
+// default class. The first matching class wins.
+func (p *PermissionPolicy) classFor(action string, resources []string) *CeilingClass {
+	a := strings.ToLower(strings.TrimSpace(action))
+	for i := range p.Ceiling.Classes {
+		c := &p.Ceiling.Classes[i]
+		if !globAny(c.Match, a) {
+			continue
+		}
+		if len(c.ResourceMatch) > 0 {
+			all := true
+			for _, res := range resources {
+				if !globAny(c.ResourceMatch, strings.ToLower(strings.TrimSpace(res))) {
+					all = false
+					break
+				}
+			}
+			if !all {
+				continue
+			}
+		}
+		return c
+	}
+	return nil
+}
+
+// ClampCeilingFor bounds requested uses and TTL by the ceiling that applies to the requested actions
+// and resources. Every action contributes its class limits and the strictest limit wins, so mixing an
+// edit with a push yields the default (single-use) limits. It also returns the grant class label.
+func (p *PermissionPolicy) ClampCeilingFor(actions, resources []string, maxUses int, ttl time.Duration) (int, time.Duration, bool, string) {
+	limitUses := p.Ceiling.MaxUsesPerGrant
+	limitTTL := p.Ceiling.MaxTTLSeconds
+	class := DefaultGrantClass
+	if len(actions) > 0 {
+		limitUses, limitTTL = int(^uint(0)>>1), int(^uint(0)>>1)
+		for _, act := range actions {
+			uses, secs, id := p.Ceiling.MaxUsesPerGrant, p.Ceiling.MaxTTLSeconds, DefaultGrantClass
+			if c := p.classFor(act, resources); c != nil {
+				uses, secs, id = c.MaxUsesPerGrant, c.MaxTTLSeconds, c.ID
+			}
+			if uses < limitUses || (uses == limitUses && secs < limitTTL) {
+				class = id
+			}
+			if uses < limitUses {
+				limitUses = uses
+			}
+			if secs < limitTTL {
+				limitTTL = secs
+			}
+		}
+	}
+	clamped := false
+	if maxUses > limitUses {
+		maxUses = limitUses
+		clamped = true
+	}
+	if maxTTL := time.Duration(limitTTL) * time.Second; ttl > maxTTL {
+		ttl = maxTTL
+		clamped = true
+	}
+	// A default-class grant that still carries several uses (a legacy override without classes) is
+	// labelled honestly rather than "single_use".
+	if class == DefaultGrantClass && maxUses > 1 {
+		class = "multi_use"
+	}
+	return maxUses, ttl, clamped, class
 }
 
 // FormatPairs renders decisions for error messages and audit reasons.

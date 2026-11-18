@@ -562,6 +562,46 @@ function Restore-TrackedFile {
     return $true
 }
 
+# BAP-1101: restore the developer's ORIGINAL file from orphaned `<file>.bap-backup-<session>` copies.
+# A backup that already holds BAP-injected content is not the original and is never restored.
+# With -Archive, whatever remains is moved to .claude\.bap-recovery-archive (nothing is deleted).
+function Restore-ClaudeOrphanedOriginals {
+    param(
+        [Parameter(Mandatory = $true)][string]$ClaudeDir,
+        [switch]$Archive
+    )
+    try {
+        if (-not (Test-Path -LiteralPath $ClaudeDir -PathType Container)) { return }
+        $orph = @(Get-ChildItem -LiteralPath $ClaudeDir -Force -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like '*.bap-backup-*' })
+        if ($orph.Count -eq 0) { return }
+        foreach ($grp in ($orph | Group-Object { $_.Name -replace '\.bap-backup-.*$', '' })) {
+            $origCandidates = @($grp.Group | Where-Object {
+                -not (Select-String -LiteralPath $_.FullName -Pattern 'interceptor\.exe|bap-zero-trust|BAP Zero-Trust|bapmcp|BAP_SESSION_ID' -Quiet -ErrorAction SilentlyContinue)
+            } | Sort-Object LastWriteTimeUtc -Descending)
+            if ($origCandidates.Count -gt 0) {
+                try {
+                    Copy-Item -LiteralPath $origCandidates[0].FullName -Destination (Join-Path $ClaudeDir $grp.Name) -Force -ErrorAction Stop
+                    Write-Host "[+] Recovered original $($grp.Name) from orphaned backup." -ForegroundColor Yellow
+                } catch {
+                    Write-Warning "Could not recover $($grp.Name): $($_.Exception.Message)"
+                }
+            }
+        }
+        if ($Archive) {
+            $archiveDir = Join-Path $ClaudeDir '.bap-recovery-archive'
+            if (-not (Test-Path -LiteralPath $archiveDir)) { [void](New-Item -ItemType Directory -Path $archiveDir -Force -ErrorAction SilentlyContinue) }
+            foreach ($o in $orph) {
+                if (Test-Path -LiteralPath $o.FullName) {
+                    Move-Item -LiteralPath $o.FullName -Destination (Join-Path $archiveDir $o.Name) -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+    } catch {
+        Write-Warning "Orphaned backup recovery notice: $($_.Exception.Message)"
+    }
+}
+
 function Restore-BapState {
     param(
         [Parameter(Mandatory = $true)][string]$ManifestPath,
@@ -1086,6 +1126,8 @@ try {
 
             if ($orphans.Count -gt 0) {
                 $names = $orphans.FullName -join "`n  "
+                # Startup recovery (BAP-1101): put the developer's ORIGINAL file back before archiving.
+                Restore-ClaudeOrphanedOriginals -ClaudeDir $ClaudeDir
                 Write-Host "[+] Auto-remediating: safely archiving $($orphans.Count) orphaned backup file(s)..." -ForegroundColor Yellow
                 $archiveDir = Join-Path $ClaudeDir '.bap-recovery-archive'
                 if (-not (Test-Path -LiteralPath $archiveDir)) {
@@ -1640,6 +1682,12 @@ finally {
                         if ($ExitCode -eq 0) {
                             $ExitCode = 20
                         }
+                    }
+
+                    # Final sweep (BAP-1101): once the transaction restored cleanly, recover and archive
+                    # any leftover backups so nothing outlives the last session.
+                    if (-not (Test-Path -LiteralPath $ManifestPath)) {
+                        Restore-ClaudeOrphanedOriginals -ClaudeDir $ClaudeDir -Archive
                     }
                 }
                 else {

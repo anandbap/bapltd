@@ -4,7 +4,10 @@
 # Defaults to %USERPROFILE%\.bap\bin unless %ProgramFiles%\BAP is writable.
 
 param(
-    [switch]$Debug = $false
+    [switch]$Debug = $false,
+    # Deploy a developer-override or test-harness build globally. Never use this on a machine that runs
+    # real agents: those builds can be told to skip approvals (BAP-1096).
+    [switch]$AllowDevBuild = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,6 +15,39 @@ $ErrorActionPreference = "Stop"
 $repoRoot = (Get-Item -Path $PSScriptRoot).Parent.FullName
 if (-not (Test-Path (Join-Path $repoRoot "bapedge.exe"))) {
     $repoRoot = $PSScriptRoot
+}
+
+# BAP-1103 helpers -------------------------------------------------------------------------------
+function Get-BapBinaryInfo {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    try {
+        $raw = & $Path version --json 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $raw) { return $null }
+        return (($raw -join "`n") | ConvertFrom-Json)
+    } catch { return $null }
+}
+
+function Get-FileSha256Safe {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    try { return (Get-FileHash -LiteralPath $Path -Algorithm SHA256 -ErrorAction Stop).Hash } catch { return $null }
+}
+
+# The binary being installed must be the freshly built, release-style one. Refuse a developer-override
+# or test-harness build unless the operator explicitly accepts it.
+$sourceEdge = Join-Path $repoRoot "bapedge.exe"
+if (Test-Path -LiteralPath $sourceEdge) {
+    $sourceInfo = Get-BapBinaryInfo -Path $sourceEdge
+    if ($null -ne $sourceInfo) {
+        Write-Host "[*] Installing bapedge $($sourceInfo.version) (commit $($sourceInfo.git_commit), built $($sourceInfo.build_date))" -ForegroundColor Cyan
+        if (($sourceInfo.allow_dev_overrides -eq $true -or $sourceInfo.headless_stepup -eq $true) -and -not $AllowDevBuild) {
+            Write-Error ("Refusing to install $sourceEdge globally: it is a developer-override or test-harness build " +
+                "(allow_dev_overrides=$($sourceInfo.allow_dev_overrides), headless_stepup=$($sourceInfo.headless_stepup)). " +
+                "Rebuild with: .\update_binaries.ps1 -AllowDevOverrides `"false`"   (or pass -AllowDevBuild to override).")
+            exit 3
+        }
+    } else {
+        Write-Warning "Could not read version information from $sourceEdge; continuing."
+    }
 }
 
 Write-Host ">>> Inspecting target installation directory..." -ForegroundColor Cyan
@@ -114,6 +150,62 @@ if (-not (Test-Path $interceptorSrc)) {
 }
 if (Test-Path $interceptorSrc) {
     Deploy-BinarySafe -SourcePath $interceptorSrc -DestinationPath (Join-Path $binDir "interceptor.exe") -DisplayName "interceptor.exe"
+}
+
+# 2c. BAP-1103: synchronize EVERY existing copy, wherever it lives. Earlier installers and `bap install`
+# put binaries in %USERPROFILE%\bin, the workspace and user .claude\hooks folders, %ProgramData% and so on.
+# Hooks and launchers run whichever copy they resolve, so a single stale copy silently keeps old (or
+# developer-override) behavior. Only files that already exist are updated here; nothing new is created.
+$syncSources = [ordered]@{}
+foreach ($b in $bins) { $syncSources[$b] = (Join-Path $repoRoot $b) }
+if (Test-Path $interceptorSrc) { $syncSources["interceptor.exe"] = $interceptorSrc }
+$syncSources["cchook-interceptor.exe"] = $interceptorSrc
+
+$syncDirs = New-Object System.Collections.Generic.List[string]
+foreach ($d in @(
+        (Join-Path $env:USERPROFILE "bin"),
+        (Join-Path $env:USERPROFILE ".bap\bin"),
+        (Join-Path $env:ProgramFiles "BAP\bin"),
+        (Join-Path $env:ProgramData "BAP\bin"),
+        (Join-Path $env:LOCALAPPDATA "BAP\bin"),
+        (Join-Path $env:APPDATA "BAP\bin"),
+        (Join-Path $env:USERPROFILE ".claude\hooks"),
+        (Join-Path $repoRoot ".claude\hooks")
+    )) { if ($d) { $syncDirs.Add($d) } }
+foreach ($pd in ($env:PATH -split ';')) { if (-not [string]::IsNullOrWhiteSpace($pd)) { $syncDirs.Add($pd.Trim('"')) } }
+
+$syncedDirs = @{}
+$staleLeft = @()
+foreach ($dir in $syncDirs) {
+    $full = try { [System.IO.Path]::GetFullPath($dir) } catch { $null }
+    if (-not $full -or $syncedDirs.ContainsKey($full.ToLowerInvariant())) { continue }
+    $syncedDirs[$full.ToLowerInvariant()] = $true
+    if (-not (Test-Path -LiteralPath $full -PathType Container)) { continue }
+    if ($full.TrimEnd('\') -ieq $binDir.TrimEnd('\')) { continue }   # already deployed above
+    # Only touch folders that really hold a BAP build; an unrelated tool's bap.exe on PATH is left alone.
+    $holdsBap = $false
+    foreach ($probe in @("bapedge.exe", "bap.exe", "bapmcp.exe")) {
+        $probePath = Join-Path $full $probe
+        if (Test-Path -LiteralPath $probePath -PathType Leaf) {
+            $probeInfo = Get-BapBinaryInfo -Path $probePath
+            if ($null -ne $probeInfo -and $probeInfo.component -eq "bapedge") { $holdsBap = $true; break }
+        }
+    }
+    if (-not $holdsBap) { continue }
+    foreach ($name in $syncSources.Keys) {
+        $target = Join-Path $full $name
+        $source = $syncSources[$name]
+        if (-not (Test-Path -LiteralPath $target -PathType Leaf) -or -not (Test-Path -LiteralPath $source -PathType Leaf)) { continue }
+        if ((Get-FileSha256Safe -Path $target) -eq (Get-FileSha256Safe -Path $source)) {
+            Write-Host "  [=] $target already current" -ForegroundColor DarkGray
+            continue
+        }
+        Deploy-BinarySafe -SourcePath $source -DestinationPath $target -DisplayName "$name (stale copy in $full)"
+        if ((Get-FileSha256Safe -Path $target) -ne (Get-FileSha256Safe -Path $source)) { $staleLeft += $target }
+    }
+    # Best-effort cleanup of binaries rotated out of the way by Deploy-BinarySafe.
+    Get-ChildItem -LiteralPath $full -Filter "*.exe.old.*" -File -ErrorAction SilentlyContinue |
+        ForEach-Object { try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop } catch { } }
 }
 
 # Config & Policy assets
@@ -343,6 +435,27 @@ if (Test-Path $pluginsSrc) {
 $bapedgeBin = Join-Path $binDir "bapedge.exe"
 if (Test-Path $bapedgeBin) {
     & $bapedgeBin plugin layers
+}
+
+# 8. BAP-1103: verify. Every copy found on this machine must now match the installed build; report
+# any that could not be replaced (usually because a BAP process still holds the file open).
+Write-Host ">>> Verifying installed copies..." -ForegroundColor Cyan
+$expected = if ($null -ne $sourceInfo) { "$($sourceInfo.version) ($($sourceInfo.git_commit))" } else { "source build" }
+foreach ($dir in $syncedDirs.Keys) {
+    foreach ($name in @("bapedge.exe", "bap.exe")) {
+        $p = Join-Path $dir $name
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }
+        $info = Get-BapBinaryInfo -Path $p
+        $label = if ($null -ne $info) { "$($info.version) ($($info.git_commit)) dev_overrides=$($info.allow_dev_overrides)" } else { "unreadable" }
+        $ok = ((Get-FileSha256Safe -Path $p) -eq (Get-FileSha256Safe -Path (Join-Path $repoRoot $name)))
+        Write-Host ("  [{0}] {1}  {2}" -f $(if ($ok) { "OK " } else { "OLD" }), $p, $label) -ForegroundColor $(if ($ok) { "Gray" } else { "Yellow" })
+    }
+}
+if ($staleLeft.Count -gt 0) {
+    Write-Warning "These copies could not be updated (stop running BAP processes and re-run this installer):"
+    $staleLeft | ForEach-Object { Write-Warning "  $_" }
+    Write-Host ">>> BAP Zero-Trust global deployment finished WITH STALE COPIES (expected: $expected)." -ForegroundColor Red
+    exit 2
 }
 
 Write-Host ">>> BAP Zero-Trust Universal Global Deployment Complete!" -ForegroundColor Green

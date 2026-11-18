@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# BAP governed launcher (macOS / Linux / WSL / Git Bash).
+# BAP governed launcher for OpenAI Codex CLI (macOS / Linux / WSL / Git Bash).
 # This file MUST keep LF line endings (see .gitattributes).
+#
+# On macOS/Linux this behaves like the Windows launcher: it injects the generated CODEX.md/AGENTS.md,
+# MCP config and hooks, enrolls the session, runs codex itself (NOT wrapped in `bapedge exec`), and
+# restores the original files on exit. Cleanup also runs at the next startup (see bap_posix_engine.sh).
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BASE_NAME="$(basename "$0" .sh)"
@@ -51,11 +55,35 @@ export BAP_SESSION_ID="sess-${BASE_NAME}-$$-$(date +%s)"
 export LTD_SOURCE="codex"
 
 TARGET_BIN="codex"
+
+# Locate the shared POSIX engine (transactional injection + startup/last-session cleanup).
+BAP_ENGINE=""
+for _c in "$SCRIPT_DIR/bap_posix_engine.sh" "$SCRIPT_DIR/launchers/bap_posix_engine.sh" \
+          "$SCRIPT_DIR/../launchers/bap_posix_engine.sh" "$SCRIPT_DIR/bap/launchers/bap_posix_engine.sh" \
+          "$HOME/.bap/launchers/bap_posix_engine.sh" "$HOME/bin/bap_posix_engine.sh"; do
+    if [ -f "$_c" ]; then BAP_ENGINE="$_c"; break; fi
+done
+
+if [ -n "$BAP_ENGINE" ]; then
+    if ! command -v "$TARGET_BIN" >/dev/null 2>&1; then
+        echo "[BAP] Error: OpenAI Codex CLI ('$TARGET_BIN') not found in PATH." >&2
+        exit 1
+    fi
+    # shellcheck source=/dev/null
+    . "$BAP_ENGINE"
+    rc=0
+    bap_governed_run codex "OpenAI Codex CLI" -- "$TARGET_BIN" "${AGENT_ARGS[@]}" || rc=$?
+    exit "$rc"
+fi
+
+# Legacy path (engine not installed): no per-session injection or cleanup.
+echo "[BAP] WARNING: bap_posix_engine.sh not found; starting without per-session hook/policy injection." >&2
 if [ -f "$SCRIPT_DIR/bapedge" ]; then
     exec "$SCRIPT_DIR/bapedge" exec "$TARGET_BIN" "${AGENT_ARGS[@]}"
 elif command -v bapedge >/dev/null 2>&1; then
     exec bapedge exec "$TARGET_BIN" "${AGENT_ARGS[@]}"
 elif command -v "$TARGET_BIN" >/dev/null 2>&1; then
+    echo "[BAP] WARNING: bapedge not found; running $TARGET_BIN UNGOVERNED." >&2
     exec "$TARGET_BIN" "${AGENT_ARGS[@]}"
 else
     echo "[BAP] Error: neither bapedge nor $TARGET_BIN found in PATH." >&2

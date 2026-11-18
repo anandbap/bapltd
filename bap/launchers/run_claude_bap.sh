@@ -77,7 +77,30 @@ export BAP_SERVER_URL="$SERVER_URL"
 export BAP_CONTROL_PLANE_URL="$SERVER_URL"
 export LTD_SOURCE="claude-code"
 
-# Start native detached bapedge session watcher
+# Preferred path (BAP-1101): the shared POSIX engine injects the generated hooks (.claude/settings.json),
+# enrolls the session, runs claude itself, cleans up stale files at startup, and restores the original
+# files when the last session exits - the same transaction the Windows launcher performs.
+BAP_ENGINE=""
+for _c in "$SCRIPT_DIR/bap_posix_engine.sh" "$SCRIPT_DIR/launchers/bap_posix_engine.sh" \
+          "$SCRIPT_DIR/../launchers/bap_posix_engine.sh" "$SCRIPT_DIR/bap/launchers/bap_posix_engine.sh" \
+          "$HOME/.bap/launchers/bap_posix_engine.sh" "$HOME/bin/bap_posix_engine.sh"; do
+    if [ -f "$_c" ]; then BAP_ENGINE="$_c"; break; fi
+done
+if [ -n "$BAP_ENGINE" ]; then
+    if ! command -v claude >/dev/null 2>&1; then
+        echo "[BAP] Error: Claude Code CLI ('claude') not found in PATH." >&2
+        echo "      Install with: npm install -g @anthropic-ai/claude-code" >&2
+        exit 1
+    fi
+    # shellcheck source=/dev/null
+    . "$BAP_ENGINE"
+    rc=0
+    bap_governed_run claude-code "Claude Code" -- claude "${AGENT_ARGS[@]}" || rc=$?
+    exit "$rc"
+fi
+echo "[BAP] WARNING: bap_posix_engine.sh not found; starting without per-session hook injection or cleanup." >&2
+
+# Legacy path: start native detached bapedge session watcher
 if [ -x "$SCRIPT_DIR/bapedge" ]; then
     "$SCRIPT_DIR/bapedge" watch --server "$SERVER_URL" --session-id "$BAP_SESSION_ID" --detach 2>/dev/null || true
 elif command -v bapedge >/dev/null 2>&1; then

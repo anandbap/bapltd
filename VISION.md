@@ -240,7 +240,7 @@ User requests and LLM prompt classifications provide forensic telemetry but **ze
 Downstream services reject direct execution requests lacking a bounded BAP grant. The resource-side PEP independently derives the target action and resource path from the raw HTTP protocol, completely neutralizing client-controlled headers.
 
 ### Pillar 4: Atomic Single-Use Grant Burning (`I4`)
-Grants issued by the Control Plane are bounded by strict single-use (`maxUses=1`) semantics and sub-second TTLs. When presented to a Gateway PEP, they are atomically burned in centralized state, eliminating replay, double-spend, and race-condition attacks.
+Grants issued by the Control Plane are bounded by strict single-use (`maxUses=1`) semantics and sub-second TTLs. At the workstation, single-use is the default; the only exceptions are named, policy-defined grant classes with their own small ceilings (for example up to 25 uses for 10 minutes for in-workspace edits, see `docs/PERMISSION_POLICY.md`), each use still producing its own lineage proof. When presented to a Gateway PEP, they are atomically burned in centralized state, eliminating replay, double-spend, and race-condition attacks.
 
 ### Pillar 5: Immutable Proposals & Lineage Remediation (`R1`–`R4`)
 Execution proposals are strictly immutable. If human operators or supervisors remediate parameters (e.g. correcting a target customer ID), remediation creates a lineage record (`parent_proposal_id`), forcing the corrected proposal back through complete policy governance.

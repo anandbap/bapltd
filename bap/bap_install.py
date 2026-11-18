@@ -864,6 +864,8 @@ def install_core_binaries(target_dir: str, portable: bool = False):
             wrappers.append((f"{base}.sh", sh_src))
     else:
         wrappers.append(("copilot-wrap.sh", os.path.join(REPO_ROOT, "copilot", "copilot-wrap.sh")))
+        # BAP-1101: shared engine sourced by the claude/codex/agy launchers (injection + cleanup)
+        wrappers.append(("bap_posix_engine.sh", os.path.join(REPO_ROOT, "bap", "launchers", "bap_posix_engine.sh")))
         for base in launcher_bases:
             sh_src = os.path.join(REPO_ROOT, f"{base}.sh")
             if not os.path.isfile(sh_src):

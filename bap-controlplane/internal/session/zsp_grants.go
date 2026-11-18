@@ -41,13 +41,19 @@ func (s *Store) EnsureZSPGrantsSchema() error {
 		receipt_id TEXT,
 		authority_signature TEXT,
 		created_at TEXT NOT NULL,
-		updated_at TEXT NOT NULL
+		updated_at TEXT NOT NULL,
+		grant_class TEXT
 	);
 	CREATE INDEX IF NOT EXISTS idx_zsp_grants_session ON zsp_grants(session_id);
 	CREATE INDEX IF NOT EXISTS idx_zsp_grants_issued ON zsp_grants(issued_at);
 	`
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+	// BAP-1102: databases created before grant classes gain the column; a duplicate-column error on
+	// an up-to-date database is expected and ignored.
+	_, _ = s.db.Exec(`ALTER TABLE zsp_grants ADD COLUMN grant_class TEXT`)
+	return nil
 }
 
 // SaveZSPGrant persists or updates a TaskGrant with full rich details.
@@ -93,9 +99,10 @@ func (s *Store) SaveZSPGrant(g *types.TaskGrant) error {
 		narrowing_applied, narrowing_reason, max_uses, remaining_uses,
 		issued_at, expires_at, delegation_type, client_type,
 		is_burned, burn_reason, consumed_cmd, receipt_id, authority_signature,
-		created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		created_at, updated_at, grant_class
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(grant_id) DO UPDATE SET
+		grant_class = COALESCE(NULLIF(excluded.grant_class, ''), zsp_grants.grant_class),
 		remaining_uses = excluded.remaining_uses,
 		is_burned = excluded.is_burned,
 		burn_reason = excluded.burn_reason,
@@ -111,7 +118,7 @@ func (s *Store) SaveZSPGrant(g *types.TaskGrant) error {
 		narrowingInt, g.NarrowingReason, g.MaxUses, g.RemainingUses,
 		issuedAtStr, expiresAtStr, g.DelegationType, g.ClientType,
 		isBurnedInt, g.BurnReason, g.ConsumedCmd, g.ReceiptID, g.AuthoritySignature,
-		nowStr, nowStr,
+		nowStr, nowStr, g.GrantClass,
 	)
 	return err
 }
@@ -146,7 +153,7 @@ func (s *Store) GetZSPGrant(grantID string) (*types.TaskGrant, error) {
 	       allowed_actions, allowed_resources, requested_actions, requested_resources,
 	       narrowing_applied, narrowing_reason, max_uses, remaining_uses,
 	       issued_at, expires_at, delegation_type, client_type,
-	       is_burned, burn_reason, consumed_cmd, receipt_id, authority_signature
+	       is_burned, burn_reason, consumed_cmd, receipt_id, authority_signature, grant_class
 	FROM zsp_grants WHERE grant_id = ?
 	`
 	row := s.db.QueryRow(query, grantID)
@@ -197,7 +204,7 @@ func (s *Store) ListZSPGrants(sessionID string, limit int) ([]*types.TaskGrant, 
 		       allowed_actions, allowed_resources, requested_actions, requested_resources,
 		       narrowing_applied, narrowing_reason, max_uses, remaining_uses,
 		       issued_at, expires_at, delegation_type, client_type,
-		       is_burned, burn_reason, consumed_cmd, receipt_id, authority_signature
+		       is_burned, burn_reason, consumed_cmd, receipt_id, authority_signature, grant_class
 		FROM zsp_grants WHERE session_id = ? ORDER BY issued_at DESC LIMIT ?
 		`
 		rows, err = s.db.Query(query, sessionID, limit)
@@ -207,7 +214,7 @@ func (s *Store) ListZSPGrants(sessionID string, limit int) ([]*types.TaskGrant, 
 		       allowed_actions, allowed_resources, requested_actions, requested_resources,
 		       narrowing_applied, narrowing_reason, max_uses, remaining_uses,
 		       issued_at, expires_at, delegation_type, client_type,
-		       is_burned, burn_reason, consumed_cmd, receipt_id, authority_signature
+		       is_burned, burn_reason, consumed_cmd, receipt_id, authority_signature, grant_class
 		FROM zsp_grants ORDER BY issued_at DESC LIMIT ?
 		`
 		rows, err = s.db.Query(query, limit)
@@ -238,14 +245,14 @@ func scanGrantRow(r rowScanner) (*types.TaskGrant, error) {
 	var narrowingInt, isBurnedInt int
 	var issuedAtStr, expiresAtStr string
 	var delegType, clientType sql.NullString
-	var burnReason, consumedCmd, receiptID, authSig sql.NullString
+	var burnReason, consumedCmd, receiptID, authSig, grantClass sql.NullString
 
 	err := r.Scan(
 		&g.GrantID, &g.EnvelopeID, &g.SessionID, &g.PrincipalSVID, &g.HumanOwner,
 		&allowedActionsStr, &allowedResourcesStr, &reqActionsStr, &reqResourcesStr,
 		&narrowingInt, &g.NarrowingReason, &g.MaxUses, &g.RemainingUses,
 		&issuedAtStr, &expiresAtStr, &delegType, &clientType,
-		&isBurnedInt, &burnReason, &consumedCmd, &receiptID, &authSig,
+		&isBurnedInt, &burnReason, &consumedCmd, &receiptID, &authSig, &grantClass,
 	)
 	if err != nil {
 		return nil, err
@@ -282,6 +289,9 @@ func scanGrantRow(r rowScanner) (*types.TaskGrant, error) {
 	}
 	if authSig.Valid {
 		g.AuthoritySignature = authSig.String
+	}
+	if grantClass.Valid {
+		g.GrantClass = grantClass.String
 	}
 
 	return &g, nil

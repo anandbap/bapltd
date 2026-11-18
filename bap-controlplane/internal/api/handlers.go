@@ -3936,6 +3936,13 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 		Command   string   `json:"command,omitempty"`
 		Timestamp string   `json:"timestamp"`
 		ReceiptID string   `json:"receipt_id,omitempty"`
+		// BAP-1102: how the grant was approved, which ceiling class applied, and its uses.
+		DelegationType string `json:"delegation_type,omitempty"`
+		GrantClass     string `json:"grant_class,omitempty"`
+		MaxUses        int    `json:"max_uses,omitempty"`
+		UsesConsumed   int    `json:"uses_consumed,omitempty"`
+		RemainingUses  int    `json:"remaining_uses,omitempty"`
+		ExpiresAt      string `json:"expires_at,omitempty"`
 	}
 	grantMap := make(map[string]*transcriptGrant)
 	for _, ev := range sessionEvents {
@@ -3983,14 +3990,12 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 	if s.sessionStore != nil {
 		if dbGrants, err := s.sessionStore.ListZSPGrants(sessionID, 100); err == nil && len(dbGrants) > 0 {
 			for _, dg := range dbGrants {
-				mode := "AUTOMATIC"
-				if dg.DelegationType == "manual_hitl" || strings.Contains(strings.ToLower(dg.DelegationType), "oob") || strings.Contains(strings.ToLower(dg.DelegationType), "step_up") {
-					mode = "MANUAL"
-				}
+				mode := grantMode(dg.DelegationType)
 				status := "used"
 				if !dg.IsBurned && dg.RemainingUses > 0 && time.Now().Before(dg.ExpiresAt) {
 					status = "active"
 				}
+				maxUses, usesConsumed := grantUses(dg)
 				agentName := dg.ClientType
 				if agentName == "" {
 					agentName = "agent"
@@ -4005,6 +4010,13 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 					Command:   dg.ConsumedCmd,
 					Timestamp: dg.IssuedAt.Format(time.RFC3339),
 					ReceiptID: dg.ReceiptID,
+
+					DelegationType: dg.DelegationType,
+					GrantClass:     grantClassLabel(dg),
+					MaxUses:        maxUses,
+					UsesConsumed:   usesConsumed,
+					RemainingUses:  dg.RemainingUses,
+					ExpiresAt:      dg.ExpiresAt.Format(time.RFC3339),
 				}
 			}
 		}

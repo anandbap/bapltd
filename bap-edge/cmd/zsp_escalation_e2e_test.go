@@ -173,7 +173,7 @@ func TestE2E_MintCapAndSignedPolicyOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	custom := strings.Replace(string(def), `"max_mints_per_session": 100`, `"max_mints_per_session": 3`, 1)
+	custom := strings.Replace(string(def), `"max_mints_per_session": 200`, `"max_mints_per_session": 3`, 1)
 	if err := os.WriteFile(src, []byte(custom), 0600); err != nil {
 		t.Fatal(err)
 	}

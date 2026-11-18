@@ -182,7 +182,8 @@ def copy_installer_script():
         "run_cursor_bap.bat", "run_cursor_bap.ps1", "run_cursor_bap.sh",
         "run_gemini_cli_bap.bat", "run_gemini_cli_bap.ps1", "run_gemini_cli_bap.sh",
         "copilot-wrap.bat", "copilot-wrap.ps1", "copilot-wrap.sh",
-        "bap_launcher_engine.ps1"
+        "bap_launcher_engine.ps1", "bap_posix_engine.sh",
+        "run_codex_cli_bap.bat", "run_codex_cli_bap.ps1", "run_codex_cli_bap.sh",
     ]
     for lf in all_launchers:
         candidates = [

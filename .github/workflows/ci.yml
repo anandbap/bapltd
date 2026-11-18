@@ -119,6 +119,32 @@ jobs:
           node tests/test_activity_metrics.cjs
           node tests/test_v3_admin.cjs
 
+  # BAP-1101: the macOS/Linux launchers inject hooks/policy per session and clean up at startup and exit.
+  # Fake agent binaries are used, so no real Claude/Codex/Antigravity or control plane is needed.
+  test-launchers-posix:
+    name: POSIX launchers (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest ]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Syntax check launchers and engine
+        run: |
+          for f in bap/launchers/run_claude_bap.sh bap/launchers/run_codex_cli_bap.sh bap/launchers/run_antigravity_cli_bap.sh bap/launchers/bap_posix_engine.sh bap/run_claude_bap.sh bap/run_antigravity_cli_bap.sh run_codex_cli_bap.sh run_antigravity_cli_bap.sh; do
+            bash -n "$f" || exit 1
+          done
+
+      - name: Launcher argument handling (legacy path, no engine)
+        run: bash scripts/check_launchers.sh
+
+      - name: Launcher injection, startup cleanup and last-session restore
+        run: bash scripts/check_launchers_posix.sh
+
   test-python:
     name: Python Integration & E2E Suites
     runs-on: windows-latest

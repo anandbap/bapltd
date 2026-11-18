@@ -154,12 +154,13 @@ func (e *ZSPEngine) AuthorizeTaskEnvelope(env *types.TaskAuthorizationEnvelope, 
 	if ttl <= 0 {
 		ttl = 300 * time.Second // Ephemeral 5-minute bounded TTL
 	}
-	if cu, ct, clamped := pol.ClampCeiling(maxUses, ttl); clamped {
+	cu, ct, clamped, grantClass := pol.ClampCeilingFor(allowedActions, allowedResources, maxUses, ttl)
+	if clamped {
 		maxUses, ttl = cu, ct
 		narrowed = true
 		if narrowingReason == "" {
-			narrowingReason = fmt.Sprintf("Monotonic scope attenuation: uses/TTL clamped to session ceiling (max uses %d, max TTL %ds)",
-				pol.Ceiling.MaxUsesPerGrant, pol.Ceiling.MaxTTLSeconds)
+			narrowingReason = fmt.Sprintf("Monotonic scope attenuation: uses/TTL clamped to the %q grant class ceiling (max uses %d, max TTL %ds)",
+				grantClass, cu, int(ct.Seconds()))
 		}
 	}
 
@@ -189,6 +190,7 @@ func (e *ZSPEngine) AuthorizeTaskEnvelope(env *types.TaskAuthorizationEnvelope, 
 		IsBurned:            false,
 		DelegationType:      env.AuthorizedBy.DelegationType,
 		ClientType:          env.Identity.ClientType,
+		GrantClass:          grantClass,
 	}
 
 	// Sign the grant with PEP Authority Secret

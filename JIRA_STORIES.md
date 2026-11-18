@@ -2,6 +2,73 @@
 
 ## Pilot hardening implementation update (candidate work)
 
+### BAP-1103 — Global installer leaves stale BAP binaries behind (P0 bug)
+
+**Status: FIXED in `scripts/install_bap_global.ps1` — not yet run, 2026-11-18.**
+
+**Problem:** `install_bap_global.bat` deployed only to `%ProgramFiles%\BAP\bin` or `%USERPROFILE%\.bap\bin`, but hooks, `bap install`
+and earlier installers use `%USERPROFILE%\bin` and `.claude\hooks`. Observed after a "successful" install: `~\bin\bapedge.exe`
+was v1.13.36 (c9244d2c) and `.claude\hooks\bapedge.exe` was **v1.12.10 with developer overrides enabled**. The agent kept running the
+old binaries (no auto-approve, no BAP-1096/1097 fixes, no grant classes) while the installer reported success.
+
+**Fix:** after deploying, the installer synchronizes every existing BAP copy it can find (user and system bin dirs, `.claude\hooks`
+for user and workspace, every PATH directory that holds a BAP build), updating only files that already exist and only in folders that
+contain a genuine BAP binary. It prints the installed version, refuses to install a developer-override or test-harness build
+(`-AllowDevBuild` overrides), verifies hashes afterwards and exits 2 listing any copy it could not replace (usually still running).
+
+**Acceptance:**
+- [ ] After `.\update_binaries.ps1 -AllowDevOverrides "false"` and `install_bap_global.bat`, every copy of `bapedge.exe`/`bap.exe` on PATH and in `.claude\hooks` reports the same commit.
+- [ ] A copy with `allow_dev_overrides: true` is replaced by the release-style build.
+- [ ] Installing a dev-override or `headless_stepup` build is refused without `-AllowDevBuild`.
+- [ ] An unrelated `bap.exe` on PATH (not a BAP build) is not touched.
+
+**Open:** `bap install` (Python) still defaults to `%USERPROFILE%\bin`; `update_binaries.ps1` defaults to a dev-override build; the number of
+copies (repo root, `dist\`, `bap\bin`, `.test-cache`) should shrink to one source plus install targets.
+
+### BAP-1102 — Single-use by default; bounded multi-use grant classes; dashboard shows them (P0)
+
+**Status: IMPLEMENTED — automated verification pending run, 2026-11-18.**
+
+**Problem:** one ceiling (1000 uses, 3600 s) applied to every grant, far from the single-use vision; the dashboard labelled every
+grant "1x Used / Burned" and showed step-up auto-approve as automatic or manual.
+
+**Delivered:** default ceiling 1 use / 300 s; classes `inspection` (10 uses, 300 s) and `workspace_edit` (25 uses, 600 s, only on
+`workspace://current`); mixed grants take the strictest class; legacy overrides without classes still load. Grants record
+`grant_class`; the control plane stores it (SQLite column added by migration) and the dashboard shows approval mode
+(AUTOMATIC / AUTO-APPROVED / DEV OVERRIDE / MANUAL), class, uses consumed/max, remaining uses and "approved via".
+
+**Acceptance:**
+- [ ] Default class clamps to 1 use / 300 s; edit class allows 25 uses / 10 min and the 26th use is refused.
+- [ ] Edit outside `workspace://current` stays single-use; edit + push is single-use.
+- [ ] Minted grant carries `grant_class`; narrowing reason names the class.
+- [ ] Control plane stores and returns `grant_class`; dashboard shows mode, class and uses, never "1x Burned" for a multi-use grant.
+- [ ] Existing Python ZSP suites reviewed: any test that mints more uses on a non-class action must request one grant per command.
+
+**Open:** path-scoped edit grants; "approved via" filter in the dashboard; suggestion text per class.
+
+### BAP-1101 — Launcher cleanup at startup as well as last-session exit (P1)
+
+**Status: IMPLEMENTED (PowerShell launchers) — syntax and behavior not yet run, 2026-11-18.**
+
+**Problem:** the Windows launcher engine restores injected files transactionally (backup + manifest + watchdog + refcounted last-session
+restore), but orphaned `<file>.bap-backup-<session>` copies survive when a run dies before its manifest exists or a restore fails
+(this repo has 4 GEMINI.md, 4 mcp_config and several `.claude` leftovers, some committed). `run_claude_bap.ps1` archived orphans
+without restoring the developer's original.
+
+**Delivered:** `Repair-OrphanedBackups` in the three engine copies. It runs (a) at startup, under the workspace mutex, when no live
+session and no manifest remain, and (b) after the last session's restore succeeded (manifest gone). It restores the newest backup that
+is not BAP-injected, never overwrites on failure, and removes leftovers. `run_claude_bap.ps1` (3 copies) now restores the original
+before archiving.
+
+**Acceptance:**
+- [ ] PowerShell parse check of the six edited scripts.
+- [ ] Kill a governed session mid-run; next launch restores GEMINI.md / mcp_config / settings.json and leaves no `.bap-backup-*`.
+- [ ] Two concurrent sessions: nothing is swept while another session is alive.
+- [ ] A backup containing BAP content is never restored over a developer file.
+
+**Open:** macOS/Linux `.sh` launchers and the Go fallback (no script) do no injection or cleanup at all; `.bat` launchers not changed;
+the three engine copies and `run_claude_bap.ps1` copies should be generated from one source.
+
 ### BAP-1100 — Optional ZSP step-up auto-approve (on/off) (P1)
 
 **Status: IMPLEMENTED — automated verification pending run, 2026-11-17.**

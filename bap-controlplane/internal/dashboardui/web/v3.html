@@ -1282,10 +1282,9 @@
           '<div style="overflow-x:auto"><table class="cov" style="font-size:12px;margin:0;width:100%"><thead><tr><th>Grant ID</th><th>Acquired By</th><th>Mode</th><th>Scope</th><th>Lifecycle</th><th>Executed Command</th><th>Lineage Proof</th></tr></thead><tbody>' +
           sessionGrants.map(function(g) {
             window.zspGrantStore[g.grant_id] = g;
-            var isAuto = String(g.mode || 'automatic').toLowerCase() === 'automatic';
-            var modeBadge = isAuto ? '<span class="chip" style="background:#e0f2fe;color:#0369a1;font-weight:600">AUTOMATIC</span>' : '<span class="chip" style="background:#fef3c7;color:#92400e;font-weight:700">MANUAL (HITL)</span>';
-            var isUsed = g.status === 'used' || g.status === 'USED' || g.burned === true;
-            var statusBadge = isUsed ? '<span class="chip ok">1x Used / Burned</span>' : '<span class="chip wr">Active</span>';
+            var gv = window.zspGrantView(g);
+            var modeBadge = gv.modeBadge + ' ' + gv.classBadge;
+            var statusBadge = gv.statusBadge;
             var agentLabel = g.agent ? '🤖 ' + esc(g.agent) : '🤖 ' + esc(whoVal);
             var scopes = (g.actions && g.actions.length) ? g.actions.join(', ') : 'workspace://current';
             var receiptBadge = g.receipt_id ? '<code style="font-size:11px;color:var(--ok)">' + esc(g.receipt_id) + '</code>' : '<span style="color:var(--ink-3)">-</span>';
@@ -1337,7 +1336,10 @@
           var grantTag = '';
           if (i.grant_id) {
             var isUsed = !isDeny;
-            var grantStatusLabel = isUsed ? '1x Used / Burned' : 'Unused / Pending';
+            // BAP-1102: a multi-use grant is not "burned" by one call; show its real consumption.
+            var gInfo = (window.zspGrantStore || {})[i.grant_id];
+            var gMulti = gInfo && Number(gInfo.max_uses) > 1;
+            var grantStatusLabel = !isUsed ? 'Unused / Pending' : (gMulti ? 'Multi-use ' + Number(gInfo.uses_consumed || 0) + '/' + Number(gInfo.max_uses) + (gInfo.grant_class ? ' · ' + gInfo.grant_class : '') : '1x Used / Burned');
             var grantBg = isUsed ? 'rgba(16,185,129,0.1)' : 'rgba(234,88,12,0.1)';
             var grantColor = isUsed ? '#047857' : '#c2410c';
             var grantBorder = isUsed ? 'rgba(16,185,129,0.3)' : 'rgba(234,88,12,0.3)';
@@ -2476,10 +2478,9 @@
           window.zspGrantStore = window.zspGrantStore || {};
           zspTableBody.innerHTML = zspGrants.map(function (zg) {
             window.zspGrantStore[zg.grant_id] = zg;
-            var isAuto = String(zg.mode || 'automatic').toUpperCase() === 'AUTOMATIC';
-            var modeBadge = isAuto ? '<span class="chip" style="background:#e0f2fe;color:#0369a1;font-weight:600">AUTOMATIC (Policy)</span>' : '<span class="chip" style="background:#fef3c7;color:#92400e;font-weight:700">MANUAL (HITL)</span>';
-            var isUsed = zg.status === 'USED' || zg.burned === true;
-            var statusBadge = isUsed ? '<span class="chip ok">1x Used / Burned</span>' : '<span class="chip wr">Active</span>';
+            var zv = window.zspGrantView(zg);
+            var modeBadge = zv.modeBadge + ' ' + zv.classBadge;
+            var statusBadge = zv.statusBadge;
             var agentLabel = zg.agent ? '🤖 ' + esc(zg.agent) : '🤖 Agent';
             var scopes = (zg.actions && zg.actions.length) ? zg.actions.join(', ') : 'workspace://current';
             return '<tr>' +
@@ -2499,19 +2500,52 @@
     });
   }
 
+  // BAP-1102: one place that turns a recorded grant into badges, so single-use and bounded multi-use
+  // grants, and how each was approved, are never mislabelled "1x Used / Burned".
+  window.zspGrantView = function (g) {
+    var mode = String(g.mode || 'automatic').toUpperCase();
+    var modes = {
+      AUTOMATIC: ['AUTOMATIC (Policy)', 'background:#e0f2fe;color:#0369a1;font-weight:600'],
+      AUTO_APPROVED: ['AUTO-APPROVED', 'background:#ede9fe;color:#5b21b6;font-weight:700'],
+      DEV_OVERRIDE: ['DEV OVERRIDE', 'background:#fee2e2;color:#991b1b;font-weight:700'],
+      MANUAL: ['MANUAL (HITL)', 'background:#fef3c7;color:#92400e;font-weight:700']
+    };
+    var m = modes[mode] || modes.AUTOMATIC;
+    var max = Number(g.max_uses || 0), used = Number(g.uses_consumed || 0);
+    var multi = max > 1;
+    var usesText = max ? (used + '/' + max + ' used') : '';
+    var st = String(g.status || '').toUpperCase();
+    var burned = g.burned === true || st === 'USED';
+    var statusBadge;
+    if (st === 'EXPIRED') statusBadge = '<span class="chip">Expired</span>';
+    else if (burned) statusBadge = '<span class="chip ok">' + (multi ? esc(usesText) + ' · Burned' : '1x Used / Burned') + '</span>';
+    else statusBadge = '<span class="chip wr">Active' + (multi ? ' · ' + esc(usesText) : '') + '</span>';
+    var cls = g.grant_class || (multi ? 'multi_use' : (max ? 'single_use' : ''));
+    var classes = {
+      single_use: ['Single-use', 'background:#f1f5f9;color:#334155'],
+      inspection: ['Multi-use · inspection', 'background:#ecfccb;color:#3f6212'],
+      workspace_edit: ['Multi-use · workspace edit', 'background:#ffedd5;color:#9a3412;font-weight:600'],
+      multi_use: ['Multi-use (unclassified)', 'background:#fee2e2;color:#991b1b;font-weight:600']
+    };
+    var c = classes[cls] || [cls, 'background:#f1f5f9;color:#334155'];
+    return {
+      modeBadge: '<span class="chip" style="' + m[1] + '">' + m[0] + '</span>',
+      statusBadge: statusBadge,
+      classBadge: cls ? '<span class="chip" style="' + c[1] + '" title="Grant class: ' + esc(cls) + '">' + esc(c[0]) + '</span>' : '',
+      usesText: usesText,
+      multi: multi,
+      className: cls
+    };
+  };
+
   window.showGrantDetails = function (grant) {
     if (!grant) return;
     var gm = $('grantModal');
     if (!gm) return;
     $('gmTitle').textContent = '🔑 ZSP Grant: ' + (grant.grant_id || '');
-    var isAuto = String(grant.mode || 'automatic').toUpperCase() === 'AUTOMATIC';
-    var modeBadge = isAuto 
-      ? '<span class="chip" style="background:#e0f2fe;color:#0369a1;font-weight:600">AUTOMATIC (Cedar Policy)</span>' 
-      : '<span class="chip" style="background:#fef3c7;color:#92400e;font-weight:700">MANUAL (HITL Step-Up)</span>';
-    var isUsed = grant.status === 'used' || grant.status === 'USED' || grant.burned === true;
-    var statusBadge = isUsed 
-      ? '<span class="chip ok">1x Used / Burned (Zero Standing Privilege)</span>' 
-      : '<span class="chip wr">Active / Ephemeral</span>';
+    var gview = window.zspGrantView(grant);
+    var modeBadge = gview.modeBadge + ' ' + gview.classBadge;
+    var statusBadge = gview.statusBadge;
 
     var allowedActs = grant.actions || grant.allowed_actions || [];
     var allowedRes = grant.resources || grant.allowed_resources || [];
@@ -2533,6 +2567,8 @@
           '<tr><td style="font-weight:600;color:var(--ink-2)">Allowed Resources</td><td><code>' + esc(allowedRes.join(', ') || '*') + '</code></td></tr>' +
           (reqActs.length ? '<tr><td style="font-weight:600;color:var(--ink-2)">Requested Actions</td><td>' + esc(reqActs.join(', ')) + '</td></tr>' : '') +
           (grant.narrowing_applied ? '<tr><td style="font-weight:600;color:#c2410c">Narrowing Applied</td><td><span class="chip limited">Least-Privilege Attenuated</span> ' + esc(grant.narrowing_reason || 'Policy restricted excessive scope') + '</td></tr>' : '') +
+          (grant.delegation_type ? '<tr><td style="font-weight:600;color:var(--ink-2)">Approved Via</td><td><code>' + esc(grant.delegation_type) + '</code></td></tr>' : '') +
+          (gview.className ? '<tr><td style="font-weight:600;color:var(--ink-2)">Grant Class / Uses</td><td>' + gview.classBadge + (gview.usesText ? ' <small>' + esc(gview.usesText) + (grant.remaining_uses != null ? ', ' + esc(String(grant.remaining_uses)) + ' left' : '') + '</small>' : '') + '</td></tr>' : '') +
           '<tr><td style="font-weight:600;color:var(--ink-2)">Executed / Consumed Command</td><td><code style="word-break:break-all;color:var(--ink);font-weight:600">' + esc(grant.command || grant.consumed_cmd || '-') + '</code></td></tr>' +
           (grant.command_hash ? '<tr><td style="font-weight:600;color:var(--ink-2)">Command Hash</td><td><small style="font-family:var(--mono)">' + esc(grant.command_hash) + '</small></td></tr>' : '') +
           '<tr><td style="font-weight:600;color:var(--ink-2)">Execution Lineage Receipt</td><td>' + (grant.receipt_id ? '<code style="color:var(--ok);font-weight:700">🛡️ ' + esc(grant.receipt_id) + '</code>' : '<span style="color:var(--ink-3)">Pending Execution Receipt</span>') + '</td></tr>' +

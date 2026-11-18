@@ -323,6 +323,93 @@ function Restore-TrackedEntry {
     }
 }
 
+# BAP-1101: files a launcher may inject into, relative to the workspace.
+$script:BapManagedRelPaths = @(
+    'GEMINI.md', 'AGENTS.md', 'CLAUDE.md', 'CODEX.md',
+    '.antigravity\mcp_config.json', '.gemini\config\mcp_config.json',
+    '.claude\settings.json', '.claude\mcp.json',
+    '.codex\mcp.json', '.codex\hooks.json',
+    '.cursor\mcp.json', '.cursorrules',
+    '.vscode\settings.json', '.vscode\mcp.json',
+    '.copilot\bap-session.json', '.copilot\mcp-config.json',
+    '.opencode\opencode.json'
+)
+
+function Test-BapInjectedContent {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    # Only markers the launchers themselves write; a developer's own file will not carry them.
+    try {
+        $text = [System.IO.File]::ReadAllText($Path)
+        return ($text -match 'BAP Zero-Trust Policy & Enterprise Governance' -or
+                $text -match '"bap-zero-trust"' -or
+                $text -match 'bapmcp' -or
+                $text -match 'BAP_SESSION_ID' -or
+                ($text -match 'interceptor\.exe' -and $text -match 'disableAllHooks'))
+    } catch { return $false }
+}
+
+# Restores the developer's original file from orphaned `<file>.bap-backup-<session>` copies left by a
+# crashed, killed or manifest-less run, then removes the leftovers. Call only while holding the
+# workspace mutex and only when no recovery manifest or live session remains for the workspace.
+# A backup that already contains BAP-injected content is never restored (it is not the original).
+function Repair-OrphanedBackups {
+    param(
+        [Parameter(Mandatory = $true)][string]$Workspace,
+        [string]$Reason = 'startup'
+    )
+    $repaired = 0
+    try {
+        foreach ($rel in $script:BapManagedRelPaths) {
+            $target = Join-Path $Workspace $rel
+            $dir = Split-Path -Parent $target
+            if (-not (Test-Path -LiteralPath $dir -PathType Container)) { continue }
+            $leaf = Split-Path -Leaf $target
+            $backups = @(Get-ChildItem -LiteralPath $dir -Force -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like "$leaf.bap-backup-*" })
+            if ($backups.Count -eq 0) { continue }
+
+            $originals = @($backups | Where-Object { -not (Test-BapInjectedContent -Path $_.FullName) } |
+                Sort-Object LastWriteTimeUtc -Descending)
+            if ($originals.Count -gt 0) {
+                try {
+                    if (Test-Path -LiteralPath $target) {
+                        try { [System.IO.File]::SetAttributes($target, [System.IO.FileAttributes]::Normal) } catch { }
+                    }
+                    [System.IO.File]::Copy($originals[0].FullName, $target, $true)
+                    $repaired++
+                    Write-Host "[+] Recovered original $rel from orphaned backup ($Reason)." -ForegroundColor Yellow
+                }
+                catch {
+                    # Keep every backup when the restore fails so nothing is lost.
+                    Write-Warning "Could not recover $rel from $($originals[0].Name): $($_.Exception.Message)"
+                    continue
+                }
+            }
+            if ($originals.Count -gt 0) {
+                # The original is back in place; the leftovers are redundant.
+                foreach ($b in $backups) {
+                    try {
+                        [System.IO.File]::SetAttributes($b.FullName, [System.IO.FileAttributes]::Normal)
+                        [System.IO.File]::Delete($b.FullName)
+                    } catch { }
+                }
+            }
+            else {
+                # No backup is provably the original: archive instead of deleting so nothing is lost.
+                $archiveDir = Join-Path $dir '.bap-recovery-archive'
+                try {
+                    if (-not (Test-Path -LiteralPath $archiveDir)) { [void](New-Item -ItemType Directory -Path $archiveDir -Force) }
+                    foreach ($b in $backups) { Move-Item -LiteralPath $b.FullName -Destination (Join-Path $archiveDir $b.Name) -Force -ErrorAction SilentlyContinue }
+                } catch { Write-Warning "Could not archive orphaned backups for ${rel}: $($_.Exception.Message)" }
+            }
+        }
+    }
+    catch {
+        Write-Warning "Orphaned backup recovery notice: $($_.Exception.Message)"
+    }
+    return $repaired
+}
+
 function Restore-BapSessionState {
     param(
         [Parameter(Mandatory = $true)][string]$ManifestPath,
@@ -930,6 +1017,11 @@ function Invoke-BapGovernedSession {
                         [void](Restore-BapSessionState -ManifestPath $ManifestPath -Reason 'stale session cleanup')
                     }
                 }
+            }
+            # Startup sweep (BAP-1101): with no live session and no manifest left, recover any orphaned
+            # backups (crash, kill, or a run that never wrote its manifest) before taking custody again.
+            if (-not $isSecondary -and -not (Test-Path -LiteralPath $ManifestPath)) {
+                [void](Repair-OrphanedBackups -Workspace $Workspace -Reason 'startup')
             }
         }
         finally {
@@ -1580,6 +1672,10 @@ function Invoke-BapGovernedSession {
                             $curRecord.state = 'Cleaning'
                             try { Write-RecoveryRecord -Record $curRecord -ManifestPath $ManifestPath } catch { }
                             [void](Restore-BapSessionState -ManifestPath $ManifestPath -Reason 'last session teardown')
+                            # Final sweep (BAP-1101): only once the transaction restored cleanly (manifest gone).
+                            if (-not (Test-Path -LiteralPath $ManifestPath)) {
+                                [void](Repair-OrphanedBackups -Workspace $Workspace -Reason 'last session teardown')
+                            }
                         } else {
                             $curRecord.active_sessions = @($surviving)
                             try { Write-RecoveryRecord -Record $curRecord -ManifestPath $ManifestPath } catch { }

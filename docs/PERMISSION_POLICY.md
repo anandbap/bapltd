@@ -70,7 +70,21 @@ continue to apply; automation does not convert `approve` or `deny` into `allow`.
   administrator adds destinations. Note the *execution-time* Cedar rules and gateway PEP still gate
   raw `curl`; aligning them is BAP-924 follow-up work.)
 * `ceiling`: `max_uses_per_grant`, `max_ttl_seconds` (requests are clamped, reported as narrowing)
-  and `max_mints_per_session` (hard stop, `ErrMintCapExceeded`).
+  and `max_mints_per_session` (hard stop, `ErrMintCapExceeded`). The top-level values are the
+  **default class: single-use, 300 s** (BAP-1102). Optional `classes` carve out bounded exceptions:
+
+  | class | actions | max uses | max TTL |
+  |---|---|---|---|
+  | default (`single_use`) | everything else: exec, interpreters, network, publish, delete, packages | 1 | 300 s |
+  | `inspection` | `git:status/log/diff/show/branch`, `fs:file:read`, `fs:dir:read`, ... | 10 | 300 s |
+  | `workspace_edit` | `fs:file:write`, `fs:file:edit`, `fs:write` on `workspace://current` only | 25 | 600 s |
+
+  A grant that mixes classes gets the **strictest** limits (an edit plus a push is single-use), a
+  class with `resource_match` never applies outside it, and an override without `classes` keeps
+  working (its grants are labelled `multi_use`). Each grant records its `grant_class`, and every use
+  still produces its own lineage proof. A multi-use edit grant limits time and blast radius; it does
+  not narrow *which* workspace files may be written (path-scoped edit grants are follow-up work).
+  Auto-approve (BAP-1100) never raises a ceiling.
 * `..` anywhere in a resource is never considered in-boundary.
 
 ## Overriding the policy (human operator only)
@@ -142,7 +156,7 @@ it is `CRITICAL`. The only effect is a `[CORRELATED RISK EVENT]` warning added t
 ### Other bounds that are not rate limits
 
 * `max_mints_per_session` is a hard stop on grant minting (`ErrMintCapExceeded`).
-* The ceiling clamps uses and lifetime per grant; a single-use grant burns on first use.
+* The ceiling clamps uses and lifetime per grant by grant class; a single-use grant burns on first use.
 * Identical pending approval requests collapse into one, so repeated asks do not flood the
   operator.
 * Credentials and other `deny`-tier actions are never grantable, however often they are requested.
