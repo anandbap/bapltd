@@ -986,7 +986,7 @@ func RunExec(args []string) {
 	if defaultShell == "" {
 		defaultShell = "auto"
 	}
-	shellFlag := fs.String("shell", defaultShell, "Target shell for execution ('auto', 'cmd', 'powershell', 'pwsh')")
+	shellFlag := fs.String("shell", defaultShell, "Target shell: auto, bash, sh, zsh, cmd, powershell, pwsh; explicit shells never fall back")
 
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing arguments: %v\n", err)
@@ -1404,7 +1404,7 @@ func RunExec(args []string) {
 	// except when invoking atomic ZSP control commands (e.g. 'bapedge zsp authorize' / 'bapedge status').
 	// An active development-only override suspends the grant requirement for bootstrapping BAP itself.
 	if allowed && isZSPRequiredForExec(ec) && taskGrantsEnforced() && !authz.IsZSPControlCommand(fullCommand) &&
-		(authz.IsAutomaticBatchCandidate(fullCommand, workspaceRoot) ||
+		(authz.IsAutomaticBatchCandidate(fullCommand, workspaceRoot, ec.shell) ||
 			(!authz.IsLocalReadOnlyCommand(fullCommand, executable, cmdArguments, workspaceRoot) &&
 				!authz.IsApprovedLocalCommand(fullCommand, executable, cmdArguments, workspaceRoot))) {
 		zspChecks := authz.ResolveZSPCommandChecks(fullCommand, executable, cmdArguments, "", "", workspaceRoot)
@@ -1417,6 +1417,7 @@ func RunExec(args []string) {
 			zspChecks,
 			!ec.decisionOnly,
 			[]string{fmt.Sprintf("parent:%d", ec.parentPID), fmt.Sprintf("broker:%d", os.Getpid())},
+			ec.shell,
 		)
 		if svid != nil {
 			ec.zspPrincipal = svid.Subject

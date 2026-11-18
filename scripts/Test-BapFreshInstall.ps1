@@ -124,15 +124,17 @@ try {
         Assert-Check 'Allowed command actually executes' ($allowed.ExitCode -eq 0 -and $allowBody.allowed -eq $true -and $allowBody.output -match 'git version') 'git --version must return real Git output'
         Assert-Check 'Allowed command retains session identity' ($allowBody.receipt.session_id -eq $runID) 'Receipt must contain this run ID'
 
-        # A nonexistent, unapproved executable: no credential reads or risky commands.
-        $probe = 'bap-unapproved-probe-' + [Guid]::NewGuid().ToString('N') + '.exe'
-        $denied = Invoke-Edge -Arguments ($common + @('--stepup-decision', 'deny', $probe)) -TimeoutSeconds 30
+        # Policy evaluation only: never execute a credential read, even on an unexpected allow.
+        # No fixture is created. Do not use --stepup-decision: shipped builds ignore that test-only flag.
+        $probe = 'type .env.bap-smoke-never-created-' + [Guid]::NewGuid().ToString('N')
+        $denied = Invoke-Edge -Arguments ($common + @('--decision-only', $probe)) -TimeoutSeconds 30
         $denyBody = $denied.Output | ConvertFrom-Json
-        Assert-Check 'Unapproved executable denied' ($denied.ExitCode -ne 0 -and $denyBody.allowed -eq $false -and $denyBody.decision -match 'deny|block') 'Policy must deny; an executable-not-found error alone is not a pass'
+        Assert-Check 'Credential policy probe denied without execution' ($denied.ExitCode -ne 0 -and $denyBody.allowed -eq $false -and $denyBody.decision -match 'deny|block' -and $denyBody.reason -match 'credential|\.env|secret') 'Require a credential-policy denial; a missing grant, unavailable service, or parse error is not a pass'
         Assert-Check 'Denial retains session identity' ($denyBody.receipt.session_id -eq $runID) 'Allowed and denied receipts must share the run ID'
         $report.broker = @{ session_id = $runID; allowed_receipt = $allowBody.receipt.receipt_id;
             denied_receipt = $denyBody.receipt.receipt_id; allowed_total_ms = $allowed.DurationMs;
-            denied_total_ms = $denied.DurationMs; prompt_text_supplied = $false }
+            denied_total_ms = $denied.DurationMs; prompt_text_supplied = $false;
+            denial_probe = 'decision_only_credential_policy'; denial_workload_executed = $false }
         $report.broker.allowed_timings_ms = $allowBody.timings_ms
         $report.broker.denied_timings_ms = $denyBody.timings_ms
 

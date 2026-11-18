@@ -476,3 +476,79 @@ func TestPreToolUseAutomaticallyAuthorizesInspectionBatchButNotPush(t *testing.T
 		}
 	}
 }
+
+func TestFirstTurnBashHookAuthorizesExactInspectionAndPreservesShell(t *testing.T) {
+	sourceRoot, broker, interceptor := setupZSPHookTestEnv(t)
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	// Bootstrap needs a local policy in its own fixture search path, not merely
+	// an authorizer --policy override. Copy source assets, never live state.
+	for _, name := range []string{"policy.cedar", "schema.json"} {
+		data, err := os.ReadFile(filepath.Join(sourceRoot, "bap-edge", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repoRoot, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("BAP_WORKSPACE_ROOT", repoRoot)
+	t.Setenv("BAP_NO_BACKGROUND_WATCHER", "1")
+	t.Setenv("BAP_TEST_ENV", "1")
+	t.Setenv("BAP_OFFLINE", "1")
+	t.Setenv("BAP_POLICY_PATH", filepath.Join(sourceRoot, "bap-edge", "policy.cedar"))
+	t.Setenv("BAP_ZSP_AUTO_GRANTS", "1")
+	t.Setenv("BAP_SERVER_URL", "http://127.0.0.1:1")
+	t.Setenv("BAP_CONTROL_PLANE_URL", "http://127.0.0.1:1")
+	session := "sess-first-turn-bash"
+	// This case tests authorization/handoff, not watcher supervision. A fresh
+	// liveness marker keeps both real binaries from spawning detached watchers
+	// against the test runner's ancestor process or locking fixture directories.
+	liveness := watcherLivenessPath(session)
+	if err := os.MkdirAll(filepath.Dir(liveness), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(liveness, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	command := "git log -1 --format=%B; ls; head -c 1500 README.md GEMINI.md package.json 2>/dev/null"
+	runHook := func(command string) HookResponse {
+		t.Helper()
+		payload, _ := json.Marshal(map[string]any{
+			"hook_event_name": "PreToolUse", "tool_name": "Bash", "app_id": "claude-code",
+			"session_id": session, "cwd": repoRoot, "tool_input": map[string]any{"command": command},
+		})
+		cmd := exec.Command(interceptor)
+		cmd.Dir, cmd.Stdin = repoRoot, bytes.NewReader(payload)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		var response HookResponse
+		if err := json.Unmarshal(out, &response); err != nil {
+			t.Fatalf("invalid hook response: %v %s stderr=%s", err, out, stderr.String())
+		}
+		_ = err // A denied hook is permitted to return a nonzero exit status.
+		return response
+	}
+	response := runHook(command)
+	if response.HookSpecificOutput.PermissionDecision != "allow" || response.HookSpecificOutput.UpdatedInput == nil {
+		t.Fatalf("fresh first turn required authorization retry: %+v", response)
+	}
+	wrapped := response.HookSpecificOutput.UpdatedInput.Command
+	if !strings.Contains(wrapped, " --shell bash ") {
+		t.Fatalf("Bash language lost in rewritten command: %s", wrapped)
+	}
+	// The broker execution hop sees the same shell and command, and must reuse
+	// the prechecked grant rather than demand a second authorization.
+	check := exec.Command(broker, "check", "--shell", "bash", "--source", "claude-code", "--session-id", session, "--json", command)
+	check.Dir = repoRoot
+	out, err := check.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), `"allowed": true`) && !strings.Contains(string(out), `"allowed":true`) {
+		t.Fatalf("broker lost prechecked authority: %v %s", err, out)
+	}
+	if blocked := runHook(command + "; git push origin main"); blocked.HookSpecificOutput.PermissionDecision != "deny" {
+		t.Fatal("first-turn authority widened to publishing")
+	}
+}

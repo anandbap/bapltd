@@ -65,7 +65,7 @@ func emitUniversalSuccess() {
 	os.Exit(0)
 }
 
-func emitClaudeUserPromptSuccessWithZSPContext(sessionID string) {
+func claudeZSPHookResponse(event, sessionID string) UniversalHookResponse {
 	ctx := fmt.Sprintf(
 		"BAP Zero Standing Privileges (ZSP) is enforced for session %q. Before invoking shell commands or inspection tools (or when asked to declare intent), first run a standalone intent authorization command (without chaining &&, ;, or |) and wait for it to finish BEFORE dispatching dependent tool calls (including parallel batches): bapedge zsp authorize --session-id %q --mission TASK_EXECUTION --goal \"<goal>\" --actions \"<canonical:actions>\" --resources workspace://current --max-uses <N>. Use canonical colon-delimited actions without spaces (e.g. \"git:status,git:log,git:branch,git:diff,fs:read\"), and set --max-uses <N> to cover all planned sequential or parallel commands. Running bapedge zsp authorize submits your envelope to the BAP Policy Enforcement Point for Cedar evaluation (it does not self-approve outside policy); run it directly yourself rather than asking the user.",
 		sessionID, sessionID,
@@ -73,11 +73,11 @@ func emitClaudeUserPromptSuccessWithZSPContext(sessionID string) {
 	if os.Getenv("BAP_ZSP_AUTO_GRANTS") != "0" {
 		ctx = fmt.Sprintf("BAP Zero Standing Privileges (ZSP) is enforced for session %q. Submit routine command batches normally: BAP checks every operation and can automatically issue a short-lived, exact-batch grant when policy permits every effect. A batch containing push, publishing, destructive operations, credential access, unknown syntax or an unapproved effect is not automatically granted. If BAP requests intent authorization, run the suggested standalone bapedge zsp authorize command yourself and wait for it before retrying dependent calls; do not chain authorization with execution. Policy authorization is NOT self-approval and cannot widen a grant or replace required human approval.", sessionID)
 	}
-	resp := UniversalHookResponse{
+	return UniversalHookResponse{
 		Status:   "ok",
 		Continue: true,
 		HookSpecificOutput: &HookSpecificOutput{
-			HookEventName:     "UserPromptSubmit",
+			HookEventName:     event,
 			AdditionalContext: ctx,
 		},
 		InjectSteps: []AntigravityInjectStep{
@@ -88,9 +88,16 @@ func emitClaudeUserPromptSuccessWithZSPContext(sessionID string) {
 			},
 		},
 	}
-	data, _ := json.Marshal(resp)
+}
+
+func emitClaudeZSPContext(event, sessionID string) {
+	data, _ := json.Marshal(claudeZSPHookResponse(event, sessionID))
 	os.Stdout.Write(append(data, '\n'))
 	os.Exit(0)
+}
+
+func emitClaudeUserPromptSuccessWithZSPContext(sessionID string) {
+	emitClaudeZSPContext("UserPromptSubmit", sessionID)
 }
 
 /*
@@ -2586,6 +2593,10 @@ func handleSessionStartHook(payload HookPayload) {
 	}
 
 	// Valid for both Claude-compatible hooks and Codex lifecycle hooks.
+	if sessionID != "" && isZSPEnforcedClientSide() {
+		emitClaudeZSPContext("SessionStart", sessionID)
+		return
+	}
 	emitUniversalSuccess()
 }
 
@@ -3686,6 +3697,7 @@ func main() {
 		execArgs = []string{"check", "--source", callerSource, "--session-id", sessionID, "--json", "--cmd-b64", cmdB64}
 	}
 	execArgs = append(execArgs, "--reporting-layer", "hook")
+	execArgs = append(execArgs, "--shell", brokerShellForTool(payload.ToolName))
 	if caller.BinaryPath != "" {
 		execArgs = append(execArgs, "--caller-binary", caller.BinaryPath)
 	}
@@ -3762,10 +3774,7 @@ func main() {
 		if callerSource == "" {
 			callerSource = "claude-code"
 		}
-		shellArg := ""
-		if strings.EqualFold(payload.ToolName, "powershell") || strings.EqualFold(payload.ToolName, "pwsh") {
-			shellArg = " --shell powershell"
-		}
+		shellArg := brokerShellFlag(payload.ToolName)
 		execBin := ltdBin
 		baseName := filepath.Base(ltdBin)
 		if lookPath, err := exec.LookPath(baseName); err == nil && lookPath != "" {
@@ -3811,10 +3820,7 @@ func main() {
 				if callerSource == "" {
 					callerSource = "claude-code"
 				}
-				shellArg := ""
-				if strings.EqualFold(payload.ToolName, "powershell") || strings.EqualFold(payload.ToolName, "pwsh") {
-					shellArg = " --shell powershell"
-				}
+				shellArg := brokerShellFlag(payload.ToolName)
 				execBin := ltdBin
 				baseName := filepath.Base(ltdBin)
 				if lookPath, err := exec.LookPath(baseName); err == nil && lookPath != "" {
@@ -3852,10 +3858,7 @@ func main() {
 					if callerSource == "" {
 						callerSource = "claude-code"
 					}
-					shellArg := ""
-					if strings.EqualFold(payload.ToolName, "powershell") || strings.EqualFold(payload.ToolName, "pwsh") {
-						shellArg = " --shell powershell"
-					}
+					shellArg := brokerShellFlag(payload.ToolName)
 					execBin := ltdBin
 					baseName := filepath.Base(ltdBin)
 					if lookPath, err := exec.LookPath(baseName); err == nil && lookPath != "" {

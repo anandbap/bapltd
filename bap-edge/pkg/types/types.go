@@ -224,19 +224,20 @@ type PermissionAsk struct {
 // Tuple: (Who, AuthorizedBy, Intent, PermissionAsk) signed by the agent's cryptographic key.
 type TaskAuthorizationEnvelope struct {
 	EnvelopeID          string                 `json:"envelope_id"`
-	Identity            CryptographicAgentSVID `json:"identity"`                 // 1. Who you are
-	AuthorizedBy        DelegationIdentity     `json:"authorized_by"`            // 2. Who authorized this
-	Intent              TaskIntent             `json:"intent"`                   // 3. What is the declared intent
-	PermissionAsk       PermissionAsk          `json:"permission_ask"`           // 4. Asked permissions (starting set = 0)
+	Identity            CryptographicAgentSVID `json:"identity"`                        // 1. Who you are
+	AuthorizedBy        DelegationIdentity     `json:"authorized_by"`                   // 2. Who authorized this
+	Intent              TaskIntent             `json:"intent"`                          // 3. What is the declared intent
+	PermissionAsk       PermissionAsk          `json:"permission_ask"`                  // 4. Asked permissions (starting set = 0)
 	RequestingSessionID string                 `json:"requesting_session_id,omitempty"` // Session that requested this grant
 	LinkedSessionIDs    []string               `json:"linked_session_ids,omitempty"`    // Cross-session links
-	EnvelopeHash        string                 `json:"envelope_hash"`            // SHA-256 of canonical fields
-	AgentSignature      string                 `json:"agent_signature"`          // Ed25519 signature by Agent private key
+	EnvelopeHash        string                 `json:"envelope_hash"`                   // SHA-256 of canonical fields
+	AgentSignature      string                 `json:"agent_signature"`                 // Ed25519 signature by Agent private key
 	Timestamp           time.Time              `json:"timestamp"`
 }
 
 // TaskGrant represents an ephemeral, task-scoped grant token with zero standing privilege (BAP-917).
 type TaskGrant struct {
+	Shell               string    `json:"shell,omitempty"`
 	CommandHash         string    `json:"command_hash,omitempty"`
 	WorkspaceRoot       string    `json:"workspace_root,omitempty"`
 	PolicyHash          string    `json:"policy_hash,omitempty"`
@@ -246,25 +247,25 @@ type TaskGrant struct {
 	RequestingSessionID string    `json:"requesting_session_id,omitempty"`
 	LinkedSessionIDs    []string  `json:"linked_session_ids,omitempty"`
 	PrincipalSVID       string    `json:"principal_svid"`
-	HumanOwner         string    `json:"human_owner"`
-	AllowedActions     []string  `json:"allowed_actions"`
-	AllowedResources   []string  `json:"allowed_resources"`
-	RequestedActions   []string  `json:"requested_actions,omitempty"`
-	RequestedResources []string  `json:"requested_resources,omitempty"`
-	NarrowingApplied   bool      `json:"narrowing_applied,omitempty"`
-	NarrowingReason    string    `json:"narrowing_reason,omitempty"`
-	MaxUses            int       `json:"max_uses"`
-	RemainingUses      int       `json:"remaining_uses"`
-	ExpiresAt          time.Time `json:"expires_at"`
-	IssuedAt           time.Time `json:"issued_at"`
-	IsBurned           bool      `json:"is_burned"`
-	BurnReason         string    `json:"burn_reason,omitempty"`
-	DelegationType     string    `json:"delegation_type,omitempty"`
-	GrantClass         string    `json:"grant_class,omitempty"` // BAP-1102: single_use, workspace_edit, inspection, ...
-	ClientType         string    `json:"client_type,omitempty"`
-	ConsumedCmd        string    `json:"consumed_cmd,omitempty"`
-	ReceiptID          string    `json:"receipt_id,omitempty"`
-	AuthoritySignature string    `json:"authority_signature"` // Signed by BAP Local PEP
+	HumanOwner          string    `json:"human_owner"`
+	AllowedActions      []string  `json:"allowed_actions"`
+	AllowedResources    []string  `json:"allowed_resources"`
+	RequestedActions    []string  `json:"requested_actions,omitempty"`
+	RequestedResources  []string  `json:"requested_resources,omitempty"`
+	NarrowingApplied    bool      `json:"narrowing_applied,omitempty"`
+	NarrowingReason     string    `json:"narrowing_reason,omitempty"`
+	MaxUses             int       `json:"max_uses"`
+	RemainingUses       int       `json:"remaining_uses"`
+	ExpiresAt           time.Time `json:"expires_at"`
+	IssuedAt            time.Time `json:"issued_at"`
+	IsBurned            bool      `json:"is_burned"`
+	BurnReason          string    `json:"burn_reason,omitempty"`
+	DelegationType      string    `json:"delegation_type,omitempty"`
+	GrantClass          string    `json:"grant_class,omitempty"` // BAP-1102: single_use, workspace_edit, inspection, ...
+	ClientType          string    `json:"client_type,omitempty"`
+	ConsumedCmd         string    `json:"consumed_cmd,omitempty"`
+	ReceiptID           string    `json:"receipt_id,omitempty"`
+	AuthoritySignature  string    `json:"authority_signature"` // Signed by BAP Local PEP
 }
 
 // AuditLineageProof provides mathematical non-repudiation linking the full execution chain (BAP-918).

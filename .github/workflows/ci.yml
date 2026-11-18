@@ -52,6 +52,9 @@ jobs:
           cache-dependency-path: '**/go.sum'
 
       - name: Test BAP Edge
+        env:
+          # Baseline shells must execute; missing runtimes cannot silently skip.
+          BAP_REQUIRE_NATIVE_SHELLS: '1'
         shell: bash
         run: |
           cd bap-edge

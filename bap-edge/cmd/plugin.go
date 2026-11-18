@@ -401,6 +401,10 @@ func runPluginAdapter(args []string) error {
 			return err
 		}
 		_, _, _, _, _ = authz.EnsureSessionPrincipal(authz.ResolveZSPDir(), sessionID, normalizeClientAppID(client))
+		if normalizeClientAppID(client) == "claude-code" && taskGrantsEnforced() {
+			emitPluginZSPContext("SessionStart", sessionID)
+			return nil
+		}
 		emitPluginSuccess(client, event)
 		return nil
 	}
@@ -1295,10 +1299,10 @@ func installClaudePlugin(repoRoot, workspace string) error {
 	manifestPath := filepath.Join(destDir, ".claude-plugin", "plugin.json")
 	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
 		manifest := map[string]any{
-			"name":        "BAP-ClaudeCode-Plugin",
-			"version":     "1.0.0",
-			"description": "BAP Zero-Trust Policy Enforcement and Agent Watch Plugin for Anthropic Claude Code CLI",
-			"entrypoint":  "hooks/hooks.json",
+			"name":              "BAP-ClaudeCode-Plugin",
+			"version":           "1.0.0",
+			"description":       "BAP Zero-Trust Policy Enforcement and Agent Watch Plugin for Anthropic Claude Code CLI",
+			"entrypoint":        "hooks/hooks.json",
 			"supportedSurfaces": []string{"cli", "terminal"},
 			"capabilities": map[string]any{
 				"blocking": true,
@@ -2024,6 +2028,7 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 
 		svid, grant, _, zspErr := authz.AuthorizeSessionCommandBatch(
 			authz.ResolveZSPDir(), sessionID, normClient, command, wsRoot, zspChecks, consumeHere, nil,
+			sandbox.ToolShell(toolName),
 		)
 		if svid != nil {
 			principalIdentity = svid.Subject
@@ -2080,15 +2085,22 @@ func executeSyntheticProbe(client, eventJSON, eventName string) (types.ExecRespo
 }
 
 func emitPluginUserPromptSuccessWithZSPContext(client, sessionID string) {
+	emitPluginZSPContext("UserPromptSubmit", sessionID)
+}
+
+func emitPluginZSPContext(event, sessionID string) {
 	ctx := fmt.Sprintf(
 		"BAP Zero Standing Privileges (ZSP) is enforced for session %q. Before invoking shell commands or inspection tools (or when asked to declare intent), first run a standalone intent authorization command (without chaining &&, ;, or |) and wait for it to finish BEFORE dispatching dependent tool calls (including parallel batches): bapedge zsp authorize --session-id %q --mission TASK_EXECUTION --goal \"<goal>\" --actions \"<canonical:actions>\" --resources workspace://current --max-uses <N>. Use canonical colon-delimited actions without spaces (e.g. \"git:status,git:log,git:branch,git:diff,fs:read\"), and set --max-uses <N> to cover all planned sequential or parallel commands. Running bapedge zsp authorize submits your envelope to the BAP Policy Enforcement Point for Cedar evaluation (it does not self-approve outside policy); run it directly yourself rather than asking the user.",
 		sessionID, sessionID,
 	)
+	if os.Getenv("BAP_ZSP_AUTO_GRANTS") != "0" {
+		ctx = fmt.Sprintf("BAP Zero Standing Privileges (ZSP) is enforced for session %q. Submit routine command batches normally: BAP checks every operation and can automatically issue a short-lived, exact-batch grant when policy permits every effect. A batch containing push, publishing, destructive operations, credential access, unknown syntax or an unapproved effect is not automatically granted. If BAP requests intent authorization, run the suggested standalone bapedge zsp authorize command yourself and wait for it before retrying dependent calls; do not chain authorization with execution. Policy authorization is NOT self-approval and cannot widen a grant or replace required human approval.", sessionID)
+	}
 	out := map[string]any{
 		"status":   "ok",
 		"continue": true,
 		"hookSpecificOutput": map[string]any{
-			"hookEventName":     "UserPromptSubmit",
+			"hookEventName":     event,
 			"additionalContext": ctx,
 		},
 	}
@@ -2149,7 +2161,7 @@ func emitPluginDecisionHalt(client, event, decision, reason, suggestion string, 
 			fmt.Println(string(data))
 		} else {
 			out := map[string]any{
-				"status":   "deny",
+				"status":     "deny",
 				"continue":   !isInvariant && !halt,
 				"stopReason": stopReason,
 				"hookSpecificOutput": map[string]any{

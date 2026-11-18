@@ -68,14 +68,15 @@ Editing a signed grant's scope or batch binding invalidates its authority signat
 
 ## What is automatic, and what falls back
 
-The initial automatic grammar is deliberately narrow: common `git status` and
-bounded `git log` inspection options, simple file inspection commands, and effects
+The automatic grammar is deliberately narrow: common `git status` and
+bounded `git log` inspection options (including `-1`, `--format=...` and
+`--pretty=...`), simple file inspection commands, and effects
 explicitly approved by the managed machine policy. It supports recognized sequences
 using `;`, `&&`, `||`, and pipelines, with up to 64 parsed operations and a 32 KiB
 command limit. Every constituent effect must pass. Existing Cedar, credential,
 workspace, and high-risk checks still apply.
 
-Unknown Git options, Git mutation commands, background execution, redirections,
+Unknown Git options, background execution, file redirections,
 substitutions, script blocks, multiline shell input, and unrecognized executables
 are not automatically minted by this path. They retain the existing authorization
 flow; failure to qualify for automation is not itself permission to execute.
@@ -112,6 +113,41 @@ The `cchook.test` principal is a useful clue, not an authorization exemption or 
 trusted test-provenance mechanism by itself.
 
 ## Verification and deployment
+
+### First-turn inspection and shell preservation
+
+The hook passes the originating Bash, sh, zsh, CMD, PowerShell or pwsh tool
+language to both the broker precheck and execution. Explicit shell selection is
+honored on each OS; an unavailable/unsupported interpreter fails with a clear
+error instead of silently executing the text in another language. Generic
+terminal tools retain the existing `auto` behavior.
+
+For example, this first call requires no model-written authorization preamble
+when the policy permits its effects:
+
+```bash
+git log -1 --format=%B; ls; head -c 1500 README.md GEMINI.md package.json 2>/dev/null
+```
+
+Recognized inspection may discard stderr only to the selected shell's actual
+null device: `2>/dev/null` in POSIX shells, or `2>NUL` on Windows CMD/PowerShell.
+This does not authorize arbitrary file writes, append redirection or descriptor
+substitutions. Percent formatting is recognized in Git format arguments, but
+CMD environment expansion is not automatically authorized. Other shell
+substitutions/unknown syntax retain the explicit-grant path.
+
+New automatic grants sign and bind the shell as well as command, workspace,
+session/principal and policy; changing shells cannot spend the same grant.
+SessionStart and UserPromptSubmit now give consistent instructions about
+automatic mode versus explicit-grant mode in both Claude hook implementations.
+
+The first-turn regression covers authorization without an initial refusal,
+precheck reuse, shell binding/tampering, rejected extra effects, the real hook
+handoff, and native shell semantics. The existing Windows/Linux/macOS CI matrix
+requires its baseline native shells to execute instead of silently skipping.
+Optional shells report skips when absent; they are not counted as native evidence.
+A missing optional file can still make `head` return nonzero after successful
+execution; that is not an authorization or shell-startup failure.
 
 The authorization tests cover multi-command automatic issuance, precheck reuse,
 atomic single-use consumption, status-only grants rejecting push, mixed-batch

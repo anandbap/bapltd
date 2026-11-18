@@ -155,6 +155,9 @@ func BuildExecCmd(cmdStr string) *exec.Cmd {
 
 // BuildExecCmdWithShell creates an *exec.Cmd appropriate for the host OS and requested shell.
 func BuildExecCmdWithShell(cmdStr, shell string) *exec.Cmd {
+	if shell = strings.ToLower(strings.TrimSpace(shell)); shell != "" && shell != "auto" {
+		return explicitShellCommand(cmdStr, shell)
+	}
 	trimmed := CleanCommandString(cmdStr)
 	if runtime.GOOS == "windows" {
 		executable, args := ParseCommand(trimmed)

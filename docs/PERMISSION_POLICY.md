@@ -184,15 +184,35 @@ STOP wording) and `go test -C bap-edge ./cmd -run TestE2E_RepeatedRefusalsAreSto
 
 ## Grant Lifecycle, Lineage, and Cockpit UI Visibility
 
-Every grant minted in BAP adheres to Zero Standing Privilege (ZSP): single-use execution tokens that bind the exact agent, human delegator, scope, and command.
+Grant-bearing operations use signed, bounded authority under ZSP. Default execution
+grants are single-use; inspection and workspace-edit classes have the bounded
+multi-use ceilings above. Automatic batch grants additionally bind the exact
+command/workspace/policy. Do not assume every explicit grant has that batch binding.
+Read and signed machine-effect exemptions are policy permissions, not consumed grants.
 
 ### 1. Acquisition Modes
-* **AUTOMATIC (Cedar Policy Attestation / Batch Engine)**: Minted dynamically by the broker when a routine, policy-permitted command (e.g. `git status`, test runs) is evaluated. TTL is capped at 30 seconds.
-* **MANUAL (HITL Out-of-Band Challenge)**: Minted when a high-risk or sensitive command (e.g., `git reset --hard`, `git push`) is blocked, requiring an interactive human operator challenge (`bapedge zsp authorize --agent <id> --action <action> --ttl 5m`).
+* **Automatic batch**: the recognized batch path internally obtains a single-use,
+  command-bound grant, at most 30 seconds. Unsupported build/test/shell syntax
+  must not be described as automatically covered by this path.
+* **Explicit policy allow**: an allowed request obtains a grant under its class
+  ceilings without per-request human approval.
+* **Manual approval**: the human reviews `bapedge zsp approvals` and runs
+  `bapedge zsp approve <request-id>` in an independent terminal; the agent then
+  retries the original operation before the minted grant expires.
+* **Autoapprove pre-consent**: an eligible approve-tier request can be granted
+  within a human-enabled bounded window. Hard denies, code-level escalation guards
+  and `no_auto_approve` rules remain effective. This is distinct from policy allow.
+* **Central stepup and recommendations**: central escalation records do not alone
+  mint local ZSP grants; signed machine recommendations are persistent eligible
+  effect exemptions, not temporary approval/resume.
 
 ### 2. Lifecycle States
-* **`ACTIVE`**: Minted token waiting in memory. Valid until TTL or first execution use.
-* **`1x USED & BURNED`**: Atomically consumed upon child process launch. Binds the consumed command text and links directly to the cryptographic audit receipt ID (`ReceiptID`). Replay is cryptographically impossible.
+* **`ACTIVE`**: Valid signed grant with remaining uses before expiry/revocation;
+  local grants are persisted, not merely waiting in memory.
+* **Used / burned**: each authorized consumption reduces the budget; exhausted
+  single-use grants cannot be reused. Authorization consumption and successful
+  child completion are separate evidence. Multi-use grants remain bounded by
+  remaining uses, TTL, scope and revocation; do not label their first use burned.
 * **`EXPIRED UNUSED`**: TTL lapsed without execution. Retained in historical ledger for forensic auditing.
 
 ### 3. Multi-Agent Principal Attribution

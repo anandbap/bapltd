@@ -589,6 +589,7 @@ func submitTaskEnvelopeBound(
 		return nil, env, err
 	}
 	if binding != nil {
+		grant.Shell = binding.Shell
 		grant.CommandHash, grant.WorkspaceRoot, grant.PolicyHash = binding.CommandHash, binding.WorkspaceRoot, binding.PolicyHash
 		grant.AuthoritySignature = engine.signGrant(grant)
 	}
@@ -889,6 +890,7 @@ func VerifyOrConsumeSessionZSPChecks(
 	fullCommand, workspaceRoot string,
 	consume bool,
 	processAncestry []string,
+	shell ...string,
 ) (*types.CryptographicAgentSVID, *types.TaskGrant, *types.AuditLineageProof, error) {
 	if zspDir == "" {
 		zspDir = ResolveZSPDir()
@@ -948,6 +950,9 @@ func VerifyOrConsumeSessionZSPChecks(
 				checked = cg
 			}
 			if g.CommandHash != "" {
+				if g.Shell != "" && g.Shell != batchShell(shell) {
+					return nil, fmt.Errorf("%w: shell differs from authorized batch", ErrActionNotGranted)
+				}
 				if g.CommandHash != batchCommandHash(fullCommand) || g.WorkspaceRoot != canonicalBatchWorkspace(workspaceRoot) {
 					return nil, fmt.Errorf("%w: command or workspace differs from authorized batch", ErrActionNotGranted)
 				}
@@ -980,7 +985,7 @@ func VerifyOrConsumeSessionZSPChecks(
 					return true
 				}
 				primaryRes := resolveZSPCheckResource(checks[0], workspaceRoot, sessionID)
-				proof, consumeErr := engine.ConsumeTaskGrant(g.GrantID, checks[0].Action, primaryRes, fullCommand, processAncestry)
+				proof, consumeErr := engine.ConsumeTaskGrant(g.GrantID, checks[0].Action, primaryRes, fullCommand, processAncestry, shell...)
 				if consumeErr == nil {
 					updated, _ := engine.GetGrant(g.GrantID)
 					if updated != nil {

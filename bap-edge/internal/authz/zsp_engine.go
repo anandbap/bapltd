@@ -223,6 +223,7 @@ func (e *ZSPEngine) ConsumeTaskGrant(
 	targetResource string,
 	commandExecuted string,
 	processAncestry []string,
+	shell ...string,
 ) (*types.AuditLineageProof, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -240,6 +241,9 @@ func (e *ZSPEngine) ConsumeTaskGrant(
 	}
 	if grant.CommandHash != "" && grant.CommandHash != batchCommandHash(commandExecuted) {
 		return nil, fmt.Errorf("%w: command differs from authorized batch", ErrActionNotGranted)
+	}
+	if grant.Shell != "" && grant.Shell != batchShell(shell) {
+		return nil, fmt.Errorf("%w: shell differs from authorized batch", ErrActionNotGranted)
 	}
 
 	now := time.Now().UTC()
@@ -460,6 +464,10 @@ func (e *ZSPEngine) signGrant(g *types.TaskGrant) string {
 		binding, _ := json.Marshal([]string{g.CommandHash, g.WorkspaceRoot, g.PolicyHash})
 		mac.Write([]byte("\x00batch-binding\x00"))
 		mac.Write(binding)
+	}
+	if g.Shell != "" {
+		mac.Write([]byte("\x00batch-shell\x00"))
+		mac.Write([]byte(g.Shell))
 	}
 	return hex.EncodeToString(mac.Sum(nil))
 }

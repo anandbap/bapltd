@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -37,21 +38,28 @@ func batchPolicyHash(policy *PermissionPolicy) string {
 	return batchCommandHash(string(raw))
 }
 
-func IsAutomaticBatchCandidate(command, workspace string) bool {
+func batchShell(shell []string) string {
+	if len(shell) == 0 || strings.TrimSpace(shell[0]) == "" {
+		return "auto"
+	}
+	return strings.ToLower(strings.TrimSpace(shell[0]))
+}
+
+func IsAutomaticBatchCandidate(command, workspace string, shell ...string) bool {
 	if os.Getenv("BAP_ZSP_AUTO_GRANTS") == "0" {
 		return false
 	}
-	_, ok := automaticBatchChecks(command, workspace)
+	_, ok := automaticBatchChecks(command, workspace, shell...)
 	return ok
 }
 
 // automaticBatchChecks is deliberately narrower than manual task authorization.
 // Unrecognized shell syntax/options always fall back to the existing grant flow.
-func automaticBatchChecks(command, workspace string) ([]ZSPActionCheck, bool) {
+func automaticBatchChecks(command, workspace string, shell ...string) ([]ZSPActionCheck, bool) {
 	if workspace == "" || strings.TrimSpace(command) == "" || len(command) > 32768 {
 		return nil, false
 	}
-	if strings.ContainsAny(command, "`$(){}\r\n<>%") {
+	if strings.ContainsAny(command, "`$(){}\r\n") {
 		return nil, false
 	}
 	// The general parser accepts incomplete quotes; auto-authorization must not.
@@ -75,9 +83,28 @@ func automaticBatchChecks(command, workspace string) ([]ZSPActionCheck, bool) {
 	approved := approvedEffectSet()
 	var checks []ZSPActionCheck
 	for _, node := range pipe.Nodes {
-		if len(node.Args) == 0 || len(node.SubCommands) > 0 || len(node.Redirections) > 0 || node.Operator == "&" {
+		if len(node.Args) == 0 || len(node.SubCommands) > 0 || node.Operator == "&" {
 			return nil, false
 		}
+		for _, redir := range node.Redirections {
+			if !automaticNullRedirection(redir, batchShell(shell)) {
+				return nil, false
+			}
+		}
+		// Percent syntax is literal only in recognized Git format arguments,
+		// and never automatically authorized when CMD could expand it.
+		for i, arg := range node.Args {
+			if i > 0 && (LooksLikeCredentialPath(arg) || isCredentialStorePath(ResolveCanonicalPath(arg, workspace))) {
+				return nil, false
+			}
+			if strings.Contains(arg, "%") && (i < 2 || node.Args[0] != "git" || node.Args[1] != "log" ||
+				(!strings.HasPrefix(arg, "--format=") && !strings.HasPrefix(arg, "--pretty=")) ||
+				batchShell(shell) == "cmd" || (batchShell(shell) == "auto" && runtime.GOOS == "windows")) {
+				return nil, false
+			}
+		}
+		// Independently validated null stderr redirection needs no write scope.
+		analysisCommand := joinArgsQuoted(node.Args)
 		executable := strings.ToLower(node.Args[0])
 		if executable == "git" || executable == "git.exe" {
 			if !automaticGitInspection(node.Args) {
@@ -85,7 +112,7 @@ func automaticBatchChecks(command, workspace string) ([]ZSPActionCheck, bool) {
 			}
 		} else {
 			// Only simple inspection tools or explicitly machine-approved effects.
-			action, _, _ := ResolveZSPActionAndResource(node.FullCommand, node.Args[0], strings.Join(node.Args[1:], " "), "", "", workspace)
+			action, _, _ := ResolveZSPActionAndResource(analysisCommand, node.Args[0], strings.Join(node.Args[1:], " "), "", "", workspace)
 			switch executable {
 			case "cat", "type", "head", "tail", "wc", "ls", "dir", "grep", "findstr":
 				if !isLocalReadAction(action) {
@@ -97,7 +124,7 @@ func automaticBatchChecks(command, workspace string) ([]ZSPActionCheck, bool) {
 				}
 			}
 		}
-		atomic := ResolveZSPCommandChecks(node.FullCommand, node.Args[0], strings.Join(node.Args[1:], " "), "", "", workspace)
+		atomic := ResolveZSPCommandChecks(analysisCommand, node.Args[0], strings.Join(node.Args[1:], " "), "", "", workspace)
 		if len(atomic) != 1 {
 			return nil, false
 		}
@@ -108,6 +135,17 @@ func automaticBatchChecks(command, workspace string) ([]ZSPActionCheck, bool) {
 		checks = append(checks, check)
 	}
 	return checks, true
+}
+
+func automaticNullRedirection(r Redirection, shell string) bool {
+	if r.Operator != "2>" {
+		return false
+	}
+	posix := shell == "bash" || shell == "sh" || shell == "zsh" || (shell == "auto" && runtime.GOOS != "windows")
+	if posix {
+		return r.Target == "/dev/null"
+	}
+	return runtime.GOOS == "windows" && (shell == "cmd" || shell == "auto" || shell == "powershell" || shell == "pwsh") && strings.EqualFold(r.Target, "NUL")
 }
 
 func automaticGitInspection(args []string) bool {
@@ -196,6 +234,14 @@ func automaticGitInspection(args []string) bool {
 					return false
 				}
 			default:
+				if strings.HasPrefix(arg, "--format=") || strings.HasPrefix(arg, "--pretty=") {
+					continue
+				}
+				if strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") {
+					if n, err := strconv.Atoi(arg[1:]); err == nil && n >= 1 && n <= 10000 {
+						continue
+					}
+				}
 				if !strings.HasPrefix(arg, "--max-count=") {
 					return false
 				}
@@ -214,8 +260,8 @@ func automaticGitInspection(args []string) bool {
 // AuthorizeSessionCommandBatch reuses existing authority before trying an exact,
 // single-use automatic grant. It never raises an approval or auto-grants a mixed
 // allow/approve batch. Cedar/invariant evaluation must succeed before calling it.
-func AuthorizeSessionCommandBatch(zspDir, sessionID, clientType, command, workspace string, checks []ZSPActionCheck, consume bool, ancestry []string) (*types.CryptographicAgentSVID, *types.TaskGrant, *types.AuditLineageProof, error) {
-	svid, grant, proof, originalErr := VerifyOrConsumeSessionZSPChecks(zspDir, sessionID, clientType, checks, command, workspace, consume, ancestry)
+func AuthorizeSessionCommandBatch(zspDir, sessionID, clientType, command, workspace string, checks []ZSPActionCheck, consume bool, ancestry []string, shell ...string) (*types.CryptographicAgentSVID, *types.TaskGrant, *types.AuditLineageProof, error) {
+	svid, grant, proof, originalErr := VerifyOrConsumeSessionZSPChecks(zspDir, sessionID, clientType, checks, command, workspace, consume, ancestry, shell...)
 	if originalErr == nil {
 		return svid, grant, proof, nil
 	}
@@ -223,7 +269,7 @@ func AuthorizeSessionCommandBatch(zspDir, sessionID, clientType, command, worksp
 	if os.Getenv("BAP_ZSP_AUTO_GRANTS") == "0" {
 		return svid, grant, proof, originalErr
 	}
-	derived, eligible := automaticBatchChecks(command, workspace)
+	derived, eligible := automaticBatchChecks(command, workspace, shell...)
 	if !eligible {
 		return svid, grant, proof, originalErr
 	}
@@ -254,18 +300,19 @@ func AuthorizeSessionCommandBatch(zspDir, sessionID, clientType, command, worksp
 	}
 	// Serialize mint/recheck/consume across concurrent identical requests. Grant
 	// persistence itself uses the shared session lock and existing mint ceilings.
-	err = withZSPStoreLock(zspDir, "auto-"+sessionID+"-"+batchCommandHash(command), func() error {
+	err = withZSPStoreLock(zspDir, "auto-"+sessionID+"-"+batchCommandHash(batchShell(shell)+"\x00"+command), func() error {
 		var checkErr error
-		svid, grant, proof, checkErr = VerifyOrConsumeSessionZSPChecks(zspDir, sessionID, clientType, derived, command, workspace, consume, ancestry)
+		svid, grant, proof, checkErr = VerifyOrConsumeSessionZSPChecks(zspDir, sessionID, clientType, derived, command, workspace, consume, ancestry, shell...)
 		if checkErr == nil {
 			return nil
 		}
 		binding := &types.TaskGrant{CommandHash: batchCommandHash(command), WorkspaceRoot: canonicalBatchWorkspace(workspace), PolicyHash: batchPolicyHash(policy)}
+		binding.Shell = batchShell(shell)
 		grant, _, err = submitTaskEnvelopeBound(zspDir, sessionID, clientType, "TASK_EXECUTION", "Policy-authorized command batch", command, actions, resources, "", "policy_automatic_batch", 1, 30*time.Second, binding)
 		if err != nil {
 			return err
 		}
-		svid, grant, proof, err = VerifyOrConsumeSessionZSPChecks(zspDir, sessionID, clientType, derived, command, workspace, consume, ancestry)
+		svid, grant, proof, err = VerifyOrConsumeSessionZSPChecks(zspDir, sessionID, clientType, derived, command, workspace, consume, ancestry, shell...)
 		return err
 	})
 	return svid, grant, proof, err
