@@ -138,6 +138,19 @@ func (e *ZSPEngine) AuthorizeTaskEnvelope(env *types.TaskAuthorizationEnvelope, 
 	if len(ev.Denied) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrActionDenied, FormatPairs(ev.Denied))
 	}
+	// 4c. Step-up auto-approve (BAP-1100) must never cover effects the policy marks no_auto_approve:
+	// publishing, destructive, administrative and network-egress effects always need a real human.
+	if env.AuthorizedBy.DelegationType == DelegationAutoApprove {
+		var never []PairDecision
+		for _, d := range ev.NeedsApproval {
+			if d.NoAutoApprove {
+				never = append(never, d)
+			}
+		}
+		if len(never) > 0 {
+			return nil, fmt.Errorf("%w: %s (step-up auto-approve never covers this effect)", ErrHighRiskApprovalRequired, FormatPairs(never))
+		}
+	}
 	if len(ev.NeedsApproval) > 0 && !isOutOfBandApproved(env) {
 		return nil, fmt.Errorf("%w: %s", ErrHighRiskApprovalRequired, FormatPairs(ev.NeedsApproval))
 	}

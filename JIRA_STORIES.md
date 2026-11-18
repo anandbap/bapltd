@@ -2,6 +2,21 @@
 
 ## Pilot hardening implementation update (candidate work)
 
+### BAP-1104 — Auto-approve could mint grants for git push, delete, admin and egress (P0 bug)
+
+**Status: FIXED in source — tests pending run, 2026-11-18.**
+
+**Problem:** step-up auto-approve (BAP-1100) satisfied every approve-tier request, and `git:push` is only approve-tier, so with
+auto-approve on `bapedge zsp authorize --actions git:push:write` would have minted a push grant. This contradicted the documented
+rule that publishing needs a separate human approval. (The engine tests only covered `policy:` style escalations.)
+
+**Fix:** new policy field `no_auto_approve` on approve-tier rules; set on `approve-destructive-and-admin` and `approve-network-egress`.
+The engine refuses an auto-approve envelope if any requested pair hits such a rule, including inside a mixed ask.
+
+**Acceptance:**
+- [ ] With auto-approve on, `git:push`, `git:push:write`, `fs:file:delete`, a drop, an admin action and `http:get` are refused with the human-approval error.
+- [ ] A mixed ask (`dev:go:-C` plus a push) is refused whole; an ordinary build/test ask is still granted.
+
 ### BAP-1103 — Global installer leaves stale BAP binaries behind (P0 bug)
 
 **Status: FIXED in `scripts/install_bap_global.ps1` — not yet run, 2026-11-18.**

@@ -85,6 +85,11 @@ continue to apply; automation does not convert `approve` or `deny` into `allow`.
   still produces its own lineage proof. A multi-use edit grant limits time and blast radius; it does
   not narrow *which* workspace files may be written (path-scoped edit grants are follow-up work).
   Auto-approve (BAP-1100) never raises a ceiling.
+
+* `no_auto_approve` on an approve-tier rule (BAP-1104) means step-up auto-approve can never satisfy it.
+  The default policy sets it on `approve-destructive-and-admin` (push, delete, drop, admin) and
+  `approve-network-egress`, so those always need a real human even while auto-approve is on. A mixed
+  ask is refused as a whole.
 * `..` anywhere in a resource is never considered in-boundary.
 
 ## Overriding the policy (human operator only)

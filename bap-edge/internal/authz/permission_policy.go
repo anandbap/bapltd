@@ -67,6 +67,8 @@ type PermissionRule struct {
 	ResourceMatch []string       `json:"resource_match,omitempty"`
 	Scope         string         `json:"scope,omitempty"`
 	Reason        string         `json:"reason,omitempty"`
+	// NoAutoApprove marks an approve-tier rule that step-up auto-approve (BAP-1100) can never satisfy.
+	NoAutoApprove bool `json:"no_auto_approve,omitempty"`
 }
 
 // Ceiling bounds every grant minted in a session; mints can only be clamped down to it.
@@ -111,6 +113,8 @@ type PairDecision struct {
 	Tier     PermissionTier
 	RuleID   string
 	Reason   string
+	// NoAutoApprove is true when any matching approve-tier rule forbids step-up auto-approve.
+	NoAutoApprove bool
 }
 
 // PolicyEvaluation aggregates per-pair decisions.
@@ -287,16 +291,21 @@ func (p *PermissionPolicy) decide(action, resource string) PairDecision {
 	a := strings.ToLower(strings.TrimSpace(action))
 	best := PairDecision{Action: action, Resource: resource, Tier: p.DefaultTier, RuleID: "default", Reason: "no rule matches; default tier applies"}
 	matched := false
+	noAuto := false
 	for i := range p.Rules {
 		r := &p.Rules[i]
 		if !globAny(r.Match, a) || !r.appliesToResource(p, resource) {
 			continue
+		}
+		if r.Tier == TierApprove && r.NoAutoApprove {
+			noAuto = true
 		}
 		if !matched || tierRank(r.Tier) > tierRank(best.Tier) {
 			best = PairDecision{Action: action, Resource: resource, Tier: r.Tier, RuleID: r.ID, Reason: r.Reason}
 			matched = true
 		}
 	}
+	best.NoAutoApprove = noAuto
 	return best
 }
 

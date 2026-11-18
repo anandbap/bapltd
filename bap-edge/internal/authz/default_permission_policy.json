@@ -51,6 +51,7 @@
       "tier": "approve",
       "scope": "any",
       "match": ["git:push", "git:push:*", "*:delete", "*:drop", "*:admin"],
+      "no_auto_approve": true,
       "reason": "destructive, publishing or administrative effect requires human approval"
     },
     {
@@ -75,6 +76,7 @@
       "tier": "approve",
       "scope": "any",
       "match": ["http:*", "net:*", "network:egress"],
+      "no_auto_approve": true,
       "reason": "network egress requires approval unless the destination is allow-listed by an explicit rule"
     },
     {
