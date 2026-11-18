@@ -27,6 +27,12 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
         *(Or invoke the native `bap_request_task_grant` MCP tool).*
      3. Requesting a grant is **NOT** a self-approval or override—it submits your envelope to the BAP Policy Enforcement Point (PEP) for automated Cedar verification.
      4. Once granted, execute through the broker: `bapedge.exe exec "<command>"`.
+   - **Grant classes & multi-use grants**: The grant class is chosen by the actions requested, and `--max-uses` is clamped to that class's ceiling.
+     - `single_use` (mixed/exec actions such as `cli:bash:exec`, `git:commit`): clamped to **1 use**, 300s TTL. One command per grant.
+     - `workspace_edit` (`fs:file:write` only): honors `--max-uses N` (e.g. 5), so request ONE grant up front for a batch of edits: `bapedge.exe zsp authorize ... --actions "fs:file:write" --max-uses 5`.
+     - Plan ahead: count the edits/commands needed, request the grant sized for them, and keep file edits separate from exec/commit grants. Mixing actions downgrades the grant to `single_use`.
+     - Run `bapedge zsp authorize` as a standalone command (no `&&`, `;` or `|`) and wait for it before the dependent call. Do not put `[` `]` list syntax in command text; the broker may mis-read it as a path.
+     - Auto-approve (when on) covers routine grants only. Push, publishing, destructive operations, credential access and network egress are never auto-approved.
 6. **Multi-Layer Defense-in-Depth & Policy Protection**:
    - Instruction and policy files (`GEMINI.md`, `CLAUDE.md`, `AGENTS.md`, `policy.cedar`, `.bap/pins.json`) are tamper-proof and actively defended across 5 layers:
      - **Layer 1 (In-Harness Tool Hooks)**: Tool write/edit attempts targeting policy files are blocked before execution.

@@ -310,9 +310,12 @@ EOF
 
 bap_stage_codex() {
     local icpt h
-    bap_rule_text codex "OpenAI Codex" | bap_add_file "CODEX.md"
-    bap_rule_text codex "OpenAI Codex" | bap_add_file "AGENTS.md"
-    bap_mcp_json codex | bap_add_file ".codex/mcp.json"
+    # NOTE: never `cmd | bap_add_file` - a pipeline runs bap_add_file in a subshell and the
+    # BAP_STAGE_N increment is lost, so every file lands in slot 1. Process substitution keeps
+    # the function in this shell.
+    bap_add_file "CODEX.md" < <(bap_rule_text codex "OpenAI Codex")
+    bap_add_file "AGENTS.md" < <(bap_rule_text codex "OpenAI Codex")
+    bap_add_file ".codex/mcp.json" < <(bap_mcp_json codex)
     icpt="$(bap_find_bin interceptor cchook-interceptor || true)"
     if [ -z "$icpt" ]; then
         bap_log "[BAP] WARNING: interceptor binary not found; Codex hooks are NOT injected for this session."
@@ -334,8 +337,8 @@ EOF
 }
 
 bap_stage_antigravity() {
-    bap_rule_text antigravity "Antigravity" | bap_add_file "GEMINI.md"
-    bap_mcp_json antigravity | bap_add_file ".antigravity/mcp_config.json"
+    bap_add_file "GEMINI.md" < <(bap_rule_text antigravity "Antigravity")
+    bap_add_file ".antigravity/mcp_config.json" < <(bap_mcp_json antigravity)
 }
 
 # ---------------------------------------------------------------------------

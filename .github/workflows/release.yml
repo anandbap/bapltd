@@ -340,7 +340,8 @@ jobs:
   # ---------------------------------------------------------------------------
   publish-pypi:
     name: Publish to PyPI
-    needs: [build-and-package, publish-release]
+    # Any failed qualification (Go, POSIX launchers, Python), build or release step blocks PyPI.
+    needs: [qualify, build-and-package, publish-release]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     environment:
