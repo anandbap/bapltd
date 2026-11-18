@@ -79,34 +79,74 @@ func TestTelemetryReadRoutesRequireAdmin(t *testing.T) {
 	}
 }
 
-func TestSimulatedEndpointsAreDemoOnlyAndAdminOnly(t *testing.T) {
+// The simulated SPIFFE/TPM/Landlock/eBPF endpoints and the simulated OAuth login pages were removed;
+// they must not be served in any mode, even to an administrator or in demo mode.
+func TestRemovedSimulationEndpointsAreNotServed(t *testing.T) {
 	paths := []string{
 		"/api/v1/spiffe/issue-svid",
 		"/api/v1/spiffe/validate",
 		"/api/v1/attestation/tpm-quote",
 		"/api/v1/sandbox/landlock/check",
 		"/api/v1/sandbox/ebpf/execve",
+		"/api/v1/auth/oauth/google-login",
+		"/api/v1/auth/oauth/github-login",
 	}
 
 	s := setupTestServer()
 	s.SetAdminSecurity("test-admin", true)
+	s.SetDemoMode(true)
 	for _, p := range paths {
-		if w := authSurfaceRequest(s,http.MethodPost, p, "test-admin"); w.Code != http.StatusNotFound {
-			t.Fatalf("POST %s outside demo mode = %d, want 404 (not served)", p, w.Code)
+		for _, token := range []string{"", "test-admin"} {
+			if w := authSurfaceRequest(s, http.MethodPost, p, token); w.Code != http.StatusNotFound {
+				t.Fatalf("POST %s = %d, want 404 (endpoint removed)", p, w.Code)
+			}
 		}
 	}
+}
 
-	// The dedicated opt-in is enough; demo mode is not required.
-	s.SetSimulatedEndpoints(true)
-	for _, p := range paths {
-		if w := authSurfaceRequest(s,http.MethodPost, p, ""); w.Code != http.StatusUnauthorized {
-			t.Fatalf("POST %s in demo mode without credential = %d, want 401", p, w.Code)
-		}
-		// A handler may itself answer 403 (the TPM verifier rejects an empty quote), so only 401
-		// (auth failed) and 404 (not served) prove the request did not reach the handler.
-		if w := authSurfaceRequest(s, http.MethodPost, p, "test-admin"); w.Code == http.StatusUnauthorized || w.Code == http.StatusNotFound {
-			t.Fatalf("POST %s in demo mode with admin credential = %d, want it to reach the handler", p, w.Code)
-		}
+func TestStreamTicketIsSingleUseAndShortLived(t *testing.T) {
+	s := setupTestServer()
+	s.SetAdminSecurity("test-admin", true)
+
+	if w := authSurfaceRequest(s, http.MethodPost, "/api/v1/auth/stream-ticket", ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("ticket without credential = %d, want 401", w.Code)
+	}
+	w := authSurfaceRequest(s, http.MethodPost, "/api/v1/auth/stream-ticket", "test-admin")
+	if w.Code != http.StatusOK {
+		t.Fatalf("ticket with admin credential = %d: %s", w.Code, w.Body.String())
+	}
+	ticket := strings.TrimSpace(w.Body.String())
+	start := strings.Index(ticket, "bap_stk_")
+	if start < 0 {
+		t.Fatalf("no ticket in response: %s", ticket)
+	}
+	ticket = ticket[start : start+len("bap_stk_")+32]
+
+	if !streamTickets.consume(ticket) {
+		t.Fatal("fresh ticket was rejected")
+	}
+	if streamTickets.consume(ticket) {
+		t.Fatal("ticket must be single-use")
+	}
+	if streamTickets.consume("bap_stk_forged") {
+		t.Fatal("forged ticket accepted")
+	}
+
+	now := time.Now()
+	streamTickets.now = func() time.Time { return now }
+	t.Cleanup(func() { streamTickets.now = time.Now })
+	expiring, err := streamTickets.issue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamTickets.now = func() time.Time { return now.Add(streamTicketTTL + time.Second) }
+	if streamTickets.consume(expiring) {
+		t.Fatal("expired ticket accepted")
+	}
+
+	// A forged ticket on a stream is rejected without reaching the handler.
+	if w := authSurfaceRequest(s, http.MethodGet, "/api/activity/stream?ticket=bap_stk_forged", ""); w.Code != http.StatusForbidden {
+		t.Fatalf("forged stream ticket = %d, want 403", w.Code)
 	}
 }
 
@@ -118,8 +158,8 @@ func TestAdminCredentialInURLOnlyAcceptedOnStreams(t *testing.T) {
 		{"/api/v1/inspector/data?token=secret", ""},
 		{"/api/v1/sessions?admin_token=secret", ""},
 		{"/api/v1/audit/events?token=secret", ""},
-		{"/api/activity/stream?token=secret", "secret"},
-		{"/api/activity/stream?admin_token=secret", "secret"},
+		{"/api/activity/stream?token=secret", ""},
+		{"/api/activity/stream?admin_token=secret", ""},
 	}
 	for _, tc := range cases {
 		r := httptest.NewRequest(http.MethodGet, tc.url, nil)

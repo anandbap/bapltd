@@ -152,7 +152,9 @@ func runStart(args []string) {
 	dbPath := fs.String("db", "", "Path to SQLite database file for state persistence (default: bap-controlplane.db, 'memory' for in-memory)")
 	allowedOrigins := fs.String("allowed-origins", os.Getenv("BAP_ALLOWED_ORIGINS"), "Comma-separated exact browser origins; same-origin only by default")
 	demoMode := fs.Bool("demo-mode", false, "Enable destructive synthetic demo endpoints (or set BAP_DEMO_MODE=true)")
-	simulated := fs.Bool("enable-simulated-endpoints", os.Getenv("BAP_ENABLE_SIMULATED_ENDPOINTS") == "1", "Serve the simulated SPIFFE/TPM/Landlock/eBPF endpoints to administrators (demo/test only; they are not attestation or enforcement)")
+	// Deprecated no-op kept so existing launch scripts that pass it do not fail to start. The
+	// simulated SPIFFE/TPM/Landlock/eBPF endpoints it used to enable have been removed.
+	_ = fs.Bool("enable-simulated-endpoints", false, "Deprecated: no effect (the simulated endpoints were removed)")
 	mode := fs.String("mode", "prod", "Control plane environment mode: 'prod' (default; strictly locked offline OTC, enterprise OIDC required) or 'dev' (open self-service OTC token request; local development only)")
 	oidcProvider := fs.String("oidc-provider", "entra", "Enterprise OIDC provider: 'entra', 'okta', or 'generic'")
 	oidcIssuer := fs.String("oidc-issuer", "", "OIDC issuer / discovery URL")
@@ -452,7 +454,6 @@ func runStart(args []string) {
 	}
 	server.SetAdminSecurity(*adminToken, *allowRemoteAdmin)
 	server.SetDemoMode(*demoMode)
-	server.SetSimulatedEndpoints(*simulated)
 	server.SetEnvironmentMode(*mode)
 	if *minEdgeVersion != "" {
 		server.SetMinEdgeVersion(*minEdgeVersion)

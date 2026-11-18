@@ -77,7 +77,6 @@ type Server struct {
 	adminToken          string
 	allowRemoteAdmin    bool
 	demoMode            bool
-	simulatedEndpoints  bool
 	adminThrottleOnce  sync.Once
 	adminThrottleState  *authFailureThrottle
 	lastDemoMu          sync.RWMutex
@@ -256,23 +255,6 @@ func (s *Server) SetDemoMode(enabled bool) {
 	s.demoMode = enabled
 }
 
-// SetSimulatedEndpoints opts in to the simulated SPIFFE/TPM/Landlock/eBPF endpoints without the
-// rest of demo mode (BAP-1098). Off by default.
-func (s *Server) SetSimulatedEndpoints(enabled bool) {
-	s.simulatedEndpoints = enabled
-}
-
-// requireSimulatedEndpoints serves a simulation only when explicitly enabled or in demo mode.
-func (s *Server) requireSimulatedEndpoints(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.simulatedEndpoints && !s.demoMode {
-			http.NotFound(w, r)
-			return
-		}
-		next(w, r)
-	}
-}
-
 func (s *Server) requireDemoMode(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.demoMode {
@@ -405,8 +387,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/sessions/transcript", s.handleSessionTranscript)
 	s.mux.HandleFunc("/api/v1/sessions", s.requireAdminViewer(s.handleListSessions))
 	s.mux.HandleFunc("/api/v1/sessions/", s.handleGetSession)
-	s.mux.HandleFunc("/api/v1/principals", s.handlePrincipals)
-	s.mux.HandleFunc("/api/v1/principals/", s.handlePrincipalByID)
+	s.mux.HandleFunc("/api/v1/principals", s.requireAdminViewer(s.handlePrincipals))
+	s.mux.HandleFunc("/api/v1/principals/", s.requireAdminViewer(s.handlePrincipalByID))
 	s.mux.HandleFunc("/api/v1/auth/envoy", s.handleEnvoyExtAuthz)
 	s.mux.HandleFunc("/api/v1/financial-records", s.handleFinancialRecords)
 	s.mux.HandleFunc("/api/v1/inspector/data", s.requireAdminViewer(s.handleInspectorData))
@@ -416,7 +398,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/control/quarantine", s.handleControlQuarantine)
 	s.mux.HandleFunc("/api/v1/saas/tokens/bind", s.handleBindSaaSToken)
 	s.mux.HandleFunc("/api/v1/saas/tokens/verify", s.handleVerifySaaSToken)
-	s.mux.HandleFunc("/api/v1/saas/tokens", s.handleListSaaSTokens)
+	s.mux.HandleFunc("/api/v1/saas/tokens", s.requireAdminViewer(s.handleListSaaSTokens))
 
 	// RFC 8693 OAuth 2.0 Security Token Service & OBO Exchange (BAP-810)
 	s.mux.HandleFunc("/api/v1/sts/token", s.handleSTSToken)
@@ -440,14 +422,13 @@ func (s *Server) registerRoutes() {
 	// Web Inspector & React Admin Handshake / Login
 	s.mux.HandleFunc("/api/v1/auth/inspector-handshake", s.handleInspectorHandshake)
 	s.mux.HandleFunc("/api/v1/auth/admin-login", s.handleAdminLogin)
+	s.mux.HandleFunc("/api/v1/auth/stream-ticket", s.requireAdminAuth(s.handleStreamTicket))
 
 	// Enterprise Identity Provider Federation & OIDC Device Flow (Epic 25)
 	s.mux.HandleFunc("/device", s.handleDevicePortal)
 	s.mux.HandleFunc("/device/success", s.handleDeviceSuccess)
 	s.mux.HandleFunc("/api/v1/auth/oauth/start", s.handleOAuthStart)
-	s.mux.HandleFunc("/api/v1/auth/oauth/google-login", s.handleGoogleLoginSim)
 	s.mux.HandleFunc("/api/v1/auth/oauth/google-complete", s.handleGoogleComplete)
-	s.mux.HandleFunc("/api/v1/auth/oauth/github-login", s.handleGitHubLoginSim)
 	s.mux.HandleFunc("/api/v1/auth/oauth/github-complete", s.handleGitHubComplete)
 	s.mux.HandleFunc("/api/v1/auth/callback/google", s.handleGoogleCallback)
 	s.mux.HandleFunc("/api/v1/auth/callback/github", s.handleGitHubCallback)
@@ -492,16 +473,6 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/audit/notarizations", s.requireAdminAuth(s.handleListNotarizations))
 	s.mux.HandleFunc("/api/v1/audit/worm/export", s.requireAdminAuth(s.handleExportWORMArchive))
 	s.mux.HandleFunc("/api/v1/audit/worm/manifests", s.requireAdminAuth(s.handleListWORMArchives))
-
-	// Epics 11 and 12 below are SIMULATIONS (BAP-1098): the "SVID" is an unsigned placeholder, the
-	// TPM quote is an HMAC over a published default secret, and the Landlock/eBPF checks evaluate
-	// paths in this process. None of them is an attestation or enforcement boundary, so they are
-	// served only in explicit demo mode and only to an authenticated administrator.
-	s.mux.HandleFunc("/api/v1/spiffe/issue-svid", s.requireSimulatedEndpoints(s.requireAdminAuth(s.handleIssueSVID)))
-	s.mux.HandleFunc("/api/v1/spiffe/validate", s.requireSimulatedEndpoints(s.requireAdminAuth(s.handleValidateSVID)))
-	s.mux.HandleFunc("/api/v1/attestation/tpm-quote", s.requireSimulatedEndpoints(s.requireAdminAuth(s.handleVerifyTPMQuote)))
-	s.mux.HandleFunc("/api/v1/sandbox/landlock/check", s.requireSimulatedEndpoints(s.requireAdminAuth(s.handleLandlockCheck)))
-	s.mux.HandleFunc("/api/v1/sandbox/ebpf/execve", s.requireSimulatedEndpoints(s.requireAdminAuth(s.handleEBPFExecve)))
 
 	// Shadow IT & Unmanaged Asset Discovery (Rogue MCP Servers & Environment Variables)
 	s.mux.HandleFunc("/api/v1/discovery/shadow-it/scan", s.handleShadowITScan)
@@ -1488,8 +1459,7 @@ func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, authURL, http.StatusFound)
 			return
 		}
-		// Fallback to interactive Google Sign-In page
-		http.Redirect(w, r, fmt.Sprintf("/api/v1/auth/oauth/google-login?user_code=%s", url.QueryEscape(userCode)), http.StatusFound)
+		writeError(w, http.StatusServiceUnavailable, "Google sign-in is not configured on this control plane")
 		return
 	}
 
@@ -1507,92 +1477,11 @@ func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, authURL, http.StatusFound)
 			return
 		}
-		// Fallback to interactive GitHub Sign-In page
-		http.Redirect(w, r, fmt.Sprintf("/api/v1/auth/oauth/github-login?user_code=%s", url.QueryEscape(userCode)), http.StatusFound)
+		writeError(w, http.StatusServiceUnavailable, "GitHub sign-in is not configured on this control plane")
 		return
 	}
 
 	http.Redirect(w, r, fmt.Sprintf("/device?user_code=%s", url.QueryEscape(userCode)), http.StatusSeeOther)
-}
-
-// handleGoogleLoginSim renders the Google Sign-In verification dialog.
-func (s *Server) handleGoogleLoginSim(w http.ResponseWriter, r *http.Request) {
-	userCode := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("user_code")))
-	html := fmt.Sprintf(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>Sign in with Google - BAP Zero-Trust</title>
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
-    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 32px; max-width: 400px; width: 100%%; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); text-align: center; }
-    h2 { font-size: 18px; margin: 16px 0 8px 0; color: #fff; }
-    p { font-size: 13px; color: #94a3b8; margin-bottom: 24px; }
-    label { font-size: 12px; font-weight: 600; text-transform: uppercase; color: #94a3b8; display: block; text-align: left; margin-bottom: 6px; }
-    input[type="email"] { width: 100%%; box-sizing: border-box; padding: 12px; background: #0f172a; border: 1px solid #475569; border-radius: 6px; color: #fff; font-size: 14px; margin-bottom: 20px; }
-    button { width: 100%%; padding: 12px; background: #1a73e8; color: #fff; border: none; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; }
-    button:hover { background: #1557b0; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <svg width="36" height="36" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.616z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z"/><path fill="#FBBC05" d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707s.102-1.167.282-1.707V4.961H.957C.347 6.175 0 7.55 0 9s.347 2.825.957 4.039l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z"/></svg>
-    <h2>Sign in with Google</h2>
-    <p>to authorize BAP Zero-Trust on device <code>%s</code></p>
-    <form method="POST" action="/api/v1/auth/oauth/google-complete">
-      <input type="hidden" name="user_code" value="%s" />
-      <input type="hidden" name="provider" value="google" />
-      <label for="email">Google Account / Email</label>
-      <input type="email" id="email" name="email" placeholder="developer@gmail.com" required autofocus />
-      <button type="submit">Sign In & Authorize</button>
-    </form>
-  </div>
-</body>
-</html>`, userCode, userCode)
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(html))
-}
-
-// handleGitHubLoginSim renders the GitHub Sign-In verification dialog.
-func (s *Server) handleGitHubLoginSim(w http.ResponseWriter, r *http.Request) {
-	userCode := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("user_code")))
-	html := fmt.Sprintf(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>Sign in to GitHub - BAP Zero-Trust</title>
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
-    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 32px; max-width: 400px; width: 100%%; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); text-align: center; }
-    h2 { font-size: 18px; margin: 16px 0 8px 0; color: #fff; }
-    p { font-size: 13px; color: #94a3b8; margin-bottom: 24px; }
-    label { font-size: 12px; font-weight: 600; text-transform: uppercase; color: #94a3b8; display: block; text-align: left; margin-bottom: 6px; }
-    input[type="text"], input[type="email"] { width: 100%%; box-sizing: border-box; padding: 12px; background: #0f172a; border: 1px solid #475569; border-radius: 6px; color: #fff; font-size: 14px; margin-bottom: 20px; }
-    button { width: 100%%; padding: 12px; background: #238636; color: #fff; border: none; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; }
-    button:hover { background: #2ea043; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <svg width="36" height="36" viewBox="0 0 16 16" fill="#f8fafc"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-    <h2>Sign in to GitHub</h2>
-    <p>to authorize BAP Zero-Trust on device <code>%s</code></p>
-    <form method="POST" action="/api/v1/auth/oauth/github-complete">
-      <input type="hidden" name="user_code" value="%s" />
-      <input type="hidden" name="provider" value="github" />
-      <label for="email">GitHub Username or Email</label>
-      <input type="text" id="email" name="email" placeholder="developer@github.com" required autofocus />
-      <button type="submit">Sign In & Authorize</button>
-    </form>
-  </div>
-</body>
-</html>`, userCode, userCode)
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(html))
 }
 
 // handleGoogleComplete processes form submission for Google authentication.
@@ -5019,17 +4908,9 @@ func telemetryViewerCredential(r *http.Request) string {
 	if cred := adminCredential(r); cred != "" {
 		return cred
 	}
-	// A credential in a URL lands in access logs, proxies and browser history. Only the
-	// server-sent-event streams, whose EventSource API cannot set headers, may still carry it
-	// there (BAP-1098); every other route needs the Authorization header or the dashboard cookie.
-	if strings.HasSuffix(r.URL.Path, "/stream") {
-		if q := r.URL.Query().Get("token"); q != "" {
-			return q
-		}
-		if q := r.URL.Query().Get("admin_token"); q != "" {
-			return q
-		}
-	}
+	// A credential in a URL lands in access logs, proxies and browser history, so no route accepts
+	// one. Streams (EventSource cannot set headers) use a short-lived single-use ?ticket= instead,
+	// checked in requireAdminViewer. Everything else needs the header or the dashboard cookie.
 	if c, err := r.Cookie("bap_admin_token"); err == nil && c.Value != "" {
 		return c.Value
 	}
@@ -5117,6 +4998,21 @@ func (s *Server) requireAdminViewer(next http.HandlerFunc) http.HandlerFunc {
 			s.adminThrottle().reset(clientAddress(r))
 			next(w, r)
 			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/stream") {
+			if t := r.URL.Query().Get("ticket"); t != "" {
+				if streamTickets.consume(t) {
+					next(w, r)
+					return
+				}
+				if over, retry := s.adminThrottle().recordFailure(clientAddress(r)); over {
+					w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retry.Seconds())+1))
+					writeError(w, http.StatusTooManyRequests, "Too many invalid administrative credentials")
+					return
+				}
+				writeError(w, http.StatusForbidden, "Invalid or expired stream ticket")
+				return
+			}
 		}
 		cred := telemetryViewerCredential(r)
 		if cred != "" {
@@ -5625,141 +5521,6 @@ func (s *Server) handleListWORMArchives(w http.ResponseWriter, r *http.Request) 
 		"count":    len(archives),
 		"archives": archives,
 	})
-}
-
-// BAP-1101: handleIssueSVID
-func (s *Server) handleIssueSVID(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	var req struct {
-		AppID       string `json:"app_id"`
-		InstanceID  string `json:"instance_id"`
-		TrustDomain string `json:"trust_domain,omitempty"`
-		TTLMins     int    `json:"ttl_mins,omitempty"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
-		return
-	}
-	if req.AppID == "" || req.InstanceID == "" {
-		writeError(w, http.StatusBadRequest, "app_id and instance_id are required")
-		return
-	}
-	bundle := attestation.IssueSVID(req.TrustDomain, req.AppID, req.InstanceID, req.TTLMins)
-	writeJSON(w, http.StatusOK, bundle)
-}
-
-// BAP-1101: handleValidateSVID
-func (s *Server) handleValidateSVID(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	var req struct {
-		SPIFFEID            string `json:"spiffe_id"`
-		ExpectedTrustDomain string `json:"expected_trust_domain,omitempty"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
-		return
-	}
-	valid, td, appID, err := attestation.ValidateSVID(req.SPIFFEID, req.ExpectedTrustDomain)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"valid": false,
-			"error": err.Error(),
-		})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"valid":        valid,
-		"trust_domain": td,
-		"app_id":       appID,
-	})
-}
-
-// BAP-1102: handleVerifyTPMQuote
-func (s *Server) handleVerifyTPMQuote(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	var req struct {
-		Quote              attestation.TPMQuoteRequest `json:"quote"`
-		ExpectedBinaryHash string                      `json:"expected_binary_hash"`
-		AKSecret           string                      `json:"ak_secret,omitempty"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
-		return
-	}
-	akSecret := req.AKSecret
-	if akSecret == "" {
-		akSecret = "tpm-attestation-identity-key-default"
-	}
-	verification := attestation.VerifyTPMQuote(req.Quote, req.ExpectedBinaryHash, akSecret)
-	status := http.StatusOK
-	if !verification.Verified {
-		status = http.StatusForbidden
-	}
-	writeJSON(w, status, verification)
-}
-
-// BAP-1201: handleLandlockCheck
-func (s *Server) handleLandlockCheck(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	var req struct {
-		WorkspaceRoot string `json:"workspace_root"`
-		TargetPath    string `json:"target_path"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
-		return
-	}
-	box := sandbox.NewLandlockSandbox(req.WorkspaceRoot)
-	allowed, err := box.CheckPathAccess(req.TargetPath)
-	if err != nil {
-		writeJSON(w, http.StatusForbidden, map[string]any{
-			"allowed": false,
-			"error":   err.Error(),
-			"lsm":     "Landlock",
-		})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"allowed": allowed,
-		"lsm":     "Landlock",
-	})
-}
-
-// BAP-1202: handleEBPFExecve
-func (s *Server) handleEBPFExecve(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	var req sandbox.ExecveEvent
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
-		return
-	}
-	req.Timestamp = time.Now().UTC()
-	disposition := s.ebpfProbe.InspectExecve(req)
-	status := http.StatusOK
-	if disposition.Violated {
-		status = http.StatusForbidden
-	}
-	writeJSON(w, status, disposition)
 }
 
 // Discovery accepts enrolled metadata reports; it never scans the server filesystem.

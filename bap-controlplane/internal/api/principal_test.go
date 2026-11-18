@@ -59,7 +59,7 @@ func TestBAP911_ExplicitAgentPrincipalAndIdentityBinding(t *testing.T) {
 	// 1. Auditor queries /api/v1/principals
 	reqPrincipals := httptest.NewRequest(http.MethodGet, "/api/v1/principals", nil)
 	wPrincipals := httptest.NewRecorder()
-	srv.mux.ServeHTTP(wPrincipals, reqPrincipals)
+	serveAsAdmin(srv, wPrincipals, reqPrincipals)
 
 	if wPrincipals.Code != http.StatusOK {
 		t.Fatalf("Expected HTTP 200 from /api/v1/principals, got %d", wPrincipals.Code)

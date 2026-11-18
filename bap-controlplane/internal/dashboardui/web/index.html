@@ -2408,13 +2408,23 @@ document.addEventListener('click', e => {
 }, true);
 
 /* ---------- SSE Stream Connection ---------- */
-function initActivityStream() {
+async function initActivityStream() {
   if (S.eventSource) {
     try { S.eventSource.close(); } catch(e){}
   }
   try {
-    const tokenQs = S.api.token ? ('?token=' + encodeURIComponent(S.api.token)) : '';
-    const es = new EventSource(S.api.base + '/api/activity/stream' + tokenQs);
+    // The admin token never goes in the URL: exchange it for a short-lived single-use stream ticket.
+    let ticketQs = '';
+    if (S.api.token) {
+      try {
+        const tr = await fetch(S.api.base + '/api/v1/auth/stream-ticket', { method: 'POST', headers: getHeaders() });
+        if (tr.ok) {
+          const tj = await tr.json();
+          if (tj && tj.ticket) ticketQs = '?ticket=' + encodeURIComponent(tj.ticket);
+        }
+      } catch (e) {}
+    }
+    const es = new EventSource(S.api.base + '/api/activity/stream' + ticketQs);
     S.eventSource = es;
     es.addEventListener('snapshot', e => {
       try {
@@ -2438,7 +2448,10 @@ function initActivityStream() {
       } catch(err){}
     });
     es.onerror = () => {
-      // Stream error: fallback handles telemetry via polling
+      // A ticket is single-use, so the browser's automatic reconnect would be rejected. Close and
+      // reconnect with a fresh ticket; polling covers telemetry in the meantime.
+      try { es.close(); } catch (e) {}
+      if (S.eventSource === es) setTimeout(initActivityStream, 5000);
     };
   } catch(e) {
     console.warn('Activity SSE stream unavailable; polling fallback active', e);
