@@ -222,7 +222,9 @@ func BuildExecCmdWithShell(cmdStr, shell string) *exec.Cmd {
 		}
 
 		// If command uses shell features (pipes, chaining, redirection), execute via cmd.exe /c
-		if strings.ContainsAny(trimmed, "|&><;") {
+		// Only unquoted operators need a shell; characters inside quoted arguments (a commit message
+		// containing ";" or "<user@host>") are data, not operators.
+		if hasUnquotedShellOperator(trimmed) {
 			return exec.Command("cmd.exe", "/c", trimmed)
 		}
 
@@ -249,6 +251,18 @@ func BuildExecCmdWithShell(cmdStr, shell string) *exec.Cmd {
 			gitPe := `C:\Program Files\Git\usr\bin\printenv.exe`
 			if _, err := os.Stat(gitPe); err == nil {
 				return exec.Command(gitPe, parts[1:]...)
+			}
+		}
+		// A plain command with no unquoted operators runs directly with an exact argv. cmd.exe does not
+		// treat single quotes as quoting, so routing it through "cmd /c" splits quoted arguments apart.
+		// Shell builtins and anything not on PATH still fall back to cmd.exe.
+		// Limited to commands that actually contain quotes, so unquoted commands (including cmd
+		// builtins such as echo) keep their existing cmd.exe behaviour.
+		if strings.ContainsAny(trimmed, `'"`) {
+			if argv, ok := splitArgv(trimmed); ok && len(argv) > 0 {
+				if resolved, err := exec.LookPath(argv[0]); err == nil {
+					return exec.Command(resolved, argv[1:]...)
+				}
 			}
 		}
 		return exec.Command("cmd.exe", "/c", trimmed)
