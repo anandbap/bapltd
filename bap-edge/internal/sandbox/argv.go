@@ -11,8 +11,25 @@ import "strings"
 //	git commit -m 'Fix a; b' -m 'Co-Authored-By: X <x@example.com>'
 //
 // was therefore split into stray arguments or misread as redirection and failed with a bare
-// "exit status 1". These helpers parse the line the way a POSIX-style shell would, so plain
-// commands can be executed directly with an exact argv.
+// "exit status 1". These helpers parse the line the way a POSIX-style shell would for quotes, so
+// plain commands can be executed directly with an exact argv.
+//
+// Backslashes follow the Windows (MSVCRT) rules, because the child process re-parses the command
+// line it is given: backslashes are literal unless they directly precede a double quote. 2n
+// backslashes followed by a quote mean n backslashes and the quote toggles quoting; 2n+1 backslashes
+// followed by a quote mean n backslashes and a literal quote. So "a\\b" is the three-part string
+// a, two backslashes, b, and "a\" is an escaped quote (an unterminated string), never "a" plus a
+// stray character. Treating "\\" as one backslash everywhere corrupts arguments such as a Python
+// string literal containing "\\b".
+
+// backslashRun measures the run of backslashes starting at s[i] and the byte after it.
+func backslashRun(s string, i int) (n int, next int) {
+	j := i
+	for j < len(s) && s[j] == '\\' {
+		j++
+	}
+	return j - i, j
+}
 
 // hasUnquotedShellOperator reports whether s contains one of | & > < ; outside quotes, or a newline.
 // Anything it cannot parse unambiguously (an unterminated quote) is reported as containing an operator
@@ -21,22 +38,37 @@ func hasUnquotedShellOperator(s string) bool {
 	inSingle, inDouble := false, false
 	for i := 0; i < len(s); i++ {
 		ch := s[i]
-		switch {
-		case inSingle:
+		if inSingle {
 			if ch == '\'' {
 				inSingle = false
 			}
-		case inDouble:
-			if ch == '\\' && i+1 < len(s) && (s[i+1] == '"' || s[i+1] == '\\') {
-				i++
-			} else if ch == '"' {
+			continue
+		}
+		if ch == '\\' {
+			n, next := backslashRun(s, i)
+			if next < len(s) && s[next] == '"' {
+				if n%2 == 1 {
+					i = next // escaped quote: consume it, quoting state unchanged
+				} else {
+					i = next - 1 // even run: the quote that follows toggles quoting
+				}
+			} else {
+				i = next - 1 // not before a quote: literal backslashes
+			}
+			continue
+		}
+		if inDouble {
+			if ch == '"' {
 				inDouble = false
 			}
-		case ch == '\'':
+			continue
+		}
+		switch ch {
+		case '\'':
 			inSingle = true
-		case ch == '"':
+		case '"':
 			inDouble = true
-		case ch == '|' || ch == '&' || ch == '>' || ch == '<' || ch == ';' || ch == '\n' || ch == '\r':
+		case '|', '&', '>', '<', ';', '\n', '\r':
 			return true
 		}
 	}
@@ -44,8 +76,8 @@ func hasUnquotedShellOperator(s string) bool {
 }
 
 // splitArgv splits a command line into arguments. Single quotes keep their content literally; double
-// quotes group words and honour \" and \\ ; a backslash elsewhere (for example in a Windows path) is
-// literal. It returns ok=false for an unterminated quote.
+// quotes group words; backslashes follow the Windows rules described above. It returns ok=false for an
+// unterminated quote.
 func splitArgv(s string) (args []string, ok bool) {
 	var cur strings.Builder
 	inSingle, inDouble, have := false, false, false
@@ -58,28 +90,45 @@ func splitArgv(s string) (args []string, ok bool) {
 	}
 	for i := 0; i < len(s); i++ {
 		ch := s[i]
-		switch {
-		case inSingle:
+		if inSingle {
 			if ch == '\'' {
 				inSingle = false
 			} else {
 				cur.WriteByte(ch)
 			}
-		case inDouble:
-			switch {
-			case ch == '\\' && i+1 < len(s) && (s[i+1] == '"' || s[i+1] == '\\'):
-				i++
-				cur.WriteByte(s[i])
-			case ch == '"':
+			continue
+		}
+		if ch == '\\' {
+			n, next := backslashRun(s, i)
+			have = true
+			if next < len(s) && s[next] == '"' {
+				cur.WriteString(strings.Repeat(`\`, n/2))
+				if n%2 == 1 {
+					cur.WriteByte('"') // escaped quote
+					i = next
+				} else {
+					i = next - 1 // the quote that follows toggles quoting
+				}
+			} else {
+				cur.WriteString(strings.Repeat(`\`, n))
+				i = next - 1
+			}
+			continue
+		}
+		if inDouble {
+			if ch == '"' {
 				inDouble = false
-			default:
+			} else {
 				cur.WriteByte(ch)
 			}
-		case ch == '\'':
+			continue
+		}
+		switch ch {
+		case '\'':
 			inSingle, have = true, true
-		case ch == '"':
+		case '"':
 			inDouble, have = true, true
-		case ch == ' ' || ch == '\t':
+		case ' ', '\t':
 			flush()
 		default:
 			cur.WriteByte(ch)

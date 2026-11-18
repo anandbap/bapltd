@@ -26,7 +26,18 @@ func TestSplitArgv(t *testing.T) {
 		{"single quote inside double quotes is literal", `git commit -m "it's fine"`, []string{"git", "commit", "-m", "it's fine"}, true},
 		{"double quote inside single quotes is literal", `git commit -m 'say "hi"'`, []string{"git", "commit", "-m", `say "hi"`}, true},
 		{"escaped quote inside double quotes", `git commit -m "say \"hi\""`, []string{"git", "commit", "-m", `say "hi"`}, true},
-		{"escaped backslash inside double quotes", `echo "a\\b"`, []string{"echo", `a\b`}, true},
+		// Windows rules: backslashes are literal unless they directly precede a double quote.
+		{"backslashes not before a quote stay literal", `echo "a\\b"`, []string{"echo", `a\\b`}, true},
+		{"single backslash stays literal", `echo a\b`, []string{"echo", `a\b`}, true},
+		{"even backslash run before closing quote", `echo "a\\"`, []string{"echo", `a\`}, true},
+		{"odd backslash run before quote is a literal quote", `echo "a\\\"b"`, []string{"echo", `a\"b`}, true},
+		{
+			// Regression: TestBAP200 handoff. "\\b" must not collapse to "\b" (a backspace in Python).
+			"python string literal with quotes and a double backslash",
+			`python -c "print('\"quotes\" and \\backslash')"`,
+			[]string{"python", "-c", `print('"quotes" and \\backslash')`},
+			true,
+		},
 		{"empty quoted argument is kept", `git commit -m ''`, []string{"git", "commit", "-m", ""}, true},
 		{"adjacent quoted segments join", `echo 'a'"b"c`, []string{"echo", "abc"}, true},
 		{"windows path unquoted", `C:\tools\git.exe status`, []string{`C:\tools\git.exe`, "status"}, true},

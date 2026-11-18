@@ -26,6 +26,10 @@ TEST_ADMIN_TOKEN = "v3-test-admin-token-xyz"
 
 def http_req(url, method="GET", data=None, headers=None):
     hdrs = dict(headers or {})
+    # Telemetry read routes (/api/activity/*, /api/v1/agents, /api/v1/audit/events, ...) require admin
+    # credentials; send the test admin token unless the caller supplies its own Authorization.
+    if "/api/" in url and "Authorization" not in hdrs and "X-BAP-Admin-Token" not in hdrs:
+        hdrs["X-BAP-Admin-Token"] = TEST_ADMIN_TOKEN
     body = None
     if data is not None:
         if isinstance(data, (dict, list)):
