@@ -4102,6 +4102,17 @@ func preToolResponseForCaller(resp HookResponse, caller, style string) any {
 			HookSpecificOutput HookSpecificOutput `json:"hookSpecificOutput"`
 		}{specific}
 	}
+	if strings.EqualFold(caller, "antigravity") || strings.EqualFold(style, "antigravity") {
+		// Antigravity CLI deserializes hook output with protojson into a strict
+		// message; unknown top-level keys (status, continue, allowed, overwrite,
+		// permissionDecision, updatedInput, ...) abort tool execution. Emit only
+		// decision, systemMessage and hookSpecificOutput.
+		return struct {
+			Decision           string             `json:"decision,omitempty"`
+			SystemMessage      string             `json:"systemMessage,omitempty"`
+			HookSpecificOutput HookSpecificOutput `json:"hookSpecificOutput"`
+		}{resp.Decision, resp.SystemMessage, resp.HookSpecificOutput}
+	}
 	return resp
 }
 

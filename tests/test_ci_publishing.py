@@ -21,7 +21,7 @@ class PublishingWorkflowTests(unittest.TestCase):
         ci = workflow('ci.yml')
         self.assertEqual(ci['on']['push']['branches'], ['main'])
         job = ci['jobs']['publish-pypi']
-        self.assertEqual(job['needs'], ['test-go', 'test-python'])
+        self.assertEqual(job['needs'], ['test-go', 'test-launchers-posix', 'test-python'])
         self.assertEqual(
             job['if'],
             "${{ !inputs.validation_only && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}",
