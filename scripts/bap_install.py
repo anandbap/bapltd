@@ -39,6 +39,11 @@ import urllib.error
 import ssl
 import platform
 
+try:
+    from .agent_guidance import AGENT_TASK_GUIDANCE, update_agent_guidance
+except ImportError:
+    from agent_guidance import AGENT_TASK_GUIDANCE, update_agent_guidance
+
 _LAST_LOCKED_BINARIES = []
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -388,7 +393,7 @@ def stop_running_bap_processes(target_dir: str = None, portable: bool = False, p
     if running:
         names_str = ", ".join(f"{name} (PID {pid})" for pid, name in sorted(running, key=lambda x: x[0]))
         print(f"\n{TermColor.YELLOW}[!] Detected {len(running)} running BAP process(es): {names_str}{TermColor.RESET}")
-
+        
         should_stop = True
         if prompt_confirmation and sys.stdin.isatty() and not os.environ.get("BAP_NON_INTERACTIVE"):
             try:
@@ -864,6 +869,8 @@ def install_core_binaries(target_dir: str, portable: bool = False):
             wrappers.append((f"{base}.sh", sh_src))
     else:
         wrappers.append(("copilot-wrap.sh", os.path.join(REPO_ROOT, "copilot", "copilot-wrap.sh")))
+        # BAP-1101: shared engine sourced by the claude/codex/agy launchers (injection + cleanup)
+        wrappers.append(("bap_posix_engine.sh", os.path.join(REPO_ROOT, "bap", "launchers", "bap_posix_engine.sh")))
         for base in launcher_bases:
             sh_src = os.path.join(REPO_ROOT, f"{base}.sh")
             if not os.path.isfile(sh_src):
@@ -1140,7 +1147,7 @@ def configure_claude_code(claude_dir: str, cchook_bin: str, mcp_bin: str, bapedg
     ]
     for event in ("PostToolUse", "PostToolUseFailure"):
         claude_settings["hooks"][event] = [
-            {"matcher": "mcp__.*", "hooks": [interceptor_hook]}
+            {"matcher": "*", "hooks": [interceptor_hook]}
         ]
     claude_settings["hooks"]["Stop"] = [
         {"hooks": [interceptor_hook]}
@@ -1150,6 +1157,8 @@ def configure_claude_code(claude_dir: str, cchook_bin: str, mcp_bin: str, bapedg
 
     with open(claude_settings_path, "w", encoding="utf-8") as f:
         json.dump(claude_settings, f, indent=2)
+
+    update_agent_guidance(os.path.join(claude_dir, "CLAUDE.md"))
 
     # Claude MCP
     claude_mcp_path = os.path.join(claude_dir, "mcp.json")
@@ -1314,6 +1323,8 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
             detected_agents.append("Google Antigravity (Existing GEMINI.md Preserved + MCP Installed)")
             print(f"  {TermColor.GREEN}[+] Google Antigravity:{TermColor.RESET} Verified active zero-trust rule at {gemini_md_path}")
 
+        update_agent_guidance(gemini_md_path)
+
         # 4. Cursor IDE (.cursorrules + .cursor/mcp.json)
         cursor_dir = os.path.join(workspace_root, ".cursor")
         os.makedirs(cursor_dir, exist_ok=True)
@@ -1323,7 +1334,7 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
                 f.write(f"""# BAP Zero-Trust Policy for Cursor Assistant
 All terminal and tool commands must be routed through the BAP broker:
 {bapedge_bin} exec "<command>"
-""")
+""" + "\n" + AGENT_TASK_GUIDANCE)
         cursor_mcp_path = os.path.join(cursor_dir, "mcp.json")
         claude_mcp_sample = {
             "mcpServers": {
