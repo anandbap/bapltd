@@ -96,6 +96,11 @@ authorized access.
 
 ## 4. Escalate a capability to a human
 
+The file write should succeed under the bounded workspace edit grant. Duplicate
+hook callbacks must not burn extra uses. A fresh-grant/"already burned" retry loop
+is a FAIL; stop and report it. Python execution has separate authority from editing.
+See [native tool authorization](docs/NATIVE_TOOL_AUTHORIZATION.md).
+
 ~~~text
 Create pilot_check.py that prints "pilot check passed", then run it with Python.
 ~~~

@@ -1,0 +1,46 @@
+{
+  "": {
+    "entityTypes": {
+      "Agent": {
+        "memberOfTypes": []
+      },
+      "Command": {
+        "memberOfTypes": []
+      }
+    },
+    "actions": {
+      "Execute": {
+        "appliesTo": {
+          "principalTypes": [
+            "Agent"
+          ],
+          "resourceTypes": [
+            "Command"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "executable": {
+                "type": "String",
+                "required": true
+              },
+              "full_command": {
+                "type": "String",
+                "required": true
+              },
+              "args": {
+                "type": "String",
+                "required": false
+              },
+              "escapes_workspace": {
+                "type": "Boolean",
+                "required": false
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+

@@ -73,6 +73,7 @@ func claudeZSPHookResponse(event, sessionID string) UniversalHookResponse {
 	if os.Getenv("BAP_ZSP_AUTO_GRANTS") != "0" {
 		ctx = fmt.Sprintf("BAP Zero Standing Privileges (ZSP) is enforced for session %q. Submit routine command batches normally: BAP checks every operation and can automatically issue a short-lived, exact-batch grant when policy permits every effect. A batch containing push, publishing, destructive operations, credential access, unknown syntax or an unapproved effect is not automatically granted. If BAP requests intent authorization, run the suggested standalone bapedge zsp authorize command yourself and wait for it before retrying dependent calls; do not chain authorization with execution. Policy authorization is NOT self-approval and cannot widen a grant or replace required human approval.", sessionID)
 	}
+	ctx += " Generic grants default to one use; ordinary workspace edits can use the separate fs:file:write workspace_edit class (at most 25 uses / 600 seconds under the default signed policy). Native Write/Edit callbacks for the same stable tool-use ID and complete input share one consumption; distinct calls spend separate edit uses. Do not mix interpreter execution into an edit grant. If a fresh grant is immediately reported burned, report the hook defect and stop the mint/retry loop; do not switch tools to bypass it. If BAP raises a pending approval, give the human its request ID and the exact bapedge zsp approve <request-id> command for their own terminal, then wait. Never approve it yourself."
 	return UniversalHookResponse{
 		Status:   "ok",
 		Continue: true,
@@ -879,6 +880,7 @@ type HookPayload struct {
 	Type               string                 `json:"type,omitempty"`
 	ToolName           string                 `json:"tool_name,omitempty"`
 	ToolUseID          string                 `json:"tool_use_id,omitempty"`
+	NativeInputDigest  string                 `json:"-"`
 	ToolNameCamel      string                 `json:"toolName,omitempty"`
 	Tool               string                 `json:"tool,omitempty"`
 	Name               string                 `json:"name,omitempty"`
@@ -3185,7 +3187,7 @@ func isZSPEnforcedClientSide() bool {
 	return !isHooksDisabled()
 }
 
-func evaluateNativeToolWithBapedge(sessionID, callerSource, toolName, targetPath string) (bool, string, string) {
+func evaluateNativeToolWithBapedge(sessionID, callerSource, toolName, targetPath string, invocation ...HookPayload) (bool, string, string) {
 	if !isZSPEnforcedClientSide() {
 		return true, "", ""
 	}
@@ -3208,6 +3210,9 @@ func evaluateNativeToolWithBapedge(sessionID, callerSource, toolName, targetPath
 		callerSource = "claude-code"
 	}
 	args := []string{"check", "--source", callerSource, "--session-id", sessionID, "--json", "--tool", toolName, "--consume"}
+	if len(invocation) > 0 && invocation[0].ToolUseID != "" {
+		args = append(args, "--tool-use-id", invocation[0].ToolUseID, "--tool-input-sha256", invocation[0].NativeInputDigest)
+	}
 	if targetPath != "" {
 		args = append(args, "--target", targetPath)
 	}
@@ -3260,6 +3265,7 @@ func main() {
 		outputDecision("deny", "Failed to parse hook payload JSON: "+err.Error(), "Invalid JSON payload")
 		return
 	}
+	payload.NativeInputDigest = nativeInputDigest(inputBytes)
 
 	// CLI argument flag overrides (e.g. interceptor.exe --event SessionStart / PreToolUse)
 	for i, arg := range os.Args {
@@ -3282,6 +3288,13 @@ func main() {
 	// Normalize Antigravity fields if present
 	if payload.ConversationID != "" && payload.SessionID == "" {
 		payload.SessionID = payload.ConversationID
+	}
+	if payload.ConversationID != "" || payload.ToolCall != nil ||
+		strings.Contains(strings.ToLower(payload.TranscriptPath), "antigravity") ||
+		strings.Contains(strings.ToLower(payload.TranscriptPath), ".gemini") {
+		if activeCallerAppID == "" {
+			activeCallerAppID = "antigravity"
+		}
 	}
 	if payload.ToolCall != nil {
 		if payload.ToolName == "" {
@@ -3319,6 +3332,7 @@ func main() {
 			outcome = "failed"
 		}
 		_ = spoolMCPObservation(payload, outcome)
+		closeNativeInvocation(payload)
 		fmt.Println("{}")
 		return
 	}
@@ -3488,11 +3502,11 @@ func main() {
 		// Enforce Zero Standing Privileges on file inspection/mutation tools
 		toolLower := strings.ToLower(payload.ToolName)
 		if isSafeFileTool(toolLower) {
-			if ok, denyReason, ctxMsg := evaluateNativeToolWithBapedge(sessionID, activeCallerAppID, payload.ToolName, targetFile); !ok {
+			if ok, denyReason, ctxMsg := evaluateNativeToolWithBapedge(sessionID, activeCallerAppID, payload.ToolName, targetFile, payload); !ok {
 				outputDecision("deny", denyReason, ctxMsg)
 				return
 			}
-			outputDecision("allow", "", "File inspection permitted")
+			outputDecision("allow", "", "Native file operation authorized by BAP policy")
 			return
 		}
 	}
@@ -3506,7 +3520,7 @@ func main() {
 	if command == "" {
 		toolLower := strings.ToLower(payload.ToolName)
 		if isSafeFileTool(toolLower) {
-			if ok, denyReason, ctxMsg := evaluateNativeToolWithBapedge(sessionID, activeCallerAppID, payload.ToolName, targetFile); !ok {
+			if ok, denyReason, ctxMsg := evaluateNativeToolWithBapedge(sessionID, activeCallerAppID, payload.ToolName, targetFile, payload); !ok {
 				outputDecision("deny", denyReason, ctxMsg)
 				return
 			}
@@ -3517,7 +3531,7 @@ func main() {
 		// Subagents & directory/search tools still require ZSP verification when targeting resources
 		if isSafeSubagentOrInspectionTool(toolLower) {
 			if !strings.HasPrefix(toolLower, "bap_") && toolLower != "agent" && toolLower != "task" && toolLower != "subagent" && !strings.Contains(toolLower, "subagent") {
-				if ok, denyReason, ctxMsg := evaluateNativeToolWithBapedge(sessionID, activeCallerAppID, payload.ToolName, targetFile); !ok {
+				if ok, denyReason, ctxMsg := evaluateNativeToolWithBapedge(sessionID, activeCallerAppID, payload.ToolName, targetFile, payload); !ok {
 					outputDecision("deny", denyReason, ctxMsg)
 					return
 				}
@@ -4092,9 +4106,12 @@ func outputDecisionWithUpdatedInput(decision, reason, context string, updatedInp
 	os.Exit(0)
 }
 
-// Codex rejects unsupported legacy fields (including continue and stopReason).
-// A malformed denial can therefore allow the tool to continue. Keep its native
-// PreToolUse envelope separate from the legacy multi-client response contract.
+// preToolResponseForCaller ensures every AI coding harness receives its native expected response schema:
+// - Antigravity (AGY / Gemini): strict protojson PreToolUseHookOutput with {decision, reason?, overwrite?}
+// - Codex: {hookSpecificOutput: {hookEventName, permissionDecision, updatedInput}}
+// - OpenCode: {allowed, decision, reason?}
+// - Copilot: {allowed, decision, reason?, hookSpecificOutput}
+// - Claude Code (default): HookResponse with {decision: "approve"|"block", systemMessage, hookSpecificOutput}
 func preToolResponseForCaller(resp HookResponse, caller, style string) any {
 	if strings.EqualFold(caller, "codex") || strings.EqualFold(style, "codex") {
 		specific := resp.HookSpecificOutput
@@ -4105,16 +4122,75 @@ func preToolResponseForCaller(resp HookResponse, caller, style string) any {
 			HookSpecificOutput HookSpecificOutput `json:"hookSpecificOutput"`
 		}{specific}
 	}
-	if strings.EqualFold(caller, "antigravity") || strings.EqualFold(style, "antigravity") {
-		// Antigravity CLI deserializes hook output with protojson into a strict
-		// message; unknown top-level keys (status, continue, allowed, overwrite,
-		// permissionDecision, updatedInput, ...) abort tool execution. Emit only
-		// decision, systemMessage and hookSpecificOutput.
+	if strings.EqualFold(caller, "antigravity") || strings.EqualFold(style, "antigravity") || strings.EqualFold(caller, "gemini") || strings.EqualFold(caller, "agy") {
+		decision := "allow"
+		if strings.EqualFold(resp.Decision, "block") || strings.EqualFold(resp.Decision, "deny") || strings.EqualFold(resp.PermissionDecision, "deny") || (resp.Allowed != nil && !*resp.Allowed) {
+			decision = "deny"
+		}
+		reason := resp.Reason
+		if reason == "" {
+			reason = resp.HookSpecificOutput.PermissionDecisionReason
+		}
+		if reason == "" {
+			reason = resp.HookSpecificOutput.AdditionalContext
+		}
+		var overwrite map[string]any
+		if len(resp.Overwrite) > 0 {
+			overwrite = resp.Overwrite
+		}
 		return struct {
-			Decision           string             `json:"decision,omitempty"`
-			SystemMessage      string             `json:"systemMessage,omitempty"`
+			Decision  string         `json:"decision"`
+			Reason    string         `json:"reason,omitempty"`
+			Overwrite map[string]any `json:"overwrite,omitempty"`
+		}{
+			Decision:  decision,
+			Reason:    reason,
+			Overwrite: overwrite,
+		}
+	}
+	if strings.EqualFold(caller, "opencode") || strings.EqualFold(style, "opencode") {
+		allowed := true
+		decision := "allow"
+		if strings.EqualFold(resp.Decision, "block") || strings.EqualFold(resp.Decision, "deny") || strings.EqualFold(resp.PermissionDecision, "deny") || (resp.Allowed != nil && !*resp.Allowed) {
+			allowed = false
+			decision = "deny"
+		}
+		reason := resp.Reason
+		if reason == "" {
+			reason = resp.HookSpecificOutput.PermissionDecisionReason
+		}
+		return struct {
+			Allowed  bool   `json:"allowed"`
+			Decision string `json:"decision"`
+			Reason   string `json:"reason,omitempty"`
+		}{
+			Allowed:  allowed,
+			Decision: decision,
+			Reason:   reason,
+		}
+	}
+	if strings.EqualFold(caller, "copilot") || strings.EqualFold(style, "copilot") {
+		allowed := true
+		decision := "allow"
+		if strings.EqualFold(resp.Decision, "block") || strings.EqualFold(resp.Decision, "deny") || strings.EqualFold(resp.PermissionDecision, "deny") || (resp.Allowed != nil && !*resp.Allowed) {
+			allowed = false
+			decision = "deny"
+		}
+		reason := resp.Reason
+		if reason == "" {
+			reason = resp.HookSpecificOutput.PermissionDecisionReason
+		}
+		return struct {
+			Allowed            bool               `json:"allowed"`
+			Decision           string             `json:"decision"`
+			Reason             string             `json:"reason,omitempty"`
 			HookSpecificOutput HookSpecificOutput `json:"hookSpecificOutput"`
-		}{resp.Decision, resp.SystemMessage, resp.HookSpecificOutput}
+		}{
+			Allowed:            allowed,
+			Decision:           decision,
+			Reason:             reason,
+			HookSpecificOutput: resp.HookSpecificOutput,
+		}
 	}
 	return resp
 }

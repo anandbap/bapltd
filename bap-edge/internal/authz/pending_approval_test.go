@@ -49,6 +49,23 @@ func raiseFor(t *testing.T, dir, sess string, actions ...string) *PendingApprova
 	return p
 }
 
+func TestHumanApprovalPreservesRequesterAndOneUseAcrossLinkedSessions(t *testing.T) {
+	dir, ws := batchFixture(t)
+	pending := PendingApproval{SessionID: "target", RequestingSessionID: "requester", ClientType: "claude-code", Mission: "TASK_EXECUTION", Goal: "run pilot", Actions: []string{"dev:python:exec"}, Resources: []string{"workspace://current"}, MaxUses: 1, TTLSeconds: 300}
+	p, err := RaisePendingApproval(dir, pending)
+	if err != nil { t.Fatal(err) }
+	pending.RequestingSessionID = "other-requester"
+	other, err := RaisePendingApproval(dir, pending)
+	if err != nil || other.ID == p.ID { t.Fatal("different requesters shared an approval") }
+	_, grant, err := DecidePendingApproval(dir, p.ID, true)
+	if err != nil { t.Fatal(err) }
+	if grant.RequestingSessionID != "requester" { t.Fatalf("lost requesting session: %+v", grant) }
+	if _, _, _, err := VerifyOrConsumeSessionZSP(dir, "other-requester", "codex", "dev:python:exec", "workspace://current", "python pilot_check.py", ws, false, true, nil); err == nil { t.Fatal("approval leaked to an unlinked requester") }
+	_, used, _, err := VerifyOrConsumeSessionZSP(dir, "requester", "codex", "dev:python:exec", "workspace://current", "python pilot_check.py", ws, false, true, nil)
+	if err != nil || used.GrantID != grant.GrantID { t.Fatalf("requesting agent cannot spend human approval: %v", err) }
+	if _, _, _, err := VerifyOrConsumeSessionZSP(dir, "target", "claude-code", "dev:python:exec", "workspace://current", "python pilot_check.py", ws, false, true, nil); err == nil { t.Fatal("linked target double-spent one-use approval") }
+}
+
 func TestBAP936_RaiseListDedupeAndApproveMintsTheRequestedGrant(t *testing.T) {
 	dir := t.TempDir()
 	// The agent is refused...

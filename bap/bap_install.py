@@ -39,6 +39,11 @@ import urllib.error
 import ssl
 import platform
 
+try:
+    from .agent_guidance import AGENT_TASK_GUIDANCE, update_agent_guidance
+except ImportError:
+    from agent_guidance import AGENT_TASK_GUIDANCE, update_agent_guidance
+
 _LAST_LOCKED_BINARIES = []
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -1142,7 +1147,7 @@ def configure_claude_code(claude_dir: str, cchook_bin: str, mcp_bin: str, bapedg
     ]
     for event in ("PostToolUse", "PostToolUseFailure"):
         claude_settings["hooks"][event] = [
-            {"matcher": "mcp__.*", "hooks": [interceptor_hook]}
+            {"matcher": "*", "hooks": [interceptor_hook]}
         ]
     claude_settings["hooks"]["Stop"] = [
         {"hooks": [interceptor_hook]}
@@ -1152,6 +1157,8 @@ def configure_claude_code(claude_dir: str, cchook_bin: str, mcp_bin: str, bapedg
 
     with open(claude_settings_path, "w", encoding="utf-8") as f:
         json.dump(claude_settings, f, indent=2)
+
+    update_agent_guidance(os.path.join(claude_dir, "CLAUDE.md"))
 
     # Claude MCP
     claude_mcp_path = os.path.join(claude_dir, "mcp.json")
@@ -1316,6 +1323,8 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
             detected_agents.append("Google Antigravity (Existing GEMINI.md Preserved + MCP Installed)")
             print(f"  {TermColor.GREEN}[+] Google Antigravity:{TermColor.RESET} Verified active zero-trust rule at {gemini_md_path}")
 
+        update_agent_guidance(gemini_md_path)
+
         # 4. Cursor IDE (.cursorrules + .cursor/mcp.json)
         cursor_dir = os.path.join(workspace_root, ".cursor")
         os.makedirs(cursor_dir, exist_ok=True)
@@ -1325,7 +1334,7 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
                 f.write(f"""# BAP Zero-Trust Policy for Cursor Assistant
 All terminal and tool commands must be routed through the BAP broker:
 {bapedge_bin} exec "<command>"
-""")
+""" + "\n" + AGENT_TASK_GUIDANCE)
         cursor_mcp_path = os.path.join(cursor_dir, "mcp.json")
         claude_mcp_sample = {
             "mcpServers": {

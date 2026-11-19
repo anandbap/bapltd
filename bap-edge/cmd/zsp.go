@@ -565,7 +565,7 @@ func RunZSP(args []string) error {
 			}
 			// An approve-tier refusal is not a dead end: raise a reviewable HITL request (BAP-936).
 			if errors.Is(err, authz.ErrHighRiskApprovalRequired) {
-				pendingReq = raiseHITLRequest(sessionID, clientType, *missionFlag, *goalFlag, actions, resources, maxUses, *ttlFlag, err)
+				pendingReq = raiseHITLRequest(sessionID, clientType, *missionFlag, *goalFlag, actions, resources, maxUses, *ttlFlag, err, requestingSessionID)
 			}
 			if *jsonFlag {
 				data, _ := json.MarshalIndent(map[string]any{

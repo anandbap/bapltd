@@ -32,6 +32,7 @@ const defaultApprovalRequestTTL = 30 * time.Minute
 type PendingApproval struct {
 	ID         string    `json:"id"`
 	SessionID  string    `json:"session_id"`
+	RequestingSessionID string `json:"requesting_session_id,omitempty"`
 	ClientType string    `json:"client_type"`
 	Mission    string    `json:"mission"`
 	Goal       string    `json:"goal"`
@@ -73,10 +74,10 @@ func RaisePendingApproval(zspDir string, p PendingApproval) (*PendingApproval, e
 	var out *PendingApproval
 	err := withZSPStoreLock(zspDir, "__approvals__", func() error {
 		existing, _ := ListPendingApprovals(zspDir)
-		fp := approvalFingerprint(p.SessionID, p.Actions, p.Resources)
+		fp := approvalFingerprint(p.SessionID+"\x00"+p.RequestingSessionID+"\x00"+p.ClientType, p.Actions, p.Resources)
 		for i := range existing {
 			e := existing[i]
-			if e.Status == "pending" && time.Now().Before(e.ExpiresAt) && approvalFingerprint(e.SessionID, e.Actions, e.Resources) == fp {
+			if e.Status == "pending" && time.Now().Before(e.ExpiresAt) && approvalFingerprint(e.SessionID+"\x00"+e.RequestingSessionID+"\x00"+e.ClientType, e.Actions, e.Resources) == fp {
 				out = &e
 				return nil
 			}
@@ -184,7 +185,7 @@ func DecidePendingApproval(zspDir, id string, approve bool) (*PendingApproval, *
 		p.DecidedAt = time.Now().UTC()
 		if approve {
 			g, _, sErr := SubmitTaskEnvelopeWithDelegation(zspDir, p.SessionID, p.ClientType, p.Mission, p.Goal, p.Goal,
-				p.Actions, p.Resources, "", "human_interactive_oob", p.MaxUses, time.Duration(p.TTLSeconds)*time.Second)
+				p.Actions, p.Resources, "", "human_interactive_oob", p.MaxUses, time.Duration(p.TTLSeconds)*time.Second, p.RequestingSessionID)
 			if sErr != nil {
 				return sErr
 			}

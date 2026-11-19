@@ -434,6 +434,8 @@ func runPluginAdapter(args []string) error {
 
 	// Non-blocking post-execution telemetry events (e.g. PostToolUse)
 	if isTelemetryEvent(event) {
+		id, _ := rawPayload["tool_use_id"].(string)
+		if err := authz.CompleteNativeToolInvocation(authz.ResolveZSPDir(), sessionID, client, id); err != nil { return err }
 		emitPluginSuccess(client, event)
 		return nil
 	}
@@ -444,14 +446,23 @@ func runPluginAdapter(args []string) error {
 
 	// 6. Check Deduplication against recent standalone hook execution
 	cmdHash := computeCommandHash(command+"|"+toolName, targetFile)
-	if cached, ok := checkDedup(sessionID, cmdHash); ok {
+	if cached, ok := checkDedup(sessionID, cmdHash); command != "" && ok {
 		// Output cached decision directly
 		emitPluginDecisionWithSuggestion(client, event, cached.Decision, cached.Reason, cached.Suggestion, cached.Receipt)
 		return nil
 	}
 
 	// 7. Evaluate against Cedar policy invariants & ZSP TaskGrants
-	ecResp := evaluateWithBapedgeTool(sessionID, client, toolName, command, targetFile)
+	id, _ := rawPayload["tool_use_id"].(string)
+	input := rawPayload["tool_input"]
+	if input == nil { input = rawPayload["toolInput"] }
+	if input == nil { input = rawPayload["input"] }
+	if input == nil { input = rawPayload["args"] }
+	if input == nil { input = rawPayload["arguments"] }
+	if input == nil { input = rawPayload["parameters"] }
+	digest, digestErr := authz.NativeToolInputDigest(input)
+	if digestErr != nil { return digestErr }
+	ecResp := evaluateWithBapedgeTool(sessionID, client, toolName, command, targetFile, authz.NativeToolInvocation{ID: id, InputDigest: digest})
 
 	decision := "allow"
 	if !ecResp.Allowed {
@@ -459,7 +470,7 @@ func runPluginAdapter(args []string) error {
 	}
 
 	// Record to dedup cache
-	recordDedupWithSuggestion(sessionID, cmdHash, decision, ecResp.Reason, ecResp.Suggestion, ecResp.Receipt)
+	if command != "" { recordDedupWithSuggestion(sessionID, cmdHash, decision, ecResp.Reason, ecResp.Suggestion, ecResp.Receipt) }
 
 	// 8. Emit Vendor-Specific Response
 	emitPluginDecisionHalt(client, event, decision, ecResp.Reason, ecResp.Suggestion, ecResp.Receipt, ecResp.Halt, ecResp.StopReason)
@@ -1733,6 +1744,10 @@ func extractCommandAndFile(payload map[string]any) (command, filePath string) {
 }
 
 func resolvePluginSessionID(client string, payload map[string]any) string {
+	// Match the standalone hook: launcher identity takes precedence over the
+	// vendor host's conversation ID, including completion callbacks.
+	if s := strings.TrimSpace(os.Getenv("BAP_SESSION_ID")); s != "" { return s }
+	if s := strings.TrimSpace(os.Getenv("LTD_SESSION_ID")); s != "" { return s }
 	if s, ok := payload["session_id"].(string); ok && s != "" {
 		return s
 	}
@@ -1901,7 +1916,7 @@ func hasStandaloneClaudeBAPHook(wsRoot string) bool {
 	return false
 }
 
-func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath string) types.ExecResponse {
+func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath string, invocation ...authz.NativeToolInvocation) types.ExecResponse {
 	wsRoot := authz.GetWorkspaceRoot()
 	normClient := normalizeClientAppID(client)
 
@@ -2026,10 +2041,17 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 			consumeHere = false
 		}
 
-		svid, grant, _, zspErr := authz.AuthorizeSessionCommandBatch(
+		var svid *types.CryptographicAgentSVID
+		var grant *types.TaskGrant
+		var zspErr error
+		if command == "" && len(invocation) > 0 && invocation[0].ID != "" {
+			svid, grant, _, zspErr = authz.AuthorizeNativeToolInvocation(authz.ResolveZSPDir(), sessionID, normClient, toolName, filePath, wsRoot, invocation[0])
+		} else {
+			svid, grant, _, zspErr = authz.AuthorizeSessionCommandBatch(
 			authz.ResolveZSPDir(), sessionID, normClient, command, wsRoot, zspChecks, consumeHere, nil,
 			sandbox.ToolShell(toolName),
 		)
+		}
 		if svid != nil {
 			principalIdentity = svid.Subject
 		}
@@ -2096,6 +2118,7 @@ func emitPluginZSPContext(event, sessionID string) {
 	if os.Getenv("BAP_ZSP_AUTO_GRANTS") != "0" {
 		ctx = fmt.Sprintf("BAP Zero Standing Privileges (ZSP) is enforced for session %q. Submit routine command batches normally: BAP checks every operation and can automatically issue a short-lived, exact-batch grant when policy permits every effect. A batch containing push, publishing, destructive operations, credential access, unknown syntax or an unapproved effect is not automatically granted. If BAP requests intent authorization, run the suggested standalone bapedge zsp authorize command yourself and wait for it before retrying dependent calls; do not chain authorization with execution. Policy authorization is NOT self-approval and cannot widen a grant or replace required human approval.", sessionID)
 	}
+	ctx += " Generic grants default to one use; ordinary workspace edits can use the separate fs:file:write workspace_edit class (at most 25 uses / 600 seconds under the default signed policy). Native Write/Edit callbacks for the same stable tool-use ID and complete input share one consumption; distinct calls spend separate edit uses. Do not mix interpreter execution into an edit grant. If a fresh grant is immediately reported burned, report the hook defect and stop the mint/retry loop; do not switch tools to bypass it. If BAP raises a pending approval, give the human its request ID and the exact bapedge zsp approve <request-id> command for their own terminal, then wait. Never approve it yourself."
 	out := map[string]any{
 		"status":   "ok",
 		"continue": true,

@@ -978,6 +978,9 @@ func RunExec(args []string) {
 	toolNameFlag := fs.String("tool", "", "Native agent tool name for non-shell check (e.g. Read, Write, Edit, Glob, Grep, LS)")
 	targetFlag := fs.String("target", "", "Target file or directory path for --tool check")
 	consumeFlag := fs.Bool("consume", false, "Consume one TaskGrant use during decision-only check (for native tools)")
+	toolUseID := fs.String("tool-use-id", "", "Stable native tool invocation ID")
+	toolInputDigest := fs.String("tool-input-sha256", "", "SHA-256 of complete canonical native input")
+	toolOutcome := fs.String("tool-outcome", "", "Close a native invocation after success or failure")
 
 	defaultShell := os.Getenv("BAP_SHELL")
 	if defaultShell == "" {
@@ -1154,6 +1157,18 @@ func RunExec(args []string) {
 	} else {
 		if len(cmdArgs) == 0 && *toolNameFlag != "" {
 			wsRoot := authz.GetWorkspaceRoot()
+			if *toolOutcome != "" {
+				err := authz.CompleteNativeToolInvocation(authz.ResolveZSPDir(), ec.sessionID, ec.source, *toolUseID)
+				resp := types.ExecResponse{Allowed: err == nil, DecisionOnly: true, Mode: ec.enforcementMode}
+				if err != nil { resp.Reason = err.Error(); ec.exit(resp, 1); return }
+				ec.exit(resp, 0)
+				return
+			}
+			syncRevocationsFast(ec.serverURL, *policyPath)
+			if err := authz.CheckSessionRevocation(*policyPath, ec.sessionID); err != nil {
+				ec.exit(types.ExecResponse{Allowed: false, Reason: err.Error(), Mode: ec.enforcementMode}, 1)
+				return
+			}
 			ec.fullCommand = fmt.Sprintf("tool:%s %s", *toolNameFlag, *targetFlag)
 			ec.executable = strings.ToLower(*toolNameFlag)
 			ec.cmdArguments = *targetFlag
@@ -1172,9 +1187,16 @@ func RunExec(args []string) {
 
 			if isZSPRequiredForExec(ec) && taskGrantsEnforced() && !authz.IsWorkspaceReadOnlyToolCall(*toolNameFlag, *targetFlag, wsRoot) &&
 				!authz.IsApprovedToolCall(*toolNameFlag, *targetFlag, wsRoot) {
-				svid, grant, _, zspErr := authz.VerifyOrConsumeSessionZSP(
+				var svid *types.CryptographicAgentSVID
+				var grant *types.TaskGrant
+				var zspErr error
+				if *consumeFlag && *toolUseID != "" {
+					svid, grant, _, zspErr = authz.AuthorizeNativeToolInvocation(authz.ResolveZSPDir(), ec.sessionID, ec.source, *toolNameFlag, *targetFlag, wsRoot, authz.NativeToolInvocation{ID: *toolUseID, InputDigest: *toolInputDigest})
+				} else {
+					svid, grant, _, zspErr = authz.VerifyOrConsumeSessionZSP(
 					authz.ResolveZSPDir(), ec.sessionID, ec.source, action, res, ec.fullCommand, wsRoot, escapes, *consumeFlag, nil,
 				)
+				}
 				if svid != nil {
 					ec.zspPrincipal = svid.Subject
 				}

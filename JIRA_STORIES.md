@@ -2,6 +2,78 @@
 
 ## Pilot hardening implementation update (candidate work)
 
+### BAP-1107 — Old exhausted grants hide live resource mismatches (P0)
+
+**Status: source fix and regression passed, 2026-11-18.**
+
+The executor retained the first error while searching grants. A newer burned
+grant could mask a live approved grant's resource mismatch, incorrectly reporting
+"already burned" and suggesting another identical workspace request. Prefer the
+live action/resource failure over stale lifecycle errors. Resource mismatch guidance
+now tells the operator to inspect the actual action/resource instead of requesting
+the same unusable scope. A regression verifies the error and that the live grant
+retains its one use after rejection. No resource boundaries are widened.
+
+The observed formatter request was classified as `system://local` while its grant
+covered `workspace://current`; the approved Python-only installer test invocation
+then succeeded using that same live grant. Re-approval was not needed.
+
+### BAP-1106 — Human approval loses the linked requesting session (P0)
+
+**Status: source fix and requester/isolation/single-use regression passed, 2026-11-18. Installed broker still needs upgrade.**
+
+`zsp authorize` preserved target/requesting session links on allow-tier and
+auto-approved grants, but pending human requests omitted the requesting session.
+Approving such a request minted authority only for the target, leaving the actual
+agent seeing an old exhausted grant. Preserve the requester through pending
+storage, deduplication and human minting; display the link during operator review.
+Different requesters cannot share a pending request. A regression verifies that
+the requester can spend its approved grant, an unrelated session cannot, and the
+linked target cannot spend the same single-use grant again.
+
+Native plugin and standalone session resolution must also use the same launcher
+session before the host conversation ID, including completion callbacks.
+
+### BAP-1105 — Native Write/Edit duplicate callbacks burn fresh grants (P0 pilot blocker)
+
+**Status: source implementation, proto conformance, MCP first-observer stamping, and native callback regressions passed, 2026-11-18. Installed release validation complete.**
+
+**Problem:** one native Write/Edit can be checked by multiple hook processes or across multiple enforcement tiers (Layer 1 In-Harness Hooks -> Layer 2 MCP Server -> Execution Broker). Each tier or duplicate hook callback could use `--consume`, exhausting a one-use grant before the host executed the write. If in-harness hooks were absent or failed, downstream layers had no correlation key. Furthermore, in Antigravity harness, emitting non-proto `systemMessage` fields caused protojson unmarshal failures aborting tool execution.
+
+**Fix:** signed invocation decisions bind the host tool-use ID and complete input
+digest to session/principal/workspace/tool/target/policy and grant (`NativeToolInvocation`).
+Duplicate prechecks share one consumption; success/failure callbacks close it.
+If Layer 1 hooks are absent, disabled, or bypassed, Layer 2 (BAP MCP Server) acts as the
+first observer: it checks for `BAP_OP_ID` and, if absent, stamps a unique monotonic ID
+(`mcp-op-<pid>-<nanos>`), exports it to downstream execution environments, and correlates
+audit turn tracking so downstream layers do not repeatedly burn grants.
+In `cchook`, updated `preToolResponseForCaller` to strictly emit each AI assistant's canonical schema:
+- **Antigravity (AGY / Gemini)**: flat protobuf `PreToolUseHookOutput` (`{decision, reason?, overwrite?}`) with automatic caller detection and without `hookSpecificOutput` or `systemMessage`.
+- **OpenAI Codex**: `{hookSpecificOutput: {hookEventName, permissionDecision, updatedInput}}`.
+- **OpenCode**: `{allowed, decision, reason?}`.
+- **GitHub Copilot**: `{allowed, decision, reason?, hookSpecificOutput}`.
+- **Claude Code**: full `HookResponse` (`{decision: "approve"|"block", systemMessage, hookSpecificOutput}`).
+Pending, changed, expired, completed, revoked and corrupt records deny. Allow-tier native
+workspace edits can obtain/renew the bounded edit class through the normal PEP.
+Generic grants remain one use. Missing-ID clients retain explicit legacy accounting.
+Update Claude/Gemini/Codex/Copilot/OpenCode instructions, installer templates,
+packaged plugin rules, launcher templates and SessionStart/UserPromptSubmit context.
+
+**Acceptance:**
+- [x] Concurrent duplicate callbacks consume one use and share the proof; prechecks execute no writes.
+- [x] Distinct edits spend distinct uses; 25-use workspace edit grants renew only through policy.
+- [x] Changed content/target/tool/policy, expiry, completion, revocation, corruption and incomplete records deny reuse.
+- [x] Secrets/protected paths/outside-workspace writes never auto-mint; interpreter execution stays separately authorized.
+- [x] Installer/launcher rules teach the same workflow and retain human-only approval commands.
+- [x] Multi-tier idempotency and Layer 2 MCP first-observer stamping (`BAP_OP_ID`) ensures safety and prevents deadlock/duplicate burns when Layer 1 hooks are bypassed.
+- [x] Full multi-harness hook schema compatibility verified across Claude Code, Codex, OpenCode, Antigravity, and Copilot.
+- [x] Antigravity Go harness protobuf conformance verified without `systemMessage` or `hookSpecificOutput` field rejection.
+- [x] Installed Claude, Codex, Copilot, OpenCode, and Antigravity with both hook paths create/run pilot scripts without a grant retry loop on Windows, Linux and macOS.
+
+**Evidence and limits:** [native authorization contract](docs/NATIVE_TOOL_AUTHORIZATION.md).
+This repository backlog entry is not evidence that an external Jira issue was updated.
+Native callback correlation prevents duplicate spending; the host owns actual tool execution.
+
 ### BAP-1104 — Auto-approve could mint grants for git push, delete, admin and egress (P0 bug)
 
 **Status: FIXED in source — tests pending run, 2026-11-18.**

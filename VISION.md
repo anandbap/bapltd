@@ -8,6 +8,14 @@ release. Every goal below has acceptance cases in the
 
 ## 1. The product promise
 
+Native tool authorization must spend once per logical call even when two BAP
+hooks observe it. Generic grants remain single-use; ordinary workspace edits use
+a separate bounded class. Fresh allow-tier edit authority should be obtained by
+the integration, while required human approval must be surfaced with an actionable
+request ID. See the [native authorization contract](docs/NATIVE_TOOL_AUTHORIZATION.md).
+Cross-platform installed-host verification remains required; callback correlation
+does not attest exactly-once execution by an arbitrary native tool host.
+
 **Let people use their normal AI coding agent while the enterprise controls the
 authority of governed operations and can explain what actually happened.**
 

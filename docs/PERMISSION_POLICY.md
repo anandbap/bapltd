@@ -1,5 +1,9 @@
 # BAP Permission Policy (BAP-924 / BAP-925 / BAP-926)
 
+Native Write/Edit invocation accounting, bounded workspace edit grants, renewal
+and human escalation are specified in [Native tool authorization](NATIVE_TOOL_AUTHORIZATION.md).
+Generic grants remain single-use by default; duplicate callbacks are not extra edits.
+
 How a request for permissions becomes a grant. Tool knowledge and risk decisions live in **data**
 (`bap-edge/internal/authz/default_permission_policy.json`, optionally replaced by a signed
 administrator override), not in Go `switch` statements. Hard safety invariants stay in code and are

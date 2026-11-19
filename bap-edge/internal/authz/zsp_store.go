@@ -696,6 +696,16 @@ type ZSPActionCheck struct {
 	EscapesWorkspace  bool
 }
 
+// A stale grant must not hide why a live grant cannot authorize this call.
+// Otherwise an action/resource mismatch is reported as "already burned" and
+// agents repeatedly request the same unusable permission.
+func preferredGrantDenial(current, candidate error) error {
+	if current == nil { return candidate }
+	lifecycle := func(err error) bool { return errors.Is(err, ErrGrantExpired) || errors.Is(err, ErrGrantBurned) }
+	if lifecycle(current) && !lifecycle(candidate) { return candidate }
+	return current
+}
+
 func effectiveZSPResource(canonicalResource, workspaceRoot string, escapesWorkspace bool) string {
 	effectiveResource := canonicalResource
 	if escapesWorkspace {
@@ -1022,9 +1032,7 @@ func VerifyOrConsumeSessionZSPChecks(
 					_ = persistGrantEverywhere(zspDir, sessionID, updated)
 				}
 			}
-			if firstErr == nil {
-				firstErr = checkErr
-			}
+			firstErr = preferredGrantDenial(firstErr, checkErr)
 			return false
 		}
 
@@ -1188,6 +1196,11 @@ func RevokeSessionZSPGrants(zspDir, sessionID, grantID string) (int, error) {
 		for _, g := range grants {
 			if grantID != "" && g.GrantID != grantID {
 				continue
+			}
+			// Also invalidate duplicate native precheck decisions for a grant
+			// already exhausted by its first callback.
+			if err := writeFileAtomic(nativeGrantRevocationPath(zspDir, g.GrantID), []byte("revoked"), 0600); err != nil {
+				return err
 			}
 			if !g.IsBurned {
 				g.IsBurned = true

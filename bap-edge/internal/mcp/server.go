@@ -407,6 +407,14 @@ func executeCommand(fullCommand string, authorizer *authz.Authorizer, cfg Server
 		sessionID = fmt.Sprintf("sess-mcp-%d", os.Getpid())
 	}
 
+	// Multi-layer stamping: if Layer 1 Hook did not stamp BAP_OP_ID, Layer 2 MCP stamps it
+	// so downstream layers (shims, execution broker) recognize the operation and deduplicate.
+	opID := strings.TrimSpace(os.Getenv("BAP_OP_ID"))
+	if opID == "" {
+		opID = fmt.Sprintf("mcp-op-%d-%d", os.Getpid(), time.Now().UnixNano())
+		_ = os.Setenv("BAP_OP_ID", opID)
+	}
+
 	isAudit := strings.EqualFold(cfg.EnforcementMode, "audit") || strings.EqualFold(cfg.EnforcementMode, "shadow")
 
 	if !allowed {
@@ -420,6 +428,7 @@ func executeCommand(fullCommand string, authorizer *authz.Authorizer, cfg Server
 
 		auditEntry := audit.AuditEntry{
 			ReportingLayer: "mcp",
+			TurnID:         opID,
 			SessionID:      sessionID,
 			UserID:         uID,
 			UserEmail:      uEmail,
@@ -469,6 +478,7 @@ func executeCommand(fullCommand string, authorizer *authz.Authorizer, cfg Server
 
 	auditEntry := audit.AuditEntry{
 		ReportingLayer: "mcp",
+		TurnID:         opID,
 		SessionID:      sessionID,
 		UserID:         uID,
 		UserEmail:      uEmail,
@@ -760,6 +770,11 @@ func sendToolError(w *bufio.Writer, id interface{}, message string) {
 }
 
 func handleWriteFile(args map[string]interface{}, cfg ServerConfig) CallToolResult {
+	opID := strings.TrimSpace(os.Getenv("BAP_OP_ID"))
+	if opID == "" {
+		opID = fmt.Sprintf("mcp-op-%d-%d", os.Getpid(), time.Now().UnixNano())
+		_ = os.Setenv("BAP_OP_ID", opID)
+	}
 	pathVal, _ := args["path"].(string)
 	contentVal, _ := args["content"].(string)
 	if strings.TrimSpace(pathVal) == "" {
@@ -820,6 +835,7 @@ func handleWriteFile(args map[string]interface{}, cfg ServerConfig) CallToolResu
 	}
 	auditEntry := audit.AuditEntry{
 		ReportingLayer: "mcp",
+		TurnID:         opID,
 		SessionID:      cfg.SessionID,
 		UserID:         uID,
 		UserEmail:      uEmail,
@@ -884,6 +900,11 @@ func handleReadFile(args map[string]interface{}) CallToolResult {
 }
 
 func handleEditFile(args map[string]interface{}, cfg ServerConfig) CallToolResult {
+	opID := strings.TrimSpace(os.Getenv("BAP_OP_ID"))
+	if opID == "" {
+		opID = fmt.Sprintf("mcp-op-%d-%d", os.Getpid(), time.Now().UnixNano())
+		_ = os.Setenv("BAP_OP_ID", opID)
+	}
 	pathVal, _ := args["path"].(string)
 	oldStr, _ := args["old_string"].(string)
 	newStr, _ := args["new_string"].(string)

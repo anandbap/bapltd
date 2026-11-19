@@ -125,8 +125,11 @@ func printHITLNextStep(p *authz.PendingApproval, sessionID, actions, resources s
 }
 
 // raiseHITLRequest records a pending approval for an approve-tier refusal.
-func raiseHITLRequest(sessionID, clientType, mission, goal string, actions, resources []string, maxUses int, ttl time.Duration, err error) *authz.PendingApproval {
+func raiseHITLRequest(sessionID, clientType, mission, goal string, actions, resources []string, maxUses int, ttl time.Duration, err error, requesting ...string) *authz.PendingApproval {
+	requester := ""
+	if len(requesting) > 0 { requester = requesting[0] }
 	p, rErr := authz.RaisePendingApproval(authz.ResolveZSPDir(), authz.PendingApproval{
+		RequestingSessionID: requester,
 		SessionID: sessionID, ClientType: clientType, Mission: mission, Goal: goal,
 		Actions: actions, Resources: resources, MaxUses: maxUses, TTLSeconds: int(ttl.Seconds()), Reason: err.Error(),
 	})
@@ -147,6 +150,9 @@ func runZSPApprovals() error {
 	for _, p := range list {
 		if p.Status == "pending" && time.Now().Before(p.ExpiresAt) {
 			pending++
+			if p.RequestingSessionID != "" && p.RequestingSessionID != p.SessionID {
+				fmt.Printf("    Linked requesting session: %s\n", p.RequestingSessionID)
+			}
 			fmt.Printf("%s  session=%s  actions=%v  resources=%v\n    goal: %s\n    why:  %s\n    expires %s\n",
 				p.ID, p.SessionID, p.Actions, p.Resources, p.Goal, p.Reason, p.ExpiresAt.Local().Format("15:04:05"))
 		}
@@ -175,6 +181,9 @@ func runZSPDecide(approve bool, args []string) error {
 	// not produce a one-time-code prompt. DecidePendingApproval re-checks under the store lock.
 	if err := p.CheckDecidable(); err != nil {
 		return err
+	}
+	if approve && p.RequestingSessionID != "" && p.RequestingSessionID != p.SessionID {
+		fmt.Fprintf(os.Stderr, "  This approval also authorizes linked requesting session: %s\n", p.RequestingSessionID)
 	}
 	if approve && !humanApprovalChallenge(p.SessionID, p.Actions, p.Resources, p.Goal) {
 		return fmt.Errorf("%w: interactive human approval challenge failed or no terminal is attached", authz.ErrHighRiskApprovalRequired)

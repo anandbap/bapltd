@@ -3,13 +3,13 @@
   "hooks_disabled": false,
   "hostname": "DESKTOP-E63V3UH",
   "instance_id": "desktop-e63v3uh",
-  "pid": 8632,
-  "process_birth": "01dd77a33cfde3fa",
+  "pid": 25340,
+  "process_birth": "01dd77aacdf6e20e",
   "prompt_count": 0,
   "reporting_layer": "plugin",
   "server_url": "http://127.0.0.1:1",
   "session_id": "stale-id",
-  "started_at": "2026-11-18T21:25:15.6646646Z",
+  "started_at": "2026-11-18T22:19:23.1999116Z",
   "user": "User",
   "user_prompt": ""
 }

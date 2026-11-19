@@ -85,6 +85,7 @@ func ZSPDenialSuggestion(err error, principal, sessionID, goal, actions string, 
 		if target, action, ok := OutOfWorkspaceTarget(checks); ok {
 			return FormatOutOfWorkspaceSuggestion(target, action, workspaceRoot)
 		}
+		return fmt.Sprintf("The grant does not cover the resource BAP resolved for this operation: %v. Stop repeating the same workspace grant request. Have the operator review the classified action/resource and authorize the required scope if appropriate; do not widen it yourself or bypass the refusal.", err)
 	}
 	return FormatZSPAgentSuggestion(principal, sessionID, goal, actions, len(checks))
 }

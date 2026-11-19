@@ -1,5 +1,8 @@
 # Command batches, automatic grants, and ZSP scope enforcement
 
+Native Write/Edit tools use [invocation-bound authorization](NATIVE_TOOL_AUTHORIZATION.md).
+They do not use shell batch command hashes or a filename/content-only dedup cache.
+
 BAP accepts multiple commands in one tool call. The broker evaluates the complete
 invocation before execution; allowing its first command does not authorize the rest.
 Automatic authorization removes the agent's separate request/deny/retry cycle for
