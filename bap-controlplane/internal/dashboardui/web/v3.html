@@ -186,6 +186,13 @@
   .badge-tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; background: #e8f0fe; color: #1a73e8; letter-spacing: 0.02em; text-transform: uppercase; }
   .sess-pill { font-family: var(--mono); background: #f1f3f4; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
   .cov .fix { color: var(--accent); font-weight: 600; font-size: 13px; }
+  /* 5-layer defense badges */
+  .defense-5layers { display: inline-flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; align-items: center; }
+  .layer-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px; border: 1px solid transparent; letter-spacing: 0.02em; }
+  .layer-pill.observed { background: #e6f4ea; color: #137333; border-color: #ceead6; }
+  .layer-pill.silent { background: #f1f3f4; color: #5f6368; border-color: #dadce0; opacity: 0.85; }
+  .layer-pill.disabled { background: #fce8e6; color: #c5221f; border-color: #fad2cf; }
+  .layer-pill.bypassed { background: #fef7e0; color: #b06000; border-color: #feefc3; }
   @media (max-width: 820px) { .cov th:nth-child(4), .cov td:nth-child(4) { display: none; } }
   .empty-hero { text-align: center; padding: 10px 0 4px; }
   .empty-hero .btn { padding: 12px 22px; font-size: 15.5px; background: var(--ink); border-color: var(--ink); color: #fff; }
@@ -2030,6 +2037,66 @@
 
             // Per-layer coverage derived by the control plane from evidence actually received.
             var covNote = '';
+            var covMeta = {
+              layer1_hooks: { id: 'L1', name: 'Hooks', desc: 'In-Harness Process Interception (Claude, AGY, Codex, Copilot)' },
+              layer2_mcp: { id: 'L2', name: 'MCP', desc: 'MCP Authority Boundary & First-Observer Stamping' },
+              layer3_shims: { id: 'L3', name: 'Shims', desc: 'Terminal Interceptors & FIM Asset Shielding' },
+              layer4_broker: { id: 'L4', name: 'Broker', desc: 'Kernel Process Sandbox & Cedar Invariants' },
+              layer5_gateway: { id: 'L5', name: 'Gateway', desc: 'Authoritative Gateway PEP & ZSP Grant Consumption' }
+            };
+
+            var covObj = s.coverage || {};
+            var l1Status = covObj.layer1_hooks === 'observed' ? 'observed' : 'silent';
+            if (s.hooks_disabled === true || s.reporting_layer === 'unmonitored' || (layers.indexOf('unmonitored') !== -1)) {
+              l1Status = 'disabled';
+            } else if (s.degraded_reason === 'hooks_unapproved_or_disabled') {
+              l1Status = 'bypassed';
+            }
+
+            var pillList = [
+              {
+                id: 'L1',
+                name: 'Hooks',
+                status: l1Status,
+                label: l1Status === 'disabled' ? 'L1 Hooks (Disabled)' : (l1Status === 'bypassed' ? 'L1 Hooks (Bypassed)' : (l1Status === 'observed' ? 'L1 Hooks' : 'L1 Hooks (Silent)')),
+                desc: covMeta.layer1_hooks.desc
+              },
+              {
+                id: 'L2',
+                name: 'MCP',
+                status: covObj.layer2_mcp === 'observed' ? 'observed' : 'silent',
+                label: covObj.layer2_mcp === 'observed' ? 'L2 MCP' : 'L2 MCP (Silent)',
+                desc: covMeta.layer2_mcp.desc
+              },
+              {
+                id: 'L3',
+                name: 'Shims',
+                status: covObj.layer3_shims === 'observed' ? 'observed' : 'silent',
+                label: covObj.layer3_shims === 'observed' ? 'L3 Shims' : 'L3 Shims (Silent)',
+                desc: covMeta.layer3_shims.desc
+              },
+              {
+                id: 'L4',
+                name: 'Broker',
+                status: covObj.layer4_broker === 'observed' ? 'observed' : 'silent',
+                label: covObj.layer4_broker === 'observed' ? 'L4 Broker' : 'L4 Broker (Silent)',
+                desc: covMeta.layer4_broker.desc
+              },
+              {
+                id: 'L5',
+                name: 'Gateway',
+                status: covObj.layer5_gateway === 'observed' ? 'observed' : 'silent',
+                label: covObj.layer5_gateway === 'observed' ? 'L5 Gateway' : 'L5 Gateway (Silent)',
+                desc: covMeta.layer5_gateway.desc
+              }
+            ];
+
+            var layerPillsHtml = '<div class="defense-5layers" role="group" aria-label="5-layer defense coverage">' + pillList.map(function (p) {
+              var dot = p.status === 'observed' ? '🟢 ' : (p.status === 'disabled' ? '🔴 ' : (p.status === 'bypassed' ? '⚠️ ' : '⚪ '));
+              return '<span class="layer-pill ' + p.status + '" title="' + esc(p.desc + ' — Status: ' + p.status) + '">' + dot + esc(p.label) + '</span>';
+            }).join('') + '</div>';
+            surfaceHtml += layerPillsHtml;
+
             if (s.coverage) {
               var covNames = { layer1_hooks: 'L1 hooks', layer2_mcp: 'L2 MCP', layer3_shims: 'L3 shims', layer4_broker: 'L4 broker', layer5_gateway: 'L5 gateway' };
               covNote = 'Layer coverage: ' + Object.keys(covNames).map(function (k) {
@@ -2242,11 +2309,18 @@
       { t: 'Everything is calm', m: 'The first thing you see is one answer: are we in control? Right now, yes.', d: 5500, run: function () {
           S.conn = 'online';
           S.covNote = 'Every place an agent can run, and whether BAP can stop it there. Gaps are shown, not hidden.';
+          function demoBadges(l1, l2, l3, l4, l5) {
+            var st = [{k:'L1 Hooks', s:l1}, {k:'L2 MCP', s:l2}, {k:'L3 Shims', s:l3}, {k:'L4 Broker', s:l4}, {k:'L5 Gateway', s:l5}];
+            return '<div class="defense-5layers">' + st.map(function(b) {
+              var dot = b.s === 'observed' ? '🟢 ' : (b.s === 'disabled' ? '🔴 ' : (b.s === 'bypassed' ? '⚠️ ' : '⚪ '));
+              return '<span class="layer-pill ' + b.s + '">' + dot + b.k + (b.s === 'silent' ? ' (Silent)' : (b.s === 'disabled' ? ' (Disabled)' : '')) + '</span>';
+            }).join('') + '</div>';
+          }
           S.coverage = [
-            { surfaceHtml: '<div style="display:flex;align-items:center;gap:7px"><span style="font-weight:700">Claude Code</span><span class="badge-tag">Agent Session</span></div><small style="display:block;margin-top:3px;color:var(--ink-2);font-size:12.5px">Session: <code class="sess-pill">sess-demo-claude-31</code> &middot; <a href="javascript:void(0)" onclick="goToWorkstation(\'PN-MACBOOK-PRO\')" class="ws-link">💻 Workstation: <b>PN-MACBOOK-PRO</b></a> &middot; User: Priya Nair &middot; Live</small>', surface: 'Claude Code', detail: '31 sessions', protect: 'Governed', pc: 'g', report: 'Live', rc: 'g', means: 'Every action is checked before it runs.' },
-            { surfaceHtml: '<div style="display:flex;align-items:center;gap:7px"><span style="font-weight:700">Google Antigravity</span><span class="badge-tag">Agent Session</span></div><small style="display:block;margin-top:3px;color:var(--ink-2);font-size:12.5px">Session: <code class="sess-pill">sess-demo-agy-09</code> &middot; <a href="javascript:void(0)" onclick="goToWorkstation(\'MW-LINUX-DEV\')" class="ws-link">💻 Workstation: <b>MW-LINUX-DEV</b></a> &middot; User: Marcus Webb &middot; Live</small>', surface: 'Google Antigravity', detail: '9 sessions', protect: 'Governed', pc: 'g', report: 'Live', rc: 'g', means: 'Same checks as the terminal.' },
-            { surfaceHtml: '<div style="display:flex;align-items:center;gap:7px"><span style="font-weight:700">GitHub Copilot CLI</span><span class="badge-tag">Agent Session</span></div><small style="display:block;margin-top:3px;color:var(--ink-2);font-size:12.5px">Session: <code class="sess-pill">sess-demo-copilot-07</code> &middot; <a href="javascript:void(0)" onclick="goToWorkstation(\'LF-THINKPAD-X1\')" class="ws-link">💻 Workstation: <b>LF-THINKPAD-X1</b></a> &middot; User: Lena Fischer &middot; Offline</small>', surface: 'GitHub Copilot CLI', detail: '7 sessions', protect: 'Governed', pc: 'g', report: 'Offline', rc: 'off', means: 'Session exited cleanly; workstation policies remain enforced.' },
-            { surfaceHtml: '<div style="display:flex;align-items:center;gap:7px"><span style="font-weight:700">Unmanaged CLI</span><span class="badge-tag" style="background:#fce8e6;color:#d93025">Unprotected</span></div><small style="display:block;margin-top:3px;color:var(--ink-2);font-size:12.5px">2 detected on unmanaged machines &middot; No bapedge broker</small>', surface: 'Unmanaged CLI', detail: '2 detected on laptops', protect: 'Not governed', pc: 'r', report: 'Detected only', rc: 'a', means: 'Seen on the network, but BAP cannot stop it.', fix: 'Install protection' }
+            { surfaceHtml: '<div style="display:flex;align-items:center;gap:7px"><span style="font-weight:700">Claude Code</span><span class="badge-tag">Agent Session</span></div><small style="display:block;margin-top:3px;color:var(--ink-2);font-size:12.5px">Session: <code class="sess-pill">sess-demo-claude-31</code> &middot; <a href="javascript:void(0)" onclick="goToWorkstation(\'PN-MACBOOK-PRO\')" class="ws-link">💻 Workstation: <b>PN-MACBOOK-PRO</b></a> &middot; User: Priya Nair &middot; Live</small>' + demoBadges('observed', 'observed', 'observed', 'observed', 'observed'), surface: 'Claude Code', detail: '31 sessions', protect: 'Governed', pc: 'g', report: 'Live', rc: 'g', means: 'Every action is checked before it runs across all 5 defense layers.' },
+            { surfaceHtml: '<div style="display:flex;align-items:center;gap:7px"><span style="font-weight:700">Google Antigravity</span><span class="badge-tag">Agent Session</span></div><small style="display:block;margin-top:3px;color:var(--ink-2);font-size:12.5px">Session: <code class="sess-pill">sess-demo-agy-09</code> &middot; <a href="javascript:void(0)" onclick="goToWorkstation(\'MW-LINUX-DEV\')" class="ws-link">💻 Workstation: <b>MW-LINUX-DEV</b></a> &middot; User: Marcus Webb &middot; Live</small>' + demoBadges('observed', 'observed', 'silent', 'observed', 'silent'), surface: 'Google Antigravity', detail: '9 sessions', protect: 'Governed', pc: 'g', report: 'Live', rc: 'g', means: 'Same checks as the terminal: L1 in-harness interception and L2 MCP boundary.' },
+            { surfaceHtml: '<div style="display:flex;align-items:center;gap:7px"><span style="font-weight:700">GitHub Copilot CLI</span><span class="badge-tag">Agent Session</span></div><small style="display:block;margin-top:3px;color:var(--ink-2);font-size:12.5px">Session: <code class="sess-pill">sess-demo-copilot-07</code> &middot; <a href="javascript:void(0)" onclick="goToWorkstation(\'LF-THINKPAD-X1\')" class="ws-link">💻 Workstation: <b>LF-THINKPAD-X1</b></a> &middot; User: Lena Fischer &middot; Offline</small>' + demoBadges('observed', 'silent', 'observed', 'observed', 'silent'), surface: 'GitHub Copilot CLI', detail: '7 sessions', protect: 'Governed', pc: 'g', report: 'Offline', rc: 'off', means: 'Session exited cleanly; workstation policies remain enforced.' },
+            { surfaceHtml: '<div style="display:flex;align-items:center;gap:7px"><span style="font-weight:700">Unmanaged CLI</span><span class="badge-tag" style="background:#fce8e6;color:#d93025">Unprotected</span></div><small style="display:block;margin-top:3px;color:var(--ink-2);font-size:12.5px">2 detected on unmanaged machines &middot; No bapedge broker</small>' + demoBadges('disabled', 'silent', 'silent', 'silent', 'silent'), surface: 'Unmanaged CLI', detail: '2 detected on laptops', protect: 'Not governed', pc: 'r', report: 'Detected only', rc: 'a', means: 'Seen on the network, but BAP cannot stop it.', fix: 'Install protection' }
           ];
           S.timeline = demoTL(0); S.shadow = 0;
           S.incident = null; S.agents = AGENTS; S.fleetTotal = AGENTS; S.flag = ''; S.blocked = 0; S.waiting = 0; S.record = true; S.frozen = false;
