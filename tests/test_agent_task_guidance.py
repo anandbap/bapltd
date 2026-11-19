@@ -11,8 +11,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class TestAgentTaskGuidance(unittest.TestCase):
+    def setUp(self):
+        self.tmp_dir = ROOT / ".test-tmp"
+        self.tmp_dir.mkdir(parents=True, exist_ok=True)
+
     def test_installer_registers_native_completion_for_success_and_failure(self):
-        with tempfile.TemporaryDirectory(dir=ROOT / ".test-tmp") as folder:
+        with tempfile.TemporaryDirectory(dir=self.tmp_dir) as folder:
             configure_claude_code(folder, "", "bapmcp", "bapedge")
             settings = json.loads((Path(folder) / "settings.json").read_text())
             for event in ("PreToolUse", "PostToolUse", "PostToolUseFailure"):
@@ -21,7 +25,7 @@ class TestAgentTaskGuidance(unittest.TestCase):
             self.assertIn(AGENT_TASK_GUIDANCE.strip(), (Path(folder) / "CLAUDE.md").read_text())
 
     def test_reinstall_refreshes_only_owned_guidance(self):
-        with tempfile.TemporaryDirectory(dir=ROOT / ".test-tmp") as folder:
+        with tempfile.TemporaryDirectory(dir=self.tmp_dir) as folder:
             path = Path(folder) / "GEMINI.md"
             path.write_text("Developer instructions\n<!-- BAP task guidance -->\nstale\n<!-- /BAP task guidance -->\nKeep this too\n", encoding="utf-8")
             update_agent_guidance(path)
