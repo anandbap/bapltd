@@ -41,8 +41,18 @@ import platform
 
 try:
     from .agent_guidance import AGENT_TASK_GUIDANCE, update_agent_guidance
-except ImportError:
-    from agent_guidance import AGENT_TASK_GUIDANCE, update_agent_guidance
+except (ImportError, ValueError):
+    try:
+        from bap.agent_guidance import AGENT_TASK_GUIDANCE, update_agent_guidance
+    except ImportError:
+        try:
+            from agent_guidance import AGENT_TASK_GUIDANCE, update_agent_guidance
+        except ImportError:
+            _here = os.path.dirname(os.path.abspath(__file__))
+            for _cand in (os.path.join(os.path.dirname(_here), "bap"), _here):
+                if os.path.isdir(_cand) and _cand not in sys.path:
+                    sys.path.insert(0, _cand)
+            from agent_guidance import AGENT_TASK_GUIDANCE, update_agent_guidance
 
 _LAST_LOCKED_BINARIES = []
 
