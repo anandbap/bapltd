@@ -143,6 +143,7 @@ python-agent/*.egg-info/
 # IDE & Operating System Files
 # ==============================================================================
 .test-cache/
+.test-tmp/
 /.codex-test-tmp/
 .bap-acceptance/
 .idea/
