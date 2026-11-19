@@ -7,7 +7,7 @@ param(
     [switch]$Archive = $true,
     [switch]$ForceRegenCerts = $false,
     [string]$Domain = "a.b.com",
-    [string]$Version = "v1.13.45",
+    [string]$Version = "v1.13.46",
     [string]$AllowDevOverrides = "false"  # distributions never include dev-override; pass "true" explicitly for a local developer build
 )
 
