@@ -35,6 +35,9 @@ type AgentActivityEvent struct {
 	RequestedActions   []string `json:"requested_actions,omitempty"`
 	AllowedActions     []string `json:"allowed_actions,omitempty"`
 	ZSPConcept         string   `json:"zsp_concept,omitempty"`
+	ReportingLayer      string   `json:"reporting_layer,omitempty"`
+	CorroboratingLayers []string `json:"corroborating_layers,omitempty"`
+	Layers              []string `json:"layers,omitempty"`
 }
 
 // ActivitySummary is the legacy/demo fixture model. Live metrics_version=2

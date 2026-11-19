@@ -280,34 +280,53 @@ func (s *Server) sessionToActivityEvent(sess *session.Session) *types.AgentActiv
 	case decision == "ALLOW" || decision == "ALLOWED":
 		outcome = "Success"
 	}
+	repLayer := ""
+	for _, ev := range sess.Events {
+		if ev.ReportingLayer != "" {
+			repLayer = ev.ReportingLayer
+		}
+	}
+	if repLayer == "" && len(sess.ReportingLayers) > 0 {
+		repLayer = sess.ReportingLayers[len(sess.ReportingLayers)-1]
+	}
+	if repLayer == "" {
+		repLayer = "hook"
+	}
+	corrobLayers := sess.ReportingLayers
+	if len(corrobLayers) == 0 {
+		corrobLayers = []string{repLayer}
+	}
 	return &types.AgentActivityEvent{
-		Timestamp:          sess.LastActiveAt.Format(time.RFC3339),
-		SessionID:          sess.SessionID,
-		AgentID:            sess.InstanceID,
-		AgentType:          agentType,
-		RuntimeID:          sess.Hostname,
-		UserID:             userDisplay,
-		BusinessUnit:       bu,
-		Application:        sess.AppID,
-		PromptSummary:      summary,
-		Intent:             sess.Intent.Primary,
-		IntentCategory:     intentCat,
-		Action:             action,
-		Tool:               "bapedge",
-		TargetResource:     "internal://session",
-		DataClassification: "Internal",
-		PolicyDecision:     decision,
-		RiskScore:          risk,
-		GrantID:            grantID,
-		ActionStatus:       status,
-		OutcomeCategory:    outcome,
-		TraceID:            "tr-" + sess.SessionID,
-		DeviationLevel:     devLevel,
-		NarrowingApplied:   narrowingApplied,
-		NarrowingReason:    narrowingReason,
-		RequestedActions:   requestedActions,
-		AllowedActions:     allowedActions,
-		ZSPConcept:         zspConcept,
+		Timestamp:           sess.LastActiveAt.Format(time.RFC3339),
+		SessionID:           sess.SessionID,
+		AgentID:             sess.InstanceID,
+		AgentType:           agentType,
+		RuntimeID:           sess.Hostname,
+		UserID:              userDisplay,
+		BusinessUnit:        bu,
+		Application:         sess.AppID,
+		PromptSummary:       summary,
+		Intent:              sess.Intent.Primary,
+		IntentCategory:      intentCat,
+		Action:              action,
+		Tool:                "bapedge",
+		TargetResource:      "internal://session",
+		DataClassification:  "Internal",
+		PolicyDecision:      decision,
+		RiskScore:           risk,
+		GrantID:             grantID,
+		ActionStatus:        status,
+		OutcomeCategory:     outcome,
+		TraceID:             "tr-" + sess.SessionID,
+		DeviationLevel:      devLevel,
+		NarrowingApplied:    narrowingApplied,
+		NarrowingReason:     narrowingReason,
+		RequestedActions:    requestedActions,
+		AllowedActions:      allowedActions,
+		ZSPConcept:          zspConcept,
+		ReportingLayer:      repLayer,
+		CorroboratingLayers: corrobLayers,
+		Layers:              corrobLayers,
 	}
 }
 
@@ -354,6 +373,9 @@ func (s *Server) seedBaselineActivities() {
 			OutcomeCategory:    "Success",
 			TraceID:            "tr-pay-8192301",
 			DeviationLevel:     "NONE",
+			ReportingLayer:      "broker",
+			CorroboratingLayers: []string{"hook", "broker"},
+			Layers:              []string{"hook", "broker"},
 		},
 		{
 			Timestamp:          ts(12),
@@ -381,6 +403,9 @@ func (s *Server) seedBaselineActivities() {
 			OutcomeCategory:    "Success",
 			TraceID:            "tr-core-8192402",
 			DeviationLevel:     "NONE",
+			ReportingLayer:      "broker",
+			CorroboratingLayers: []string{"hook", "broker"},
+			Layers:              []string{"hook", "broker"},
 		},
 		{
 			Timestamp:          ts(25),
@@ -408,6 +433,9 @@ func (s *Server) seedBaselineActivities() {
 			OutcomeCategory:    "Success",
 			TraceID:            "tr-sec-8192503",
 			DeviationLevel:     "NONE",
+			ReportingLayer:      "hook",
+			CorroboratingLayers: []string{"hook"},
+			Layers:              []string{"hook"},
 		},
 		{
 			Timestamp:          ts(45),
@@ -435,6 +463,9 @@ func (s *Server) seedBaselineActivities() {
 			OutcomeCategory:    "Success",
 			TraceID:            "tr-ops-8192604",
 			DeviationLevel:     "NONE",
+			ReportingLayer:      "broker",
+			CorroboratingLayers: []string{"hook", "broker"},
+			Layers:              []string{"hook", "broker"},
 		},
 		{
 			Timestamp:          ts(60),
@@ -462,6 +493,9 @@ func (s *Server) seedBaselineActivities() {
 			OutcomeCategory:    "Success",
 			TraceID:            "tr-fraud-8192705",
 			DeviationLevel:     "NONE",
+			ReportingLayer:      "mcp",
+			CorroboratingLayers: []string{"mcp"},
+			Layers:              []string{"mcp"},
 		},
 		{
 			Timestamp:          ts(80),
@@ -490,6 +524,9 @@ func (s *Server) seedBaselineActivities() {
 			TraceID:            "tr-pay-8192806",
 			DeviationLevel:     "CRITICAL",
 			DeviationReason:    "Blocked because the requested customer-record modification was inconsistent with the session's declared production-diagnosis intent.",
+			ReportingLayer:      "broker",
+			CorroboratingLayers: []string{"hook", "broker"},
+			Layers:              []string{"hook", "broker"},
 		},
 	}
 }

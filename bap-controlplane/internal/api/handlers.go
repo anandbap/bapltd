@@ -3713,38 +3713,52 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	type item struct {
-		Kind             string   `json:"kind"` // prompt | response | action
-		Timestamp        string   `json:"timestamp"`
-		Text             string   `json:"text,omitempty"`
-		Action           string   `json:"action,omitempty"`
-		Decision         string   `json:"decision,omitempty"`
-		Reason           string   `json:"reason,omitempty"`
-		Intent           string   `json:"intent,omitempty"`
-		GrantID          string   `json:"grant_id,omitempty"`
-		NarrowingApplied bool     `json:"narrowing_applied,omitempty"`
-		NarrowingReason  string   `json:"narrowing_reason,omitempty"`
-		RequestedActions []string `json:"requested_actions,omitempty"`
-		AllowedActions   []string `json:"allowed_actions,omitempty"`
-		ZSPConcept       string   `json:"zsp_concept,omitempty"`
-		EventHash        string   `json:"event_hash"`
-		PrevHash         string   `json:"previous_hash"`
-		Captured         bool     `json:"captured"`
+		Kind                string   `json:"kind"` // prompt | response | action
+		Timestamp           string   `json:"timestamp"`
+		Text                string   `json:"text,omitempty"`
+		Action              string   `json:"action,omitempty"`
+		Decision            string   `json:"decision,omitempty"`
+		Reason              string   `json:"reason,omitempty"`
+		Intent              string   `json:"intent,omitempty"`
+		GrantID             string   `json:"grant_id,omitempty"`
+		NarrowingApplied    bool     `json:"narrowing_applied,omitempty"`
+		NarrowingReason     string   `json:"narrowing_reason,omitempty"`
+		RequestedActions    []string `json:"requested_actions,omitempty"`
+		AllowedActions      []string `json:"allowed_actions,omitempty"`
+		ZSPConcept          string   `json:"zsp_concept,omitempty"`
+		ReportingLayer      string   `json:"reporting_layer,omitempty"`
+		CorroboratingLayers []string `json:"corroborating_layers,omitempty"`
+		Layers              []string `json:"layers,omitempty"`
+		EventHash           string   `json:"event_hash"`
+		PrevHash            string   `json:"previous_hash"`
+		Captured            bool     `json:"captured"`
 	}
 	items := make([]item, 0)
 	sessionEvents := s.auditStore.ListBySession(sessionID)
 	for _, ev := range session.CanonicalPromptEvents(sessionEvents) {
+		repL := ev.ReportingLayer
+		if repL == "" {
+			if ev.FullCommand == "USER_PROMPT_SUBMITTED" {
+				repL = "hook"
+			} else {
+				repL = "broker"
+			}
+		}
 		it := item{
-			Timestamp:        ev.Timestamp,
-			Decision:         ev.Decision,
-			Reason:           ev.Reason,
-			GrantID:          ev.GrantID,
-			NarrowingApplied: ev.NarrowingApplied,
-			NarrowingReason:  ev.NarrowingReason,
-			RequestedActions: ev.RequestedActions,
-			AllowedActions:   ev.AllowedActions,
-			ZSPConcept:       ev.ZSPConcept,
-			EventHash:        ev.EventHash,
-			PrevHash:         ev.PreviousHash,
+			Timestamp:           ev.Timestamp,
+			Decision:            ev.Decision,
+			Reason:              ev.Reason,
+			GrantID:             ev.GrantID,
+			NarrowingApplied:    ev.NarrowingApplied,
+			NarrowingReason:     ev.NarrowingReason,
+			RequestedActions:    ev.RequestedActions,
+			AllowedActions:      ev.AllowedActions,
+			ZSPConcept:          ev.ZSPConcept,
+			ReportingLayer:      repL,
+			CorroboratingLayers: ev.CorroboratingLayers,
+			Layers:              ev.CorroboratingLayers,
+			EventHash:           ev.EventHash,
+			PrevHash:            ev.PreviousHash,
 		}
 		switch ev.FullCommand {
 		case "USER_PROMPT_SUBMITTED":

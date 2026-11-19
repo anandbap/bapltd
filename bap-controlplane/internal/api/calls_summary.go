@@ -46,6 +46,7 @@ type CallRecord struct {
 	RequestedActions  []string `json:"requested_actions,omitempty"`
 	AllowedActions    []string `json:"allowed_actions,omitempty"`
 	ZSPConcept        string   `json:"zsp_concept,omitempty"`
+	ReportingLayer    string   `json:"reporting_layer,omitempty"`
 	Layers            []string `json:"layers,omitempty"`
 	EventCount        int      `json:"event_count"`
 }
@@ -302,6 +303,19 @@ func resolveGroup(g *callGroup) CallRecord {
 		}
 	}
 
+	repLayer := rep.ReportingLayer
+	if repLayer == "" {
+		for i := range g.events {
+			if g.events[i].ReportingLayer != "" {
+				repLayer = g.events[i].ReportingLayer
+				break
+			}
+		}
+	}
+	if repLayer == "" {
+		repLayer = "broker"
+	}
+
 	return CallRecord{
 		Timestamp:         rep.Timestamp,
 		Action:            rep.FullCommand,
@@ -316,6 +330,7 @@ func resolveGroup(g *callGroup) CallRecord {
 		RequestedActions:  rep.RequestedActions,
 		AllowedActions:    rep.AllowedActions,
 		ZSPConcept:        concept,
+		ReportingLayer:    repLayer,
 		Layers:            layerList,
 		EventCount:        len(g.events),
 	}
