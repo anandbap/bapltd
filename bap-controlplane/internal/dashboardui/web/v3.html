@@ -1131,15 +1131,23 @@
       li.className = f.blocked ? 'blocked-row' : 'clickable';
       var ini = String(f.who).split(' · ')[0].split(/\s+/).map(function (w) { return w.charAt(0); }).join('').slice(0, 2).toUpperCase();
       var askHtml = esc(f.ask);
+      
       if (f.isMasked) {
         askHtml = '<span style="color:var(--ink-2);font-weight:500">' + esc(f.ask) + '</span> ' +
           '<button type="button" class="convo-unlock-link" style="font-size:11px;padding:1px 7px;margin-left:4px" onclick="openAdminPopover();event.stopPropagation();" title="Prompt text is masked for privacy. Click to unlock with Admin Token">Unlock Prompt</button>';
       }
       var narrowBadge = f.narrowed ? ' <span class="chip limited" title="' + esc(f.narrowingReason || 'Monotonic scope attenuation applied') + '">ALLOWED-LIMITED</span>' : '';
       var badgeHtml = (f.blocked ? '<span class="chip no">Blocked</span>' : (f.narrowed ? '' : (f.shadow ? '<span class="chip wr" style="background:#fef7e0;color:#b06000;border:1px solid #f9ab00" title="Executed on host in audit mode; would be blocked by policy in enforce mode">Audit Allowed (Flagged)</span>' : (f.unknown ? '<span class="chip wr">Not evaluated</span>' : '<span class="chip ok">Allowed</span>')))) + narrowBadge;
+      var feedLayersHtml = '<div class="defense-5layers" style="margin-top:6px">' +
+        '<span class="layer-pill observed" title="Layer 1: In-Harness Hooks">🟢 L1: Hooks</span>' +
+        '<span class="layer-pill ' + (f.shadow ? 'silent' : 'observed') + '" title="Layer 2: MCP Boundary">' + (f.shadow ? '⚪ L2: MCP' : '🟢 L2: MCP') + '</span>' +
+        '<span class="layer-pill silent" title="Layer 3: Shims & FIM">⚪ L3: Shims</span>' +
+        '<span class="layer-pill observed" title="Layer 4: Kernel Broker Sandbox">🟢 L4: Broker</span>' +
+        '<span class="layer-pill silent" title="Layer 5: Gateway PEP">⚪ L5: Gateway</span>' +
+        '</div>';
       li.innerHTML = '<div class="row"><div class="av" aria-hidden="true">' + esc(ini) + '</div><div><div class="who">' + esc(f.who) + '</div>' +
         '<div class="ask">' + askHtml + badgeHtml + '</div>' +
-        '<div class="did">' + esc(f.did) + (f.blocked ? ' &mdash; <u>see the proof</u>' : (f.narrowed ? ' <span class="open-hint" style="color:#c2410c;font-weight:700">&mdash; scope limited by policy (allowed-limited)</span>' : (f.shadow ? ' <span class="open-hint" style="color:#b06000;font-weight:600">&mdash; executed in audit mode, policy violation flagged</span>' : ' <span class="open-hint">&mdash; click for every prompt and reply</span>'))) + '</div></div></div>';
+        '<div class="did">' + esc(f.did) + (f.blocked ? ' &mdash; <u>see the proof</u>' : (f.narrowed ? ' <span class="open-hint" style="color:#c2410c;font-weight:700">&mdash; scope limited by policy (allowed-limited)</span>' : (f.shadow ? ' <span class="open-hint" style="color:#b06000;font-weight:600">&mdash; executed in audit mode, policy violation flagged</span>' : ' <span class="open-hint">&mdash; click for every prompt and reply</span>'))) + '</div>' + feedLayersHtml + '</div></div>';
       var open = function () { if (f.blocked && stories[f.storyId]) { openStory(f.storyId, f.sessionId); } else { openConvo(f); } };
       li.addEventListener('click', open);
       li.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
@@ -1194,6 +1202,15 @@
       '<div><small>Last seen</small>' + esc(m.last) + '</div>' +
       '<div><small>Kind of work</small>' + esc(m.cat) + '</div>' +
       '<div><small>Desktop app or terminal?</small><span class="pill a">Not recorded</span></div></div>' +
+      '<div style="margin:14px 0;padding:12px 14px;background:rgba(15,23,42,0.03);border-radius:10px;border:1px solid var(--line)">' +
+      '<small style="display:block;font-size:11px;font-weight:700;color:var(--ink-3);text-transform:uppercase;margin-bottom:6px">Active 5-Layer Defense</small>' +
+      '<div class="defense-5layers">' +
+      '<span class="layer-pill observed" title="Layer 1: In-Harness Hooks">🟢 L1: Hooks</span>' +
+      '<span class="layer-pill observed" title="Layer 2: MCP Boundary">🟢 L2: MCP</span>' +
+      '<span class="layer-pill silent" title="Layer 3: Shims & FIM">⚪ L3: Shims</span>' +
+      '<span class="layer-pill observed" title="Layer 4: Kernel Broker Sandbox">🟢 L4: Broker</span>' +
+      '<span class="layer-pill silent" title="Layer 5: Gateway PEP">⚪ L5: Gateway</span>' +
+      '</div></div>' +
       '<div class="mono">trace ' + esc(m.id) + '</div><div style="margin-top:12px">' + gap + '</div>';
   }
   function renderSession() {
@@ -1249,10 +1266,18 @@
                          ((r.allowed_limited_count > 0) ? 'Allowed-Limited' :
                          (((r.failed_count || 0) > 0 && !(r.allowed_count || 0)) ? 'Failed' : 'Allowed'));
         var resultColor = (r.blocked_count > 0) ? 'var(--bad)' : ((r.allowed_limited_count > 0) ? '#c2410c' : 'var(--ok)');
+        var drawerLayersHtml = '<div class="defense-5layers" style="margin-top:4px">' +
+          '<span class="layer-pill observed" title="Layer 1: In-Harness Hooks">🟢 L1: Hooks</span>' +
+          '<span class="layer-pill observed" title="Layer 2: MCP Boundary">🟢 L2: MCP</span>' +
+          '<span class="layer-pill silent" title="Layer 3: Shims & FIM">⚪ L3: Shims</span>' +
+          '<span class="layer-pill observed" title="Layer 4: Kernel Broker Sandbox">🟢 L4: Broker</span>' +
+          '<span class="layer-pill silent" title="Layer 5: Gateway PEP">⚪ L5: Gateway</span>' +
+          '</div>';
         $('dSteps').innerHTML = [
           ['Who', esc(whoVal)],
           ['Latest action', esc(latestActionStr)],
-          ['Result', '<span style="color:' + resultColor + ';font-weight:700">' + esc(trueResult) + '</span>']
+          ['Result', '<span style="color:' + resultColor + ';font-weight:700">' + esc(trueResult) + '</span>'],
+          ['Defense in-depth', drawerLayersHtml]
         ].map(function (p) {
           return '<li><div class="k">' + p[0] + '</div><div class="v">' + p[1] + '</div></li>';
         }).join('');
@@ -1404,8 +1429,21 @@
     var rawAsk = f.ask || 'Session activity';
     $('dTitle').textContent = rawAsk.length > 300 ? rawAsk.slice(0, 300) + '…' : rawAsk;
     $('dTitle').title = rawAsk.length > 300 ? rawAsk : '';
-    $('dSteps').innerHTML = [['Who', f.who], ['Latest action', f.did], ['Result', f.blocked ? 'Blocked' : (f.shadow ? 'Flagged, not stopped' : (f.unknown ? 'Not evaluated' : 'Allowed'))]].map(function (p) {
-      return '<li><div class="k">' + esc(p[0]) + '</div><div class="v">' + esc(p[1] || '-') + '</div></li>'; }).join('');
+    var drawerInitLayers = '<div class="defense-5layers" style="margin-top:4px">' +
+      '<span class="layer-pill observed">🟢 L1: Hooks</span>' +
+      '<span class="layer-pill observed">🟢 L2: MCP</span>' +
+      '<span class="layer-pill silent">⚪ L3: Shims</span>' +
+      '<span class="layer-pill observed">🟢 L4: Broker</span>' +
+      '<span class="layer-pill silent">⚪ L5: Gateway</span>' +
+      '</div>';
+    $('dSteps').innerHTML = [
+      ['Who', esc(f.who)],
+      ['Latest action', esc(f.did)],
+      ['Result', f.blocked ? '<span style="color:var(--bad);font-weight:700">Blocked</span>' : (f.shadow ? '<span style="color:#b06000;font-weight:700">Flagged (Audit)</span>' : '<span style="color:var(--ok);font-weight:700">Allowed</span>')],
+      ['Defense in-depth', drawerInitLayers]
+    ].map(function (p) {
+      return '<li><div class="k">' + p[0] + '</div><div class="v">' + p[1] + '</div></li>';
+    }).join('');
     $('dTech').innerHTML = esc('Session: ' + (f.sessionId || 'not available')) + (f.t ? '<br>' + esc('Last event: ' + fmtTime(f.t)) : '');
     loadConvo(f.sessionId, f);
     $('narrator').classList.add('shift');
@@ -1697,7 +1735,7 @@
           { k: 'Result', v: 'Execution stopped before running on host.', cls: 'seal' }
         ],
         receipt: { id: id || '#rec-live', time: new Date().toISOString().slice(11, 19) + ' UTC', agent: 'Governed Agent', rule: 'bap-zero-trust', decision: 'BLOCKED before running' },
-        tech: ['Enforced by: bapedge execution broker', 'Evaluator: Cedar policy engine', 'Status: Zero host side effects']
+        tech: ['5-Layer Defense: L1 Hooks & L3 Shims (Cedar Policy Deny)', 'Enforced by: bapedge execution broker', 'Evaluator: Cedar policy engine', 'Status: Zero host side effects']
       };
       stories[id] = s;
     }
