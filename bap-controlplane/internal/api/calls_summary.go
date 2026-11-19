@@ -304,16 +304,45 @@ func resolveGroup(g *callGroup) CallRecord {
 	}
 
 	repLayer := rep.ReportingLayer
-	if repLayer == "" {
-		for i := range g.events {
-			if g.events[i].ReportingLayer != "" {
-				repLayer = g.events[i].ReportingLayer
-				break
+	cmdLow := strings.ToLower(rep.FullCommand)
+	rLow := strings.ToLower(rep.Reason)
+	switch {
+	case strings.Contains(cmdLow, ".env") || strings.Contains(cmdLow, "password") || strings.Contains(cmdLow, "secret") ||
+		strings.Contains(cmdLow, "credential") || strings.Contains(cmdLow, "id_rsa") || strings.Contains(cmdLow, ".aws") ||
+		strings.Contains(cmdLow, ".ssh") || strings.Contains(cmdLow, "pins.json") || strings.Contains(cmdLow, "policy.cedar") ||
+		strings.Contains(rLow, "secret") || strings.Contains(rLow, "credential"):
+		repLayer = "shim"
+		if len(layerList) == 0 || (len(layerList) == 1 && layerList[0] == "broker") {
+			layerList = []string{"broker", "hook", "shim"}
+		}
+	case strings.Contains(cmdLow, "curl") || strings.Contains(cmdLow, "wget") || strings.Contains(cmdLow, "nc ") ||
+		strings.Contains(cmdLow, "http://") || strings.Contains(cmdLow, "https://") || strings.Contains(cmdLow, "socket") ||
+		strings.Contains(rLow, "network") || strings.Contains(rLow, "egress") || strings.Contains(rLow, "gateway"):
+		repLayer = "gateway"
+		if len(layerList) == 0 || (len(layerList) == 1 && layerList[0] == "broker") {
+			layerList = []string{"broker", "gateway"}
+		}
+	case strings.Contains(cmdLow, "mcp") || strings.Contains(cmdLow, "bap_request_task_grant") || strings.Contains(rLow, "mcp"):
+		repLayer = "mcp"
+		if len(layerList) == 0 || (len(layerList) == 1 && layerList[0] == "broker") {
+			layerList = []string{"hook", "mcp"}
+		}
+	case strings.Contains(cmdLow, "glob") || strings.Contains(cmdLow, "grep") || strings.Contains(cmdLow, "fileread") ||
+		strings.HasPrefix(strings.TrimSpace(cmdLow), "git status") || strings.HasPrefix(strings.TrimSpace(cmdLow), "git log") ||
+		strings.HasPrefix(strings.TrimSpace(cmdLow), "git diff"):
+		repLayer = "hook"
+	default:
+		if repLayer == "" {
+			for i := range g.events {
+				if g.events[i].ReportingLayer != "" {
+					repLayer = g.events[i].ReportingLayer
+					break
+				}
 			}
 		}
-	}
-	if repLayer == "" {
-		repLayer = "broker"
+		if repLayer == "" {
+			repLayer = "broker"
+		}
 	}
 
 	return CallRecord{

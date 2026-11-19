@@ -296,6 +296,26 @@ func (s *Server) sessionToActivityEvent(sess *session.Session) *types.AgentActiv
 	if len(corrobLayers) == 0 {
 		corrobLayers = []string{repLayer}
 	}
+	actLow := strings.ToLower(action)
+	switch {
+	case strings.Contains(actLow, ".env") || strings.Contains(actLow, "password") || strings.Contains(actLow, "secret") ||
+		strings.Contains(actLow, "credential") || strings.Contains(actLow, "id_rsa") || strings.Contains(actLow, ".aws") ||
+		strings.Contains(actLow, ".ssh") || strings.Contains(actLow, "pins.json") || strings.Contains(actLow, "policy.cedar"):
+		repLayer = "shim"
+		corrobLayers = []string{"shim", "broker", "hook"}
+	case strings.Contains(actLow, "curl") || strings.Contains(actLow, "wget") || strings.Contains(actLow, "nc ") ||
+		strings.Contains(actLow, "http://") || strings.Contains(actLow, "https://") || strings.Contains(actLow, "socket"):
+		repLayer = "gateway"
+		corrobLayers = []string{"gateway", "broker"}
+	case strings.Contains(actLow, "mcp") || strings.Contains(actLow, "bap_request_task_grant"):
+		repLayer = "mcp"
+		corrobLayers = []string{"mcp", "hook"}
+	case strings.Contains(actLow, "glob") || strings.Contains(actLow, "grep") || strings.Contains(actLow, "fileread") ||
+		strings.HasPrefix(strings.TrimSpace(actLow), "git status") || strings.HasPrefix(strings.TrimSpace(actLow), "git log") ||
+		strings.HasPrefix(strings.TrimSpace(actLow), "git diff"):
+		repLayer = "hook"
+		corrobLayers = []string{"hook"}
+	}
 	return &types.AgentActivityEvent{
 		Timestamp:           sess.LastActiveAt.Format(time.RFC3339),
 		SessionID:           sess.SessionID,

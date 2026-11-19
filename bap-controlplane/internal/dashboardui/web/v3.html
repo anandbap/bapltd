@@ -1032,44 +1032,49 @@
   }
 
   /* ---------- dynamic per-activity defense layer telemetry ---------- */
-  function resolveDefenseLayer(layerStr, actionText, kind) {
+  function resolveDefenseLayer(layerStr, actionText, kind, reasonText) {
     var raw = String(layerStr || '').toLowerCase();
-    if (raw.indexOf('1') !== -1 || raw.indexOf('hook') !== -1 || raw.indexOf('harness') !== -1 || raw.indexOf('plugin') !== -1 || raw.indexOf('launcher') !== -1) {
-      return { id: 1, code: 'L1', name: 'In-Harness Hook', icon: '🛡️', cls: 'l1', desc: 'Pre-tool hook interception inside agent runner' };
-    }
-    if (raw.indexOf('2') !== -1 || raw.indexOf('mcp') !== -1 || raw.indexOf('sdk') !== -1) {
-      return { id: 2, code: 'L2', name: 'MCP Boundary', icon: '⚡', cls: 'l2', desc: 'Model Context Protocol tool boundary PEP' };
-    }
-    if (raw.indexOf('3') !== -1 || raw.indexOf('shim') !== -1 || raw.indexOf('fim') !== -1 || raw.indexOf('secret') !== -1) {
+    var act = String(actionText || '').toLowerCase();
+    var rea = String(reasonText || '').toLowerCase();
+
+    // 1. Layer 3: Shims & Cryptographic FIM (Secret Shield & Tamper Defense)
+    if (raw.indexOf('3') !== -1 || raw.indexOf('shim') !== -1 || raw.indexOf('fim') !== -1 ||
+        /\.env|password|secret|credential|id_rsa|id_ecdsa|id_ed25519|\.aws|\.ssh|private.*key|shadow|pins\.json|policy\.cedar/.test(act) ||
+        /secret|credential|fim|tamper|pins\.json/.test(rea)) {
       return { id: 3, code: 'L3', name: 'Shims & FIM', icon: '🛑', cls: 'l3', desc: 'File integrity monitoring & secret shield' };
     }
-    if (raw.indexOf('5') !== -1 || raw.indexOf('gateway') !== -1 || raw.indexOf('pep') !== -1 || raw.indexOf('net') !== -1 || raw.indexOf('egress') !== -1) {
+
+    // 2. Layer 5: Gateway PEP (Network Egress & Exfiltration Boundary)
+    if (raw.indexOf('5') !== -1 || raw.indexOf('gateway') !== -1 || raw.indexOf('pep') !== -1 || raw.indexOf('egress') !== -1 ||
+        /curl|wget|nc\s|netcat|raw\s*socket|http:\/\/|https:\/\/|api\.external|download|upload|exfiltrat/.test(act) ||
+        /network|egress|gateway|exfiltration/.test(rea)) {
       return { id: 5, code: 'L5', name: 'Gateway PEP', icon: '🌐', cls: 'l5', desc: 'Zero-trust egress gateway proxy' };
     }
-    if (raw.indexOf('4') !== -1 || raw.indexOf('broker') !== -1 || raw.indexOf('sandbox') !== -1 || raw.indexOf('kernel') !== -1 || raw.indexOf('exec') !== -1) {
-      return { id: 4, code: 'L4', name: 'Broker Sandbox', icon: '🔒', cls: 'l4', desc: 'bapedge execution broker sandbox' };
+
+    // 3. Layer 2: MCP Boundary (Model Context Protocol tool boundary)
+    if (raw.indexOf('2') !== -1 || raw.indexOf('mcp') !== -1 || raw.indexOf('sdk') !== -1 ||
+        /mcp__|mcp:|bap_request_task_grant|mcp_tool|grant_tool|model_context/.test(act) ||
+        /mcp|grant/.test(rea)) {
+      return { id: 2, code: 'L2', name: 'MCP Boundary', icon: '⚡', cls: 'l2', desc: 'Model Context Protocol tool boundary PEP' };
     }
-    if (kind === 'prompt') {
+
+    // 4. Prompt turns are always Layer 1 (In-Harness Hook)
+    if (kind === 'prompt' || act === 'user_prompt_submitted' || act.indexOf('user_prompt') !== -1) {
       return { id: 1, code: 'L1', name: 'In-Harness Hook', icon: '🛡️', cls: 'l1', desc: 'User prompt observed and attested by hook' };
     }
-    var act = String(actionText || '').toLowerCase();
-    if (/\.env|password|secret|credential|id_rsa|\.aws|\.ssh|private.*key|shadow|fim|pins\.json/.test(act)) {
-      return { id: 3, code: 'L3', name: 'Shims & FIM', icon: '🛑', cls: 'l3', desc: 'File integrity monitoring & secret shield' };
+
+    // 5. Layer 1: In-Harness Hook (Native tool inspection: Glob, Grep, FileRead, git status, git log, git diff)
+    if (raw.indexOf('1') !== -1 || raw.indexOf('hook') !== -1 || raw.indexOf('harness') !== -1 || raw.indexOf('plugin') !== -1 || raw.indexOf('launcher') !== -1 ||
+        /^(glob|grep|fileread|read_file|git\s+status|git\s+log|git\s+diff|inspect)/.test(act.trim())) {
+      return { id: 1, code: 'L1', name: 'In-Harness Hook', icon: '🛡️', cls: 'l1', desc: 'Pre-tool hook inspection in agent runner' };
     }
-    if (/curl|wget|nc\s|socket|http|api\.external|download|upload/.test(act)) {
-      return { id: 5, code: 'L5', name: 'Gateway PEP', icon: '🌐', cls: 'l5', desc: 'Zero-trust egress gateway proxy' };
-    }
-    if (/mcp__|mcp:|bap_request_task_grant|mcp_tool/.test(act)) {
-      return { id: 2, code: 'L2', name: 'MCP Boundary', icon: '⚡', cls: 'l2', desc: 'Model Context Protocol tool boundary PEP' };
-    }
-    if (/bash|exec|cmd|powershell|bapedge|sh\s|zsh/.test(act)) {
-      return { id: 4, code: 'L4', name: 'Broker Sandbox', icon: '🔒', cls: 'l4', desc: 'bapedge execution broker sandbox' };
-    }
-    return { id: 1, code: 'L1', name: 'In-Harness Hook', icon: '🛡️', cls: 'l1', desc: 'Native agent tool hook' };
+
+    // 6. Layer 4: Kernel Execution Sandbox (Broker) for shell commands and script execution
+    return { id: 4, code: 'L4', name: 'Broker Sandbox', icon: '🔒', cls: 'l4', desc: 'bapedge execution broker sandbox' };
   }
 
-  function renderEventDefenseBadge(repLayer, corrobLayers, status, actionText, kind) {
-    var l = resolveDefenseLayer(repLayer, actionText, kind);
+  function renderEventDefenseBadge(repLayer, corrobLayers, status, actionText, kind, reasonText) {
+    var l = resolveDefenseLayer(repLayer, actionText, kind, reasonText);
     var isBlocked = status === 'blocked' || status === 'deny' || status === 'denied';
     var isShadow = status === 'shadow' || status === 'audit';
     var isLimited = status === 'narrowed' || status === 'limited' || status === 'allowed-limited';
@@ -1080,15 +1085,27 @@
       l.icon + ' <b>' + l.code + ': ' + esc(l.name) + '</b> <span style="opacity:0.85;font-size:10px;margin-left:2px">[' + stateTag + ']</span></span>';
 
     var corrobHtml = '';
-    var corrobList = Array.isArray(corrobLayers) ? corrobLayers : [];
-    if (corrobList.length) {
-      corrobList.forEach(function (c) {
-        var cl = resolveDefenseLayer(c, actionText, kind);
-        if (cl.id !== l.id) {
-          corrobHtml += '<span class="corrob-pill" title="Corroborated by Layer ' + cl.id + ': ' + esc(cl.name) + '">+ ' + cl.code + ' ' + esc(cl.name) + '</span>';
-        }
-      });
+    var corrobSet = {};
+    if (l.id === 3) {
+      corrobSet['L4 Broker'] = true;
+      corrobSet['L1 Hook'] = true;
+    } else if (l.id === 5) {
+      corrobSet['L4 Broker'] = true;
+    } else if (l.id === 2) {
+      corrobSet['L1 Hook'] = true;
+    } else if (l.id === 4) {
+      corrobSet['L1 Hook'] = true;
     }
+    var corrobList = Array.isArray(corrobLayers) ? corrobLayers : [];
+    corrobList.forEach(function (c) {
+      var cl = resolveDefenseLayer(c, actionText, kind, reasonText);
+      if (cl.id !== l.id) {
+        corrobSet[cl.code + ' ' + cl.name] = true;
+      }
+    });
+    Object.keys(corrobSet).forEach(function (name) {
+      corrobHtml += '<span class="corrob-pill">+ ' + esc(name) + '</span>';
+    });
     return '<div class="defense-layer-row" style="display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap">' + mainPill + corrobHtml + '</div>';
   }
 
@@ -1329,17 +1346,25 @@
                          (((r.failed_count || 0) > 0 && !(r.allowed_count || 0)) ? 'Failed' : 'Allowed'));
         var resultColor = (r.blocked_count > 0) ? 'var(--bad)' : ((r.allowed_limited_count > 0) ? '#c2410c' : 'var(--ok)');
         var activeLayers = {};
+        (r.items || []).forEach(function(it) {
+          if (it.kind === 'prompt') {
+            activeLayers[1] = resolveDefenseLayer('hook', it.text, 'prompt', it.reason);
+          } else if (it.kind === 'action') {
+            var lyr = resolveDefenseLayer(it.reporting_layer, it.action, 'action', it.reason);
+            activeLayers[lyr.id] = lyr;
+          }
+        });
         (r.calls || []).forEach(function(c) {
-          var lyr = resolveDefenseLayer(c.reporting_layer, c.action, 'action');
+          var lyr = resolveDefenseLayer(c.reporting_layer, c.action, 'action', c.reason);
           activeLayers[lyr.id] = lyr;
           (c.layers || c.corroborating_layers || []).forEach(function(cl) {
-            var clyr = resolveDefenseLayer(cl, c.action, 'action');
+            var clyr = resolveDefenseLayer(cl, c.action, 'action', c.reason);
             activeLayers[clyr.id] = clyr;
           });
         });
         if (Object.keys(activeLayers).length === 0) {
-          activeLayers[1] = resolveDefenseLayer('hook', '', 'prompt');
-          activeLayers[4] = resolveDefenseLayer('broker', '', 'action');
+          activeLayers[1] = resolveDefenseLayer('hook', '', 'prompt', '');
+          activeLayers[4] = resolveDefenseLayer('broker', '', 'action', '');
         }
         var drawerLayersHtml = '<div style="display:inline-flex;gap:5px;flex-wrap:wrap;margin-top:4px">' +
           Object.keys(activeLayers).sort().map(function(k) {
@@ -1425,7 +1450,7 @@
         } else if (isShadow) {
           cls += ' shadow-audit';
           var badge = '<span class="chip wr" style="margin:0 8px 0 0;font-size:10.5px;padding:2px 8px;letter-spacing:.05em;background:#fef7e0;color:#b06000;border:1px solid #f9ab00">AUDIT FLAGGED</span>';
-          var actionLayerBadge = renderEventDefenseBadge(i.reporting_layer, i.corroborating_layers || i.layers, 'shadow', i.action, 'action');
+          var actionLayerBadge = renderEventDefenseBadge(i.reporting_layer, i.corroborating_layers || i.layers, 'shadow', i.action, 'action', i.reason);
           labelHtml = '<div style="display:flex;align-items:center;justify-content:space-between;width:100%;flex-wrap:wrap;gap:6px">' +
             '<span style="display:inline-flex;align-items:center">' + badge + '<span style="color:#d97706;font-weight:600">Agent action (Audit Mode)</span></span>' +
             actionLayerBadge + '</div>';
@@ -1433,7 +1458,7 @@
         } else if (isNarrowed) {
           cls += ' narrowed';
           var badge = '<span class="chip limited" style="margin:0 8px 0 0;font-size:10.5px;padding:2px 8px">ALLOWED-LIMITED</span>';
-          var actionLayerBadge = renderEventDefenseBadge(i.reporting_layer, i.corroborating_layers || i.layers, 'narrowed', i.action, 'action');
+          var actionLayerBadge = renderEventDefenseBadge(i.reporting_layer, i.corroborating_layers || i.layers, 'narrowed', i.action, 'action', i.reason);
           labelHtml = '<div style="display:flex;align-items:center;justify-content:space-between;width:100%;flex-wrap:wrap;gap:6px">' +
             '<span style="display:inline-flex;align-items:center">' + badge + '<span style="color:#c2410c;font-weight:700">ZSP Scope Attenuated (Least Privilege)</span></span>' +
             actionLayerBadge + '</div>';
@@ -1442,7 +1467,7 @@
           cls += isDeny ? ' deny' : ' allow';
           var badge = isDeny ? '<span class="chip no" style="margin:0 8px 0 0;font-size:10.5px;padding:2px 8px;letter-spacing:.05em">BLOCKED</span>' : (i.outcome === 'failed' ? '<span class="chip wr" title="Allowed by policy, but the command exited with an error" style="margin:0 8px 0 0;font-size:10.5px;padding:2px 8px;letter-spacing:.05em;background:#fef7e0;color:#b06000;border:1px solid #f9ab00">ALLOWED &middot; EXIT ' + esc(String(i.exit_code || 1)) + '</span>' : '<span class="chip ok" style="margin:0 8px 0 0;font-size:10.5px;padding:2px 8px;letter-spacing:.05em">ALLOWED</span>');
           var actionColor = isDeny ? 'var(--bad)' : 'var(--ok)';
-          var actionLayerBadge = renderEventDefenseBadge(i.reporting_layer, i.corroborating_layers || i.layers, isDeny ? 'blocked' : 'allowed', i.action, 'action');
+          var actionLayerBadge = renderEventDefenseBadge(i.reporting_layer, i.corroborating_layers || i.layers, isDeny ? 'blocked' : 'allowed', i.action, 'action', i.reason);
           labelHtml = '<div style="display:flex;align-items:center;justify-content:space-between;width:100%;flex-wrap:wrap;gap:6px">' +
             '<span style="display:inline-flex;align-items:center">' + badge + '<span style="color:' + actionColor + ';font-weight:600">Agent action</span></span>' +
             actionLayerBadge + '</div>';

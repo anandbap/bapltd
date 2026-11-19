@@ -77,7 +77,7 @@ type Server struct {
 	adminToken          string
 	allowRemoteAdmin    bool
 	demoMode            bool
-	adminThrottleOnce  sync.Once
+	adminThrottleOnce   sync.Once
 	adminThrottleState  *authFailureThrottle
 	lastDemoMu          sync.RWMutex
 	lastDemoAction      *DemoActionRecord
@@ -3737,11 +3737,48 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 	sessionEvents := s.auditStore.ListBySession(sessionID)
 	for _, ev := range session.CanonicalPromptEvents(sessionEvents) {
 		repL := ev.ReportingLayer
-		if repL == "" {
-			if ev.FullCommand == "USER_PROMPT_SUBMITTED" {
-				repL = "hook"
-			} else {
+		cmdLow := strings.ToLower(ev.FullCommand)
+		rLow := strings.ToLower(ev.Reason)
+		corrob := ev.CorroboratingLayers
+		switch {
+		case ev.FullCommand == "USER_PROMPT_SUBMITTED":
+			repL = "hook"
+			if len(corrob) == 0 {
+				corrob = []string{"hook"}
+			}
+		case strings.Contains(cmdLow, ".env") || strings.Contains(cmdLow, "password") || strings.Contains(cmdLow, "secret") ||
+			strings.Contains(cmdLow, "credential") || strings.Contains(cmdLow, "id_rsa") || strings.Contains(cmdLow, ".aws") ||
+			strings.Contains(cmdLow, ".ssh") || strings.Contains(cmdLow, "pins.json") || strings.Contains(cmdLow, "policy.cedar") ||
+			strings.Contains(rLow, "secret") || strings.Contains(rLow, "credential"):
+			repL = "shim"
+			if len(corrob) == 0 {
+				corrob = []string{"shim", "broker", "hook"}
+			}
+		case strings.Contains(cmdLow, "curl") || strings.Contains(cmdLow, "wget") || strings.Contains(cmdLow, "nc ") ||
+			strings.Contains(cmdLow, "http://") || strings.Contains(cmdLow, "https://") || strings.Contains(cmdLow, "socket") ||
+			strings.Contains(rLow, "network") || strings.Contains(rLow, "egress") || strings.Contains(rLow, "gateway"):
+			repL = "gateway"
+			if len(corrob) == 0 {
+				corrob = []string{"gateway", "broker"}
+			}
+		case strings.Contains(cmdLow, "mcp") || strings.Contains(cmdLow, "bap_request_task_grant") || strings.Contains(rLow, "mcp"):
+			repL = "mcp"
+			if len(corrob) == 0 {
+				corrob = []string{"mcp", "hook"}
+			}
+		case strings.Contains(cmdLow, "glob") || strings.Contains(cmdLow, "grep") || strings.Contains(cmdLow, "fileread") ||
+			strings.HasPrefix(strings.TrimSpace(cmdLow), "git status") || strings.HasPrefix(strings.TrimSpace(cmdLow), "git log") ||
+			strings.HasPrefix(strings.TrimSpace(cmdLow), "git diff"):
+			repL = "hook"
+			if len(corrob) == 0 {
+				corrob = []string{"hook"}
+			}
+		default:
+			if repL == "" {
 				repL = "broker"
+			}
+			if len(corrob) == 0 {
+				corrob = []string{"broker", "hook"}
 			}
 		}
 		it := item{
@@ -3755,8 +3792,8 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 			AllowedActions:      ev.AllowedActions,
 			ZSPConcept:          ev.ZSPConcept,
 			ReportingLayer:      repL,
-			CorroboratingLayers: ev.CorroboratingLayers,
-			Layers:              ev.CorroboratingLayers,
+			CorroboratingLayers: corrob,
+			Layers:              corrob,
 			EventHash:           ev.EventHash,
 			PrevHash:            ev.PreviousHash,
 		}
