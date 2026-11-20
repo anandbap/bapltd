@@ -3,6 +3,7 @@ package audit
 import (
 	"bap-edge/internal/httptransport"
 	"bap-edge/internal/state"
+	"bap-edge/pkg/types"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -17,31 +18,32 @@ import (
 
 // AuditEntry represents a structured, tamper-evident log record for an execution request.
 type AuditEntry struct {
-	EventID           string          `json:"event_id,omitempty"`
-	ReportingLayer    string          `json:"reporting_layer,omitempty"`
-	EvidenceGrade     string          `json:"evidence_grade,omitempty"` // set by fallback reporters, e.g. self_reported
-	TurnID            string          `json:"turn_id,omitempty"`        // per-turn id so the control plane can dedupe prompts
-	SessionID         string          `json:"session_id,omitempty"`
-	UserPrompt        string          `json:"user_prompt,omitempty"`
-	PromptHash        string          `json:"prompt_hash,omitempty"`
-	UserID            string          `json:"user_id,omitempty"`
-	UserEmail         string          `json:"user_email,omitempty"`
-	SPIFFEID          string          `json:"spiffe_id,omitempty"`
-	Timestamp         time.Time       `json:"timestamp"`
-	Source            string          `json:"source"`
-	ClientPID         int             `json:"client_pid"`
-	Executable        string          `json:"executable"`
-	Arguments         string          `json:"arguments,omitempty"`
-	FullCommand       string          `json:"full_command"`
-	ToolInput         json.RawMessage `json:"tool_input,omitempty"`
-	Decision          string          `json:"decision"` // "allow" or "deny"
-	Reason            string          `json:"reason,omitempty"`
-	DurationMs        int64           `json:"duration_ms"`
-	ExitCode          int             `json:"exit_code"`
-	Error             string          `json:"error,omitempty"`
-	CanonicalAction   string          `json:"canonical_action,omitempty"`
-	CanonicalResource string          `json:"canonical_resource,omitempty"`
-	ContentHash       string          `json:"content_hash,omitempty"`
+	DefenseObservations []types.DefenseObservation `json:"defense_observations,omitempty"`
+	EventID             string                     `json:"event_id,omitempty"`
+	ReportingLayer      string                     `json:"reporting_layer,omitempty"`
+	EvidenceGrade       string                     `json:"evidence_grade,omitempty"` // set by fallback reporters, e.g. self_reported
+	TurnID              string                     `json:"turn_id,omitempty"`        // per-turn id so the control plane can dedupe prompts
+	SessionID           string                     `json:"session_id,omitempty"`
+	UserPrompt          string                     `json:"user_prompt,omitempty"`
+	PromptHash          string                     `json:"prompt_hash,omitempty"`
+	UserID              string                     `json:"user_id,omitempty"`
+	UserEmail           string                     `json:"user_email,omitempty"`
+	SPIFFEID            string                     `json:"spiffe_id,omitempty"`
+	Timestamp           time.Time                  `json:"timestamp"`
+	Source              string                     `json:"source"`
+	ClientPID           int                        `json:"client_pid"`
+	Executable          string                     `json:"executable"`
+	Arguments           string                     `json:"arguments,omitempty"`
+	FullCommand         string                     `json:"full_command"`
+	ToolInput           json.RawMessage            `json:"tool_input,omitempty"`
+	Decision            string                     `json:"decision"` // "allow" or "deny"
+	Reason              string                     `json:"reason,omitempty"`
+	DurationMs          int64                      `json:"duration_ms"`
+	ExitCode            int                        `json:"exit_code"`
+	Error               string                     `json:"error,omitempty"`
+	CanonicalAction     string                     `json:"canonical_action,omitempty"`
+	CanonicalResource   string                     `json:"canonical_resource,omitempty"`
+	ContentHash         string                     `json:"content_hash,omitempty"`
 	// Delegation Lineage & Attenuation (BAP-532)
 	Lineage             []string `json:"lineage,omitempty"`
 	LineageTree         string   `json:"lineage_tree,omitempty"`
@@ -137,6 +139,11 @@ func ComputeEntryHash(entry AuditEntry, prevHash string) string {
 	}
 	if entry.ProcessPID != 0 {
 		h.Write([]byte(strconv.Itoa(entry.ProcessPID)))
+	}
+	if len(entry.DefenseObservations) > 0 {
+		raw, _ := json.Marshal(entry.DefenseObservations)
+		h.Write([]byte("\x00bap-defense-observations\x00"))
+		h.Write(raw)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

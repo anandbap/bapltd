@@ -90,6 +90,7 @@ func prepareClaudeIntegration(paths []string, managed map[string]bool, exe strin
 		return nil, nil, 0, err
 	}
 	rawHooks := map[string][]any{}
+	processSettings := map[string]any{}
 	for _, path := range paths {
 		if managed[path] || invalid[path] || !excluded[scope(path)] {
 			continue
@@ -107,6 +108,17 @@ func prepareClaudeIntegration(paths []string, managed map[string]bool, exe strin
 		}
 		for key := range settings {
 			if key != "hooks" && key != "disableAllHooks" {
+				// User settings are already trusted user configuration. Preserve
+				// them in the process snapshot when omitting that source's BAP
+				// duplicates; unrelated preferences must never block startup.
+				if scope(path) == "user" {
+					var value any
+					if err := json.Unmarshal(settings[key], &value); err != nil {
+						return nil, nil, 0, err
+					}
+					processSettings[key] = value
+					continue
+				}
 				return nil, nil, 0, fmt.Errorf("duplicate hooks in %s coexist with %q; cannot promote scoped settings safely. Reconcile BAP registrations in that source", path, key)
 			}
 		}
@@ -154,7 +166,9 @@ func prepareClaudeIntegration(paths []string, managed map[string]bool, exe strin
 			rawHooks[event] = append(rawHooks[event], group)
 		}
 	}
-	data, err := json.Marshal(map[string]any{"hooks": rawHooks, "disableAllHooks": false})
+	processSettings["hooks"] = rawHooks
+	processSettings["disableAllHooks"] = false
+	data, err := json.Marshal(processSettings)
 	if err != nil {
 		return nil, nil, 0, err
 	}

@@ -488,6 +488,7 @@ func runPluginAdapter(args []string) error {
 	if !ecResp.Allowed {
 		decision = "deny"
 	}
+	recordNativeDefenseDecision(sessionID, client, id, decision, ecResp.Reason)
 
 	// Record to dedup cache
 	if command != "" {

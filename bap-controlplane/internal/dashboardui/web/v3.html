@@ -385,6 +385,7 @@
     .narrator { flex-direction: column; align-items: stretch; }
   }
 </style>
+<script src="/dashboard/defense-live.js"></script>
 </head>
 <body data-state="ok">
 
@@ -431,7 +432,6 @@
       <details class="menu-more" id="menuMore">
         <summary aria-label="More options">More &#9662;</summary>
         <div class="menu-more-pop">
-          <a href="/dashboard/showcase.html">Five-layer defense showcase</a>
           <a href="#admin" title="Open policy administration and approvals">Policies &amp; approvals</a>
           <a href="/dashboard/v2/">Operator console</a>
           <button class="printbtn" id="printBtn" type="button">Print summary</button>
@@ -2048,6 +2048,10 @@
             status: (s.status || 'active').toLowerCase(),
             close_reason: s.close_reason || '',
             reporting_layers: s.reporting_layers || [],
+			defense_layers: s.defense_layers || [],
+			coverage: s.coverage || {},
+			hooks_disabled: s.hooks_disabled === true,
+			degraded_reason: s.degraded_reason || '',
             prompt_available: !!(s.user_prompt || (s.intent && s.intent.user_prompt)),
             prompt_capture_disabled: !!(s.intent && s.intent.prompt_hash && s.intent.prompt_captured === false && !s.user_prompt),
             _t: t
@@ -2189,72 +2193,8 @@
 
             // Per-layer coverage derived by the control plane from evidence actually received.
             var covNote = '';
-            var covMeta = {
-              layer1_hooks: { id: 'L1', name: 'Hooks', desc: 'In-Harness Process Interception (Claude, AGY, Codex, Copilot)' },
-              layer2_mcp: { id: 'L2', name: 'MCP', desc: 'MCP Authority Boundary & First-Observer Stamping' },
-              layer3_shims: { id: 'L3', name: 'Shims', desc: 'Terminal Interceptors & FIM Asset Shielding' },
-              layer4_broker: { id: 'L4', name: 'Broker', desc: 'Kernel Process Sandbox & Cedar Invariants' },
-              layer5_gateway: { id: 'L5', name: 'Gateway', desc: 'Authoritative Gateway PEP & ZSP Grant Consumption' }
-            };
-
-            var covObj = s.coverage || {};
-            var l1Status = covObj.layer1_hooks === 'observed' ? 'observed' : 'silent';
-            if (s.hooks_disabled === true || s.reporting_layer === 'unmonitored' || (layers.indexOf('unmonitored') !== -1)) {
-              l1Status = 'disabled';
-            } else if (s.degraded_reason === 'hooks_unapproved_or_disabled') {
-              l1Status = 'bypassed';
-            }
-
-            var pillList = [
-              {
-                id: 'L1',
-                name: 'Hooks',
-                status: l1Status,
-                label: l1Status === 'disabled' ? 'L1 Hooks (Disabled)' : (l1Status === 'bypassed' ? 'L1 Hooks (Bypassed)' : (l1Status === 'observed' ? 'L1 Hooks' : 'L1 Hooks (Silent)')),
-                desc: covMeta.layer1_hooks.desc
-              },
-              {
-                id: 'L2',
-                name: 'MCP',
-                status: covObj.layer2_mcp === 'observed' ? 'observed' : 'silent',
-                label: covObj.layer2_mcp === 'observed' ? 'L2 MCP' : 'L2 MCP (Silent)',
-                desc: covMeta.layer2_mcp.desc
-              },
-              {
-                id: 'L3',
-                name: 'Shims',
-                status: covObj.layer3_shims === 'observed' ? 'observed' : 'silent',
-                label: covObj.layer3_shims === 'observed' ? 'L3 Shims' : 'L3 Shims (Silent)',
-                desc: covMeta.layer3_shims.desc
-              },
-              {
-                id: 'L4',
-                name: 'Broker',
-                status: covObj.layer4_broker === 'observed' ? 'observed' : 'silent',
-                label: covObj.layer4_broker === 'observed' ? 'L4 Broker' : 'L4 Broker (Silent)',
-                desc: covMeta.layer4_broker.desc
-              },
-              {
-                id: 'L5',
-                name: 'Gateway',
-                status: covObj.layer5_gateway === 'observed' ? 'observed' : 'silent',
-                label: covObj.layer5_gateway === 'observed' ? 'L5 Gateway' : 'L5 Gateway (Silent)',
-                desc: covMeta.layer5_gateway.desc
-              }
-            ];
-
-            var layerPillsHtml = '<div class="defense-5layers" role="group" aria-label="5-layer defense coverage">' + pillList.map(function (p) {
-              var dot = p.status === 'observed' ? '🟢 ' : (p.status === 'disabled' ? '🔴 ' : (p.status === 'bypassed' ? '⚠️ ' : '⚪ '));
-              return '<span class="layer-pill ' + p.status + '" title="' + esc(p.desc + ' — Status: ' + p.status) + '">' + dot + esc(p.label) + '</span>';
-            }).join('') + '</div>';
-            surfaceHtml += layerPillsHtml;
-
-            if (s.coverage) {
-              var covNames = { layer1_hooks: 'L1 hooks', layer2_mcp: 'L2 MCP', layer3_shims: 'L3 shims', layer4_broker: 'L4 broker', layer5_gateway: 'L5 gateway' };
-              covNote = 'Layer coverage: ' + Object.keys(covNames).map(function (k) {
-                return covNames[k] + ' ' + (s.coverage[k] === 'observed' ? 'observed' : 'silent');
-              }).join(', ') + '. ';
-            }
+            surfaceHtml += BapDefenseLive.render(s.defense_layers || []);
+            covNote = 'Layer states come from live producer evidence. ';
             var degradedText = {
               hooks_disabled: 'Hooks are disabled for this session. ',
               hooks_unapproved_or_disabled: 'Hooks are not reporting while lower layers are, so hooks may be unapproved or disabled. ',

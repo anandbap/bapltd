@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -384,19 +383,27 @@ func RunClaude(args []string) (result error) {
 	}
 	repairClaudeLaunchEnvironment()
 	fmt.Fprintln(os.Stderr, coverage.Guidance)
-	bin := findExecutable([]string{"claude", "claude.exe", "claude.cmd"})
+	bin := claudeExecutableResolver()
 	if bin == "" {
 		return fmt.Errorf("Claude Code CLI not found")
 	}
 	if len(downstream) == 1 && downstream[0] == "--version" {
-		c := exec.Command(bin, downstream...)
+		c, err := claudeCLICommand(context.Background(), bin, downstream...)
+		if err != nil {
+			return err
+		}
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
 		return c.Run()
 	}
 	// Fail closed on older hosts that cannot provide a process-only overlay.
 	probeCtx, probeCancel := context.WithTimeout(context.Background(), 3*time.Second)
-	help, err := exec.CommandContext(probeCtx, bin, "--help").Output()
+	probe, probeErr := claudeCLICommand(probeCtx, bin, "--help")
+	if probeErr != nil {
+		probeCancel()
+		return probeErr
+	}
+	help, err := probe.Output()
 	probeCancel()
 	if err == nil && (!strings.Contains(string(help), "--settings") || !strings.Contains(string(help), "--setting-sources")) {
 		return fmt.Errorf("Claude must support --settings and --setting-sources; cannot verify process-scoped integration")
@@ -440,7 +447,10 @@ func RunClaude(args []string) (result error) {
 	journal := newClaudeLaunchJournal(workspace, session, data)
 	defer journal.close()
 	launchArgs := append([]string{"--settings", string(data)}, sourceFlags...)
-	child := exec.CommandContext(ctx, bin, append(launchArgs, downstream...)...)
+	child, err := claudeCLICommand(ctx, bin, append(launchArgs, downstream...)...)
+	if err != nil {
+		return err
+	}
 	child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
 	child.Env = append(os.Environ(), "LTD_SOURCE=claude-code", "BAP_SESSION_ID="+session, "BAP_SERVER_URL="+server, "BAP_CONTROL_PLANE_URL="+server, "BAP_BOUNDARY_GUIDANCE="+coverage.Guidance)
 	// Existing session lifecycle tolerates transport/5xx faults and establishes

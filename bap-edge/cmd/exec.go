@@ -34,37 +34,39 @@ import (
 )
 
 type execContext struct {
-	authorizerMS    *float64
-	preExecutionMS  *float64
-	startTime       time.Time
-	source          string
-	sessionID       string
-	serverURL       string
-	policyPath      string
-	auditLogPath    string
-	fullCommand     string
-	executable      string
-	cmdArguments    string
-	shell           string
-	enforcementMode string
-	decisionOnly    bool
-	shadowDenied    bool
-	shadowReason    string
-	forceJSON       bool
-	forceRaw        bool
-	userPrompt      string
-	skillName       string
-	contentHash     string
-	stepUpDecision  string
-	parentPID       int
-	workloadPID     int
-	reportingLayer  string
-	processPID      int
-	processTree     []string
-	callerBinary    string
-	callerHash      string
-	zspPrincipal    string
-	zspGrantID      string
+	actionID            string
+	defenseObservations []types.DefenseObservation
+	authorizerMS        *float64
+	preExecutionMS      *float64
+	startTime           time.Time
+	source              string
+	sessionID           string
+	serverURL           string
+	policyPath          string
+	auditLogPath        string
+	fullCommand         string
+	executable          string
+	cmdArguments        string
+	shell               string
+	enforcementMode     string
+	decisionOnly        bool
+	shadowDenied        bool
+	shadowReason        string
+	forceJSON           bool
+	forceRaw            bool
+	userPrompt          string
+	skillName           string
+	contentHash         string
+	stepUpDecision      string
+	parentPID           int
+	workloadPID         int
+	reportingLayer      string
+	processPID          int
+	processTree         []string
+	callerBinary        string
+	callerHash          string
+	zspPrincipal        string
+	zspGrantID          string
 }
 
 type sessionRiskState struct {
@@ -764,6 +766,7 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 			result = "DENIED_POLICY"
 		}
 		denialCount, threatLevel := recordSessionDenial(ec.sessionID, ec.fullCommand, resp.Reason)
+		ec.observeDefense(4, "edge/risk-engine", threatLevel, fmt.Sprintf("Session denial history evaluated: %d denials", denialCount))
 		if denialCount >= 2 {
 			if resp.Warning == "" {
 				resp.Warning = fmt.Sprintf("[CORRELATED RISK EVENT] Repeated alternative attempts detected (%d denials in session %q, Threat Level: %s)", denialCount, ec.sessionID, threatLevel)
@@ -777,9 +780,11 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 		resp.StepUpDecision = ec.stepUpDecision
 	}
 
+	ec.observeDefense(2, "edge/execution-broker", result, resp.Reason)
 	if resp.Receipt == nil {
 		resp.Receipt = generateExecutionReceipt(ec, result, code)
 	}
+	resp.Receipt.DefenseObservations = append([]types.DefenseObservation(nil), ec.defenseObservations...)
 
 	if !resp.Allowed && resp.Suggestion == "" {
 		resp.Suggestion = GenerateSuggestion(ec.fullCommand, ec.executable, resp.Reason)
@@ -811,36 +816,38 @@ func (ec *execContext) exit(resp types.ExecResponse, code int) {
 	}
 
 	entry := audit.AuditEntry{
-		ReportingLayer:    "broker",
-		SessionID:         ec.sessionID,
-		UserPrompt:        uPrompt,
-		TurnID:            os.Getenv("BAP_TURN_ID"),
-		UserID:            uID,
-		UserEmail:         uEmail,
-		SPIFFEID:          spiffeID,
-		Timestamp:         ec.startTime.UTC(),
-		Source:            ec.source,
-		ClientPID:         os.Getpid(),
-		Executable:        ec.executable,
-		Arguments:         ec.cmdArguments,
-		FullCommand:       ec.fullCommand,
-		CanonicalAction:   decomp.CanonicalAction,
-		CanonicalResource: decomp.CanonicalResource,
-		ContentHash:       ec.contentHash,
-		Decision:          decision,
-		Reason:            resp.Reason,
-		DurationMs:        durationMs,
-		ExitCode:          code,
-		Lineage:           resp.Receipt.Lineage,
-		LineageTree:       resp.Receipt.LineageTree,
-		RootAgentID:       resp.Receipt.RootAgentID,
-		ParentGrantID:     resp.Receipt.ParentGrantID,
-		GrantID:           resp.Receipt.GrantID,
-		ProcessTree:       resp.Receipt.ProcessTree,
-		ParentPID:         resp.Receipt.ParentPID,
-		ProcessPID:        resp.Receipt.ProcessPID,
-		CallerBinary:      ec.callerBinary,
-		CallerHash:        ec.callerHash,
+		EventID:             ec.actionID,
+		DefenseObservations: ec.defenseObservations,
+		ReportingLayer:      "broker",
+		SessionID:           ec.sessionID,
+		UserPrompt:          uPrompt,
+		TurnID:              os.Getenv("BAP_TURN_ID"),
+		UserID:              uID,
+		UserEmail:           uEmail,
+		SPIFFEID:            spiffeID,
+		Timestamp:           ec.startTime.UTC(),
+		Source:              ec.source,
+		ClientPID:           os.Getpid(),
+		Executable:          ec.executable,
+		Arguments:           ec.cmdArguments,
+		FullCommand:         ec.fullCommand,
+		CanonicalAction:     decomp.CanonicalAction,
+		CanonicalResource:   decomp.CanonicalResource,
+		ContentHash:         ec.contentHash,
+		Decision:            decision,
+		Reason:              resp.Reason,
+		DurationMs:          durationMs,
+		ExitCode:            code,
+		Lineage:             resp.Receipt.Lineage,
+		LineageTree:         resp.Receipt.LineageTree,
+		RootAgentID:         resp.Receipt.RootAgentID,
+		ParentGrantID:       resp.Receipt.ParentGrantID,
+		GrantID:             resp.Receipt.GrantID,
+		ProcessTree:         resp.Receipt.ProcessTree,
+		ParentPID:           resp.Receipt.ParentPID,
+		ProcessPID:          resp.Receipt.ProcessPID,
+		CallerBinary:        ec.callerBinary,
+		CallerHash:          ec.callerHash,
 	}
 	if ec.authorizerMS != nil {
 		entry.PolicyEvalMs = *ec.authorizerMS
@@ -1886,6 +1893,7 @@ func checkContentPinning(ec *execContext, skillName string) (string, error) {
 		}
 		res := manifest.VerifyAsset(skillKey)
 		if res.Asset.ID != "" && pinning.IsAssetInAgentScope(res.Asset.AgentScope, ec.source) {
+			ec.observeDefense(3, "edge/content-pinning", pinDecision(res.Matches), res.Error)
 			if !res.Matches {
 				return res.CurrentHash, fmt.Errorf("declaring skill %q failed content attestation: %s", skillName, res.Error)
 			}
@@ -1905,9 +1913,11 @@ func checkContentPinning(ec *execContext, skillName string) (string, error) {
 		if strings.Contains(cleanCmd, baseName) || strings.Contains(cleanCmd, cleanAssetPath) {
 			res := manifest.VerifyAsset(a.ID)
 			if !res.Matches {
+				ec.observeDefense(3, "edge/content-pinning", "mismatch", res.Error)
 				return res.CurrentHash, fmt.Errorf("referenced asset %s (%s) has drifted: %s", a.ID, a.Path, res.Error)
 			}
 			matchedHash = a.ExpectedHash
+			ec.observeDefense(3, "edge/content-pinning", "passed", "Referenced pinned asset matched")
 		}
 	}
 
@@ -1918,6 +1928,7 @@ func checkContentPinning(ec *execContext, skillName string) (string, error) {
 				continue
 			}
 			res := manifest.VerifyAsset(a.ID)
+			ec.observeDefense(3, "edge/content-pinning", pinDecision(res.Matches), res.Error)
 			if !res.Matches {
 				return res.CurrentHash, fmt.Errorf("active skill %s on disk has drifted: %s", a.ID, res.Error)
 			}
@@ -1935,9 +1946,12 @@ func checkContentPinning(ec *execContext, skillName string) (string, error) {
 				isPrimaryPrompt := (canon == "antigravity" && base == "gemini.md") ||
 					(canon == "claude-code" && base == "claude.md") ||
 					(canon == "copilot" && base == "agents.md") ||
+					(canon == "codex" && (base == "agents.md" || base == "codex.md")) ||
+					(canon == "opencode" && base == "agents.md") ||
 					base == "policy.cedar"
 				if isPrimaryPrompt {
 					res := manifest.VerifyAsset(a.ID)
+					ec.observeDefense(3, "edge/content-pinning", pinDecision(res.Matches), res.Error)
 					if !res.Matches {
 						// If the drifted asset is policy.cedar, verify whether the file on disk has valid Cedar syntax
 						// and is an authorized policy update. If valid, auto-reconcile the pin so agents are not blocked.

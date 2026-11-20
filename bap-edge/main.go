@@ -25,6 +25,7 @@ Service & Daemon Lifecycle:
   daemon       Manage supervisor daemon subsystem (start, stop, status)
 
 Zero-Trust Governance & HITL Authorization:
+  zsp          Inspect, request, check, revoke and review JIT grants; bounded human-enabled autoapprove
   trust        Authorize cross-folder write/delete operations for a path (session/project/global)
   untrust      Revoke cross-folder mutation authorization for a path
   permissions  List all active cross-folder authorizations across session, project, and global scopes
@@ -39,6 +40,9 @@ Zero-Trust Governance & HITL Authorization:
   recommend    Inspect a blocked call and recommend it to the control plane as benign for administrator approval (--status shows outcomes)
 
 Execution & Protocol Integration:
+  run          Run a command within a selected process boundary (--print renders the spec)
+  egress       List, approve or serve the workspace profile's egress destinations
+  learn        Inspect recorded effects and review/apply workspace-scoped proposals
   showcase     Run isolated five-layer diagnostics and write a workspace evidence report
   claude       Launch Claude Code CLI in active zero-trust transactional sandbox
   codex        Launch OpenAI Codex CLI in active zero-trust transactional sandbox
@@ -63,6 +67,7 @@ Identity & Central Control Plane:
   register     Enroll edge LTD with central BAP Control Plane using one-time code (OTC)
   sync         Synchronize or inspect local policy cache from control plane (with offline fallback)
   config       View or update central control plane and gateway host URLs
+  policy-setting Print an effective control-plane-managed setting (prompt-capture)
   attest       Client test command: connect to attestation server and request OBO JWT
   verify-log   Verify cryptographic integrity and anti-tamper hash-chain of local audit log
   version      Display semantic version, git commit, build date, and platform metadata (-v, --version, --json)
@@ -74,7 +79,7 @@ Examples:
   bapedge stop
   bapedge exec "echo hello world"
   bapedge why "rm -rf /"
-  bapedge trust --path C:\Users\User\pyprj\other --scope session --ops write,delete
+  bapedge trust --session --session-id=sess-example --actions=write,delete C:\Users\User\pyprj\other
   bapedge permissions
   bapedge untrust --path C:\Users\User\pyprj\other
   bapedge rollback --checkpoint-id chk-xxx

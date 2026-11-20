@@ -2,6 +2,15 @@
 
 Comprehensive operational and reference documentation for the BAP (Bounded Authority Plane) Zero-Trust platform.
 
+Reviewed against the source command dispatchers and argument parsers on 2026-11-19.
+This describes this checkout; an installed release may expose fewer commands. Check
+`bapedge version --json` before comparing behavior. Examples document syntax; they
+do not grant authority to change trust, pins, policy, credentials, or approvals.
+
+Navigation: [launchers](#22-governed-agent-launchers), [ZSP and auto-approval](#25-zero-standing-privilege-zsp--playback),
+[cross-folder trust](#27-cross-folder-authority--permissions), [pins](#210a-content-pins),
+[boundary and learning](#211-process-boundary-egress-and-learning), [integration commands](#213-lifecycle-and-integration-commands).
+
 ---
 
 ## 1. Architecture Overview: The 7 Core Binaries
@@ -22,22 +31,35 @@ BAP delivers enterprise-grade defense-in-depth across 7 dedicated binaries:
 
 ## 2. `bap` / `bapedge` CLI Reference
 
-`bap` and `bapedge` are the primary workstation CLI.
+`bap` and `bapedge` are the primary workstation CLI. The Python `bap` entry point
+proxies the edge binary, with older launcher fallbacks; use `bapedge` when diagnosing
+which native command implementation ran. Windows accepts `bapedge.exe`.
+
+Go flag parsers generally stop at the first positional argument. Put flags before
+positional arguments unless a command explicitly reorders them. For `trust` and
+`untrust`, use `--flag=value` for value flags because their current reordering parser
+does not reliably preserve separated flag/value pairs.
 
 ### 2.1 Set Up, Identity & Onboarding
 
 | Command | Arguments / Flags | Description |
 |---|---|---|
-| `bap login` | `[--verify-now]` | Authenticate developer identity via enterprise OIDC/OAuth2 device flow (Google, GitHub, Okta, Microsoft Entra). Enrolls this machine, pins the policy signing key, and syncs initial signed rules. |
-| `bap register` | `<code>` | Enroll edge daemon with central control plane using an administrative One-Time Code (OTC). |
-| `bap logout` | *(none)* | Deregister workstation, clear credentials, and purge active session tokens (`alias: deregister`). |
-| `bap setup` | `--app <claude-code\|antigravity\|codex\|copilot\|all>` | 1-click workstation onboarding: writes local configs, injects boundary rules (`GEMINI.md`, `CLAUDE.md`, `AGENTS.md`), and registers native hooks. |
-| `bap enable` | *(none)* | Enable zero-trust workstation governance and configure local daemon. |
-| `bap doctor` | `[--repair-policy] [--hook-copies-json]` | Run comprehensive diagnostic health check verifying binaries, policy digest, certificates, and hook hooks. |
+| `bap login` | `[--server <url>] [--provider entra\|okta\|generic] [--force] [--no-daemon] [--type laptop\|desktop\|server] [--ca-cert <path>] [--config <path>]` | Authenticate/enroll and synchronize signed policy. Parser also accepts `--email`, `--department`, `--groups`, `--verify-now`, and development-only `--insecure`; these do not establish a verified production identity by themselves. |
+| `bap register` | `[--server <url>] --code <code>` or `[flags] <code>` | OTC enrollment. Also accepts `--instance-id`, `--config`, `--ca-cert`, development-only `--dev` and `--insecure`. |
+| `bap logout` | `[--config <path>] [--ca-cert <path>] [--force] [--insecure]` | Deregister and clear local enrollment (`alias: deregister`). `--force` permits local cleanup if remote deregistration fails; `--insecure` is development-only. |
+| `bap setup` | `[--app claude-code\|antigravity\|codex\|copilot\|opencode\|all] [--dir <workspace>] [--server <url>] [--force]` | Persistent workstation configuration and plugin installation. Defaults to `claude-code`; writes configuration, unlike process-scoped `bap claude`. Successful setup output does not prove a native client accepted its callbacks. |
+| `bap enable` | Same flags as `setup` | Alias dispatch to the setup implementation; does not itself start the daemon. |
+| `bap doctor` | `[--fix] [--repair-policy] [--hook-copies-json]` | Inspect environment and hook copies; repair flags can mutate state. Health/readiness does not prove five-layer participation. |
+| `bap onboarding begin` | *(none)* | Create a bounded reporting probe and print a prompt for the human to submit in a supported native Claude session. |
+| `bap onboarding check` | `[--require]` | Check correlated callback/reporting observations; `--require` fails if evidence is absent. Does not automate native approvals or prove execution success. |
+| `bap ensure-enrolled` | *(none)* | Run the enrollment consistency/remediation check. A genuinely unenrolled machine still needs enrollment. |
 
-### 2.2 Governed Agent Launchers (Layer 1A Sandbox)
+### 2.2 Governed Agent Launchers
 
-Launch coding agent CLIs wrapped in transactional zero-trust sandboxes. Injects environment variables (`BAP_SESSION_ID`, `LTD_SOURCE`), resolves the global control plane endpoint, enrolls the session, starts background prompt and grant tailers, and auto-cleans on exit.
+Launch coding clients with BAP session identity and integration lifecycle. Launching
+does not establish that every native tool was intercepted or that the entire client
+is contained by an OS boundary. Native-hook support depends on the host integration;
+received broker/MCP requests are evaluated independently when native hooks are absent.
 
 ```powershell
 bap agy [args...]             # Launch Google Antigravity CLI (agy) under active governance
@@ -45,33 +67,57 @@ bap antigravity [args...]     # Alias for 'bap agy'
 bap claude [args...]          # Launch Claude Code CLI under active governance
 bap claude-code [args...]     # Alias for 'bap claude'
 bap codex [args...]           # Launch OpenAI Codex CLI under active governance
+bap copilot [args...]         # Launch GitHub Copilot CLI
+bap opencode [args...]        # Launch OpenCode CLI
 ```
 
 **Common Launcher Flags:**
 * `--server=<url>`: Override control plane URL for this session (defaults to global setting in `bap-config.json`).
-* `--no-hooks`: Launch in unmonitored development mode (only permitted if developer override is enabled).
+* `--no-hooks`: Restricted development option in the shared parser; requires developer override. The deterministic Claude launcher rejects it even with override.
+
+Aliases: `openai-codex`, `github-copilot`, and `open-code` map to their respective
+launchers. Claude owns `--settings` and `--setting-sources`; downstream flags that
+conflict with its registration ownership are rejected. It selects one effective BAP
+registration per lifecycle event, reuses managed registrations, preserves source
+files, and cleans owned temporary journals on exit or later stale-owner recovery.
+Ordinary user preferences such as `autoUpdatesChannel` survive duplicate-hook
+reconciliation. Mandatory managed conflicts remain explicit errors. Network/5xx
+outages retain local session enforcement and queued reporting; revocation, missing
+authority and enrollment failures are not converted into permission to run.
 
 ### 2.3 Daemon & Service Lifecycle
 
 | Command | Arguments / Flags | Description |
 |---|---|---|
-| `bap start` | `[-foreground] [-server <url>]` | Start background supervisor daemon (`bap-daemon`). Runs unprivileged in user-space. |
+| `bap start` | `[--foreground] [--server <url>] [--port <port>]` | Start background daemon; default local IPC port 18446. |
 | `bap stop` | *(none)* | Gracefully terminate background supervisor daemon. |
 | `bap restart` | *(none)* | Restart background supervisor daemon. |
-| `bap status` | `[--all] [--json]` | Inspect local active sessions, daemon state, policy cache, spool backlog, and 5-layer compliance. |
-| `bap sweep` | *(none)* | Clean sweep orphaned sessions, purge stale process locks, and flush offline audit records to the control plane. |
-| `bap daemon` | `<start\|stop\|status\|restart>` | Low-level daemon subsystem management. |
+| `bap status` | `[--server <url>] [--json] [--no-sweep] [--fix] [--no-fix]` | Inspect sessions, daemon, policy and pending telemetry. By default may reconcile/sweep state; use `--no-sweep --no-fix` to suppress those automatic operations. Readiness is not compliance proof. |
+| `bap sweep` | `[--server <url>] [--force]` | Reconcile orphaned sessions and retry pending reports. `--force` ignores normal PID liveness checks; it is not routine concurrent-session cleanup. |
+| `bap daemon` | `start`/`run`, `stop`, `status [--json]` | Low-level daemon management. Use top-level `bap restart` for restart. `daemon supervise` is an internal supervisor entry point. |
 
 ### 2.4 Policy, Inspection & Broker Sandbox
 
 | Command | Arguments / Flags | Description |
 |---|---|---|
-| `bap exec` | `"<command>" [--timeout <dur>] [--progress] [--shell auto\|cmd\|powershell\|pwsh]` | Evaluate command against Cedar invariants and run inside sandboxed execution broker. See [Quoting rules for `bap exec`](#24a-quoting-rules-for-bap-exec). |
-| `bap check` | `"<command>"` | Evaluate command against Cedar policy in decision-only mode (zero execution side effects; alias: `authorize`). |
+| `bap exec` | `[--timeout <dur>] [--progress] [--shell <shell>] [--json\|--raw] "<command>"` | Evaluate and execute a command through the broker. Flags must precede the command. See [quoting](#24a-quoting-rules-for-bap-exec). |
+| `bap check` | `"<command>"` | Decision-only broker evaluation (alias: `authorize`). Does not execute the requested command; policy checks and audit/reporting can still produce state. |
 | `bap why` | `"<command>"` | Explain Cedar policy decision directly in terminal with matched rules and remediation advice (alias: `explain`). |
-| `bap sync` | `[--server <url>] [--policy-dir <path>]` | Force immediate synchronization of local signed Cedar policy bundle from the central control plane. |
+| `bap sync` | `[--server <url>] [--policy-dir <path>] [--agent-id <id>]` | Synchronize the signed policy cache. |
 | `bap config` | `show` | Display resolved control plane, API gateway, trust domain, and enforcement mode. |
-| `bap config` | `set [--server <url>] [--gateway <url>] [--mode enforce\|audit] [--global]` | Update control plane URL or enforcement mode locally or globally (`~/.bap/config.json`). |
+| `bap config` | `set [--server <url>] [--gateway <url>] [--envoy <url>] [--mode enforce\|audit] [--global]` | Update endpoints/mode locally or in `~/.bap/config.json`. |
+
+Broker defaults: timeout 30 minutes (or `BAP_EXEC_TIMEOUT_SEC`), bounded to 24 hours;
+progress is opt-in. Shells: `auto`, `bash`, `sh`, `zsh`, `cmd`, `powershell`, `pwsh`.
+Explicit shell selection does not silently fall back. Additional parser options:
+`--policy`, `--source`, `--session-id`, `--server`/`--server-url`, `--audit-log`,
+`--mode enforce|audit|shadow`, `--prompt`, `--skill`, `--verify-pins`,
+`--decision-only`/`--check-only`, and `--cmd-b64`. Native integration handoff also
+uses `--reporting-layer`, `--caller-binary`, `--caller-hash`, `--tool`, `--target`,
+`--consume`, `--tool-use-id`, `--tool-input-sha256`, `--tool-outcome`, and
+`--stepup-decision`. These metadata flags are not approval credentials. Workspace
+and enterprise policy can prohibit changing enforcement, pin verification or audit
+settings; documenting a parser option does not authorize bypassing those rules.
 
 ### 2.4a Quoting rules for `bap exec`
 
@@ -97,13 +143,25 @@ BAP operates on Zero Standing Privileges: agents start with zero authority and a
 
 | Command | Arguments / Flags | Description |
 |---|---|---|
-| `bap zsp status` | `[--all] [--all-sessions]` | Inspect active and burned ephemeral JIT TaskGrants. `--all-sessions` aggregates across all agent sessions. |
-| `bap zsp grants` | `[--all] [--all-sessions]` | Alias for `bap zsp status`. Shows grant envelope, principal SVID, allowed scopes, and receipt proofs. |
-| `bap zsp playback` | `[--all-sessions]` | Replay chronological grant lifecycle events, distinguishing `[AUTOMATIC (Cedar Policy)]` from `[MANUAL (HITL Challenge)]`. Outputs automation velocity % for policy tuning. |
+| `bap zsp init` | `[--session-id <id>] [--client <client>] [--json]` | Initialize the session principal with zero standing privileges. |
+| `bap zsp status` | `[--session-id <id>] [--client <client>] [--all] [--all-sessions] [--json]` | Inspect grants; `--all` includes burned/expired grants and `--all-sessions` spans sessions. |
+| `bap zsp grants` | Same as `status` | Alias; `zsp list` is another alias. |
+| `bap zsp playback` | `[--limit <n>] [--json]` | Replay recorded grants across the workstation; default limit 50. Does not accept `--all-sessions`. |
 | `bap zsp authorize` | `--session-id <id> --mission <m> --goal "<text>" --actions <a,b> [--resources <r>] [--max-uses N] [--ttl <dur>] [--authorized-by <email>] [--client <c>] [--json]` | Submit a 4-Tuple Task Authorization Envelope to the policy engine. Defaults: `--mission TASK_EXECUTION`, `--resources workspace://current`, `--max-uses 1`, `--ttl 300s`. Run it as a **standalone** command (no `&&`, `;` or `\|`). A grant is minted, **or** a human-approval request id is raised, **or** the request is denied. |
 | `bap zsp approvals` | *(none)* | Human only: list pending high-risk approval requests. Blocked for agents. |
 | `bap zsp approve` | `<req-id>` | Human only: approve a pending request. Requires a one-time code typed in the developer's own terminal. Blocked for agents. |
 | `bap zsp deny` | `<req-id>` | Human only: deny a pending request. Blocked for agents. |
+| `bap zsp autoapprove` | `[status]` | Inspect the bounded approve-tier window; no subcommand defaults to `status`. |
+| `bap zsp autoapprove on` | `[--duration <duration>]` | Human only, terminal challenge required. Default 1 hour, maximum 8 hours. Alias: `enable`. |
+| `bap zsp autoapprove off` | *(none)* | Close the window immediately. Alias: `disable`. |
+| `bap zsp check` | `[--session-id <id>] [--client <client>] --action <action> [--resource <resource>] [--command <text>] [--consume]` | Verify coverage; `--consume` spends one use. Resource defaults to `workspace://current`; emits JSON. |
+| `bap zsp revoke` | `[--session-id <id>] [--grant-id <id>]` | Revoke one grant or all grants for the resolved session. |
+| `bap zsp policy-sign` | `--file <permission-policy.json>` | Human-operator path: validate, sign and install a permission-policy override. |
+
+`zsp authorize` also accepts `--requesting-session-id`, `--prompt`, and human-only
+`--oob-approve`. `zsp request` aliases `authorize`; `zsp requests` aliases `approvals`.
+An approver email or `--oob-approve` flag is not proof of human approval: the latter
+requires an interactive challenge. Use the real BAP session ID, not a fabricated one.
 
 **Grant classes.** The class is chosen by the actions requested, and `--max-uses` is clamped to the class ceiling.
 
@@ -116,8 +174,25 @@ BAP operates on Zero Standing Privileges: agents start with zero authority and a
 `High-Risk Escalation Blocked … HITL REQUEST RAISED: req-…` (stop, tell the developer, wait for
 `bap zsp approve`); or a policy denial. An approval covers only the action requested. Approving
 `cli:bash:exec` does not cover `dev:go:-C`. When `BAP ZSP AUTO-APPROVE ON` appears, routine (approve-tier)
-requests are granted without a prompt; push, publishing, destructive operations, credential access and network
-egress are never auto-approved. See [ZSP_APPROVAL_FLOW.md](../ZSP_APPROVAL_FLOW.md) for the full explanation.
+requests are eligible without a per-request prompt. Signed policy denies, protected
+governance actions and rules requiring separate human approval remain enforced.
+Eligibility follows the actual action/resource policy, not a promise that every
+command of a particular name is eligible. An already pending request still requires
+its explicit approval path; a banner is not approval. See
+[ZSP_APPROVAL_FLOW.md](../ZSP_APPROVAL_FLOW.md) for the authorization workflow.
+
+Human terminal examples (documentation only):
+
+```powershell
+bap zsp autoapprove status
+bap zsp autoapprove on --duration 30m
+bap zsp autoapprove off
+```
+
+Auto-approval is off by default, expires automatically and records a distinct
+`auto_approve` delegation. It does not disable broker, hook, integrity or
+control-plane checks. Developer override is a separate, broader development mode
+and makes a run unsuitable for normal enforcement validation.
 
 ### 2.6 Human-in-the-Loop (HITL) Step-Up Escalations
 
@@ -127,34 +202,55 @@ When an agent requests an action outside routine policy (e.g. interpreter execut
 |---|---|---|
 | `bap stepup list` | *(none)* | List pending out-of-scope escalation requests from the Central Control Plane. |
 | `bap stepup request` | `<task_id> <action> <resource> [reason]` | Submit an out-of-scope task escalation request to the control plane inbox. |
-| `bap stepup status` | `<task_id>` | Query approval state of an escalation request. |
-| `bap stepup approve` | `<task_id>` | Human developer interactive approval of an escalation request. |
-| `bap stepup reject` | `<task_id> [reason]` | Human developer interactive rejection of an escalation request. |
+| `bap stepup status` | `<escalation_id>` | Query the escalation ID returned by the request. |
+
+The CLI implements `request`, `status`, and `list` only. Central escalation decisions
+use the authorized control-plane UI/API. Local `zsp approve` handles local pending
+ZSP requests; these are separate workflows.
 
 ### 2.7 Cross-Folder Authority & Permissions
 
 | Command | Arguments / Flags | Description |
 |---|---|---|
-| `bap trust` | `--path <dir> --scope session\|project\|global [--ops read,write,delete]` | Authorize mutations in an external directory outside the workspace root (e.g. `..\sibling-project`). Never permitted for filesystem roots, user home, or credential directories. |
-| `bap untrust` | `--path <dir>` | Revoke cross-folder mutation authorization. |
+| `bap trust` | `[--project\|--global\|--session] [--session-id=<id>] [--actions=write,delete] [--json] <path>` | Human-operator cross-folder mutation authorization. Project scope is default; actions default to `write,delete`. `all` is accepted. `read` is not a grant action. Forbidden roots, home and credential locations remain protected. |
+| `bap untrust` | `[--project\|--global\|--session] [--session-id=<id>] <path>` | Human-operator revocation; specify the same scope as the grant. |
 | `bap permissions` | *(none)* | List all active cross-folder authorizations across session, project, and global scopes. |
+
+`bap trust list` and `bap trust` with no path list permissions. There are no
+`--path`, `--scope` or `--ops` flags in this handler. Trust expands the filesystem
+boundary; it does not mint a TaskGrant or override Cedar policy or secret protection.
+Agents cannot authorize their own cross-folder mutations.
+
+```powershell
+# Human terminal, only after authorizing this directory:
+bap trust --project --actions=write '..\shared-library'
+bap permissions
+bap untrust --project '..\shared-library'
+bap trust --session --session-id=sess-example --actions=write '..\shared-library'
+```
+
+Current limitations: session trust also writes the implementation's `default`
+session alias; do not assume strict single-session isolation from this CLI alone.
+Its `--json` formatter currently prints Go slice notation for `actions`, so consumers
+must not assume the result is valid JSON. Both are code-review findings, not intended
+security guarantees.
 
 ### 2.8 Native Plugin Management (Layer 1A)
 
 | Command | Arguments / Flags | Description |
 |---|---|---|
 | `bap plugin list` | `[workspace]` | List discovered and installed native plugins across Claude Code, Copilot, Antigravity, OpenCode, and Codex. |
-| `bap plugin install` | `<claude\|copilot\|antigravity\|opencode\|codex\|all>` | Install native in-harness hook extensions and adaptors. |
+| `bap plugin install` | `[--dir <workspace>] <claude\|copilot\|antigravity\|opencode\|codex\|all>` | Persist native plugin integration files. |
 | `bap plugin uninstall` | `<claude\|copilot\|antigravity\|opencode\|codex\|all>` | Safely remove native plugin registrations. |
-| `bap plugin verify` | `[client]` | Verify plugin hook execution, file integrity, and active enforcement. |
-| `bap plugin inspect` | `<client>` | Inspect detailed plugin health record, manifest, and adapter paths. |
-| `bap plugin layers` | *(none)* | Display the active 5-layer defense-in-depth security status. |
+| `bap plugin verify` | `[client]` | Inspect configuration/health; synthetic component checks do not prove native-host acceptance. |
+| `bap plugin status` | `[--dir <workspace>]` | Report plugin health/status. `plugin inspect` is not implemented. |
+| `bap plugin layers` | *(none)* | Print layer descriptions/readiness, not proof that each layer evaluated an action. |
 
 ### 2.9 Closed-Loop Policy Recommendations
 
 | Command | Arguments / Flags | Description |
 |---|---|---|
-| `bap recommend` | *(none)* | List recent blocked calls grouped by effect; prompts developer to pick one to inspect and justify. |
+| `bap recommend` | `[--limit <n>] [--audit-log <path>]` | List recent blocked effects; default limit 15. |
 | `bap recommend` | `--pick <n> --justify "<reason>"` | Submit a recommended policy relaxation for routine build/test commands to administrator. |
 | `bap recommend` | `--status` | Check status of recommendations submitted by this workstation. |
 | `bap review recommend` | *(none)* | Same recommendation flow accessible directly from the session reviewer. |
@@ -163,15 +259,115 @@ When an agent requests an action outside routine policy (e.g. interpreter execut
 
 | Command | Arguments / Flags | Description |
 |---|---|---|
-| `bap rollback` | `--checkpoint-id <id> [--dry-run]` | Forensically revert filesystem mutations to pre-execution cryptographic checkpoints (BAP-538). |
-| `bap pin` | `<verify\|update\|status> [--all]` | Cryptographically pin, verify, and re-attest skills, prompts, and MCP tool schemas (BAP-531). |
-| `bap scan` | `[--dir <path>] [--strict]` | Audit workspace skills, prompt templates, and configs for prompt injection, leakage, and drift (BAP-536). |
-| `bap shield` | `<status\|canary\|sanitize>` | Ambient credential shielding, disk token virtualization, and canary traps (BAP-562). |
-| `bap antibypass` | `<status\|verify\|enforce>` | Multi-tier anti-bypass inspection and egress isolation engine (BAP-560). |
-| `bap delegate` | `[args...]` | Multi-agent hierarchical delegation & subagent envelope broker (BAP-532). |
-| `bap verify-log` | *(none)* | Verify the tamper-evident SHA-256 hash-chain of the local audit log. |
-| `bap dev-override` | `<on\|off\|status>` | Manage time-boxed developer override (interactive human only; strictly blocked for agents). Only works in a binary built with dev overrides (`allow_dev_overrides=true` in `bap version --json`). See [Build modes](#81-build--package). |
+| `bap rollback` | `[--session-id <id>] [--checkpoint-id <id>] [--file <path>] [--list] [--json]` | List checkpoints or restore approved files. There is no `--dry-run`; use `--list` for inspection. |
+| `bap pin` | See [content pins](#210a-content-pins) | Manage content hash baselines; `pin status` is not implemented. |
+| `bap scan` | `[--json] [--fail-on critical\|high\|medium\|low] [--manifest <path>] [--fix] [workspace]` | Injection/drift scan. Default failure threshold `high`; `--fix` pins clean discovered assets. No `--dir` or `--strict`. |
+| `bap shield` | `scan [dir]`, `plant-canary [dir]`, `check-canary <payload>` | Operator credential-discovery/canary utilities. Do not run a scan where workspace policy forbids credential access. These commands do not prove ambient OS credential isolation. |
+| `bap antibypass` | `status` or `check "<command>"` | Inspect/check command-pattern rules. The status banner does not prove all network paths are mediated; there is no `verify` or `enforce` subcommand. |
+| `bap delegate` | `mint`, `run`, `status`/`tree`, `help` | Attenuated child grants and lineage. `mint`/`run` accept `--child-agent`, `--child-app`, `--session`, `--scopes`, `--action`, `--resource`, `--ttl` (minutes; default 15), `--server`, and `--parent-token` (prefer the `BAP_GRANT_TOKEN` environment binding over exposing a token in arguments). `mint` also accepts `--json`; `run` separates its command with `--`. |
+| `bap verify-log` | `[--file <audit.jsonl>]` | Verify the audit hash chain; default resolves the configured local audit log. |
+| `bap dev-override` | `on [--duration <duration>] [--reason <text>]`, `off`, `status` | Human-controlled development override; default 4 hours, maximum 12 hours. Requires a permitted development build/environment (`allow_dev_overrides=true` in version JSON). Agents must never enable it. See [build modes](#81-build--package). |
 | `bap version` | `[-v] [--version] [--json]` | Display semantic version, git commit, build date, and architecture. |
+
+### 2.10a Content Pins
+
+`pin` selects the workspace manifest when present; otherwise it uses the default
+state manifest. Inspect the reported manifest path before any mutation. Empty or
+missing pins cannot prove protected-file coverage. Agent scope filters apply to
+verification results; `verify --scope` currently calls `VerifyAll` before filtering.
+
+| Command | Flags / operands | Effect |
+|---|---|---|
+| `bap pin list` | `[--json]` | Inspect assets, IDs, scopes, paths, hashes and attestation metadata. |
+| `bap pin verify` | `[--scope <agent>] [--json]` | Verify hashes; mismatch returns nonzero. Alias: `pin check`. An empty result can be clean without verifying any asset; inspect counts. |
+| `bap pin add` | `[--id <id>] [--type skill\|mcp_tool\|prompt\|script] [--scope <agent>] <path>` | Compute and persist a new baseline. Default type `skill`; scope is inferred if omitted. Use an explicit scope for shared `AGENTS.md` assets. |
+| `bap pin update` | `[--all] [asset-id ...]` | Recompute approved baselines; `--all` updates every asset. Review modifications before re-attesting. |
+| `bap pin scan` | `[--dir <workspace>]` | Discover and pin workspace assets; this writes the manifest and can replace discovered IDs. |
+| `bap pin unpin` | `[--all] [asset-id ...]` | Remove selected entries or every entry. |
+| `bap pin clear` | *(none)* | Persist an empty manifest. |
+| `bap pin reset` | `[--dir <workspace>]` | Clear then rediscover/re-pin the workspace. |
+
+Read-only examples:
+
+```powershell
+bap pin list --json
+bap pin verify --scope codex --json
+```
+
+Mutation syntax, for an authorized operator and a disposable example file:
+
+```powershell
+bap pin add --id script:example --type script --scope all './diagnostic-fixture.txt'
+bap pin update script:example
+bap pin unpin script:example
+```
+
+Do not clear, reset or update real protected-file pins to make a failing check pass.
+These are baseline changes, not repairs of the original content. Current `update`
+and `unpin` handlers can print per-asset failures while returning success overall;
+check the subsequent list/verify results. The broker's pre-existing content-pinning
+path also contains automatic baseline reconciliation for some instruction/policy
+files; a successful broker result alone is therefore not proof that no prior drift
+occurred. Review the verifier observations and baseline provenance.
+
+### 2.11 Process Boundary, Egress and Learning
+
+These are human-operator profile controls. They are separate from TaskGrant issuance
+and do not replace signed policy or corporate egress requirements.
+
+| Command | Flags / operands | Behavior |
+|---|---|---|
+| `bap run` | `[--provider auto\|appcontainer\|bwrap\|seatbelt\|docker] [--print] [--image <image>] [--docker-network <name>] -- <command> [args...]` | Execute with the selected boundary. `auto` selects AppContainer on Windows, bubblewrap on Linux, Seatbelt on macOS. Missing providers fail instead of running unsandboxed. `--print` renders a specification only. Docker defaults to network `none`; it is not the default provider. |
+| `bap egress list` | *(none)* | Show the current workspace profile and allowed destinations. |
+| `bap egress allow` | `<host[:port]>` or `<*.domain>` | Persist an operator-approved profile destination and approval event. Does not authorize bypassing a required enterprise gateway. |
+| `bap egress serve` | `[--addr <address>]` | Start the standalone profile proxy; default `127.0.0.1:3128`. A proxy alone does not close other network paths. |
+| `bap learn` | *(none)* | Propose changes from recorded effects belonging to this workspace. |
+| `bap learn report` | *(none)* | JSON metrics, proposals and prediction mismatches. |
+| `bap learn profile` | *(none)* | JSON profile recommendation; does not apply it. |
+| `bap learn apply` | `<host>` | Apply a matching mined proposal and record an operator decision. |
+
+See [capability model](CAPABILITY_MODEL.md) and [learning loop](LEARNING_LOOP.md)
+for provider and authority limitations. Rendering a Linux/macOS spec is not native
+runtime acceptance on those operating systems.
+
+### 2.12 Actual Layer Evidence and Diagnostics
+
+The normal dashboard derives five layers from live producer observations:
+in-harness hooks, execution broker, cryptographic integrity/pinning, anomaly risk,
+and control-plane attestation. A layer is evaluated only when its own evidence is
+present; installation/readiness and transport labels do not establish participation.
+An early denial need not reach downstream layers. Missing native-hook evidence does
+not prevent an independently received broker request from being evaluated.
+
+`bap showcase [--client claude-code|codex|antigravity|copilot|opencode]
+[--output <workspace-report.json>] [--without-hooks]` runs isolated diagnostic
+fixtures. It is a developer diagnostic, not a requirement for ordinary telemetry.
+`--without-hooks` omits the callback fixture without disabling defenses. The edge
+cannot generate a control-plane verdict: its report marks attestation unavailable
+until the authenticated control-plane diagnostic path is exercised. Fixture results
+are marked diagnostic and cannot prove native endpoint acceptance or live coverage.
+
+### 2.13 Lifecycle and Integration Commands
+
+These commands normally run from launchers/hooks. Keep the BAP-supplied identity;
+do not manufacture another session to evade policy.
+
+| Command | Purpose |
+|---|---|
+| `bap review` | Review session decisions/performance. Aliases: `review-session`, `review-sessions`, `sessions`; `review recommend` opens the recommendation flow. |
+| `bap adapter` | `cursor`, `gemini`, `browser`, `hook`/`plugin`, or `emit`; invoke without operands for adapter-specific syntax. Emitted/self-reported telemetry is not native interception proof. |
+| `bap watch` | `[--pid <pid>] [--server <url>] [--session-id <id>] [--app-id <client>] [--instance-id <id>] [--detach]`; launcher-owned watcher/replay process. |
+| `bap session-start` | `[--server <url>] [--session-id <id>] [--app-id <client>] [--instance-id <id>] [--pid <pid>] [--prompt <text>] [--hooks-disabled]`; the last option is restricted development behavior. |
+| `bap session-end` | `[--server <url>] [--session-id <id>] [--reason <text>]`; end/report a session. Claude `Stop` is turn completion, not session termination. |
+| `bap session-telemetry` | `[--server <url>] --kind start\|heartbeat\|prompt\|response\|end`; reads valid JSON up to 1 MiB on stdin. Current helper retains failed prompt deliveries, but does not durably queue every other kind; its HTTP status is in the returned JSON and is not necessarily the process exit status. |
+| `bap policy-setting prompt-capture` | Print the effective signed setting; does not change it. |
+| `bap serve` | `[--socket <path>] [--allowed-hash <sha256,...>]`; start the local attestation transport server, default socket `/tmp/ltd.sock`. |
+| `bap attest` | `[--socket <path>] [--timeout <seconds>]`; client for local attestation/OBO transport, default timeout 5 seconds. Distinct from control-plane binary-image verification evidence. |
+| `bap help` | Top-level usage. Aliases: `-h`, `--help`. |
+
+Other aliases: `clean-sweep` → `sweep`, `subagent` → `delegate`, `dev` →
+`dev-override`, `explain` → `why`, `deregister` → `logout`, `-v`/`--version` →
+`version`. `__shim` is the internal in-sandbox egress relay, not a user entry point.
 
 ---
 
@@ -211,6 +407,7 @@ bapcontrolplane version             # Display semantic version, git commit, and 
 | `--trust-domain <dom>` | `bap.internal` | SPIFFE Trust Domain for agent workload identities. |
 | `--ttl <minutes>` | `30` | Default grant TTL in minutes. |
 | `--tls`, `--https` | `false` | Enable HTTPS/TLS (auto-generates dev certs if none provided). |
+| `--tls-auto` | `false` | Request development self-signed TLS generation. |
 | `--tls-cert <path>` | *(empty)* | Path to TLS certificate PEM file. |
 | `--tls-key <path>` | *(empty)* | Path to TLS private key PEM file. |
 | `--allowed-origins <origins>` | *(empty)* | Comma-separated browser origins for CORS (default: same-origin only). |
@@ -241,8 +438,12 @@ Invoke-RestMethod -Method Post -Uri "$cp/api/v1/auth/stream-ticket" -Headers @{ 
 "$cp/api/activity/stream?ticket=bap_stk_..."
 ```
 
-* **Intentionally unauthenticated** (called by edge agents): `/health`, `/policy/bundle`, `/sessions/{id}`,
-  `/escalation/{id}`, enrollment and session-telemetry routes.
+* **Workstation reporting is a separate authentication path.** Session start,
+  heartbeat, prompt, response and end routes require session/workstation identity;
+  they are not anonymous just because they are called by edge agents. Resume and
+  transcript handlers perform their own checks. `/health` and enrollment bootstrap
+  have different rules. Consult the route/handler for the specific endpoint rather
+  than treating an absent admin middleware wrapper as proof of anonymous access.
 * **Removed:** `/api/v1/spiffe/*`, `/attestation/tpm-quote` and the simulated `/api/v1/sandbox/*` endpoints,
   the destructive demo endpoints (`/sessions/reset`, `/demo/exec-safe`, `/demo/exec-attack`, `/demo/fleet-scale`),
   and the simulated Google/GitHub login pages. `/auth/oauth/start` returns `503` when no provider client ID is configured.
@@ -268,8 +469,8 @@ bapdashboard [flags]
 | `-port <p>` | `8444` | HTTPS port for the standalone dashboard server. |
 | `-control-plane <url>` | `https://localhost:8443` | Upstream BAP Control Plane base URL. |
 | `-ca-cert <path>` | `$BAP_CA_CERT` | CA certificate file used to verify control plane TLS. |
-| `-tls-cert <path>` | `dashboard-cert.pem` | Dashboard HTTPS server certificate. |
-| `-tls-key <path>` | `dashboard-key.pem` | Dashboard HTTPS private key. |
+| `-tls-cert <path>` | auto-discovered/generated | Dashboard certificate; otherwise look for control-plane certs, then generate `dashboard-cert.pem`. |
+| `-tls-key <path>` | auto-discovered/generated | Paired private key; explicit cert/key options must be supplied together. |
 | `-client-cert <path>` | *(empty)* | Optional mTLS client certificate presented to control plane. |
 | `-client-key <path>` | *(empty)* | Optional mTLS client private key presented to control plane. |
 | `-allow-remote-admin` | `false` | Allow remote dashboard clients to invoke administrative APIs. |
@@ -298,6 +499,7 @@ bapgateway version             # Display version and build info
 |---|---|---|
 | `--port <p>` | `9090` / `$BAP_GATEWAY_PORT` | Port for Gateway PEP server. |
 | `--detach`, `-d` | `false` | Run as detached background daemon. |
+| `--foreground`, `--fg` | `false` | Run the gateway in the foreground. |
 | `--controlplane <url>` | `http://localhost:8080` | BAP Control Plane base URL. |
 | `--secret <key>` | *(empty)* | HMAC secret key for offline JWT verification. |
 | `--consume` | `true` | Atomically consume single-use task grants via control plane on egress. |
@@ -335,20 +537,17 @@ bapmcp help                   # Display onboarding instructions and sample confi
 * **`bap_request_task_grant`**: Submit 4-Tuple Task Authorization Envelope (Who, AuthorizedBy, Intent, Ask) to mint ephemeral JIT TaskGrants.
 * **`bap_zsp_status`**: Inspect agent's SPIFFE SVID principal, human owner binding, and active grants.
 * **`bap_read_file`**, **`bap_write_file`**, **`bap_edit_file`**, **`bap_list_dir`**: Policy-governed workspace filesystem tools.
-* **`bap_report_request`**: User turn prompt fallback reporting.
+
+The current server exposes the nine tools above. `bap_report_request` is not an
+implemented MCP tool; launcher/session reporting uses separate telemetry paths.
 
 ### 6.4 Client Configurations
 
-**Claude Code (`~/.claude/settings.json`):**
-```json
-{
-  "mcpServers": {
-    "bap-zero-trust": {
-      "command": "bapmcp",
-      "args": ["--stdio"]
-    }
-  }
-}
+**Claude Code:** register through its MCP configuration command rather than
+inserting an MCP server block into the hook settings file:
+
+```powershell
+claude mcp add bap-zero-trust -- bapedge mcp --stdio
 ```
 
 **Google Antigravity (`.antigravity/mcp_config.json`):**
@@ -440,3 +639,24 @@ binary with `bapedge version --json` (`allow_dev_overrides`, `headless_stepup`).
 | `go test -v -run TestStepUp ./cmd` | Endpoint resolution and HITL step-up tests. |
 | `python -m unittest discover -v tests` | Python integration and end-to-end regression suites. |
 | `.\scripts\run_pilot.ps1 [-Quick]` | Automated end-to-end pilot runbook verifying all 5 defense layers. |
+| `python scripts/check_cli_reference.py` | Check public edge dispatch commands and trust/pin/ZSP parser options for missing reference entries; does not execute privileged commands. |
+
+### 8.3 Source Map and Review Limits
+
+| Surface | Source |
+|---|---|
+| Native command/alias dispatch | [edge main](../bap-edge/main.go), [Python proxy](../bap/cli.py) |
+| Trust and permissions | [trust.go](../bap-edge/cmd/trust.go) |
+| Pin lifecycle | [pin.go](../bap-edge/cmd/pin.go), [pinning verifier](../bap-edge/internal/pinning/pinning.go) |
+| ZSP and bounded auto-approval | [zsp.go](../bap-edge/cmd/zsp.go), [auto-approval CLI](../bap-edge/cmd/zsp_autoapprove.go), [engine](../bap-edge/internal/authz/zsp_engine_policy.go) |
+| Boundary, egress and learning | [boundary.go](../bap-edge/cmd/boundary.go) |
+| Launcher ownership | [Claude lifecycle](../bap-edge/cmd/claude_lifecycle.go), [other clients](../bap-edge/cmd/agent_lifecycle.go) |
+| Server/dashboard/gateway flags | [control plane](../bap-controlplane/cmd/server/main.go), [dashboard](../bap-controlplane/cmd/dashboard/main.go), [gateway](../bap-gateway/main.go) |
+
+This review checks command dispatch, parser syntax and implementation behavior. It
+does not certify installed packages or native-host callback acceptance. The drift
+checker detects missing entries; it cannot prove every description is semantically
+correct. Runtime limitations called out above remain code issues, not documentation
+fixes: trust session aliasing/JSON formatting, partial pin-operation success, legacy
+automatic pin reconciliation, and incomplete retry handling in the direct
+`session-telemetry` helper.

@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"bap-controlplane/pkg/types"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,49 +12,50 @@ import (
 )
 
 type Event struct {
-	HashVersion         int      `json:"hash_version,omitempty"`
-	ReportingLayer      string   `json:"reporting_layer,omitempty"`
-	EvidenceGrade       string   `json:"evidence_grade,omitempty"`       // verified | mediated | self_reported | presence (hash v4)
-	TurnID              string   `json:"turn_id,omitempty"`              // per-turn id for prompt deduplication (hash v4)
-	DedupKey            string   `json:"dedup_key,omitempty"`            // explicit arbitration key (hash v4)
-	CorroboratingLayers []string `json:"corroborating_layers,omitempty"` // derived by the arbiter; not hashed
-	InstanceID          string   `json:"instance_id,omitempty"`
-	EventID             string   `json:"event_id"`
-	AgentID             string   `json:"agent_id,omitempty"`
-	SessionID           string   `json:"session_id,omitempty"`
-	UserID              string   `json:"user_id,omitempty"`
-	UserEmail           string   `json:"user_email,omitempty"`
-	SPIFFEID            string   `json:"spiffe_id,omitempty"`
-	Timestamp           string   `json:"timestamp"`
-	Source              string   `json:"source"`
-	ClientPID           int      `json:"client_pid,omitempty"`
-	Executable          string   `json:"executable"`
-	Arguments           string   `json:"arguments,omitempty"`
-	FullCommand         string   `json:"full_command"`
-	Decision            string   `json:"decision"`
-	Reason              string   `json:"reason,omitempty"`
-	UserPrompt          string   `json:"user_prompt,omitempty"`
-	AgentResponse       string   `json:"agent_response,omitempty"`
-	PrimaryIntent       string   `json:"primary_intent,omitempty"`
-	SecondaryIntents    []string `json:"secondary_intents,omitempty"`
-	IntentTags          []string `json:"intent_tags,omitempty"`
-	IntentConfidence    float64  `json:"intent_confidence,omitempty"`
-	IntentClassifier    string   `json:"intent_classifier,omitempty"`
-	PromptHash          string   `json:"prompt_hash,omitempty"`
-	PromptCaptured      bool     `json:"prompt_captured"`
-	DurationMs          int64    `json:"duration_ms,omitempty"`
-	ExitCode            int      `json:"exit_code"`
-	DestinationTenantID string   `json:"destination_tenant_id,omitempty"`
-	CanonicalResource   string   `json:"canonical_resource,omitempty"`
-	CanonicalAction     string   `json:"canonical_action,omitempty"`
-	GrantID             string   `json:"grant_id,omitempty"`
-	NarrowingApplied    bool     `json:"narrowing_applied,omitempty"`
-	NarrowingReason     string   `json:"narrowing_reason,omitempty"`
-	RequestedActions    []string `json:"requested_actions,omitempty"`
-	AllowedActions      []string `json:"allowed_actions,omitempty"`
-	ZSPConcept          string   `json:"zsp_concept,omitempty"`
-	PreviousHash        string   `json:"previous_hash"`
-	EventHash           string   `json:"event_hash"`
+	DefenseObservations []types.DefenseObservation `json:"defense_observations,omitempty"`
+	HashVersion         int                        `json:"hash_version,omitempty"`
+	ReportingLayer      string                     `json:"reporting_layer,omitempty"`
+	EvidenceGrade       string                     `json:"evidence_grade,omitempty"`       // verified | mediated | self_reported | presence (hash v4)
+	TurnID              string                     `json:"turn_id,omitempty"`              // per-turn id for prompt deduplication (hash v4)
+	DedupKey            string                     `json:"dedup_key,omitempty"`            // explicit arbitration key (hash v4)
+	CorroboratingLayers []string                   `json:"corroborating_layers,omitempty"` // derived by the arbiter; not hashed
+	InstanceID          string                     `json:"instance_id,omitempty"`
+	EventID             string                     `json:"event_id"`
+	AgentID             string                     `json:"agent_id,omitempty"`
+	SessionID           string                     `json:"session_id,omitempty"`
+	UserID              string                     `json:"user_id,omitempty"`
+	UserEmail           string                     `json:"user_email,omitempty"`
+	SPIFFEID            string                     `json:"spiffe_id,omitempty"`
+	Timestamp           string                     `json:"timestamp"`
+	Source              string                     `json:"source"`
+	ClientPID           int                        `json:"client_pid,omitempty"`
+	Executable          string                     `json:"executable"`
+	Arguments           string                     `json:"arguments,omitempty"`
+	FullCommand         string                     `json:"full_command"`
+	Decision            string                     `json:"decision"`
+	Reason              string                     `json:"reason,omitempty"`
+	UserPrompt          string                     `json:"user_prompt,omitempty"`
+	AgentResponse       string                     `json:"agent_response,omitempty"`
+	PrimaryIntent       string                     `json:"primary_intent,omitempty"`
+	SecondaryIntents    []string                   `json:"secondary_intents,omitempty"`
+	IntentTags          []string                   `json:"intent_tags,omitempty"`
+	IntentConfidence    float64                    `json:"intent_confidence,omitempty"`
+	IntentClassifier    string                     `json:"intent_classifier,omitempty"`
+	PromptHash          string                     `json:"prompt_hash,omitempty"`
+	PromptCaptured      bool                       `json:"prompt_captured"`
+	DurationMs          int64                      `json:"duration_ms,omitempty"`
+	ExitCode            int                        `json:"exit_code"`
+	DestinationTenantID string                     `json:"destination_tenant_id,omitempty"`
+	CanonicalResource   string                     `json:"canonical_resource,omitempty"`
+	CanonicalAction     string                     `json:"canonical_action,omitempty"`
+	GrantID             string                     `json:"grant_id,omitempty"`
+	NarrowingApplied    bool                       `json:"narrowing_applied,omitempty"`
+	NarrowingReason     string                     `json:"narrowing_reason,omitempty"`
+	RequestedActions    []string                   `json:"requested_actions,omitempty"`
+	AllowedActions      []string                   `json:"allowed_actions,omitempty"`
+	ZSPConcept          string                     `json:"zsp_concept,omitempty"`
+	PreviousHash        string                     `json:"previous_hash"`
+	EventHash           string                     `json:"event_hash"`
 }
 
 type Store struct {
@@ -144,12 +146,16 @@ func (s *Store) IngestAccepted(incoming []Event) ([]Event, error) {
 		}
 
 		ev.PreviousHash = s.lastHash
+		ev.DefenseObservations = append([]types.DefenseObservation(nil), ev.DefenseObservations...)
 		ev.HashVersion = 2
 		if ev.ReportingLayer != "" {
 			ev.HashVersion = 3
 		}
 		if ev.EvidenceGrade != "" || ev.TurnID != "" || ev.DedupKey != "" {
 			ev.HashVersion = 4
+		}
+		if len(ev.DefenseObservations) > 0 {
+			ev.HashVersion = 5
 		}
 
 		h := sha256.New()
@@ -168,7 +174,9 @@ func (s *Store) IngestAccepted(incoming []Event) ([]Event, error) {
 		s.lastHash = ev.EventHash
 		s.seenIDs[ev.EventID] = struct{}{}
 		s.events = append(s.events, ev)
-		accepted = append(accepted, ev)
+		acceptedCopy := ev
+		acceptedCopy.DefenseObservations = append([]types.DefenseObservation(nil), ev.DefenseObservations...)
+		accepted = append(accepted, acceptedCopy)
 	}
 
 	return accepted, nil
@@ -185,6 +193,9 @@ func (s *Store) List(limit int) []Event {
 	start := len(s.events) - limit
 	result := make([]Event, limit)
 	copy(result, s.events[start:])
+	for i := range result {
+		result[i].DefenseObservations = append([]types.DefenseObservation(nil), result[i].DefenseObservations...)
+	}
 	return result
 }
 
@@ -196,6 +207,7 @@ func (s *Store) ListBySession(sessionID string) []Event {
 	result := make([]Event, 0)
 	for _, ev := range s.events {
 		if ev.SessionID == sessionID {
+			ev.DefenseObservations = append([]types.DefenseObservation(nil), ev.DefenseObservations...)
 			result = append(result, ev)
 		}
 	}
@@ -247,6 +259,11 @@ func (s *Store) LastHash() string {
 
 // Version 2 binds authenticated ownership without rewriting legacy chain links.
 func writeEventIdentity(h hash.Hash, ev Event) {
+	if ev.HashVersion >= 5 {
+		raw, _ := json.Marshal(ev.DefenseObservations)
+		h.Write([]byte("\x00bap-defense-observations-v5\x00"))
+		h.Write(raw)
+	}
 	if ev.HashVersion < 2 {
 		return
 	}

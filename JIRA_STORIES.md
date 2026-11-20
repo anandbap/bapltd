@@ -2,11 +2,183 @@
 
 ## Pilot hardening implementation update (candidate work)
 
+### CLI reference review — 2026-11-19
+
+Reviewed actual native dispatch and parsers; expanded `docs/CLI_REFERENCE.md` and
+`ZSP_APPROVAL_FLOW.md`. Added full trust/pin/ZSP operations, bounded human-enabled
+auto-approval (1h default, 8h maximum), missing run/egress/learn/onboarding/lifecycle
+commands and aliases. Removed unsupported syntax and participation claims; fixed
+top-level help's trust example and missing governance/boundary command listings.
+`scripts/check_cli_reference.py` checks all 55 public native dispatch groups and
+core trust/pin/ZSP parser options without executing them.
+
+Open code-review findings (documented, not resolved by this documentation change):
+session trust also grants the shared `default` alias; trust's `--json` action list
+uses Go notation; pin update/unpin can succeed overall after per-asset failures;
+legacy broker instruction/policy pin reconciliation can replace drifted baselines;
+the direct `session-telemetry` helper only retains selected failed prompt requests,
+not every telemetry kind. These need targeted authority/delivery work and runtime
+acceptance. No live Jira issue was created or updated without an Atlassian connection.
+
+### CLI review remediation backlog — local tracker
+
+The user selected this Markdown file as the tracker. `CLI-REVIEW-*` are local
+tracking IDs, not assigned Jira issue keys. All six remediation items below are
+**OPEN**; documentation and source-level tests do not close runtime defects.
+Protected policy files and production pin manifests must remain untouched while
+implementing or validating these fixes. Use isolated disposable fixtures.
+
+#### CLI-REVIEW-01 — Isolate session trust and revoke the complete grant (P0, OPEN)
+
+**Evidence:** [trust.go](bap-edge/cmd/trust.go), `RunTrust` writes the requested
+session permission and then writes another permission for `default`. `RunUntrust`
+revokes only the selected session. A session-scoped grant can therefore outlive
+its apparent revocation or be available through a shared alias.
+
+**Required fix:** bind session trust to one verified session identity; remove the
+unconditional shared alias. Reconcile previously created aliases only when their
+ownership and provenance are known; preserve unrelated/global/project grants and
+unknown ownership. Keep the human-operator gate and existing forbidden paths.
+
+**Acceptance:** two concurrent sessions cannot inherit each other's grants;
+revocation removes only the intended authority; normal exit, interruption and
+crash recovery remove expired owned session permissions; restart/PID reuse cannot
+revive them. Exercise an existing legacy alias and unknown ownership explicitly.
+Verify with an isolated built CLI as well as authorization-store tests.
+
+#### CLI-REVIEW-02 — Require authorized pin changes; never trust drift by content heuristics (P0, OPEN)
+
+**Evidence:** [exec.go](bap-edge/cmd/exec.go), `checkContentPinning` can replace a
+drifted policy baseline when Cedar syntax is valid, or replace an instruction
+baseline when text contains BAP phrases. Those checks establish neither provenance
+nor authorization to change a trusted hash.
+
+**Required fix:** fail closed on unexplained protected-asset drift. Any legitimate
+baseline migration must require authenticated policy/pin authority and an explicit
+auditable transition. Startup/network repair must not silently accept new content.
+Keep original mismatch evidence even after a separately authorized update.
+
+**Acceptance:** valid-syntax but unauthorized policy content is rejected; instruction
+text containing expected BAP phrases is still rejected after unauthorized drift;
+missing/broken pins cannot become a successful hash check. Approved signed changes
+work only through the authorized path. Run matching/mismatching SHA-256 checks on
+dedicated fixtures for each supported agent scope. Assert production pins and real
+policy files are byte-identical before/after the test; verify actual built-broker
+receipts and dashboard evidence with developer override disabled by the human.
+
+#### CLI-REVIEW-03 — Make trust parsing and JSON output reliable (P1, OPEN)
+
+**Evidence:** [trust.go](bap-edge/cmd/trust.go), flag reordering separates flags
+from their values; the `--json` response interpolates `[]string` using `%v` instead
+of JSON encoding. Current documentation recommends `--flag=value` as a workaround.
+
+**Required fix:** preserve flag/value association and positional paths, validate
+conflicting scope flags, and serialize machine-readable output with the JSON
+encoder. Do not change authority or weaken the human-only mutation gate.
+
+**Acceptance:** separated and equals forms of `--session-id`/`--actions` work
+before and after the path; Windows paths with spaces/Unicode and explicit `--`
+are preserved; malformed/conflicting arguments fail without writes. Parse CLI
+stdout with a real JSON parser for zero/one/multiple actions; stderr warnings must
+not contaminate stdout. Confirm trust/list/untrust behavior using isolated state.
+
+#### CLI-REVIEW-04 — Surface every pin-operation failure and protect atomicity (P1, OPEN)
+
+**Evidence:** [pin.go](bap-edge/cmd/pin.go), `runPinUpdate` and `runPinUnpin` print
+missing/failed assets but can return success overall. A caller can mistake partial
+or empty work for successful re-attestation/removal.
+
+**Required fix:** return a nonzero status for requested assets that failed or did
+not exist; provide structured per-asset outcomes. Validate before committing and
+make manifest replacement atomic, with no unrequested partial commit. Preserve the
+last good manifest on verifier, permission, storage or replacement failure.
+
+**Acceptance:** mixed valid/missing IDs, unreadable fixtures, hash failure, invalid
+manifest and failed replacement yield explicit failure and unchanged prior state.
+Successful `add/update/unpin/clear/reset/scan` affect only the selected fixture
+manifest; follow with list/verify to establish the result. Empty verification must
+remain distinguishable from verifying a nonempty set. Run built-CLI exit-code and
+JSON checks; never reset production pins to get a passing test.
+
+#### CLI-REVIEW-05 — Unify direct session telemetry with durable retry (P1, OPEN)
+
+**Evidence:** [session_telemetry.go](bap-edge/cmd/session_telemetry.go) posts directly;
+it retains selected prompt failures but not all start/heartbeat/response/end
+deliveries. HTTP failures can be encoded in JSON while the process returns success.
+Other lifecycle reporting already has a durable outbox, so guarantees differ by
+entry point.
+
+**Required fix:** route all important lifecycle/prompt/response evidence through one
+durable, destination-bound queue before delivery. Reuse stable event IDs across
+retry; acknowledge only verified acceptance. Surface permanent rejection and local
+storage errors without discarding evidence or widening execution authority. Bound
+heartbeat storage by a documented coalescing rule; never coalesce distinct actions.
+
+**Acceptance:** disconnect/reconnect, 401/403/404/429/5xx, interrupted response,
+crash-before/after-send and concurrent append/flush preserve pending records and
+drain them once acknowledged. Replay must not resurrect ended sessions or cross
+server/account ownership. Verify two concurrent clients and all five coding-client
+adapters. After successful replay retain required audit/recovery state and remove
+only owned acknowledged temporary records. Prove server ingestion and visible UI
+evidence with the built helper/daemon, not just mocked transport tests.
+
+#### CLI-REVIEW-06 — Keep CLI reference and help aligned with real commands (P2, OPEN)
+
+**Evidence:** the review found unsupported trust flags, nonexistent `pin status`,
+`plugin inspect`, `stepup approve/reject`, and an unimplemented MCP reporting tool
+in the reference; ZSP auto-approval and several real commands were absent. Source
+help also omitted key command families and showed invalid trust syntax.
+
+**Already done:** corrected the reference/approval-flow docs and primary help
+entries. Added [check_cli_reference.py](scripts/check_cli_reference.py); its current
+check covers 55 public dispatch groups and core trust/pin/ZSP parser options.
+
+**Required follow-up:** wire the check into the normal CI/release gate, extend it
+to aliases/subcommand ownership and supported examples, and reconcile remaining
+secondary help strings. Preserve a clear distinction between parser support,
+policy permission, component diagnostics and native runtime acceptance.
+
+**Acceptance:** a deliberately missing command/flag or nonexistent documented
+subcommand fails the check. All five clients, trust/pin operations and auto-approval
+status/on/off remain documented with exact flags, defaults and human boundaries.
+Smoke-test help and safe examples against freshly packaged binaries in isolated
+state; include Windows quoting and JSON parsing. No test may enable auto-approval,
+developer override or alter real protected files autonomously.
+
 ### Five-layer evidence showcase and resilient Claude lifecycle — 2026-11-19
 
 **Status: source implementation and focused component validation passed; installed-runtime acceptance pending.**
 Related work: BAP-1085 (duplicate/stale hook integrations), BAP-1073 (process cleanup),
 BAP-1004 (telemetry delivery). No new live Jira issue ID has been assigned here.
+
+**Follow-up: real activity and reported Claude startup failure.** The normal V3
+session overview now uses the actual five defense layers, rather than relabeling
+MCP/shim/gateway transport coverage as defense participation. Native callback,
+broker, SHA-256 pin-verifier, actual risk evaluation and server-side binary-image
+verification observations retain producer, action, timestamp, decision and reason.
+Audit delivery and session persistence carry these records; incoming clients cannot
+claim server attestation. Missing evidence remains absent and diagnostics cannot
+establish live coverage. Typed events never merge by command/time similarity.
+No special prompt, diagnostic import or showcase menu is required for live evidence.
+
+The remote startup error was caused by rejecting ordinary user preferences such
+as `autoUpdatesChannel` when omitting a duplicate-hook user source. The launcher
+now preserves those user settings in valid serialized process configuration without
+rewriting the original. Windows npm launchers invoke the declared Node entry point
+directly so settings JSON avoids `cmd.exe` interpolation. A Windows regression
+actually started a separate child process with the reported duplicate/preferences
+combination; a Node child verified exact JSON argument preservation. Project-scoped
+permission promotion and contradictory mandatory managed registrations remain
+explicit conflicts, rather than silently weakening policy.
+
+Validation includes complete edge command/audit and control-plane API/audit/session
+suites, eleven dashboard model checks, persisted evidence after restart, retry
+deduplication, rejected client-forged attestation and independent broker coverage.
+A workspace-built broker emitted actual pin and execution observations for ordinary
+`git status`. Developer override was active: this verifies the reporting path only,
+not normal enforcement. Remote installed binaries and a live browser-to-server
+acceptance run still require deployment and verification. Live Jira remains
+unmodified because no Atlassian connection is available.
 
 The showcase uses five explicit defense layers: in-harness hooks, execution broker,
 cryptographic integrity/pinning, anomaly risk, and control-plane attestation.

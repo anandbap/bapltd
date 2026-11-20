@@ -9,16 +9,17 @@ type AttestationResponse struct {
 
 // ExecutionReceipt represents the cryptographic provenance record of an executed or evaluated action.
 type ExecutionReceipt struct {
-	ReceiptID      string    `json:"receipt_id"`
-	RequestHash    string    `json:"request_hash"`
-	Identity       string    `json:"identity"`
-	Delegation     string    `json:"delegation"`
-	PolicyVersion  string    `json:"policy_version"`
-	PolicyHash     string    `json:"policy_hash,omitempty"`
-	SandboxProfile string    `json:"sandbox_profile"`
-	SessionID      string    `json:"session_id,omitempty"`
-	Timestamp      time.Time `json:"timestamp"`
-	Result         string    `json:"result"` // e.g. "ALLOWED_EXECUTED", "DENIED_POLICY", "DENIED_TAMPER", "EXECUTION_FAILED", "DECISION_ONLY"
+	DefenseObservations []DefenseObservation `json:"defense_observations,omitempty"`
+	ReceiptID           string               `json:"receipt_id"`
+	RequestHash         string               `json:"request_hash"`
+	Identity            string               `json:"identity"`
+	Delegation          string               `json:"delegation"`
+	PolicyVersion       string               `json:"policy_version"`
+	PolicyHash          string               `json:"policy_hash,omitempty"`
+	SandboxProfile      string               `json:"sandbox_profile"`
+	SessionID           string               `json:"session_id,omitempty"`
+	Timestamp           time.Time            `json:"timestamp"`
+	Result              string               `json:"result"` // e.g. "ALLOWED_EXECUTED", "DENIED_POLICY", "DENIED_TAMPER", "EXECUTION_FAILED", "DECISION_ONLY"
 
 	// Delegation Lineage & Attenuation (BAP-532)
 	Lineage       []string `json:"lineage,omitempty"`

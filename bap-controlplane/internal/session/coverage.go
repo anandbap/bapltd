@@ -82,6 +82,11 @@ func GradeFor(ev audit.Event) string {
 // DedupKeyFor returns the arbitration key for an event, or "" when the event
 // has no stable identity and must pass through unmerged.
 func DedupKeyFor(ev audit.Event) string {
+	// Typed live observations have explicit action identity. Never fall back to
+	// command/time similarity for these events: repeated commands are distinct.
+	if len(ev.DefenseObservations) > 0 {
+		return "defense-event:" + ev.EventID
+	}
 	if ev.DedupKey != "" {
 		return ev.DedupKey
 	}
@@ -174,6 +179,7 @@ func Arbitrate(events []audit.Event) []audit.Event {
 // layers a session has actually reported. It never claims compliance: a layer
 // is "observed" only after real events from it, otherwise "silent".
 func applyCoverage(sess *Session) {
+	applyDefense(sess)
 	has := map[string]bool{}
 	for _, l := range sess.ReportingLayers {
 		has[l] = true

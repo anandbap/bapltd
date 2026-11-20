@@ -20,41 +20,43 @@ import (
 
 // Session represents an active or historical agent execution session (e.g., a Claude Code or Copilot run).
 type Session struct {
-	ReportingLayers     []string          `json:"reporting_layers,omitempty"`
-	ReportingLayer      string            `json:"reporting_layer,omitempty"`
-	HooksDisabled       bool              `json:"hooks_disabled,omitempty"`
-	Coverage            map[string]string `json:"coverage,omitempty"`        // derived per-layer state, see coverage.go
-	DegradedReason      string            `json:"degraded_reason,omitempty"` // derived, see coverage.go
-	EnforcementTier     string            `json:"enforcement_tier,omitempty"`
-	SessionID           string            `json:"session_id"`
-	AppID               string            `json:"app_id"`
-	InstanceID          string            `json:"instance_id,omitempty"`
-	ResourceID          string            `json:"resource_id,omitempty"`
-	WorkstationSPIFFEID string            `json:"workstation_spiffe_id,omitempty"`
-	SessionSVID         string            `json:"session_svid,omitempty"`
-	AgentName           string            `json:"agent_name,omitempty"`
-	UserID              string            `json:"user_id,omitempty"`
-	UserEmail           string            `json:"user_email,omitempty"`
-	SPIFFEID            string            `json:"spiffe_id,omitempty"`
-	Status              string            `json:"status"` // "active", "closed", or "revoked"
-	StartedAt           time.Time         `json:"started_at"`
-	EndedAt             *time.Time        `json:"ended_at,omitempty"`
-	LastActiveAt        time.Time         `json:"last_active_at"`
-	ClientPID           int               `json:"client_pid,omitempty"`
-	Hostname            string            `json:"hostname,omitempty"`
-	TotalEvents         int               `json:"total_events"`
-	AllowedCount        int               `json:"allowed_count"`
-	DeniedCount         int               `json:"denied_count"`
-	CloseReason         string            `json:"close_reason,omitempty"`
-	UserPrompt          string            `json:"user_prompt,omitempty"`
-	PromptRiskScore     float64           `json:"prompt_risk_score,omitempty"`
-	PromptRiskLevel     string            `json:"prompt_risk_level,omitempty"`
-	InjectionSignals    []string          `json:"injection_signals,omitempty"`
-	IsHighRisk          bool              `json:"is_high_risk,omitempty"`
-	Intent              IntentContext     `json:"intent"`
-	IntentHistory       []string          `json:"intent_history,omitempty"`
-	PromptCount         int               `json:"prompt_count,omitempty"`
-	Events              []audit.Event     `json:"events,omitempty"`
+	DefenseObservations []types.DefenseObservation `json:"defense_observations,omitempty"`
+	DefenseLayers       []DefenseLayer             `json:"defense_layers"`
+	ReportingLayers     []string                   `json:"reporting_layers,omitempty"`
+	ReportingLayer      string                     `json:"reporting_layer,omitempty"`
+	HooksDisabled       bool                       `json:"hooks_disabled,omitempty"`
+	Coverage            map[string]string          `json:"coverage,omitempty"`        // derived per-layer state, see coverage.go
+	DegradedReason      string                     `json:"degraded_reason,omitempty"` // derived, see coverage.go
+	EnforcementTier     string                     `json:"enforcement_tier,omitempty"`
+	SessionID           string                     `json:"session_id"`
+	AppID               string                     `json:"app_id"`
+	InstanceID          string                     `json:"instance_id,omitempty"`
+	ResourceID          string                     `json:"resource_id,omitempty"`
+	WorkstationSPIFFEID string                     `json:"workstation_spiffe_id,omitempty"`
+	SessionSVID         string                     `json:"session_svid,omitempty"`
+	AgentName           string                     `json:"agent_name,omitempty"`
+	UserID              string                     `json:"user_id,omitempty"`
+	UserEmail           string                     `json:"user_email,omitempty"`
+	SPIFFEID            string                     `json:"spiffe_id,omitempty"`
+	Status              string                     `json:"status"` // "active", "closed", or "revoked"
+	StartedAt           time.Time                  `json:"started_at"`
+	EndedAt             *time.Time                 `json:"ended_at,omitempty"`
+	LastActiveAt        time.Time                  `json:"last_active_at"`
+	ClientPID           int                        `json:"client_pid,omitempty"`
+	Hostname            string                     `json:"hostname,omitempty"`
+	TotalEvents         int                        `json:"total_events"`
+	AllowedCount        int                        `json:"allowed_count"`
+	DeniedCount         int                        `json:"denied_count"`
+	CloseReason         string                     `json:"close_reason,omitempty"`
+	UserPrompt          string                     `json:"user_prompt,omitempty"`
+	PromptRiskScore     float64                    `json:"prompt_risk_score,omitempty"`
+	PromptRiskLevel     string                     `json:"prompt_risk_level,omitempty"`
+	InjectionSignals    []string                   `json:"injection_signals,omitempty"`
+	IsHighRisk          bool                       `json:"is_high_risk,omitempty"`
+	Intent              IntentContext              `json:"intent"`
+	IntentHistory       []string                   `json:"intent_history,omitempty"`
+	PromptCount         int                        `json:"prompt_count,omitempty"`
+	Events              []audit.Event              `json:"events,omitempty"`
 	// Delegation Lineage (BAP-532)
 	ParentSessionID string   `json:"parent_session_id,omitempty"`
 	ParentAgentID   string   `json:"parent_agent_id,omitempty"`
@@ -266,6 +268,7 @@ func NewStoreWithDB(dbPath string) (*Store, error) {
 	_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN user_prompt TEXT`)
 	_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN agent_name TEXT`)
 	_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN reporting_json TEXT`)
+	_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN defense_json TEXT`)
 
 	store := &Store{
 		sessions:          make(map[string]*Session),
@@ -961,6 +964,7 @@ func (s *Store) RecordEvent(sessionID string, ev audit.Event) {
 		sess.LastActiveAt = eventTime
 	}
 	addReportingLayer(sess, ev.ReportingLayer)
+	recordDefense(sess, ev)
 	if ev.Decision != "observed" {
 		sess.TotalEvents++
 	}
@@ -1278,7 +1282,7 @@ func (s *Store) loadFromDB() error {
 	if s.db == nil {
 		return nil
 	}
-	rows, err := s.db.Query(`SELECT session_id, app_id, instance_id, user_id, user_email, spiffe_id, status, started_at, ended_at, last_active_at, client_pid, hostname, total_events, allowed_count, denied_count, close_reason, intent_json, user_prompt, agent_name, reporting_json FROM sessions ORDER BY started_at ASC`)
+	rows, err := s.db.Query(`SELECT session_id, app_id, instance_id, user_id, user_email, spiffe_id, status, started_at, ended_at, last_active_at, client_pid, hostname, total_events, allowed_count, denied_count, close_reason, intent_json, user_prompt, agent_name, reporting_json, defense_json FROM sessions ORDER BY started_at ASC`)
 	if err != nil {
 		return err
 	}
@@ -1286,10 +1290,10 @@ func (s *Store) loadFromDB() error {
 
 	for rows.Next() {
 		var (
-			sessID, appID, instID, uID, uEmail, spiffeID, status, startedAtStr, endedAtStr, lastActiveStr, hostname, closeReason, intentJSON, userPrompt, agentName, reportingJSON sql.NullString
-			clientPID, totalEv, allowCnt, denyCnt                                                                                                                                  sql.NullInt64
+			sessID, appID, instID, uID, uEmail, spiffeID, status, startedAtStr, endedAtStr, lastActiveStr, hostname, closeReason, intentJSON, userPrompt, agentName, reportingJSON, defenseJSON sql.NullString
+			clientPID, totalEv, allowCnt, denyCnt                                                                                                                                               sql.NullInt64
 		)
-		if err := rows.Scan(&sessID, &appID, &instID, &uID, &uEmail, &spiffeID, &status, &startedAtStr, &endedAtStr, &lastActiveStr, &clientPID, &hostname, &totalEv, &allowCnt, &denyCnt, &closeReason, &intentJSON, &userPrompt, &agentName, &reportingJSON); err != nil {
+		if err := rows.Scan(&sessID, &appID, &instID, &uID, &uEmail, &spiffeID, &status, &startedAtStr, &endedAtStr, &lastActiveStr, &clientPID, &hostname, &totalEv, &allowCnt, &denyCnt, &closeReason, &intentJSON, &userPrompt, &agentName, &reportingJSON, &defenseJSON); err != nil {
 			continue
 		}
 		startedAt, _ := time.Parse(time.RFC3339, startedAtStr.String)
@@ -1329,6 +1333,7 @@ func (s *Store) loadFromDB() error {
 		}
 		var layers []string
 		_ = json.Unmarshal([]byte(reportingJSON.String), &layers)
+		_ = json.Unmarshal([]byte(defenseJSON.String), &sess.DefenseObservations)
 		for _, layer := range layers {
 			addReportingLayer(sess, layer)
 			if layer == "unmonitored" {
@@ -1426,9 +1431,10 @@ func (s *Store) saveSessionToDB(sess *Session) {
 	}
 	intentJSON, _ := json.Marshal(normalizeIntent(sess.Intent))
 	reportingJSON, _ := json.Marshal(sess.ReportingLayers)
+	defenseJSON, _ := json.Marshal(sess.DefenseObservations)
 	query := `
-	INSERT INTO sessions (session_id, app_id, instance_id, user_id, user_email, spiffe_id, status, started_at, ended_at, last_active_at, client_pid, hostname, total_events, allowed_count, denied_count, close_reason, intent_json, user_prompt, agent_name, reporting_json)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO sessions (session_id, app_id, instance_id, user_id, user_email, spiffe_id, status, started_at, ended_at, last_active_at, client_pid, hostname, total_events, allowed_count, denied_count, close_reason, intent_json, user_prompt, agent_name, reporting_json, defense_json)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(session_id) DO UPDATE SET
 		status = excluded.status,
 		ended_at = excluded.ended_at,
@@ -1440,7 +1446,8 @@ func (s *Store) saveSessionToDB(sess *Session) {
 		intent_json = excluded.intent_json,
 		user_prompt = excluded.user_prompt,
 		agent_name = excluded.agent_name,
-		reporting_json = excluded.reporting_json;`
+		reporting_json = excluded.reporting_json,
+		defense_json = excluded.defense_json;`
 	_, _ = s.db.Exec(query,
 		sess.SessionID,
 		sess.AppID,
@@ -1462,6 +1469,7 @@ func (s *Store) saveSessionToDB(sess *Session) {
 		sess.UserPrompt,
 		sess.AgentName,
 		string(reportingJSON),
+		string(defenseJSON),
 	)
 }
 

@@ -668,7 +668,9 @@ func (s *Server) handleRegisterEdge(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Binary Attestation
-	if err := attestation.VerifyBinaryImage(agent, req.BinaryHash); err != nil {
+	imageErr := attestation.VerifyBinaryImage(agent, req.BinaryHash)
+	s.recordImageAttestation(agent, "", imageErr)
+	if err := imageErr; err != nil {
 		writeError(w, http.StatusForbidden, "Binary image attestation failed: "+err.Error())
 		return
 	}
@@ -1809,7 +1811,9 @@ func (s *Server) handleAcquireGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Verify binary hash hasn't drifted or been modified
-	if err := attestation.VerifyBinaryImage(agent, req.BinaryHash); err != nil {
+	imageErr := attestation.VerifyBinaryImage(agent, req.BinaryHash)
+	s.recordImageAttestation(agent, req.SessionID, imageErr)
+	if err := imageErr; err != nil {
 		writeError(w, http.StatusForbidden, "Binary image attestation failed on grant request: "+err.Error())
 		return
 	}
@@ -2699,6 +2703,10 @@ func (s *Server) handleAuditIngest(w http.ResponseWriter, r *http.Request) {
 			events[i].ReportingLayer = "gateway"
 			events[i].InstanceID, events[i].UserID, events[i].UserEmail, events[i].SPIFFEID = "", "", "", ""
 		}
+	}
+	// A workstation may report its local checks, never a control-plane verdict.
+	for i := range events {
+		events[i].DefenseObservations = filterLocalDefense(events[i])
 	}
 
 	accepted, err := s.auditStore.IngestAccepted(events)

@@ -1,8 +1,10 @@
 # How Claude Knows Whether It Needs Human Approval
 
 This describes the BAP Zero Standing Privileges (ZSP) flow as observed in a real Claude Code session in this
-repo. It is based on the behaviour of `bapedge`, the hooks and `CLAUDE.md`. It is not a reading of the policy
-engine's source, so where the exact internal rule is not visible from outside it says so.
+repo, updated against the CLI and local authorization implementation on 2026-11-19.
+The same grant boundaries apply to other supported coding clients; native callback
+coverage depends on the client integration. See the [CLI reference](docs/CLI_REFERENCE.md#25-zero-standing-privilege-zsp--playback)
+for complete command syntax.
 
 ## Short answer
 
@@ -14,14 +16,17 @@ the BAP Policy Enforcement Point (PEP) for a grant, and the **response** says on
 3. **Denied** - policy forbids it. Claude must not look for a workaround.
 
 Whether a request is auto-approved or needs a human is a property of the **action requested** and the
-**policy rules and session state**, evaluated server-side by Cedar policy. Claude only reads the result.
+**policy rules and session state**. The local broker/authorization engine evaluates
+the installed policy and grant evidence; central policy distribution and approval
+services are separate boundaries. Not every authorization involves an online
+control-plane evaluation. Claude only reads the result.
 
 ## The moving parts
 
 | Part | Role |
 |---|---|
 | `CLAUDE.md` | Tells Claude the rules: zero standing privileges, request a grant, run commands through `bapedge.exe exec`. Tamper-protected. |
-| PreToolUse hooks | Run before every tool call. Allow read-only inspection (Read, Grep, Glob). Block mutating or exec calls that have no matching grant, returning `ZeroStandingPrivilegeViolation`. |
+| PreToolUse hooks | Evaluate callbacks the native client delivers. Read exemptions and eligible automatic JIT grants follow policy; unsupported/missing hooks do not imply tool coverage. Refused grant checks can return `ZeroStandingPrivilegeViolation`. |
 | UserPromptSubmit hook | Injects a reminder each turn that ZSP is enforced and how to request a grant. |
 | `bapedge zsp authorize` | Sends Claude's declared intent (mission, goal, actions, resources) to the PEP. |
 | PEP + Cedar policy | Classifies the requested actions, decides allow, escalate or deny, and mints a grant when allowed. |
@@ -30,8 +35,8 @@ Whether a request is auto-approved or needs a human is a property of the **actio
 
 ## Step by step
 
-1. **Claude tries an action.** For a read, the hook answers "permitted" and nothing more is needed. For an
-   edit or a command, the hook checks whether a live grant covers the action.
+1. **Claude tries an action.** The hook evaluates policy and applicable read
+   exemptions or automatic grants, then checks the authority required for the action.
 2. **No grant covers it.** The hook returns `ZeroStandingPrivilegeViolation: action X not in granted scopes`
    and prints a ready-made `bapedge zsp authorize ...` command naming the exact action string (for example
    `fs:file:write` or `dev:go:-C`).
@@ -42,7 +47,7 @@ Whether a request is auto-approved or needs a human is a property of the **actio
    - Needs a human: output contains `High-Risk Escalation Blocked (Out-of-Band Interactive Human Approval
      Required)`, a `HITL REQUEST RAISED: req-xxxxxxxx`, an expiry time, and a non-zero exit code.
 5. **Claude acts on the answer.**
-   - Granted: run the real command through `bapedge.exec`. The broker checks it against the grant.
+   - Granted: run the real command through `bapedge exec`. The broker checks it against the grant.
    - Escalated: stop, tell the human the request id, wait. Do not run `approve` (blocked for agents), do not
      change the command to dodge the rule, do not try another shell.
 6. **The human approves** in their own terminal with `bapedge zsp approve <req-id>` and a one-time code.
@@ -68,15 +73,43 @@ The factors visible from outside:
 - **Auto-approve state.** The grant output shows `BAP ZSP AUTO-APPROVE ON until <time>` when a human has
   switched it on. While on, "approve-tier" requests are granted without a prompt. The delegation field in
   the grant reads `auto_approve` instead of `human_interactive_prompt`.
-- **Hard exclusions.** Per `CLAUDE.md`, auto-approve never covers push, publishing, destructive operations,
-  credential access or network egress. Those always need a human or are denied, and policy denies and
-  governance escalations still apply even with auto-approve on.
+- **Hard exclusions.** Rules marked `no_auto_approve`, policy denies and governance
+  escalations remain enforced. The current default-policy regression suite covers
+  push/publishing, deletion/destructive actions, administrative operations and
+  network egress as ineligible. Credential protection is not relaxed. A mixed
+  request cannot smuggle an ineligible action alongside an eligible build command.
 - **Grant class limits.** `workspace_edit` (writes only) can have several uses. Anything mixed or exec is
   `single_use`: one command, 300 second TTL. Mixing actions downgrades the grant to single use.
 
-The exact tier table lives in the Cedar policy (`bap-edge/policy.cedar`) and the control plane's ZSP code
-(`bap-controlplane/internal/session/zsp_grants.go`, `bap-edge/internal/authz/zsp_store.go`). Read those for the
-authoritative rules.
+The local command is implemented in `bap-edge/cmd/zsp.go`; policy-tier and
+auto-approval checks are in `bap-edge/internal/authz/zsp_engine_policy.go`,
+`zsp_engine.go` and `zsp_autoapprove.go`. Cedar command authorization and
+control-plane grant services also apply at their respective boundaries. Use the
+actual decision and effective installed policy rather than assuming an observed
+example is a universal allow rule.
+
+## Controlling the auto-approval window
+
+These examples are for a human's own terminal. This document does not authorize an
+agent to enable the window or approve itself.
+
+```powershell
+bapedge zsp autoapprove status
+bapedge zsp autoapprove on --duration 30m
+bapedge zsp autoapprove off
+```
+
+The default is off. `on` requires an interactive one-time challenge, defaults to
+one hour and is bounded to eight hours. `enable`/`disable` alias `on`/`off`; no
+subcommand means `status`. The window expires automatically. Grants minted under
+it retain `auto_approve` provenance and their own action/resource/use/expiry limits.
+It does not authorize policy changes, turn off integrity checks, or satisfy a rule
+that requires separate human approval. An existing pending request must still be
+resolved through its own approval path; do not treat a banner as its approval.
+
+Developer override (`bapedge dev-override`) is a separate development mechanism
+available only in permitted builds/environments. An override run is unsuitable for
+normal enforcement validation, even if telemetry shows each layer evaluated.
 
 ## How Claude tells the three outcomes apart
 

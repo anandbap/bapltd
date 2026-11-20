@@ -23,6 +23,9 @@ import (
 // TestMain lets this test binary play two roles inside the sandbox: the egress relay shim
 // (`__shim`) and a tiny HTTP client (`-bapclient`) that reports what it could reach.
 func TestMain(m *testing.M) {
+	if runClaudeStartupFixture() {
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "__shim" {
 		sock, rest := "", os.Args[2:]
 		if len(rest) >= 2 && rest[0] == "--socket" {
