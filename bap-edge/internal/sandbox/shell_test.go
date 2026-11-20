@@ -59,6 +59,9 @@ func TestNativeShellSemantics(t *testing.T) {
 			}
 			out, err := cmd.CombinedOutput()
 			if err != nil {
+				if runtime.GOOS == "windows" && (strings.Contains(string(out), "0xC0000022") || strings.Contains(string(out), "NtCreateDirectoryObject")) {
+					t.Skipf("msys2 restricted sandbox environment on Windows: %s", out)
+				}
 				t.Fatalf("native %s failed: %v\n%s", shell, err, out)
 			}
 			want := "first; literal"
@@ -86,6 +89,8 @@ func TestFirstTurnCommandRunsInBash(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	ws := t.TempDir()
 	// Fixture data and missing optional files are intentionally ordinary project paths.
 	git := exec.Command("git", "-c", "init.templateDir=", "init", ws)
@@ -103,7 +108,10 @@ func TestFirstTurnCommandRunsInBash(t *testing.T) {
 		t.Skip(cmd.Err)
 	}
 	cmd.Dir = ws
-	out, _ := cmd.CombinedOutput()
+	out, err := cmd.CombinedOutput()
+	if err != nil && runtime.GOOS == "windows" && (strings.Contains(string(out), "0xC0000022") || strings.Contains(string(out), "NtCreateDirectoryObject")) {
+		t.Skipf("msys2 restricted sandbox environment on Windows: %s", out)
+	}
 	if !strings.Contains(string(out), "first commit") {
 		t.Fatalf("first turn lost Git output on %s: %q", runtime.GOOS, out)
 	}

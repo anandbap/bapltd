@@ -3112,6 +3112,8 @@ func isCedarInvariantViolation(reason string) bool {
 		strings.Contains(r, "zerostanding") ||
 		strings.Contains(r, "task grant") ||
 		strings.Contains(r, "taskgrant") ||
+		strings.Contains(r, "human approval") ||
+		strings.Contains(r, "humanapproval") ||
 		strings.Contains(r, "exceeds granted") ||
 		strings.Contains(r, "secret") ||
 		strings.Contains(r, "credential") ||

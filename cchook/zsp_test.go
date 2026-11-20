@@ -22,6 +22,8 @@ func TestIsCedarInvariantViolationCoversZSPAndRootEscape(t *testing.T) {
 		{"Security Invariant Violation: Filesystem root path escapes workspace boundary", true},
 		{"task grant already burned (max uses exceeded)", true},
 		{"attempted action exceeds granted task scope", true},
+		{"HumanApprovalRequired: [action=git:push]", true},
+		{"ZeroStandingPrivilegeViolation: HumanApprovalRequired: [action=git:push]", true},
 	}
 	for _, tc := range cases {
 		if got := isCedarInvariantViolation(tc.reason); got != tc.want {
@@ -52,13 +54,13 @@ func setupZSPHookTestEnv(t *testing.T) (repoRoot, bapOut, interOut string) {
 	})
 
 	bapOut = filepath.Join(tmpBin, "bapedge.exe")
-	buildCmd := exec.Command("go", "build", "-C", filepath.Join(repoRoot, "bap-edge"), "-o", bapOut, ".")
+	buildCmd := exec.Command("go", "build", "-C", filepath.Join(repoRoot, "bap-edge"), "-buildvcs=false", "-o", bapOut, ".")
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		t.Fatalf("failed to build bapedge.exe for test: %v\n%s", err, string(out))
 	}
 
 	interOut = filepath.Join(tmpBin, "interceptor.exe")
-	buildInter := exec.Command("go", "build", "-o", interOut, ".")
+	buildInter := exec.Command("go", "build", "-buildvcs=false", "-o", interOut, ".")
 	if out, err := buildInter.CombinedOutput(); err != nil {
 		t.Fatalf("failed to build interceptor.exe for test: %v\n%s", err, string(out))
 	}
