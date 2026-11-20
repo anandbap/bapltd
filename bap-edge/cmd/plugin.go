@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -2067,7 +2068,6 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 		}
 		if zspErr != nil {
 			suggestedActions := authz.SummarizeZSPActions(zspChecks)
-			brk := newDenialBreaker(sessionID, authz.DenialKey("zsp-deny", zspErr.Error(), command, toolName, filePath), "ZSP refusal")
 			goalTarget := command
 			if goalTarget == "" {
 				goalTarget = toolName
@@ -2075,11 +2075,50 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 					goalTarget = toolName + " " + filePath
 				}
 			}
+			suggestion := authz.ZSPDenialSuggestion(zspErr, principalIdentity, sessionID, goalTarget, suggestedActions, zspChecks, wsRoot)
+			reason := fmt.Sprintf("ZeroStandingPrivilegeViolation: %v", zspErr)
+			target, _, isOutOfWorkspace := authz.OutOfWorkspaceTarget(zspChecks)
+			if isOutOfWorkspace && errors.Is(zspErr, authz.ErrResourceNotGranted) {
+				suggestion = authz.FormatOutOfWorkspaceSuggestion(target, suggestedActions, wsRoot)
+			} else {
+				zspDir := authz.ResolveZSPDir()
+				if _, _, _, secret, sErr := authz.EnsureSessionPrincipal(zspDir, sessionID, normClient); sErr == nil {
+					if policy, pErr := authz.LoadPermissionPolicy(zspDir, secret); pErr == nil {
+						reqActions := make([]string, 0, len(zspChecks))
+						reqResources := make([]string, 0, len(zspChecks))
+						for _, c := range zspChecks {
+							reqActions = append(reqActions, c.Action)
+							res := c.CanonicalResource
+							if res == "" || !c.EscapesWorkspace {
+								res = "workspace://current"
+							}
+							reqResources = append(reqResources, res)
+						}
+						decision := policy.Evaluate(reqActions, reqResources)
+						if len(decision.Denied) > 0 {
+							reason = fmt.Sprintf("BAP Policy Denied: %s", authz.FormatPairs(decision.Denied))
+							suggestion = fmt.Sprintf("BAP POLICY DENIAL: %s. Action(s) %s permanently denied by policy. AGENT: Do NOT retry or request authorization.", authz.FormatPairs(decision.Denied), suggestedActions)
+						} else if len(decision.NeedsApproval) > 0 || errors.Is(zspErr, authz.ErrHighRiskApprovalRequired) {
+							if pending := raiseHITLRequest(sessionID, normClient, "TASK_EXECUTION", goalTarget, reqActions, reqResources, 1, 300*time.Second, zspErr); pending != nil {
+								reason = fmt.Sprintf("HumanApprovalRequired: %s", authz.FormatPairs(decision.NeedsApproval))
+								suggestion = fmt.Sprintf(
+									"HUMAN APPROVAL REQUIRED: Action(s) %s require verified human approval.\n"+
+										"Pending Request ID: %s\n"+
+										"DEVELOPER ACTION: Run 'bapedge zsp approve %s' in your terminal.\n"+
+										"AGENT: Stop and ask the developer to approve request %s. Do NOT run bapedge zsp authorize; retry your command once the developer approves.",
+									suggestedActions, pending.ID, pending.ID, pending.ID,
+								)
+							}
+						}
+					}
+				}
+			}
+			brk := newDenialBreaker(sessionID, authz.DenialKey("zsp-deny", zspErr.Error(), command, toolName, filePath), "ZSP refusal")
 			return types.ExecResponse{
 				Allowed:    false,
 				ExitCode:   1,
-				Reason:     fmt.Sprintf("ZeroStandingPrivilegeViolation: %v", zspErr),
-				Suggestion: brk.wrap(authz.ZSPDenialSuggestion(zspErr, principalIdentity, sessionID, goalTarget, suggestedActions, zspChecks, wsRoot)),
+				Reason:     reason,
+				Suggestion: brk.wrap(suggestion),
 				Halt:       brk.halt,
 				StopReason: brk.stop,
 			}
@@ -2126,9 +2165,9 @@ func emitPluginZSPContext(event, sessionID string) {
 		sessionID, sessionID,
 	)
 	if os.Getenv("BAP_ZSP_AUTO_GRANTS") != "0" {
-		ctx = fmt.Sprintf("BAP Zero Standing Privileges (ZSP) is enforced for session %q. Submit routine command batches normally: BAP checks every operation and can automatically issue a short-lived, exact-batch grant when policy permits every effect. A batch containing push, publishing, destructive operations, credential access, unknown syntax or an unapproved effect is not automatically granted. If BAP requests intent authorization, run the suggested standalone bapedge zsp authorize command yourself and wait for it before retrying dependent calls; do not chain authorization with execution. Policy authorization is NOT self-approval and cannot widen a grant or replace required human approval.", sessionID)
+		ctx = fmt.Sprintf("BAP Zero Standing Privileges (ZSP) is broker-mediated for session %q. Submit routine command batches normally: BAP checks every operation and can automatically issue a short-lived, exact-batch grant when policy permits every effect. A batch containing push, publishing, destructive operations, credential access, unknown syntax or an unapproved effect is not automatically granted. Under broker-mediated ZSP, autonomous agents do NOT run 'bapedge zsp authorize': the broker evaluates policy and registers pending approval requests in the ZSP inbox automatically. If BAP reports a pending approval, give the human its request ID and the exact bapedge zsp approve <request-id> command for their own terminal, then wait. Never approve it yourself.", sessionID)
 	}
-	ctx += " Generic grants default to one use; ordinary workspace edits can use the separate fs:file:write workspace_edit class (at most 25 uses / 600 seconds under the default signed policy). Native Write/Edit callbacks for the same stable tool-use ID and complete input share one consumption; distinct calls spend separate edit uses. Do not mix interpreter execution into an edit grant. If a fresh grant is immediately reported burned, report the hook defect and stop the mint/retry loop; do not switch tools to bypass it. If BAP raises a pending approval, give the human its request ID and the exact bapedge zsp approve <request-id> command for their own terminal, then wait. Never approve it yourself."
+	ctx += " Generic grants default to one use; ordinary workspace edits can use the separate fs:file:write workspace_edit class (at most 25 uses / 600 seconds under the default signed policy). Native Write/Edit callbacks for the same stable tool-use ID and complete input share one consumption; distinct calls spend separate edit uses. Do not mix interpreter execution into an edit grant. If a fresh grant is immediately reported burned, report the hook defect and stop the mint/retry loop; do not switch tools to bypass it."
 	out := map[string]any{
 		"status":   "ok",
 		"continue": true,

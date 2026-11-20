@@ -2,6 +2,23 @@
 
 ## Pilot hardening implementation update (candidate work)
 
+### BAP-1108 — Broker-mediated ZSP: eliminate agent `zsp authorize` loop, broker directly raises HITL and auto-authorizes — 2026-11-20
+
+**Why:** Autonomous agents previously were instructed to run `bapedge zsp authorize` whenever an action lacked a pre-existing grant. This created an architectural anti-pattern and security risk:
+1. **Confused Deputy & Self-Authorization Loop:** An untrusted entity (the AI agent) was tasked with formulating its own permission requests, wasting context tokens, increasing prompt injection surface, and generating spurious retry loops.
+2. **Inefficient HITL Workflow:** An approve-tier action (such as Python execution, `git push`, deletion, or egress) failed at the broker, requiring the agent to execute a standalone `bapedge zsp authorize` turn *solely to register the request in the inbox*.
+3. **Privilege Boundary:** In alignment with least-privilege principles, the agent should have zero direct grant-minting access. The hook and execution broker (`bapedge exec` / plugin callbacks) must act as the sole local evaluator and authority bridge.
+
+**Implemented in source:**
+- **Direct Broker-Mediated HITL Approval:** When an intercepted command or native tool call requires human approval (`TierApprove` under the signed permission policy, e.g. `dev:python:exec`, `git:push`, network egress), `bapedge exec` and plugin hooks directly register a pending approval request (`RaisePendingApproval`) in the ZSP inbox on the spot.
+- **Actionable Developer Guidance without Agent Self-Authorization:** The broker response format provides the pending request ID (`req-xxxx`) and exact `bapedge zsp approve req-xxxx` terminal command for the human developer. The agent's guidance explicitly forbids running `bapedge zsp authorize` (`AGENT: Stop and ask the developer to approve request req-xxxx. Do NOT run bapedge zsp authorize; retry once approved.`).
+- **Hard Denial for Prohibited Operations:** Deny-tier actions (credentials, protected policy assets, escapes without trust) fail closed immediately with a permanent policy denial (`BAP POLICY DENIAL`), eliminating misleading suggestions to seek authorization.
+- **Automated In-Boundary Execution:** Routine in-boundary workspace operations continue through automatic batch authorization without manual intervention.
+
+**Validation:**
+- `exec_broker_zsp_test.go`: verified broker directly registers HITL approval requests in the ZSP inbox on ungranted approve-tier commands, outputs the pending request ID, and instructs the agent not to run `zsp authorize`; verified credential access is permanently refused without an authorization suggestion.
+- Unit and E2E regression suites pass in `bap-edge/cmd` and `bap-edge/internal/authz` (`TestBrokerMediatedZSP_*`, `TestAutomaticBatch*`, `TestPluginAllowsBrokerWrappedZSPAndCommandsButBlocksTampering`, `TestE2E_GitAddAndCommitWithHeredocMessageAreNotBlocked`, `TestE2E_RepeatedRefusalsAreStoppedNotSpun`).
+
 ### ZSP authority-state protection and agent-lineage gate — 2026-11-20
 
 **Why:** ZSP-REVIEW-01 (below) stays P0 OPEN, but two cheap, same-account controls were

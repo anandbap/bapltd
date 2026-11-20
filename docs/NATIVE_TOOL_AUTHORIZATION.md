@@ -53,10 +53,12 @@ that effect. Credentials, protected policy assets, filesystem roots and workspac
 escapes remain blocked. Approval-tier actions are never converted into allow-tier
 edits. `BAP_ZSP_AUTO_GRANTS=0` retains explicit authorization.
 
-If explicit authorization is needed, the agent runs the suggested standalone
-`bapedge zsp authorize` command and waits before retrying. For several edits,
-request only `fs:file:write --resources workspace://current --max-uses 25 --ttl 600s`.
-Read the returned scope, budget and expiry. Request script execution separately.
+Under broker-mediated ZSP (BAP-1108), the agent does not formulate `bapedge zsp authorize`
+commands. When an action or resource requires human approval (e.g. target-scoped approvals,
+interpreters, or mutating operations requiring escalation), the broker directly creates the
+pending approval request (`req-xxxx`) in the ZSP inbox on the spot. The broker response
+instructs the developer with the exact `bapedge zsp approve <request-id>` command and
+explicitly tells the agent: `AGENT: Stop and ask the developer to approve request <id>. Do NOT run bapedge zsp authorize.`
 
 If BAP raises a pending approval request, the agent gives the human the request ID
 and `bapedge zsp approve <request-id>` command for their own terminal. It waits for

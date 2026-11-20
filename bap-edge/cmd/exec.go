@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -1223,10 +1224,34 @@ func RunExec(args []string) {
 						ec.shadowDenied = true
 						ec.shadowReason = zspErr.Error()
 					} else {
+						suggestion := authz.FormatZSPAgentSuggestion(ec.zspPrincipal, ec.sessionID, ec.fullCommand, action, 1)
+						zspDir := authz.ResolveZSPDir()
+						if _, _, _, secret, sErr := authz.EnsureSessionPrincipal(zspDir, ec.sessionID, ec.source); sErr == nil {
+							if policy, pErr := authz.LoadPermissionPolicy(zspDir, secret); pErr == nil {
+								targetRes := res
+							if !escapes {
+								targetRes = "workspace://current"
+							}
+							decision := policy.Evaluate([]string{action}, []string{targetRes})
+								if len(decision.Denied) > 0 {
+									suggestion = fmt.Sprintf("BAP POLICY DENIAL: %s. Native tool action %s on %s is permanently denied by policy. AGENT: Do not retry or request authorization.", authz.FormatPairs(decision.Denied), action, *targetFlag)
+								} else if len(decision.NeedsApproval) > 0 || errors.Is(zspErr, authz.ErrHighRiskApprovalRequired) {
+									if pending := raiseHITLRequest(ec.sessionID, ec.source, "NATIVE_TOOL", *toolNameFlag+" "+*targetFlag, []string{action}, []string{res}, 1, 300*time.Second, zspErr); pending != nil {
+										suggestion = fmt.Sprintf(
+											"HUMAN APPROVAL REQUIRED: Native tool action %s on %s requires human approval.\n"+
+												"Pending Request ID: %s\n"+
+												"DEVELOPER ACTION: Run 'bapedge zsp approve %s' in your terminal.\n"+
+												"AGENT: Stop and ask the developer to approve request %s. Do NOT run bapedge zsp authorize; retry once approved.",
+											action, *targetFlag, pending.ID, pending.ID, pending.ID,
+										)
+									}
+								}
+							}
+						}
 						resp := types.ExecResponse{
 							Allowed:    false,
 							Reason:     fmt.Sprintf("ZeroStandingPrivilegeViolation: %v", zspErr),
-							Suggestion: authz.FormatZSPAgentSuggestion(ec.zspPrincipal, ec.sessionID, ec.fullCommand, action, 1),
+							Suggestion: suggestion,
 							Mode:       ec.enforcementMode,
 						}
 						ec.exit(resp, 1)
@@ -1471,10 +1496,47 @@ func RunExec(args []string) {
 				allowed = true
 			} else {
 				suggestedActions := authz.SummarizeZSPActions(zspChecks)
+				suggestion := authz.ZSPDenialSuggestion(zspErr, ec.zspPrincipal, ec.sessionID, fullCommand, suggestedActions, zspChecks, workspaceRoot)
+				target, _, isOutOfWorkspace := authz.OutOfWorkspaceTarget(zspChecks)
+				if isOutOfWorkspace && errors.Is(zspErr, authz.ErrResourceNotGranted) {
+					suggestion = authz.FormatOutOfWorkspaceSuggestion(target, suggestedActions, workspaceRoot)
+				} else {
+					zspDir := authz.ResolveZSPDir()
+					if _, _, _, secret, sErr := authz.EnsureSessionPrincipal(zspDir, ec.sessionID, ec.source); sErr == nil {
+						if policy, pErr := authz.LoadPermissionPolicy(zspDir, secret); pErr == nil {
+							reqActions := make([]string, 0, len(zspChecks))
+							reqResources := make([]string, 0, len(zspChecks))
+							for _, c := range zspChecks {
+								reqActions = append(reqActions, c.Action)
+								res := c.CanonicalResource
+								if res == "" || !c.EscapesWorkspace {
+									res = "workspace://current"
+								}
+								reqResources = append(reqResources, res)
+							}
+							decision := policy.Evaluate(reqActions, reqResources)
+							if len(decision.Denied) > 0 {
+								reason = fmt.Sprintf("BAP Policy Denied: %s", authz.FormatPairs(decision.Denied))
+								suggestion = fmt.Sprintf("BAP POLICY DENIAL: %s. Action(s) %s permanently denied by policy. AGENT: Do NOT retry or request authorization.", authz.FormatPairs(decision.Denied), suggestedActions)
+							} else if len(decision.NeedsApproval) > 0 || errors.Is(zspErr, authz.ErrHighRiskApprovalRequired) {
+								if pending := raiseHITLRequest(ec.sessionID, ec.source, "TASK_EXECUTION", fullCommand, reqActions, reqResources, 1, 300*time.Second, zspErr); pending != nil {
+									reason = fmt.Sprintf("HumanApprovalRequired: %s", authz.FormatPairs(decision.NeedsApproval))
+									suggestion = fmt.Sprintf(
+										"HUMAN APPROVAL REQUIRED: Action(s) %s require verified human approval.\n"+
+											"Pending Request ID: %s\n"+
+											"DEVELOPER ACTION: Run 'bapedge zsp approve %s' in your terminal.\n"+
+											"AGENT: Stop and ask the developer to approve request %s. Do NOT run bapedge zsp authorize; retry your command once the developer approves.",
+										suggestedActions, pending.ID, pending.ID, pending.ID,
+									)
+								}
+							}
+						}
+					}
+				}
 				resp := types.ExecResponse{
 					Allowed:        false,
 					Reason:         reason,
-					Suggestion:     authz.ZSPDenialSuggestion(zspErr, ec.zspPrincipal, ec.sessionID, fullCommand, suggestedActions, zspChecks, workspaceRoot),
+					Suggestion:     suggestion,
 					Mode:           ec.enforcementMode,
 					StepUpDecision: "denied",
 				}

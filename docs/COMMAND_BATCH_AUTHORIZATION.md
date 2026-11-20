@@ -96,6 +96,19 @@ read exemptions. `BAP_ZSP_STRICT_READS=1` requires grants for reads; it can be c
 with automatic grants because those are real signed grants. Combine both flags
 when deliberately testing missing-grant denials.
 
+## Broker-Mediated ZSP and direct HITL approval (BAP-1108)
+
+Under Broker-Mediated ZSP:
+1. The agent is eliminated as an authorization requester. The agent does not execute
+   `bapedge zsp authorize`.
+2. When a command requires human approval (`TierApprove` in policy, e.g. `git push`, deletion,
+   interpreters, network egress), the hook/broker immediately records a pending request (`req-xxxx`)
+   in the ZSP inbox via `RaisePendingApproval`.
+3. The broker returns the pending request ID in the refusal suggestion and explicitly tells the agent:
+   `AGENT: Stop and ask the developer to approve request req-xxxx. Do NOT run bapedge zsp authorize.`
+4. Permanently denied operations (`TierDeny`, credential stores, protected policy assets) fail
+   closed with a hard policy denial, without offering an authorization path.
+
 Revoking a token prevents its reuse. A new policy-permitted inspection request may
 receive a new token; stopping future authorization requires revoking the session or
 principal, or tightening the applicable policy, rather than revoking one old token.

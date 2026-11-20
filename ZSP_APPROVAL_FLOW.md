@@ -25,33 +25,29 @@ control-plane evaluation. Claude only reads the result.
 
 | Part | Role |
 |---|---|
-| `CLAUDE.md` | Tells Claude the rules: zero standing privileges, request a grant, run commands through `bapedge.exe exec`. Tamper-protected. |
-| PreToolUse hooks | Evaluate callbacks the native client delivers. Read exemptions and eligible automatic JIT grants follow policy; unsupported/missing hooks do not imply tool coverage. Refused grant checks can return `ZeroStandingPrivilegeViolation`. |
-| UserPromptSubmit hook | Injects a reminder each turn that ZSP is enforced and how to request a grant. |
-| `bapedge zsp authorize` | Sends Claude's declared intent (mission, goal, actions, resources) to the PEP. |
-| PEP + Cedar policy | Classifies the requested actions, decides allow, escalate or deny, and mints a grant when allowed. |
-| `bapedge exec "<cmd>"` | The execution broker. Re-checks the command against the grant before running it in a sandbox. |
+| `CLAUDE.md` | Tells Claude the rules: zero standing privileges, commands run through `bapedge.exe exec`, ZSP is broker-mediated. Tamper-protected. |
+| PreToolUse hooks | Evaluate callbacks the native client delivers. Read exemptions and eligible automatic JIT grants follow policy; unsupported/missing hooks do not imply tool coverage. |
+| UserPromptSubmit hook | Injects a reminder each turn that ZSP is broker-mediated. |
+| Broker / PEP + Cedar | Classifies requested actions, decides allow, escalate or deny. Automatically mints grants for allow-tier operations and directly registers HITL inbox requests for approve-tier operations. |
+| `bapedge exec "<cmd>"` | The execution broker. Re-checks the command against policy and the active grant before running it in a sandbox. |
 | `bapedge zsp approve/deny` | Human-only commands. Blocked for agents, and approval needs a one-time code typed by the human. |
 
-## Step by step
+## Step by step (Broker-Mediated ZSP, BAP-1108)
 
-1. **Claude tries an action.** The hook evaluates policy and applicable read
-   exemptions or automatic grants, then checks the authority required for the action.
-2. **No grant covers it.** The hook returns `ZeroStandingPrivilegeViolation: action X not in granted scopes`
-   and prints a ready-made `bapedge zsp authorize ...` command naming the exact action string (for example
-   `fs:file:write` or `dev:go:-C`).
-3. **Claude runs that command as a standalone call.** This is a request, not an approval. It submits the
-   envelope (mission, goal, actions, resources) to the PEP.
-4. **The PEP answers.** The JSON result is the whole signal:
-   - Allowed: output contains `JIT TaskGrant Minted`, a Grant ID, `Max Uses / TTL`, and a `Grant Class`.
-   - Needs a human: output contains `High-Risk Escalation Blocked (Out-of-Band Interactive Human Approval
-     Required)`, a `HITL REQUEST RAISED: req-xxxxxxxx`, an expiry time, and a non-zero exit code.
-5. **Claude acts on the answer.**
-   - Granted: run the real command through `bapedge exec`. The broker checks it against the grant.
-   - Escalated: stop, tell the human the request id, wait. Do not run `approve` (blocked for agents), do not
-     change the command to dodge the rule, do not try another shell.
-6. **The human approves** in their own terminal with `bapedge zsp approve <req-id>` and a one-time code.
-7. **Claude retries** the same request or command. It now matches an approved request and proceeds.
+1. **Claude tries an action.** The hook and execution broker evaluate policy, applicable read
+   exemptions, and signed Cedar invariants directly against the command/tool AST.
+2. **Action permitted by policy (`allow` tier).** The broker auto-authorizes and mints the bounded
+   task grant on the fly; the command executes immediately with zero agent round-trips.
+3. **Action requires human approval (`approve` tier, e.g. python, git push, egress).**
+   - The broker refuses execution and **directly registers the pending approval request (`req-xxxx`)
+     in the ZSP inbox on the spot**.
+   - The refusal response gives the human developer the exact terminal command:
+     `bapedge zsp approve req-xxxx`.
+   - Claude is explicitly instructed: `Do NOT run bapedge zsp authorize.`
+4. **Claude reports the pending request.** Claude stops, relays `req-xxxx` to the developer, and waits.
+   Claude does NOT run `zsp authorize` or `zsp approve` (both blocked for agents).
+5. **The human approves** in their own terminal with `bapedge zsp approve <req-id>` and a one-time code.
+6. **Claude retries** the command. It now runs under the approved grant.
 
 ## What decides auto-approve versus human approval
 

@@ -9,24 +9,27 @@ How a request for permissions becomes a grant. Tool knowledge and risk decisions
 administrator override), not in Go `switch` statements. Hard safety invariants stay in code and are
 never relaxable by policy.
 
-## The model (AWS-style: ask, policy approves)
+## The model (Broker-mediated evaluation: PEP decides, agent does not self-authorize)
 
 ```
-agent: bapedge zsp authorize --actions <catalog actions> --resources <scopes>
+agent tool/command execution (bapedge exec / in-harness hook)
         |
-        v  1. non-reliance + hard invariants (code)      policy:/grant:/admin:/iam:/sudo: always need a human
-        v  2. wildcard handling (policy data)            repo:* -> repo:read ; every other wildcard rejected
-        v  3. resource wildcard narrowing (policy data)  "/*", "repo://*", "workspace://*" -> workspace://current
-        v  4. per (action, resource) decision (policy)   allow | approve | deny   (most restrictive rule wins)
-        v  5. ceiling clamp (policy)                     max uses / TTL clamped, mint cap per session
-        v  6. grant signed with the PEP secret (HMAC)
+        v  1. Hook/Broker intercepts raw tool call or shell command
+        v  2. non-reliance + hard invariants (code)      credentials / policy assets permanently denied
+        v  3. AST command & resource decomposition       actions & canonical resources extracted
+        v  4. per (action, resource) decision (policy)   allow | approve | deny (most restrictive rule wins)
+        v  5. Automated Resolution (Broker-Mediated ZSP, BAP-1108):
+              - tier allow:   Broker automatically mints bounded TaskGrant (HMAC signed) and executes
+              - tier approve: Broker directly registers HITL request (req-xxxx) in inbox & prompts developer;
+                              Agent is explicitly told NOT to run bapedge zsp authorize
+              - tier deny:    Broker rejects with permanent policy denial
 ```
 
 | Tier | Meaning |
 |---|---|
-| `allow` | auto-minted, no human |
-| `approve` | minted only with verified human approval (one-time terminal challenge, see below) |
-| `deny` | never grantable, **not even with human approval** (credential access, secrets) |
+| `allow` | auto-minted by broker, no human, no agent `zsp authorize` loop |
+| `approve` | broker raises pending HITL request (`req-xxxx`), minted only with verified human terminal challenge |
+| `deny` | never grantable, **not even with human approval** (credential access, secrets, protected policy assets) |
 
 Unknown actions fall to `default_tier` (`approve` or `deny`; `allow` is rejected at load time).
 
