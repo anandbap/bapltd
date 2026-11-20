@@ -317,7 +317,7 @@ and do not replace signed policy or corporate egress requirements.
 
 | Command | Flags / operands | Behavior |
 |---|---|---|
-| `bap run` | `[--provider auto\|appcontainer\|bwrap\|seatbelt\|docker] [--print] [--image <image>] [--docker-network <name>] -- <command> [args...]` | Execute with the selected boundary. `auto` selects AppContainer on Windows, bubblewrap on Linux, Seatbelt on macOS. Missing providers fail instead of running unsandboxed. `--print` renders a specification only. Docker defaults to network `none`; it is not the default provider. |
+| `bap run` | `[--provider <provider>] [--print] [--image <image>] [--docker-network <name>] -- <command> [args...]` | Execute with the selected boundary. `auto` selects AppContainer on Windows, bubblewrap on Linux, Seatbelt (native execution unverified) on macOS. Missing providers fail instead of running unsandboxed. `--print` renders a specification only. Docker defaults to network `none`; it is not the default provider. |
 | `bap egress list` | *(none)* | Show the current workspace profile and allowed destinations. |
 | `bap egress allow` | `<host[:port]>` or `<*.domain>` | Persist an operator-approved profile destination and approval event. Does not authorize bypassing a required enterprise gateway. |
 | `bap egress serve` | `[--addr <address>]` | Start the standalone profile proxy; default `127.0.0.1:3128`. A proxy alone does not close other network paths. |
@@ -325,6 +325,8 @@ and do not replace signed policy or corporate egress requirements.
 | `bap learn report` | *(none)* | JSON metrics, proposals and prediction mismatches. |
 | `bap learn profile` | *(none)* | JSON profile recommendation; does not apply it. |
 | `bap learn apply` | `<host>` | Apply a matching mined proposal and record an operator decision. |
+
+Provider values are `auto`, `appcontainer`, `bwrap`, seatbelt (native execution unverified), and `docker`.
 
 See [capability model](CAPABILITY_MODEL.md) and [learning loop](LEARNING_LOOP.md)
 for provider and authority limitations. Rendering a Linux/macOS spec is not native
@@ -631,6 +633,26 @@ binary with `bapedge version --json` (`allow_dev_overrides`, `headless_stepup`).
 `bap dev-override on`; it needs an interactive human.
 
 ### 8.2 Test Suites
+
+**Windows local Python suite:** from the repository root, run:
+
+```powershell
+.\test_python.bat
+```
+
+This discovers every `test*.py` under `tests`, using the active `python` interpreter
+and existing dependencies/binaries. It sets isolated BAP state and temporary paths,
+uses the same development-server/content settings as the CI Python job, streams
+output, and saves `output.log` plus `result.json` under `.bap/python-tests/<run>/`.
+The command returns the suite's exit code; failed tests make it fail. Owned runtime
+state is cleaned after execution; real enrollment state is not used. It does not
+install dependencies, rebuild binaries, or enable developer override/headless mode.
+Missing optional fixtures can still cause skips; inspect the final unittest summary.
+
+Use `.\test_python.bat --require-wheel-tests` to require the packaging fixtures
+that CI builds beforehand. Full CI parity also requires its matching prebuilt test
+binaries and dependencies. For a focused retry:
+`.\test_python.bat --pattern test_capability_claims.py`.
 
 | Command | Purpose |
 |---|---|
