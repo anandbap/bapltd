@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"bap-edge/internal/state"
 	"bap-edge/pkg/types"
 )
 
@@ -43,11 +44,11 @@ func TestDefenseInDepthLayersCalculation(t *testing.T) {
 	tmpDir := t.TempDir()
 	layers := GetDefenseInDepthLayers(tmpDir)
 
-	if len(layers) < 6 {
-		t.Fatalf("expected at least 6 defense layer representations, got %d", len(layers))
+	if len(layers) != 5 {
+		t.Fatalf("expected exactly five defense layers, got %d", len(layers))
 	}
 
-	expectedIDs := []string{"Layer 1A", "Layer 1B", "Layer 2", "Layer 3", "Layer 4", "Layer 5"}
+	expectedIDs := []string{"Layer 1", "Layer 2", "Layer 3", "Layer 4", "Layer 5"}
 	for i, id := range expectedIDs {
 		if layers[i].LayerID != id {
 			t.Errorf("expected layer %d to have ID %s, got %s", i, id, layers[i].LayerID)
@@ -100,15 +101,20 @@ func TestPluginSyntheticProbe(t *testing.T) {
 }
 
 func TestPluginVerificationHealthSpool(t *testing.T) {
+	t.Setenv("BAP_STATE_DIR", t.TempDir())
+	state.ResetForTesting()
+	defer state.ResetForTesting()
 	tmpDir := t.TempDir()
 	recordEnforcementVerification("claude", tmpDir)
 
 	hookActive, verified, lastObs := readHealthStatus("claude")
-	if !hookActive || !verified {
-		t.Errorf("expected hookActive and verified to be true after recordEnforcementVerification")
+	if hookActive || verified || lastObs != nil {
+		t.Fatal("component fixture was promoted to native-host coverage")
 	}
-	if lastObs == nil || time.Since(*lastObs) > 10*time.Second {
-		t.Errorf("expected recent lastObs timestamp")
+	recordPluginCallback("claude", "PreToolUse", map[string]any{"session_id": "native-fixture-test"})
+	hookActive, verified, lastObs = readHealthStatus("claude")
+	if !hookActive || verified || lastObs == nil || time.Since(*lastObs) > 10*time.Second {
+		t.Fatal("native callback and component evidence were not distinguished")
 	}
 }
 

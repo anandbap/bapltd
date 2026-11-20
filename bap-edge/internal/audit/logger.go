@@ -232,8 +232,10 @@ func Log(entryInput any, logPath string) error {
 	}
 
 	data = append(data, '\n')
-	_, err = f.Write(data)
-	return err
+	if _, err = f.Write(data); err != nil {
+		return err
+	}
+	return f.Sync()
 }
 
 // acquireLogLock takes an exclusive cross-process lock for appending to logPath using an
@@ -241,6 +243,16 @@ func Log(entryInput any, logPath string) error {
 // returns a release func; if the lock cannot be taken before the deadline the caller
 // proceeds unlocked so audit records are never dropped.
 func acquireLogLock(logPath string) func() {
+	release, _ := acquireLogLockRequired(logPath)
+	if release == nil {
+		return func() {}
+	}
+	return release
+}
+
+// Pruning must never proceed unlocked: retaining an acknowledged duplicate is
+// safer than racing a different process's newly appended offline evidence.
+func acquireLogLockRequired(logPath string) (func(), error) {
 	const (
 		timeout    = 5 * time.Second
 		staleAfter = 10 * time.Second
@@ -252,14 +264,14 @@ func acquireLogLock(logPath string) func() {
 		if err == nil {
 			_, _ = f.WriteString(strconv.Itoa(os.Getpid()))
 			_ = f.Close()
-			return func() { _ = os.Remove(lockPath) }
+			return func() { _ = os.Remove(lockPath) }, nil
 		}
 		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > staleAfter {
 			_ = os.Remove(lockPath)
 			continue
 		}
 		if time.Now().After(deadline) {
-			return func() {}
+			return nil, fmt.Errorf("audit spool is busy; retaining pending evidence")
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -345,54 +357,10 @@ func VerifyLocalLog(logPath string) (bool, int, error) {
 // RemoveEntry removes a specific entry by event_id after confirmed server transmission.
 // If no entries remain, it truncates the file to 0 bytes, removing storage burden from edge devices.
 func RemoveEntry(eventID string, logPath string) error {
-	if eventID == "" || logPath == "off" || logPath == "none" {
+	if eventID == "" {
 		return nil
 	}
-	if logPath == "" {
-		logPath = DefaultLogPath()
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	if _, err := os.Stat(logPath); os.IsNotExist(err) {
-		return nil
-	}
-
-	content, err := os.ReadFile(logPath)
-	if err != nil {
-		return err
-	}
-
-	lines := bytes.Split(bytes.TrimSpace(content), []byte("\n"))
-	var remainingLines [][]byte
-
-	for _, line := range lines {
-		trimmed := bytes.TrimSpace(line)
-		if len(trimmed) == 0 {
-			continue
-		}
-		var entry AuditEntry
-		if err := json.Unmarshal(trimmed, &entry); err == nil {
-			if entry.EventID == eventID {
-				continue // Skip the successfully transmitted event
-			}
-		}
-		remainingLines = append(remainingLines, line)
-	}
-
-	if len(remainingLines) == 0 {
-		// Truncate to 0 bytes to relieve edge storage burden
-		return os.Truncate(logPath, 0)
-	}
-
-	// If there are other untransmitted entries, rewrite the remaining lines
-	var buf bytes.Buffer
-	for _, l := range remainingLines {
-		buf.Write(l)
-		buf.WriteByte('\n')
-	}
-	return os.WriteFile(logPath, buf.Bytes(), 0600)
+	return RemoveEntries(map[string]struct{}{eventID: {}}, logPath)
 }
 
 // RemoveEntries removes multiple entries by event_id in a single atomic pass.
@@ -406,6 +374,15 @@ func RemoveEntries(eventIDs map[string]struct{}, logPath string) error {
 
 	mu.Lock()
 	defer mu.Unlock()
+	// A missing spool needs no lock directory and no housekeeping files.
+	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		return nil
+	}
+	release, err := acquireLogLockRequired(logPath)
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	content, err := os.ReadFile(logPath)
 	if err != nil {
@@ -435,7 +412,7 @@ func RemoveEntries(eventIDs map[string]struct{}, logPath string) error {
 	}
 
 	if len(remainingLines) == 0 {
-		return os.Truncate(logPath, 0)
+		return replacePendingLog(logPath, nil)
 	}
 
 	var buf bytes.Buffer
@@ -443,7 +420,30 @@ func RemoveEntries(eventIDs map[string]struct{}, logPath string) error {
 		buf.Write(l)
 		buf.WriteByte('\n')
 	}
-	return os.WriteFile(logPath, buf.Bytes(), 0600)
+	return replacePendingLog(logPath, buf.Bytes())
+}
+
+// Stage and sync before atomic replacement. A crash before the rename leaves
+// the original pending ledger intact. Normal completion removes staging files.
+func replacePendingLog(path string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".pending-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return replacePendingFile(tmp, path)
 }
 
 // ClearLog truncates the local log file to 0 bytes.

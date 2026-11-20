@@ -32,6 +32,13 @@ func TestDashboardServesAssetsAndProxiesAPI(t *testing.T) {
 	target, _ := url.Parse(upstream.URL)
 	expectedHost = target.Host
 	handler := Handler(target, &mockRoundTripper{handler: upstreamHandler}, false)
+	for path, marker := range map[string]string{"/dashboard/showcase.html": "Five-layer defense showcase", "/dashboard/showcase.js": "bap-defense-showcase/v1"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest("GET", path, nil))
+		if response.Code != 200 || !strings.Contains(response.Body.String(), marker) {
+			t.Fatalf("showcase asset %s: %d", path, response.Code)
+		}
+	}
 
 	page := httptest.NewRecorder()
 	handler.ServeHTTP(page, httptest.NewRequest("GET", "/dashboard/", nil))

@@ -101,8 +101,20 @@ func recordSessionDenial(sessionID, fullCmd, reason string) (int, string) {
 		allRisks[sessionID] = rec
 	}
 
+	advanceSessionRisk(rec, fullCmd, time.Now().UTC())
+
+	if updatedData, err := json.MarshalIndent(allRisks, "", "  "); err == nil {
+		_ = os.WriteFile(riskPath, updatedData, 0600)
+	}
+
+	return rec.DenialCount, rec.ThreatLevel
+}
+
+// advanceSessionRisk is shared by enforcement and isolated diagnostics. It has
+// no storage or session authority side effects.
+func advanceSessionRisk(rec *sessionRiskState, fullCmd string, now time.Time) {
 	rec.DenialCount++
-	rec.LastDenial = time.Now().UTC()
+	rec.LastDenial = now
 	if len(rec.AttemptHistory) > 20 {
 		rec.AttemptHistory = rec.AttemptHistory[1:]
 	}
@@ -116,11 +128,6 @@ func recordSessionDenial(sessionID, fullCmd, reason string) (int, string) {
 		rec.ThreatLevel = "LOW"
 	}
 
-	if updatedData, err := json.MarshalIndent(allRisks, "", "  "); err == nil {
-		_ = os.WriteFile(riskPath, updatedData, 0600)
-	}
-
-	return rec.DenialCount, rec.ThreatLevel
 }
 
 type sessionApprovalRecord struct {
@@ -1160,7 +1167,11 @@ func RunExec(args []string) {
 			if *toolOutcome != "" {
 				err := authz.CompleteNativeToolInvocation(authz.ResolveZSPDir(), ec.sessionID, ec.source, *toolUseID)
 				resp := types.ExecResponse{Allowed: err == nil, DecisionOnly: true, Mode: ec.enforcementMode}
-				if err != nil { resp.Reason = err.Error(); ec.exit(resp, 1); return }
+				if err != nil {
+					resp.Reason = err.Error()
+					ec.exit(resp, 1)
+					return
+				}
 				ec.exit(resp, 0)
 				return
 			}
@@ -1194,8 +1205,8 @@ func RunExec(args []string) {
 					svid, grant, _, zspErr = authz.AuthorizeNativeToolInvocation(authz.ResolveZSPDir(), ec.sessionID, ec.source, *toolNameFlag, *targetFlag, wsRoot, authz.NativeToolInvocation{ID: *toolUseID, InputDigest: *toolInputDigest})
 				} else {
 					svid, grant, _, zspErr = authz.VerifyOrConsumeSessionZSP(
-					authz.ResolveZSPDir(), ec.sessionID, ec.source, action, res, ec.fullCommand, wsRoot, escapes, *consumeFlag, nil,
-				)
+						authz.ResolveZSPDir(), ec.sessionID, ec.source, action, res, ec.fullCommand, wsRoot, escapes, *consumeFlag, nil,
+					)
 				}
 				if svid != nil {
 					ec.zspPrincipal = svid.Subject

@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bap-edge/internal/coverage"
 	"bufio"
 	"encoding/json"
 	"fmt"
@@ -140,8 +141,9 @@ func handleRequest(w *bufio.Writer, req JSONRPCRequest, authorizer *authz.Author
 				"version": ServerVersion,
 			},
 		}
+		result["instructions"] = coverage.Guidance
 		if fallbackReportingEnabled() {
-			result["instructions"] = "Call " + reportRequestTool + " once at the start of each user turn with a short " +
+			result["instructions"] = coverage.Guidance + " Call " + reportRequestTool + " once at the start of each user turn with a short " +
 				"summary of the request and the host's native turn_id (reuse it across layers/retries). The control plane prefers hook evidence and counts each turn once."
 		}
 		sendResult(w, req.ID, result)

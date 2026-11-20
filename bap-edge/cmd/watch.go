@@ -427,9 +427,10 @@ func touchWatcherLiveness(path string, watchPID int) {
 	_ = os.Chtimes(path, now, now)
 }
 
-// flushPromptSpool replays spooled prompt events for this session. 2xx and permanent 4xx
-// (other than 404) drop the entry; 404 (session not enrolled yet) is retried for 10 minutes;
-// network errors and 5xx stop the pass and keep everything for the next one.
+// flushPromptSpool replays durable prompt/lifecycle envelopes. An empty session
+// selects all pending sessions, including workloads that ended while offline.
+// Only successful delivery removes a record; age, malformed data or a refusal
+// never establish delivery and therefore never justify deleting evidence.
 func flushPromptSpool(serverURL, sessionID string) {
 	if !isSpoolFlushRunning.CompareAndSwap(false, true) {
 		return
@@ -453,19 +454,32 @@ func flushPromptSpool(serverURL, sessionID string) {
 		var env struct {
 			SessionID string          `json:"session_id"`
 			Body      json.RawMessage `json:"body"`
+			ServerURL string          `json:"server_url"`
+			Endpoint  string          `json:"endpoint"`
 		}
 		if json.Unmarshal(data, &env) != nil || len(env.Body) == 0 {
-			_ = os.Remove(p)
 			continue
 		}
-		if env.SessionID != sessionID {
-			// Belongs to another session's watcher; reap only if clearly abandoned.
-			if fi, err := e.Info(); err == nil && time.Since(fi.ModTime()) > 24*time.Hour {
-				_ = os.Remove(p)
-			}
+		var identity struct {
+			SessionID string `json:"session_id"`
+		}
+		if env.SessionID == "" || json.Unmarshal(env.Body, &identity) != nil || identity.SessionID != env.SessionID {
 			continue
 		}
-		resp, err := client.Post(serverURL+"/api/v1/sessions/prompt", "application/json", bytes.NewReader(env.Body))
+		if sessionID != "" && env.SessionID != sessionID {
+			continue
+		}
+		if env.ServerURL != "" && strings.TrimRight(env.ServerURL, "/") != strings.TrimRight(serverURL, "/") {
+			continue
+		}
+		endpoint := env.Endpoint
+		if endpoint == "" {
+			endpoint = "/api/v1/sessions/prompt"
+		}
+		if !sessionReportingPath(endpoint) {
+			continue
+		}
+		resp, err := client.Post(strings.TrimRight(serverURL, "/")+endpoint, "application/json", bytes.NewReader(env.Body))
 		if err != nil {
 			return
 		}
@@ -479,7 +493,8 @@ func flushPromptSpool(serverURL, sessionID string) {
 		case status >= 500:
 			return
 		default:
-			_ = os.Remove(p)
+			// Keep refusals for identity/policy reconciliation. Other sessions
+			// still get their delivery attempt during this pass.
 		}
 	}
 }
@@ -881,7 +896,7 @@ func runWatchLoop(watchPID int, serverURL, sessionID, appID string, instanceIDOp
 			// Replay prompts the hook could not deliver (first on a fresh session, then
 			// every few ticks) in the background so the heartbeat loop never stalls.
 			if heartbeatCounter == 0 || heartbeatCounter%3 == 0 {
-				go flushPromptSpool(serverURL, sessionID)
+				go flushPromptSpool(serverURL, "")
 			}
 			heartbeatCounter++
 			if heartbeatCounter%5 == 0 {
@@ -1060,7 +1075,15 @@ func pulseHeartbeat(serverURL, sessionID string) (string, string, int64) {
 }
 
 func postJSONQuick(url string, payload any) error {
-	return postJSONWithRetry(url, payload, 2, 100*time.Millisecond)
+	queued, queueErr := queueSessionReport(url, payload)
+	if queueErr != nil {
+		fmt.Fprintf(os.Stderr, "BAP reporting: durable outbox unavailable: %v\n", queueErr)
+	}
+	err := postJSONWithRetry(url, payload, 2, 100*time.Millisecond)
+	if err == nil {
+		removeDeliveredSessionReport(queued)
+	}
+	return err
 }
 
 func postJSONWithRetry(url string, payload any, maxAttempts int, initialBackoff time.Duration) error {

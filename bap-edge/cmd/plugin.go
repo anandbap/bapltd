@@ -409,8 +409,14 @@ func runPluginAdapter(args []string) error {
 		return nil
 	}
 
-	// 2. SessionEnd / Stop event (Agent exit)
-	if normEvent == "sessionend" || normEvent == "stop" || normEvent == "sessionstop" {
+	// Claude Stop ends an assistant turn, not the process/session. Closing the
+	// session here races the launcher's ownership and subsequent tool callbacks.
+	if normEvent == "stop" {
+		emitPluginSuccess(client, event)
+		return nil
+	}
+	// 2. Actual session exit.
+	if normEvent == "sessionend" || normEvent == "sessionstop" {
 		_ = EnsureSessionEnded(sessionID, "Agent session closed gracefully")
 		emitPluginSuccess(client, event)
 		return nil
@@ -435,7 +441,9 @@ func runPluginAdapter(args []string) error {
 	// Non-blocking post-execution telemetry events (e.g. PostToolUse)
 	if isTelemetryEvent(event) {
 		id, _ := rawPayload["tool_use_id"].(string)
-		if err := authz.CompleteNativeToolInvocation(authz.ResolveZSPDir(), sessionID, client, id); err != nil { return err }
+		if err := authz.CompleteNativeToolInvocation(authz.ResolveZSPDir(), sessionID, client, id); err != nil {
+			return err
+		}
 		emitPluginSuccess(client, event)
 		return nil
 	}
@@ -455,13 +463,25 @@ func runPluginAdapter(args []string) error {
 	// 7. Evaluate against Cedar policy invariants & ZSP TaskGrants
 	id, _ := rawPayload["tool_use_id"].(string)
 	input := rawPayload["tool_input"]
-	if input == nil { input = rawPayload["toolInput"] }
-	if input == nil { input = rawPayload["input"] }
-	if input == nil { input = rawPayload["args"] }
-	if input == nil { input = rawPayload["arguments"] }
-	if input == nil { input = rawPayload["parameters"] }
+	if input == nil {
+		input = rawPayload["toolInput"]
+	}
+	if input == nil {
+		input = rawPayload["input"]
+	}
+	if input == nil {
+		input = rawPayload["args"]
+	}
+	if input == nil {
+		input = rawPayload["arguments"]
+	}
+	if input == nil {
+		input = rawPayload["parameters"]
+	}
 	digest, digestErr := authz.NativeToolInputDigest(input)
-	if digestErr != nil { return digestErr }
+	if digestErr != nil {
+		return digestErr
+	}
 	ecResp := evaluateWithBapedgeTool(sessionID, client, toolName, command, targetFile, authz.NativeToolInvocation{ID: id, InputDigest: digest})
 
 	decision := "allow"
@@ -470,7 +490,9 @@ func runPluginAdapter(args []string) error {
 	}
 
 	// Record to dedup cache
-	if command != "" { recordDedupWithSuggestion(sessionID, cmdHash, decision, ecResp.Reason, ecResp.Suggestion, ecResp.Receipt) }
+	if command != "" {
+		recordDedupWithSuggestion(sessionID, cmdHash, decision, ecResp.Reason, ecResp.Suggestion, ecResp.Receipt)
+	}
 
 	// 8. Emit Vendor-Specific Response
 	emitPluginDecisionHalt(client, event, decision, ecResp.Reason, ecResp.Suggestion, ecResp.Receipt, ecResp.Halt, ecResp.StopReason)
@@ -482,76 +504,49 @@ func runPluginAdapter(args []string) error {
 // -----------------------------------------------------------------------------
 
 func GetDefenseInDepthLayers(workspace string) []types.DefenseLayerStatus {
-	claudeRec := InspectClaudePlugin(workspace)
-	copilotRec := InspectCopilotPlugin(workspace)
-	antigravityRec := InspectAntigravityPlugin(workspace)
-	opencodeRec := InspectOpenCodePlugin(workspace)
-	codexRec := InspectCodexPlugin(workspace)
+	return GetClientDefenseLayers(workspace, "")
+}
 
-	// Layer 1A: Native Agent Plugin
-	var activePlugins []string
-	if claudeRec.PluginInstalled {
-		activePlugins = append(activePlugins, "Claude Code")
+func GetClientDefenseLayers(workspace, client string) []types.DefenseLayerStatus {
+	records := []types.PluginHealthRecord{}
+	switch normalizeClientAppID(client) {
+	case "claude-code":
+		records = append(records, InspectClaudePlugin(workspace))
+	case "codex":
+		records = append(records, InspectCodexPlugin(workspace))
+	case "antigravity":
+		records = append(records, InspectAntigravityPlugin(workspace))
+	case "copilot":
+		records = append(records, InspectCopilotPlugin(workspace))
+	case "opencode":
+		records = append(records, InspectOpenCodePlugin(workspace))
+	default:
+		records = append(records, InspectClaudePlugin(workspace), InspectCodexPlugin(workspace), InspectAntigravityPlugin(workspace), InspectCopilotPlugin(workspace), InspectOpenCodePlugin(workspace))
 	}
-	if copilotRec.PluginInstalled {
-		activePlugins = append(activePlugins, "Copilot")
+	status, evidence := "NOT_OBSERVED", "No native callback evidence for this client. The broker still evaluates requests it receives independently; unrouted native tools remain unverified."
+	for _, record := range records {
+		if record.HookActive {
+			status = "OBSERVED"
+			evidence = "Recent native callback observed for " + record.Client + "; this is not per-action enforcement proof."
+			break
+		}
+		if record.PluginInstalled {
+			status = "READY"
+			evidence = "Integration files present for " + record.Client + "; callback delivery is not verified."
+		}
 	}
-	if antigravityRec.PluginInstalled {
-		activePlugins = append(activePlugins, "Antigravity")
-	}
-	if opencodeRec.PluginInstalled {
-		activePlugins = append(activePlugins, "OpenCode")
-	}
-	if codexRec.PluginInstalled {
-		activePlugins = append(activePlugins, "Codex")
-	}
-
-	l1aStatus := "DISABLED"
-	l1aEvidence := "No native agent plugin manifest installed"
-	if len(activePlugins) > 0 {
-		l1aStatus = "ACTIVE"
-		l1aEvidence = strings.Join(activePlugins, ", ") + " native plugins installed"
-	}
-
-	// Layer 1B: Standalone Configuration Hook
-	l1bStatus := "DISABLED"
-	l1bEvidence := "No standalone hooks found"
-	claudeSettings := filepath.Join(workspace, ".claude", "settings.json")
-	claudeManaged := filepath.Join(workspace, ".claude", "managed-settings.json")
-	if _, err := os.Stat(claudeSettings); err == nil {
-		l1bStatus = "ACTIVE"
-		l1bEvidence = ".claude/settings.json hook interceptor configured"
-	} else if _, err := os.Stat(claudeManaged); err == nil {
-		l1bStatus = "ACTIVE"
-		l1bEvidence = ".claude/managed-settings.json lifecycle hooks configured"
-	} else if _, err := os.Stat(filepath.Join(workspace, "GEMINI.md")); err == nil {
-		l1bStatus = "ACTIVE"
-		l1bEvidence = "GEMINI.md policy interceptor configured"
-	}
-
-	// Layer 2: Execution Broker & Kernel Sandboxing
-	l2Status := "ACTIVE"
-	l2Evidence := "bapedge exec broker with restricted security tokens & Cedar policy engine"
-
-	// Layer 3: Anti-Tamper & Asset Shielding
-	l3Status := "ACTIVE"
-	l3Evidence := "FIM anti-tamper shielding active for .env, .bap, policies, and keys"
-
-	// Layer 4: Telemetry & Continuous Health Probe
-	l4Status := "ACTIVE"
-	l4Evidence := "Agent Watch LTD discovery worker & reporting health attestation spool active"
-
-	// Layer 5: Cryptographic Identity & Zero-Trust Gateway
-	l5Status := "ACTIVE"
-	l5Evidence := "SPIFFE/SVID workstation identity and Control Plane mTLS active"
-
 	return []types.DefenseLayerStatus{
-		{LayerID: "Layer 1A", Name: "Native Agent Plugin", Description: "In-harness native vendor extension (Claude / Copilot)", Status: l1aStatus, Evidence: l1aEvidence},
-		{LayerID: "Layer 1B", Name: "Standalone Hook Guard", Description: "Workspace configuration interceptor (.claude/settings.json)", Status: l1bStatus, Evidence: l1bEvidence},
-		{LayerID: "Layer 2", Name: "Execution Broker", Description: "Sandboxed OS token, Cedar authorizer, process lineage", Status: l2Status, Evidence: l2Evidence},
-		{LayerID: "Layer 3", Name: "Anti-Tamper & Asset Shield", Description: "FIM credential protection, canary traps, checkpoint rollback", Status: l3Status, Evidence: l3Evidence},
-		{LayerID: "Layer 4", Name: "Continuous Health & Telemetry", Description: "Observable callback heartbeats, drift & degradation detection", Status: l4Status, Evidence: l4Evidence},
-		{LayerID: "Layer 5", Name: "Identity & Zero-Trust Gateway", Description: "SPIFFE/SVID mTLS attestation and short-lived STS tokens", Status: l5Status, Evidence: l5Evidence},
+		{LayerID: "Layer 1", Name: "In-harness tool hooks", Status: status, Evidence: evidence},
+		{LayerID: "Layer 2", Name: "Execution broker", Status: "READY", Evidence: "Independent broker evaluator is available. Execution participation requires an attributable receipt; missing hooks do not skip its checks."},
+		{LayerID: "Layer 3", Name: "Cryptographic file integrity and pinning", Status: "READY", Evidence: "Independent integrity verifier is available. A matching/mismatching verification result is required to establish participation."},
+		{LayerID: "Layer 4", Name: "Anomaly risk engine", Status: "READY", Evidence: "Risk evaluator is available. Evaluated events and resulting risk state establish participation."},
+		{LayerID: "Layer 5", Name: "Control-plane attestation", Status: "NOT_OBSERVED", Evidence: "No live attestation verdict supplied to this readiness inspection. Identity configuration alone is not attestation evidence."},
+	}
+}
+
+func PrintClientDefenseLayers(w io.Writer, workspace, client string) {
+	for _, layer := range GetClientDefenseLayers(workspace, client) {
+		fmt.Fprintf(w, "%s: %s [%s] — %s\n", layer.LayerID, layer.Name, layer.Status, layer.Evidence)
 	}
 }
 
@@ -560,11 +555,11 @@ func PrintDefenseInDepthLayers(w io.Writer, workspace string) {
 	layers := GetDefenseInDepthLayers(workspace)
 
 	fmt.Fprintln(w, "================================================================================")
-	fmt.Fprintln(w, "  🛡️  [BAP ZERO-TRUST] Active Defense-in-Depth Security Layers")
+	fmt.Fprintln(w, "  [BAP ZERO-TRUST] Five-layer Readiness (not per-action participation)")
 	fmt.Fprintln(w, "================================================================================")
 	for _, l := range layers {
-		tag := "[✓]"
-		if l.Status == "DISABLED" {
+		tag := "[-]"
+		if l.Status == "DISABLED" || l.Status == "NOT_OBSERVED" {
 			tag = "[ ]"
 		} else if l.Status == "DEGRADED" {
 			tag = "[!]"
@@ -1003,11 +998,20 @@ func readHealthStatus(client string) (hookActive, verified bool, lastObs *time.T
 				body, rerr := os.ReadFile(filepath.Join(dir, e.Name()))
 				if rerr == nil {
 					var sig struct {
+						Source              string    `json:"source"`
+						SessionID           string    `json:"session_id"`
+						Diagnostic          bool      `json:"diagnostic"`
 						ObservedAt          time.Time `json:"observed_at"`
 						Event               string    `json:"event"`
 						EnforcementVerified bool      `json:"enforcement_verified"`
 					}
 					if json.Unmarshal(body, &sig) == nil {
+						if sig.Source == "synthetic_probe" || sig.Diagnostic || strings.HasPrefix(sig.SessionID, "diagnostic-") {
+							continue
+						}
+						if sig.ObservedAt.IsZero() || sig.ObservedAt.After(time.Now().Add(5*time.Second)) || time.Since(sig.ObservedAt) > time.Minute {
+							continue
+						}
 						hookActive = true
 						if sig.ObservedAt.After(latest) {
 							latest = sig.ObservedAt
@@ -1027,11 +1031,14 @@ func readHealthStatus(client string) (hookActive, verified bool, lastObs *time.T
 }
 
 func recordPluginCallback(client, event string, payload map[string]any) {
+	if isShowcaseDiagnosticContext() {
+		return
+	}
 	client = normalizeClientAppID(client)
 	dir := filepath.Join(state.Dir(), "reporting-health")
 
 	now := time.Now().UTC()
-	fn := fmt.Sprintf("%s-plugin-%s-%d.json", client, strings.ToLower(event), now.UnixNano())
+	fn := fmt.Sprintf("%s-plugin-%s-latest.json", client, strings.ToLower(event))
 	sig := map[string]any{
 		"app":                  client,
 		"event":                event,
@@ -1040,9 +1047,8 @@ func recordPluginCallback(client, event string, payload map[string]any) {
 		"enforcement_verified": false,
 		"session_id":           resolvePluginSessionID(client, payload),
 	}
-	data, _ := json.Marshal(sig)
 	_ = os.MkdirAll(dir, 0700)
-	_ = os.WriteFile(filepath.Join(dir, fn), data, 0600)
+	_ = writeRuntimeState(filepath.Join(dir, fn), sig)
 }
 
 func recordEnforcementVerification(client, workspace string) {
@@ -1050,7 +1056,7 @@ func recordEnforcementVerification(client, workspace string) {
 	dir := filepath.Join(state.Dir(), "reporting-health")
 
 	now := time.Now().UTC()
-	fn := fmt.Sprintf("%s-verified-%d.json", client, now.UnixNano())
+	fn := fmt.Sprintf("%s-component-probe-latest.json", client)
 	sig := map[string]any{
 		"app":                  client,
 		"event":                "EnforcementVerified",
@@ -1058,9 +1064,8 @@ func recordEnforcementVerification(client, workspace string) {
 		"observed_at":          now,
 		"enforcement_verified": true,
 	}
-	data, _ := json.Marshal(sig)
 	_ = os.MkdirAll(dir, 0700)
-	_ = os.WriteFile(filepath.Join(dir, fn), data, 0600)
+	_ = writeRuntimeState(filepath.Join(dir, fn), sig)
 }
 
 // -----------------------------------------------------------------------------
@@ -1746,8 +1751,12 @@ func extractCommandAndFile(payload map[string]any) (command, filePath string) {
 func resolvePluginSessionID(client string, payload map[string]any) string {
 	// Match the standalone hook: launcher identity takes precedence over the
 	// vendor host's conversation ID, including completion callbacks.
-	if s := strings.TrimSpace(os.Getenv("BAP_SESSION_ID")); s != "" { return s }
-	if s := strings.TrimSpace(os.Getenv("LTD_SESSION_ID")); s != "" { return s }
+	if s := strings.TrimSpace(os.Getenv("BAP_SESSION_ID")); s != "" {
+		return s
+	}
+	if s := strings.TrimSpace(os.Getenv("LTD_SESSION_ID")); s != "" {
+		return s
+	}
 	if s, ok := payload["session_id"].(string); ok && s != "" {
 		return s
 	}
@@ -2048,9 +2057,9 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 			svid, grant, _, zspErr = authz.AuthorizeNativeToolInvocation(authz.ResolveZSPDir(), sessionID, normClient, toolName, filePath, wsRoot, invocation[0])
 		} else {
 			svid, grant, _, zspErr = authz.AuthorizeSessionCommandBatch(
-			authz.ResolveZSPDir(), sessionID, normClient, command, wsRoot, zspChecks, consumeHere, nil,
-			sandbox.ToolShell(toolName),
-		)
+				authz.ResolveZSPDir(), sessionID, normClient, command, wsRoot, zspChecks, consumeHere, nil,
+				sandbox.ToolShell(toolName),
+			)
 		}
 		if svid != nil {
 			principalIdentity = svid.Subject
@@ -2088,10 +2097,10 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 			Delegation:     fmt.Sprintf("user:workstation->agent:%s", normClient),
 			GrantID:        grantID,
 			PolicyVersion:  "sha256:enterprise-active",
-			SandboxProfile: "windows-restricted-token",
+			SandboxProfile: "in-process-hook-decision",
 			SessionID:      sessionID,
 			Timestamp:      time.Now().UTC(),
-			Result:         "ALLOWED_EXECUTED",
+			Result:         "DECISION_ONLY",
 		},
 	}
 }
@@ -2156,6 +2165,7 @@ func emitPluginDecisionWithSuggestion(client, event, decision, reason, suggestio
 // emitPluginDecisionHalt emits the hook decision. With halt set, Claude Code is told to stop the turn
 // (continue:false + stopReason) so a refusal that only a human can resolve does not become a retry loop.
 func emitPluginDecisionHalt(client, event, decision, reason, suggestion string, receipt *types.ExecutionReceipt, halt bool, stopReason string) {
+	recordShowcaseHookReceipt(client, decision, receipt)
 	isInvariant := strings.Contains(reason, "Security Invariant Violation") ||
 		strings.Contains(reason, "sensitive credential") ||
 		strings.Contains(reason, "tampering")

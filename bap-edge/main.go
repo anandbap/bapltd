@@ -39,9 +39,12 @@ Zero-Trust Governance & HITL Authorization:
   recommend    Inspect a blocked call and recommend it to the control plane as benign for administrator approval (--status shows outcomes)
 
 Execution & Protocol Integration:
+  showcase     Run isolated five-layer diagnostics and write a workspace evidence report
   claude       Launch Claude Code CLI in active zero-trust transactional sandbox
   codex        Launch OpenAI Codex CLI in active zero-trust transactional sandbox
   antigravity  Launch Google Antigravity CLI (agy) in active zero-trust transactional sandbox
+  copilot      Launch GitHub Copilot CLI with shared lifecycle and boundary reporting
+  opencode     Launch OpenCode CLI with shared lifecycle and boundary reporting
   review       Inspect recent agent sessions, policy decisions, and performance
   plugin       Manage native agent plugins for Claude Code & Copilot (BAP-806)
   exec         Evaluate command against Cedar policy and run in sandboxed kernel namespace
@@ -188,6 +191,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error running server: %v\n", err)
 			os.Exit(1)
 		}
+	case "showcase":
+		if err := cmd.RunShowcase(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Showcase: %v\n", err)
+			os.Exit(1)
+		}
 	case "claude", "claude-code":
 		if err := cmd.RunClaude(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error running Claude: %v\n", err)
@@ -201,6 +209,16 @@ func main() {
 	case "antigravity", "agy":
 		if err := cmd.RunAntigravity(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error running Antigravity: %v\n", err)
+			os.Exit(1)
+		}
+	case "copilot", "github-copilot":
+		if err := cmd.RunCopilot(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error running Copilot: %v\n", err)
+			os.Exit(1)
+		}
+	case "opencode", "open-code":
+		if err := cmd.RunOpenCode(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error running OpenCode: %v\n", err)
 			os.Exit(1)
 		}
 	case "recommend":
@@ -241,7 +259,10 @@ func main() {
 			os.Exit(1)
 		}
 	case "onboarding":
-		if err:=cmd.RunOnboarding(args);err!=nil{fmt.Fprintf(os.Stderr,"Onboarding: %v\n",err);os.Exit(1)}
+		if err := cmd.RunOnboarding(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Onboarding: %v\n", err)
+			os.Exit(1)
+		}
 	case "pin":
 		if err := cmd.RunPin(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error in pin: %v\n", err)

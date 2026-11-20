@@ -20,8 +20,7 @@ var (
 	httpClient = httptransport.New(1500 * time.Millisecond)
 
 	offlineMux             sync.Mutex
-	serverKnownOffline     bool
-	lastServerOfflineCheck time.Time
+	offlineServers         = map[string]time.Time{}
 	offlineBackoffDuration = 30 * time.Second
 	// A watcher, daemon and explicit sync can flush the same spool concurrently.
 	// Serialize snapshots and acknowledgements so a second flush sees the updated
@@ -88,7 +87,7 @@ func Transmit(entry AuditEntry, serverURL string, logPath string) (bool, string,
 	}
 
 	offlineMux.Lock()
-	if serverKnownOffline && time.Since(lastServerOfflineCheck) < offlineBackoffDuration {
+	if failedAt, offline := offlineServers[strings.TrimRight(serverURL, "/")]; offline && time.Since(failedAt) < offlineBackoffDuration {
 		offlineMux.Unlock()
 		return false, "offline", nil
 	}
@@ -154,15 +153,14 @@ func Transmit(entry AuditEntry, serverURL string, logPath string) (bool, string,
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		offlineMux.Lock()
-		serverKnownOffline = true
-		lastServerOfflineCheck = time.Now()
+		offlineServers[serverURL] = time.Now()
 		offlineMux.Unlock()
 		return false, "offline", nil // server offline/unreachable: fail-secure, keep local entry
 	}
 	defer resp.Body.Close()
 
 	offlineMux.Lock()
-	serverKnownOffline = false
+	delete(offlineServers, serverURL)
 	offlineMux.Unlock()
 
 	if resp.StatusCode != http.StatusOK {
@@ -186,7 +184,9 @@ func Transmit(entry AuditEntry, serverURL string, logPath string) (bool, string,
 		if err := archiveAcknowledged(serverURL, logPath, []AuditEntry{entry}, ack.ServerEpoch); err != nil {
 			return false, "local_recovery_failed", err
 		}
-		_ = RemoveEntry(entry.EventID, logPath)
+		if err := RemoveEntry(entry.EventID, logPath); err != nil {
+			return false, "local_cleanup_failed", err
+		}
 	}
 
 	return true, ack.ReceiptHash, nil
@@ -303,6 +303,9 @@ func FlushOfflineAudit(serverURL string, logPath string) (int, error) {
 
 			// Acknowledged by central control plane (either newly ingested or duplicate reconciled)
 			if ack.ChainValid && (ack.Status == "acknowledged" || ack.Ingested > 0) {
+				offlineMux.Lock()
+				delete(offlineServers, serverURL)
+				offlineMux.Unlock()
 				if os.Getenv("BAP_RETAIN_LOCAL") != "1" {
 					if err := archiveAcknowledged(serverURL, logPath, batch, ack.ServerEpoch); err != nil {
 						return totalFlushed, err

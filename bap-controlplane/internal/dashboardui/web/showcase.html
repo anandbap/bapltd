@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BAP · Five-layer defense showcase</title>
+<style>
+:root{font:16px/1.5 system-ui;color:#182335;background:#f5f6f8}body{margin:0}main{max-width:1200px;margin:auto;padding:32px}a{color:#2158ac}h1{font-size:30px;margin-bottom:8px}button,input{font:inherit}button{padding:9px 14px;border:1px solid #bbc7d7;border-radius:6px;background:white;cursor:pointer}button:disabled{opacity:.5;cursor:default}.banner{padding:16px;border:1px solid #b9c9e0;background:#edf3fc;margin:16px 0;border-radius:8px}.override{border-color:#b22727;background:#fff0ed;color:#8b1c1c;font-weight:700}.controls{display:flex;flex-wrap:wrap;gap:16px;align-items:center}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(205px,1fr));gap:12px;margin:24px 0}.card{background:white;border:1px solid #d7dfe9;border-radius:8px;padding:16px}.card h2{font-size:17px;min-height:50px}.status{font-weight:700}.participated{color:#14683e}.blocked,.failed{color:#9e2626}.unavailable,.not_reached,.ready{color:#7d580b}small{display:block;color:#526278;overflow-wrap:anywhere}table{width:100%;border-collapse:collapse;background:white}th,td{padding:12px;text-align:left;border-bottom:1px solid #d7dfe9;vertical-align:top}th{font-size:13px}details{max-width:380px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}.scroll{overflow:auto}#message{white-space:pre-wrap;color:#9e2626}label{cursor:pointer}code{font-size:14px}
+</style></head><body><main>
+<a href="/dashboard/">← Dashboard</a><h1>Five-layer defense showcase</h1>
+<p>Diagnostic evidence from each boundary. Readiness, participation, and missing evidence remain distinct.</p>
+<div class="banner" id="validation">No run loaded. All five layers remain visible; no participation is assumed.</div>
+<div class="controls"><label>Import edge report <input id="report" type="file" accept="application/json,.json"></label><button id="attest" disabled>Run control-plane attestation diagnostic</button><button id="download" disabled>Download combined evidence</button></div>
+<p>Generate an edge report with <code>bapedge showcase --client codex</code> (also: claude-code, antigravity, copilot, opencode), then import its JSON file. Imported files are local evidence, not authenticated server telemetry.</p>
+<small id="identity"></small><p id="message" role="status" aria-live="polite"></p><section class="grid" id="layers" aria-label="Five defense layers"></section>
+<h2>Scenario evidence timeline</h2><p>Each row keeps its producer and action identity. An early block does not imply downstream participation.</p>
+<p><label>Scenario <select id="scenario"><option value="">All scenarios</option></select></label></p>
+<div class="scroll"><table><thead><tr><th>Time / scenario / action</th><th>Layer / producer</th><th>Status / decision</th><th>Evidence</th></tr></thead><tbody id="timeline"></tbody></table></div>
+</main><script src="/dashboard/showcase.js"></script></body></html>

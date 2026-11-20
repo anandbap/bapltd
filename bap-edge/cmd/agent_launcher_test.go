@@ -92,3 +92,13 @@ func TestParseLauncherArgs_ServerURL(t *testing.T) {
 		t.Errorf("expected downstream args to preserve ['-p', 'task'], got %v", downstream)
 	}
 }
+
+func TestParseLauncherArgsSeparateServerValue(t *testing.T) {
+	args, _, _, server, err := parseLauncherArgs([]string{"--server", "https://bap.example.test", "-p", "task"})
+	if err != nil || server != "https://bap.example.test" || len(args) != 2 || args[0] != "-p" {
+		t.Fatal(args, server, err)
+	}
+	if _, _, _, _, err := parseLauncherArgs([]string{"--server"}); err == nil {
+		t.Fatal("missing server accepted")
+	}
+}

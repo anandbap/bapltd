@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"bap-edge/internal/audit"
 	"bap-edge/internal/config"
 	"bap-edge/internal/httptransport"
 	"bap-edge/internal/state"
@@ -245,6 +246,9 @@ func EnsureSessionStarted(sessionID, appID string, clientPID int, initialPrompt 
 		hooksDisabled = true
 	}
 	repLayer := "plugin"
+	if isShowcaseDiagnosticContext() {
+		repLayer = "diagnostic_fixture"
+	}
 	if hooksDisabled {
 		repLayer = "unmonitored"
 	}
@@ -276,10 +280,17 @@ func EnsureSessionStarted(sessionID, appID string, clientPID int, initialPrompt 
 	}
 
 	body, _ := json.Marshal(startPayload)
+	queued, queueErr := queueSessionReport(serverURL+"/api/v1/sessions/start", startPayload)
+	if queueErr != nil {
+		fmt.Fprintf(os.Stderr, "BAP reporting: durable startup outbox unavailable: %v\n", queueErr)
+	}
 	client := httptransport.New(800 * time.Millisecond)
 	resp, err := client.Post(serverURL+"/api/v1/sessions/start", "application/json", bytes.NewReader(body))
 	if err == nil && resp != nil {
 		defer resp.Body.Close()
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			removeDeliveredSessionReport(queued)
+		}
 		if resp.StatusCode == http.StatusForbidden {
 			var errResp struct {
 				Error string `json:"error"`
@@ -390,6 +401,8 @@ func SubmitUserPrompt(sessionID, appID, prompt string) error {
 	}
 
 	promptPayload := map[string]any{
+		"event_id":               audit.GenerateEventID(),
+		"turn_id":                os.Getenv("BAP_TURN_ID"),
 		"session_id":             sessionID,
 		"app_id":                 normAppID,
 		"user_prompt":            prompt,
@@ -404,6 +417,9 @@ func SubmitUserPrompt(sessionID, appID, prompt string) error {
 			"prompt_hash":        promptHash,
 			"prompt_captured":    true,
 		},
+	}
+	if promptPayload["turn_id"] == "" {
+		promptPayload["turn_id"] = promptPayload["event_id"]
 	}
 	incrementSessionMarkerPromptCount(sessionID, prompt)
 	return postJSONQuick(serverURL+"/api/v1/sessions/prompt", promptPayload)
@@ -488,4 +504,3 @@ func isWorkstationFrozenInState() bool {
 	}
 	return false
 }
-

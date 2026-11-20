@@ -436,6 +436,7 @@ func (s *DaemonServer) runHeartbeatWorker(ctx context.Context) {
 			if s.state.ServerURL == "" {
 				continue
 			}
+			flushPromptSpool(s.state.ServerURL, "")
 			start := time.Now()
 			resp, err := client.Get(strings.TrimRight(s.state.ServerURL, "/") + "/health")
 			if err == nil {

@@ -2,6 +2,82 @@
 
 ## Pilot hardening implementation update (candidate work)
 
+### Five-layer evidence showcase and resilient Claude lifecycle — 2026-11-19
+
+**Status: source implementation and focused component validation passed; installed-runtime acceptance pending.**
+Related work: BAP-1085 (duplicate/stale hook integrations), BAP-1073 (process cleanup),
+BAP-1004 (telemetry delivery). No new live Jira issue ID has been assigned here.
+
+The showcase uses five explicit defense layers: in-harness hooks, execution broker,
+cryptographic integrity/pinning, anomaly risk, and control-plane attestation.
+Every diagnostic carries run/session/scenario/action and producer identity. The UI
+keeps all layers visible, separates readiness from participation and missing evidence,
+and shows scenario timelines. Fixture callbacks do not establish native-host delivery;
+binary-image attestation does not establish TPM/device attestation. Developer override
+must be disclosed even when the diagnostic binary itself cannot honor an override.
+
+`bap claude` now has a native lifecycle owner and a process-scoped hook configuration.
+Known duplicates in hook-only scopes can be reconciled without rewriting source files;
+managed registrations are preserved. Scoped permissions/environment settings must never
+be promoted into command-line scope to work around a duplicate. Claude `Stop` ends a turn,
+not the session. A hook-only verdict is `DECISION_ONLY`, not execution evidence.
+
+Codex, Antigravity, Copilot and OpenCode now share session identity, local/offline
+startup handling, teardown and boundary guidance; explicit Copilot/OpenCode CLI
+entry points were added. The five-layer diagnostic accepts all five client names.
+`--without-hooks` omits the callback fixture without disabling a real defense: a
+workspace-built run verified that the broker still independently produced its
+execution receipt. It does not prove interception of tools that never reach BAP.
+
+Ordinary malformed Claude settings are excluded from the affected session scope
+and valid process-scoped hooks are serialized; damaged originals are preserved.
+Native hook JSON is never assembled by string interpolation. Legacy PowerShell
+writers validate generated JSON before any source swap, replace files atomically,
+and preserve good bytes when malformed text is rejected. Windows PowerShell tests
+verified spaces, Unicode and invalid escapes. Diagnostic receipts use a separate
+owned breadcrumb, preserving each vendor's strict callback response schema.
+
+Claude enforcement configuration travels inline, independent of its optional
+workspace journal. A journal storage fault cannot stop governed startup; bounded
+background repair recovers it automatically. Unknown leftovers do not block new
+launches or prevent cleanup of other known dead owners. Existing user edits and
+live child-process artifacts remain preserved. Recent native callback health is
+separate from synthetic component probes; fixtures cannot establish live hook
+coverage. New health snapshots use bounded latest-record names rather than one
+new file per callback.
+
+**Required resilience:** missing ordinary configuration and network/5xx failures must
+not strand the user in development tools. Start with local enforcement, repair optional
+bookkeeping automatically with bounded retries, reconnect and drain durable pending
+telemetry by stable event ID, and retain unacknowledged evidence across crashes. Explicit
+revocation, managed-policy conflicts, and unavailable execution authority remain enforced.
+Keep only important policy/identity/audit/recovery state and currently owned artifacts;
+clean normal exits and known abandoned artifacts, preserve unknown ownership/user edits.
+
+Prompt/start/end reports are now durably queued before delivery and replayed even
+after their source session ends. Replay binds the destination and endpoint and
+keeps malformed/refused/old undelivered records instead of discarding them by age.
+Audit appends sync to disk; acknowledged pruning uses staged atomic replacement
+under the append lock. Direct-delivery cleanup errors are surfaced. Pending audit
+spools drain after verified ingestion while retained recovery/audit evidence stays
+available where the server only acknowledged metadata or non-durable ingestion.
+
+**Validation:** focused edge lifecycle/selection/override/session-recovery and
+outbox tests, audit reconnect/concurrent-append/atomic-prune tests, control-plane
+diagnostic/authentication and dashboard asset tests, and seven UI evidence-model tests
+passed. A workspace-built edge binary produced real hook-decision and broker execution
+receipts for all five client adapters, matching/mismatching pin results, and isolated
+risk escalation; a separate run verified the missing-callback/broker-participation case.
+PowerShell JSON-preservation tests passed on Windows. Source builds/tests do not prove
+installed Claude, dashboard, or control-plane behavior; live native acceptance and
+deployment remain open. Live Jira synchronization awaits an Atlassian connection.
+
+**Workspace cleanup limitation:** the broker refused removal of the test-generated
+`test-runtime-tmp` directory under Cedar `policy2`, including after a scoped
+`fs:file:delete` grant was issued. No alternate deletion route was attempted; the
+directory remains for human policy review. This is separate from the passing
+runtime-owned artifact and spool cleanup regressions.
+
 ### BAP-1107 — Old exhausted grants hide live resource mismatches (P0)
 
 **Status: source fix and regression passed, 2026-11-18.**

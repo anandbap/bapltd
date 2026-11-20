@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -19,6 +20,31 @@ type mockRoundTripper func(*http.Request) (*http.Response, error)
 
 func (f mockRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
+}
+
+func TestSessionLifecycleNetworkFailuresStayLocallyGoverned(t *testing.T) {
+	t.Setenv("BAP_TEST_ENV", "1")
+	t.Setenv("BAP_STATE_DIR", t.TempDir())
+	state.ResetForTesting()
+	defer state.ResetForTesting()
+	previous := httptransport.MockTransport
+	defer func() { httptransport.MockTransport = previous }()
+	for _, status := range []int{0, http.StatusServiceUnavailable, http.StatusUnauthorized} {
+		httptransport.MockTransport = mockRoundTripper(func(r *http.Request) (*http.Response, error) {
+			if status == 0 {
+				return nil, fmt.Errorf("diagnostic network outage")
+			}
+			return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"status":"unavailable"}`))}, nil
+		})
+		sid := fmt.Sprintf("sess-network-fault-%d", status)
+		if err := EnsureSessionStarted(sid, "claude-code", os.Getpid(), ""); err != nil {
+			t.Fatalf("recoverable status %d blocked local startup: %v", status, err)
+		}
+		if !IsSessionActive(sid) {
+			t.Fatalf("local session missing after network status %d", status)
+		}
+		cleanupSessionMarker(sid, 0)
+	}
 }
 
 func TestSessionLifecycle_EnsureSessionStartedAndEnded(t *testing.T) {

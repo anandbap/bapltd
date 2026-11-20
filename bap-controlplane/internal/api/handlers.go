@@ -333,6 +333,7 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) registerRoutes() {
 	s.registerControlPlaneRoutes()
+	s.mux.HandleFunc("/api/v1/admin/showcase/attestation", s.requireAdminAuth(s.handleShowcaseAttestation))
 	s.mux.HandleFunc("/api/v1/admin/inspector/data", s.requireAdminAuth(s.handleInspectorData))
 	// Public and Agent Endpoints
 	s.mux.HandleFunc("/health", s.handleHealth)

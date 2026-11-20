@@ -164,6 +164,13 @@ func devOverrideActive() (bool, string) {
 	if allowed, _ := isDeveloperModeAllowed(); !allowed {
 		return false, ""
 	}
+	return configuredDevOverride()
+}
+
+// Read-only observation is separate from the build/environment gates that
+// decide whether THIS binary honors an override. A release diagnostic must
+// still disclose an active workstation marker used by another installed build.
+func configuredDevOverride() (bool, string) {
 
 	// 1. Check environment variable BAP_DEV_OVERRIDE or BAP_DEV_MODE
 	raw := strings.TrimSpace(os.Getenv("BAP_DEV_OVERRIDE"))

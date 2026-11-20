@@ -7,16 +7,15 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"bap-edge/internal/authz"
-	"bap-edge/internal/config"
 	"bap-edge/pkg/version"
 )
 
 // parseLauncherArgs extracts BAP launcher flags and returns the filtered downstream args for the agent CLI.
 func parseLauncherArgs(args []string) (downstreamArgs []string, hooksDisabled bool, forceFix bool, serverURL string, err error) {
-	for _, a := range args {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		switch {
 		case a == "--no-hooks" || a == "--disable-hooks" || a == "--hooks-disabled" || a == "--unmonitored" || a == "--bap-hooks=false" || a == "--prompt-only":
 			if !version.DevOverridesAllowed() {
@@ -30,7 +29,11 @@ func parseLauncherArgs(args []string) (downstreamArgs []string, hooksDisabled bo
 		case strings.HasPrefix(a, "--server-url="):
 			serverURL = strings.TrimPrefix(a, "--server-url=")
 		case a == "--server" || a == "--server-url":
-			continue
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
+				return nil, false, false, "", fmt.Errorf("missing value for %s", a)
+			}
+			i++
+			serverURL = args[i]
 		default:
 			downstreamArgs = append(downstreamArgs, a)
 		}
@@ -212,276 +215,6 @@ func reexecUnderWinpty(subcmd string, args []string) (handled bool, err error) {
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(), "BAP_UNDER_WINPTY=1")
 	return true, cmd.Run()
-}
-
-// RunClaude launches Claude Code in active BAP Zero-Trust Governance.
-func RunClaude(args []string) error {
-	if handled, werr := reexecUnderWinpty("claude", args); handled {
-		return werr
-	}
-	downstreamArgs, hooksDisabled, forceFix, serverURL, err := parseLauncherArgs(args)
-	if err != nil {
-		return err
-	}
-	_ = forceFix
-
-	if serverURL == "" {
-		ep := config.ResolveEndpoints()
-		serverURL = ep.ControlPlaneURL
-	}
-	if serverURL == "" {
-		serverURL = config.DefaultControlPlaneURL
-	}
-	serverURL = strings.TrimRight(serverURL, "/")
-
-	if hooksDisabled {
-		_ = os.Setenv("BAP_HOOKS", "false")
-		_ = os.Setenv("BAP_DISABLE_HOOKS", "1")
-		fmt.Println("[!] BAP hooks disabled via CLI flag (--no-hooks). Running in unmonitored development mode.")
-	}
-
-	// First check for dedicated BAP launcher scripts
-	var script string
-	if runtime.GOOS == "windows" {
-		script = resolveLauncherScript([]string{"run_claude_bap.ps1", "run_claude_bap.bat", "run_claude_cli_bap.ps1"})
-	} else {
-		script = resolveLauncherScript([]string{"run_claude_bap.sh", "run_claude_cli_bap.sh"})
-	}
-
-	if script != "" {
-		cmd := buildLauncherCommand(script, serverURL, downstreamArgs)
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmdEnv := os.Environ()
-		cmdEnv = append(cmdEnv,
-			"BAP_SERVER_URL="+serverURL,
-			"BAP_CONTROL_PLANE_URL="+serverURL,
-		)
-		cmd.Env = cmdEnv
-		return cmd.Run()
-	}
-
-	// Fallback: look for claude binary on PATH
-	claudeNames := []string{"claude"}
-	if runtime.GOOS == "windows" {
-		claudeNames = []string{"claude.cmd", "claude.bat", "claude.exe", "claude"}
-	}
-	claudeBin := findExecutable(claudeNames)
-	if claudeBin == "" {
-		return fmt.Errorf("Claude Code CLI ('claude') not found on PATH or standard directories.\nPlease install with 'npm install -g @anthropic-ai/claude-code' or run 'bap setup --app=claude-code'.")
-	}
-
-	claudeArgs := downstreamArgs
-	if !hooksDisabled {
-		cwd, _ := os.Getwd()
-		home, _ := os.UserHomeDir()
-		exePath, _ := os.Executable()
-		pluginCandidates := []string{
-			filepath.Join(cwd, "plugins", "claude"),
-			filepath.Join(filepath.Dir(exePath), "plugins", "claude"),
-			filepath.Join(home, "bin", "plugins", "claude"),
-			filepath.Join(home, ".bap", "plugins", "claude"),
-			filepath.Join(home, ".claude", "plugins", "claude"),
-		}
-		var pluginDir string
-		for _, cand := range pluginCandidates {
-			if info, err := os.Stat(cand); err == nil && info.IsDir() {
-				pluginDir = cand
-				break
-			}
-		}
-		hasPluginFlag := false
-		for _, a := range downstreamArgs {
-			if strings.HasPrefix(a, "--plugin-dir") {
-				hasPluginFlag = true
-				break
-			}
-		}
-		if !hasPluginFlag && pluginDir != "" {
-			claudeArgs = append([]string{"--plugin-dir", pluginDir}, downstreamArgs...)
-		}
-	}
-
-	sessionID := strings.TrimSpace(os.Getenv("BAP_SESSION_ID"))
-	if sessionID == "" {
-		sessionID = fmt.Sprintf("sess-claude-%d-%d", os.Getpid(), time.Now().Unix())
-	}
-	cmd := exec.Command(claudeBin, claudeArgs...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmdEnv := os.Environ()
-	cmdEnv = append(cmdEnv,
-		"LTD_SOURCE=claude-code",
-		"BAP_SESSION_ID="+sessionID,
-	)
-	if hooksDisabled {
-		cmdEnv = append(cmdEnv, "BAP_HOOKS=false", "BAP_DISABLE_HOOKS=1")
-	}
-	cmd.Env = cmdEnv
-
-	_ = EnsureSessionStarted(sessionID, "claude-code", os.Getpid(), "")
-	runErr := cmd.Run()
-	_ = EnsureSessionEnded(sessionID, "cli process exited")
-	return runErr
-}
-
-// RunCodex launches OpenAI Codex CLI in active BAP Zero-Trust Governance.
-func RunCodex(args []string) error {
-	if handled, werr := reexecUnderWinpty("codex", args); handled {
-		return werr
-	}
-	downstreamArgs, hooksDisabled, forceFix, serverURL, err := parseLauncherArgs(args)
-	if err != nil {
-		return err
-	}
-	_ = forceFix
-
-	if serverURL == "" {
-		ep := config.ResolveEndpoints()
-		serverURL = ep.ControlPlaneURL
-	}
-	if serverURL == "" {
-		serverURL = config.DefaultControlPlaneURL
-	}
-	serverURL = strings.TrimRight(serverURL, "/")
-
-	if hooksDisabled {
-		_ = os.Setenv("BAP_HOOKS", "false")
-		_ = os.Setenv("BAP_DISABLE_HOOKS", "1")
-		fmt.Println("[!] BAP hooks disabled via CLI flag (--no-hooks). Running in unmonitored development mode.")
-	}
-
-	var script string
-	if runtime.GOOS == "windows" {
-		script = resolveLauncherScript([]string{"run_codex_cli_bap.ps1", "run_codex_cli_bap.bat"})
-	} else {
-		script = resolveLauncherScript([]string{"run_codex_cli_bap.sh"})
-	}
-
-	if script != "" {
-		cmd := buildLauncherCommand(script, serverURL, downstreamArgs)
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmdEnv := os.Environ()
-		cmdEnv = append(cmdEnv,
-			"BAP_SERVER_URL="+serverURL,
-			"BAP_CONTROL_PLANE_URL="+serverURL,
-		)
-		cmd.Env = cmdEnv
-		return cmd.Run()
-	}
-
-	// Fallback: look for codex binary on PATH
-	codexNames := []string{"codex"}
-	if runtime.GOOS == "windows" {
-		codexNames = []string{"codex.cmd", "codex.bat", "codex.exe", "codex"}
-	}
-	codexBin := findExecutable(codexNames)
-	if codexBin == "" {
-		return fmt.Errorf("OpenAI Codex CLI ('codex') not found on PATH or standard directories.\nPlease install with 'npm install -g @openai/codex' or run 'bap setup --app=codex'.")
-	}
-
-	sessionID := fmt.Sprintf("sess-codex-%d-%d", os.Getpid(), time.Now().Unix())
-	cmd := exec.Command(codexBin, downstreamArgs...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmdEnv := os.Environ()
-	cmdEnv = append(cmdEnv,
-		"LTD_SOURCE=codex",
-		"BAP_SESSION_ID="+sessionID,
-	)
-	if hooksDisabled {
-		cmdEnv = append(cmdEnv, "BAP_HOOKS=false", "BAP_DISABLE_HOOKS=1")
-	}
-	cmd.Env = cmdEnv
-	return cmd.Run()
-}
-
-// RunAntigravity launches Google Antigravity CLI (agy) in active BAP Zero-Trust Governance.
-func RunAntigravity(args []string) error {
-	if handled, werr := reexecUnderWinpty("agy", args); handled {
-		return werr
-	}
-	downstreamArgs, hooksDisabled, forceFix, serverURL, err := parseLauncherArgs(args)
-	if err != nil {
-		return err
-	}
-	_ = forceFix
-
-	if serverURL == "" {
-		ep := config.ResolveEndpoints()
-		serverURL = ep.ControlPlaneURL
-	}
-	if serverURL == "" {
-		serverURL = config.DefaultControlPlaneURL
-	}
-	serverURL = strings.TrimRight(serverURL, "/")
-
-	if hooksDisabled {
-		_ = os.Setenv("BAP_HOOKS", "false")
-		_ = os.Setenv("BAP_DISABLE_HOOKS", "1")
-		fmt.Println("[!] BAP hooks disabled via CLI flag (--no-hooks). Running in unmonitored development mode.")
-	}
-
-	var script string
-	if runtime.GOOS == "windows" {
-		script = resolveLauncherScript([]string{"run_antigravity_cli_bap.ps1", "run_antigravity_cli_bap.bat"})
-	} else {
-		script = resolveLauncherScript([]string{"run_antigravity_cli_bap.sh"})
-	}
-
-	if script != "" {
-		cmd := buildLauncherCommand(script, serverURL, downstreamArgs)
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmdEnv := os.Environ()
-		cmdEnv = append(cmdEnv,
-			"BAP_SERVER_URL="+serverURL,
-			"BAP_CONTROL_PLANE_URL="+serverURL,
-		)
-		cmd.Env = cmdEnv
-		return cmd.Run()
-	}
-
-	// Fallback: look for agy binary on PATH
-	agyNames := []string{"agy"}
-	if runtime.GOOS == "windows" {
-		agyNames = []string{"agy.cmd", "agy.bat", "agy.exe", "agy"}
-	}
-	agyBin := findExecutable(agyNames)
-	if agyBin == "" {
-		return fmt.Errorf("Google Antigravity CLI ('agy') not found on PATH or standard directories.\nPlease install Antigravity CLI or run 'bap setup --app=antigravity'.")
-	}
-
-	sessionID := strings.TrimSpace(os.Getenv("BAP_SESSION_ID"))
-	if sessionID == "" {
-		sessionID = fmt.Sprintf("sess-antigravity-%d-%d", os.Getpid(), time.Now().Unix())
-	}
-	cmd := exec.Command(agyBin, downstreamArgs...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmdEnv := os.Environ()
-	cmdEnv = append(cmdEnv,
-		"LTD_SOURCE=antigravity",
-		"BAP_SESSION_ID="+sessionID,
-		"BAP_SERVER_URL="+serverURL,
-		"BAP_CONTROL_PLANE_URL="+serverURL,
-	)
-	if hooksDisabled {
-		cmdEnv = append(cmdEnv, "BAP_HOOKS=false", "BAP_DISABLE_HOOKS=1")
-	}
-	cmd.Env = cmdEnv
-
-	_ = EnsureSessionStarted(sessionID, "antigravity", os.Getpid(), "")
-	runErr := cmd.Run()
-	_ = EnsureSessionEnded(sessionID, "cli process exited")
-	return runErr
 }
 
 // RunReview launches the interactive session reviewer and performance inspector.
