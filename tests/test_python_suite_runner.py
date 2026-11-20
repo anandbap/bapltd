@@ -1,4 +1,5 @@
 import io
+from contextlib import redirect_stderr, redirect_stdout
 import json
 from pathlib import Path
 import tempfile
@@ -32,7 +33,12 @@ class TestPythonSuiteRunner(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(runner, "ROOT", Path(directory)), patch.object(runner.subprocess, "Popen", return_value=FailedSuite()) as launch:
-                self.assertEqual(runner.main([]), 1)
+                # This simulated child failure must not resemble the real CI
+                # suite result in the enclosing test process's output.
+                output = io.StringIO()
+                with redirect_stdout(output), redirect_stderr(output):
+                    self.assertEqual(runner.main([]), 1)
+                self.assertIn("FAILED (failures=1)", output.getvalue())
                 args, kwargs = launch.call_args
                 self.assertIn("test*.py", args[0])
                 self.assertEqual(kwargs["cwd"], Path(directory))
