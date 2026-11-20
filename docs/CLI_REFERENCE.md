@@ -141,14 +141,39 @@ A quoted command with no unquoted operator runs directly with an exact argument 
 
 BAP operates on Zero Standing Privileges: agents start with zero authority and acquire short-lived, least-privilege JIT TaskGrants.
 
+**Interactive approval inbox:** in your own terminal, run `bap zsp`. It automatically
+finds pending requests, displays their client/session, linked session, intent,
+actions, resources, use limits and expiry, and offers approve/deny/skip/quit.
+Each approval still requires a separate one-time code. It waits for newly arriving
+requests until Ctrl+C; no request ID needs to be copied. `bap zsp inbox` reviews the
+current queue once; `bap zsp inbox --watch` keeps waiting. In noninteractive output,
+bare `bap zsp` prints usage instead of opening a console. Existing explicit
+`approve <id>`/`deny <id>` commands remain available.
+
+The console and approve/deny operations are agent-blocked at supported hook/broker
+boundaries; the console also rejects broker-marked processes and nonterminal input.
+Aliases are covered, including `autoapprove enable`. Changed requests cannot be
+approved against an older displayed snapshot: all reviewed fields are rechecked
+under the store lock before minting. Request-provided terminal control characters
+are escaped. EOF, skipped requests and invalid choices never grant authority.
+
+**Human-authentication limit:** a terminal and a code are not cryptographic proof
+of a human. An agent with same-account process/PTY control or direct authority over
+local signing state is outside this guarantee. Strict separation requires a trusted
+approval service or a human-held signing key outside the agent's security context.
+Do not expose the approval terminal to an agent. Agent `zsp authorize` and read-only
+status/list operations remain supported; restricting every ZSP command to humans
+would prevent agents from requesting legitimate grants.
+
 | Command | Arguments / Flags | Description |
 |---|---|---|
+| `bap zsp inbox` | `[--watch]` | Human interactive review; no IDs required. Bare `bap zsp` watches when launched in an interactive terminal. |
 | `bap zsp init` | `[--session-id <id>] [--client <client>] [--json]` | Initialize the session principal with zero standing privileges. |
 | `bap zsp status` | `[--session-id <id>] [--client <client>] [--all] [--all-sessions] [--json]` | Inspect grants; `--all` includes burned/expired grants and `--all-sessions` spans sessions. |
 | `bap zsp grants` | Same as `status` | Alias; `zsp list` is another alias. |
 | `bap zsp playback` | `[--limit <n>] [--json]` | Replay recorded grants across the workstation; default limit 50. Does not accept `--all-sessions`. |
 | `bap zsp authorize` | `--session-id <id> --mission <m> --goal "<text>" --actions <a,b> [--resources <r>] [--max-uses N] [--ttl <dur>] [--authorized-by <email>] [--client <c>] [--json]` | Submit a 4-Tuple Task Authorization Envelope to the policy engine. Defaults: `--mission TASK_EXECUTION`, `--resources workspace://current`, `--max-uses 1`, `--ttl 300s`. Run it as a **standalone** command (no `&&`, `;` or `\|`). A grant is minted, **or** a human-approval request id is raised, **or** the request is denied. |
-| `bap zsp approvals` | *(none)* | Human only: list pending high-risk approval requests. Blocked for agents. |
+| `bap zsp approvals` | *(none)* | Read-only list of pending requests; humans and agents may inspect. Decisions remain guarded. |
 | `bap zsp approve` | `<req-id>` | Human only: approve a pending request. Requires a one-time code typed in the developer's own terminal. Blocked for agents. |
 | `bap zsp deny` | `<req-id>` | Human only: deny a pending request. Blocked for agents. |
 | `bap zsp autoapprove` | `[status]` | Inspect the bounded approve-tier window; no subcommand defaults to `status`. |

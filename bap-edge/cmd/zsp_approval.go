@@ -19,29 +19,32 @@ import (
 // trust, untrust, dev-override, and zsp policy-sign. This is the explicit agent gate (BAP-934); the
 // commands themselves only check BAP_IN_BROKER so a developer is never locked out.
 func humanOnlyBAPCommand(command string) (string, bool) {
-	toks := strings.Fields(strings.ToLower(strings.ReplaceAll(command, "\"", " ")))
+	toks := strings.Fields(strings.ToLower(strings.NewReplacer("\"", " ", "'", " ").Replace(command)))
 	isBAP := func(t string) bool {
 		t = strings.ReplaceAll(t, "\\", "/")
 		base := t[strings.LastIndex(t, "/")+1:]
-		return base == "bap" || base == "bapedge" || base == "bap.exe" || base == "bapedge.exe"
+		return base == "bap" || base == "bapedge" || base == "bap.exe" || base == "bapedge.exe" || base == "ltd-agent" || base == "ltd-agent.exe" || base == "bapmcp" || base == "bapmcp.exe" || base == "bap.cli"
 	}
 	for i := 0; i+1 < len(toks); i++ {
 		if !isBAP(toks[i]) {
 			continue
 		}
 		switch toks[i+1] {
-		case "trust", "untrust", "dev-override", "egress", "learn", "run", "recommend":
+		case "trust", "untrust", "dev-override", "dev", "egress", "learn", "run", "recommend":
 			return toks[i+1], true
 		case "review":
 			if i+2 < len(toks) && toks[i+2] == "recommend" {
 				return "review recommend", true
 			}
 		case "zsp":
+			if i+2 == len(toks) || (i+2 < len(toks) && toks[i+2] == "inbox") {
+				return "zsp inbox", true
+			}
 			if i+2 < len(toks) && (toks[i+2] == "policy-sign" || toks[i+2] == "approve" || toks[i+2] == "deny") {
 				return "zsp " + toks[i+2], true
 			}
 			// Turning step-up auto-approve ON is a human decision (BAP-1100); off/status are harmless.
-			if i+3 < len(toks) && toks[i+2] == "autoapprove" && toks[i+3] == "on" {
+			if i+3 < len(toks) && toks[i+2] == "autoapprove" && (toks[i+3] == "on" || toks[i+3] == "enable") {
 				return "zsp autoapprove on", true
 			}
 		}
@@ -127,10 +130,12 @@ func printHITLNextStep(p *authz.PendingApproval, sessionID, actions, resources s
 // raiseHITLRequest records a pending approval for an approve-tier refusal.
 func raiseHITLRequest(sessionID, clientType, mission, goal string, actions, resources []string, maxUses int, ttl time.Duration, err error, requesting ...string) *authz.PendingApproval {
 	requester := ""
-	if len(requesting) > 0 { requester = requesting[0] }
+	if len(requesting) > 0 {
+		requester = requesting[0]
+	}
 	p, rErr := authz.RaisePendingApproval(authz.ResolveZSPDir(), authz.PendingApproval{
 		RequestingSessionID: requester,
-		SessionID: sessionID, ClientType: clientType, Mission: mission, Goal: goal,
+		SessionID:           sessionID, ClientType: clientType, Mission: mission, Goal: goal,
 		Actions: actions, Resources: resources, MaxUses: maxUses, TTLSeconds: int(ttl.Seconds()), Reason: err.Error(),
 	})
 	if rErr != nil {
@@ -166,10 +171,14 @@ func runZSPApprovals() error {
 // runZSPDecide approves or denies a request. Human-only: refused inside the broker, and approval also
 // needs a real terminal and a freshly generated one-time code.
 func runZSPDecide(approve bool, args []string) error {
+	return runZSPDecideReviewed(approve, args, bufio.NewReader(os.Stdin), nil)
+}
+
+func runZSPDecideReviewed(approve bool, args []string, reader *bufio.Reader, reviewed *authz.PendingApproval) error {
 	if strings.TrimSpace(os.Getenv("BAP_IN_BROKER")) != "" {
 		return fmt.Errorf("%w: approving or denying requests is a human-operator action and cannot run inside an agent session", authz.ErrHighRiskApprovalRequired)
 	}
-	if len(args) == 0 {
+	if len(args) != 1 {
 		return fmt.Errorf("usage: bapedge zsp %s <request-id>", map[bool]string{true: "approve", false: "deny"}[approve])
 	}
 	id := strings.TrimSpace(args[0])
@@ -177,18 +186,23 @@ func runZSPDecide(approve bool, args []string) error {
 	if err != nil {
 		return err
 	}
+	if reviewed != nil {
+		if err := p.CheckReviewed(*reviewed); err != nil {
+			return err
+		}
+	}
 	// Check the state before asking the human anything: an already-decided or expired request must
 	// not produce a one-time-code prompt. DecidePendingApproval re-checks under the store lock.
 	if err := p.CheckDecidable(); err != nil {
 		return err
 	}
 	if approve && p.RequestingSessionID != "" && p.RequestingSessionID != p.SessionID {
-		fmt.Fprintf(os.Stderr, "  This approval also authorizes linked requesting session: %s\n", p.RequestingSessionID)
+		fmt.Fprintf(os.Stderr, "  This approval also authorizes linked requesting session: %q\n", p.RequestingSessionID)
 	}
-	if approve && !humanApprovalChallenge(p.SessionID, p.Actions, p.Resources, p.Goal) {
+	if approve && !humanApprovalChallengeWithReader(p.SessionID, p.Actions, p.Resources, p.Goal, reader) {
 		return fmt.Errorf("%w: interactive human approval challenge failed or no terminal is attached", authz.ErrHighRiskApprovalRequired)
 	}
-	req, grant, err := authz.DecidePendingApproval(authz.ResolveZSPDir(), id, approve)
+	req, grant, err := authz.DecidePendingApprovalReviewed(authz.ResolveZSPDir(), id, approve, *p)
 	if err != nil {
 		return err
 	}
@@ -228,7 +242,9 @@ const approvalCodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 func newApprovalCode() string {
 	b := make([]byte, 6)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
 	out := make([]byte, len(b))
 	for i, v := range b {
 		out[i] = approvalCodeAlphabet[int(v)%len(approvalCodeAlphabet)]
@@ -247,12 +263,22 @@ func newApprovalCode() string {
 // The planned hardening (BAP-926 follow-up) moves approval to a separate channel with a
 // human-held signing key; this challenge removes the trivially scriptable paths today.
 func humanApprovalChallenge(sessionID string, actions, resources []string, goal string) bool {
+	return humanApprovalChallengeWithReader(sessionID, actions, resources, goal, bufio.NewReader(os.Stdin))
+}
+
+func humanApprovalChallengeWithReader(sessionID string, actions, resources []string, goal string, reader *bufio.Reader) bool {
+	if strings.TrimSpace(os.Getenv("BAP_IN_BROKER")) != "" {
+		return false
+	}
 	if !isTerminal(os.Stdin) || !isTerminal(os.Stderr) {
 		return false
 	}
 	code := newApprovalCode()
-	fmt.Fprintf(os.Stderr, "\n[BAP HUMAN APPROVAL REQUIRED] Session %s is requesting elevated permissions.\n", sessionID)
-	fmt.Fprintf(os.Stderr, "  Actions:   %v\n  Resources: %v\n  Goal:      %s\n", actions, resources, goal)
+	if code == "" {
+		return false
+	}
+	fmt.Fprintf(os.Stderr, "\n[BAP HUMAN APPROVAL REQUIRED] Session %q is requesting elevated permissions.\n", sessionID)
+	fmt.Fprintf(os.Stderr, "  Actions:   %q\n  Resources: %q\n  Goal:      %q\n", actions, resources, goal)
 	fmt.Fprintf(os.Stderr, "To approve, type this one-time code exactly (anything else denies): %s\n> ", code)
 	// The prompt can never spin forever: if nobody answers, it gives up and leaves the request pending.
 	type readResult struct {
@@ -261,7 +287,7 @@ func humanApprovalChallenge(sessionID string, actions, resources []string, goal 
 	}
 	ch := make(chan readResult, 1)
 	go func() {
-		l, e := bufio.NewReader(os.Stdin).ReadString('\n')
+		l, e := reader.ReadString('\n')
 		ch <- readResult{l, e}
 	}()
 	var line string

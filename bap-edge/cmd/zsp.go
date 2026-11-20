@@ -162,6 +162,12 @@ func splitCSVFlags(raw string) []string {
 // and Zero Standing Privileges JIT TaskGrants (BAP-915, BAP-916, BAP-917, BAP-918).
 func RunZSP(args []string) error {
 	if len(args) == 0 {
+		if strings.TrimSpace(os.Getenv("BAP_IN_BROKER")) != "" {
+			return fmt.Errorf("%w: approval inbox is a human-operator command", authz.ErrHighRiskApprovalRequired)
+		}
+		if isTerminal(os.Stdin) && isTerminal(os.Stderr) {
+			return runZSPInbox([]string{"--watch"})
+		}
 		printZSPUsage()
 		return nil
 	}
@@ -170,6 +176,8 @@ func RunZSP(args []string) error {
 	rest := args[1:]
 
 	switch sub {
+	case "inbox":
+		return runZSPInbox(rest)
 	case "init":
 		fs := flag.NewFlagSet("zsp init", flag.ContinueOnError)
 		sessFlag := fs.String("session-id", "", "Session ID")
@@ -495,19 +503,19 @@ func RunZSP(args []string) error {
 			delegationType = "human_interactive_oob"
 		}
 		if delegationType == "human_interactive_prompt" {
-				// A human opened a developer override window: policy-tier approvals are paused for its
-				// duration. Governance escalations (policy:, grant:, admin:, ...) are still refused by the
-				// engine, and the grant carries a distinct delegation type so the audit trail shows it.
-				if active, banner := devOverrideActive(); active {
-					fmt.Fprintln(os.Stderr, banner)
-					delegationType = authz.DelegationDevOverride
-				} else if on, until, _ := authz.AutoApproveStatus(authz.ResolveZSPDir()); on {
-					// BAP-1100: a human enabled step-up auto-approve for a bounded window.
-					fmt.Fprintf(os.Stderr, "[BAP ZSP AUTO-APPROVE ON until %s] Approve-tier requests are granted without a prompt; policy denies and governance escalations still apply.\n", until.Format(time.RFC3339))
-					delegationType = authz.DelegationAutoApprove
-				}
+			// A human opened a developer override window: policy-tier approvals are paused for its
+			// duration. Governance escalations (policy:, grant:, admin:, ...) are still refused by the
+			// engine, and the grant carries a distinct delegation type so the audit trail shows it.
+			if active, banner := devOverrideActive(); active {
+				fmt.Fprintln(os.Stderr, banner)
+				delegationType = authz.DelegationDevOverride
+			} else if on, until, _ := authz.AutoApproveStatus(authz.ResolveZSPDir()); on {
+				// BAP-1100: a human enabled step-up auto-approve for a bounded window.
+				fmt.Fprintf(os.Stderr, "[BAP ZSP AUTO-APPROVE ON until %s] Approve-tier requests are granted without a prompt; policy denies and governance escalations still apply.\n", until.Format(time.RFC3339))
+				delegationType = authz.DelegationAutoApprove
 			}
-			var pendingReq *authz.PendingApproval
+		}
+		var pendingReq *authz.PendingApproval
 		grant, _, err := authz.SubmitTaskEnvelopeWithDelegation(
 			authz.ResolveZSPDir(),
 			sessionID,
@@ -583,12 +591,12 @@ func RunZSP(args []string) error {
 		}
 		decision := "allow"
 		zspConcept := "ZSP_GRANT_MINTED"
-			if delegationType == authz.DelegationDevOverride {
-				zspConcept = "ZSP_DEV_OVERRIDE_GRANT"
-			}
-			if delegationType == authz.DelegationAutoApprove {
-				zspConcept = "ZSP_AUTO_APPROVE_GRANT"
-			}
+		if delegationType == authz.DelegationDevOverride {
+			zspConcept = "ZSP_DEV_OVERRIDE_GRANT"
+		}
+		if delegationType == authz.DelegationAutoApprove {
+			zspConcept = "ZSP_AUTO_APPROVE_GRANT"
+		}
 		if reusedApprovedGrant {
 			zspConcept = "ZSP_APPROVED_GRANT_REUSED"
 		}
@@ -806,6 +814,7 @@ func printZSPUsage() {
 	fmt.Println(`Usage: bapedge zsp <subcommand> [flags]
 
 Subcommands:
+  inbox      Review pending requests interactively without copying IDs (--watch waits for new requests)
   init       Initialize cryptographic Agent Principal SVID with 0 standing privileges
   status     Inspect cryptographic principal, standing privilege posture, and JIT grants
   playback   Replay full chronological grant lifecycle, modes (auto vs HITL) and policy recommendations

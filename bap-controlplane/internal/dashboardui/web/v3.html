@@ -2193,7 +2193,7 @@
 
             // Per-layer coverage derived by the control plane from evidence actually received.
             var covNote = '';
-            surfaceHtml += BapDefenseLive.render(s.defense_layers || []);
+            surfaceHtml += typeof BapDefenseLive !== 'undefined' ? BapDefenseLive.render(s.defense_layers || []) : '';
             covNote = 'Layer states come from live producer evidence. ';
             var degradedText = {
               hooks_disabled: 'Hooks are disabled for this session. ',

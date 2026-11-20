@@ -2,6 +2,49 @@
 
 ## Pilot hardening implementation update (candidate work)
 
+### ZSP approval inbox and human-authentication boundary — 2026-11-20
+
+**Implemented in source:** interactive `bap zsp` discovers pending requests and
+watches for new ones; `zsp inbox [--watch]` is explicit. Per-request approve/deny/
+skip/quit replaces manual request-ID copying without adding bulk approval. The
+existing terminal challenge remains mandatory for each approval; broker/nonterminal
+inbox launches are refused. Native command blocking includes inbox/bare ZSP,
+autoapprove `enable`, developer-override `dev`, and known executable/module aliases.
+All displayed request fields are compared again under the decision-store lock;
+changed session/scope/use/TTL/expiry/intent cannot be minted using a stale review.
+Request-provided terminal escape sequences are quoted. These are local controls,
+not cryptographic human identity or proof of installed-client acceptance.
+
+**Validation:** focused inbox/request-substitution tests and the full edge `cmd`
+and `internal/authz` suites passed on Windows, including an unchanged disposable
+request and replay rejection. CLI-reference and capability-claim checks passed;
+a workspace-only executable built successfully at `.bap/bapedge-zsp-review.exe`.
+No real request was approved, no production approval window was changed, and no
+interactive human approval was automated. Installed binaries were not replaced.
+`gofmt` initially required operator review because BAP classified it as
+`system://local`. After explicit human authorization of that formatting scope,
+all six changed ZSP Go files were formatted successfully; `git diff --check`
+passed. No alternative formatting route or unapproved scope widening was used.
+
+**ZSP-REVIEW-01 (P0, OPEN; local tracker ID): independent human approval authority.**
+Current `BAP_IN_BROKER` and terminal/code checks cannot exclude an agent with
+same-account environment/PTY/process control. Do not claim otherwise. Implement
+an authenticated approval channel outside the agent's security context (trusted
+operator service or human-held signing key), with request-digest/session/action/
+resource/expiry binding, one-use decision receipts, verified approver identity,
+and replay-resistant minting. The local PEP must verify that evidence before
+accepting a human delegation; setting an environment variable, supplying a flag,
+typing a captured terminal code or editing local pending-request JSON is not
+sufficient authority. Keep grant-request/inspection available to agents.
+
+**Acceptance:** reject piped answers, self-created PTYs, marker removal, renamed
+executables/module aliases, stale/replayed receipts, request substitution and local
+state tampering; verify two concurrent sessions and exact reviewed limits. Verify
+a real operator approval succeeds through the separate channel and appears with
+attributable evidence in the UI. No autonomous test enables a real approval window,
+developer override, or approves a production request. Source fixture tests do not
+close this P0; it needs independently authenticated runtime proof.
+
 ### CLI reference review — 2026-11-19
 
 Reviewed actual native dispatch and parsers; expanded `docs/CLI_REFERENCE.md` and

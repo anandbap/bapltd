@@ -90,6 +90,18 @@ example is a universal allow rule.
 
 ## Controlling the auto-approval window
 
+To review requests without copying IDs, open `bapedge zsp` in your own terminal.
+The inbox discovers requests and waits for new ones. Each request is reviewed
+individually; approval invokes a fresh one-time challenge. Use `bapedge zsp inbox`
+for one pass or `bapedge zsp inbox --watch` to keep watching. Agent-origin and
+nonterminal inbox launches are rejected; requesting a grant with `zsp authorize`
+remains supported for agents. The exact reviewed request is rechecked at commit.
+
+These local terminal controls cannot prove physical human presence against an
+agent with same-account PTY/process control. The one-time challenge must not be
+presented as equivalent to approval through an independently authenticated human
+channel. See the remediation item in `JIRA_STORIES.md` for that remaining boundary.
+
 These examples are for a human's own terminal. This document does not authorize an
 agent to enable the window or approve itself.
 

@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
-const html = fs.readFileSync(path.join(__dirname, '../bap-controlplane/internal/dashboardui/web/v3.html'), 'utf8');
+const BapDefenseLive = require('../bap-controlplane/internal/dashboardui/web/defense-live.js');
+const html = fs.readFileSync(path.join(__dirname, '../bap-controlplane/internal/dashboardui/web/v3.html'), 'utf8').replace(/\r\n/g, '\n');
 const source = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 const section = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -12,7 +13,7 @@ async function main() {
   const elements = new Map();
   const element = () => ({ hidden: false, textContent: '', children: [], classList: { contains: () => true },
     appendChild(child) { this.children.push(child); }, addEventListener(_, cb) { this.click = cb; } });
-  const ctx = vm.createContext({ console, Date, Promise, performance, encodeURIComponent,
+  const ctx = vm.createContext({ console, Date, Promise, performance, encodeURIComponent, BapDefenseLive,
     S: { adminActive: true, mode: 'live' }, stories: {}, STREAMS: [], liveRequest: 0, liveInFlight: false,
     $: id => { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); },
     esc: value => String(value), render() {}, openAdminPopover() {}, confirm: () => true,

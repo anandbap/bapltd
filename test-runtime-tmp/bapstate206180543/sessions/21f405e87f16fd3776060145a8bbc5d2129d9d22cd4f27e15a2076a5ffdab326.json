@@ -1,0 +1,15 @@
+{
+  "app_id": "antigravity",
+  "hooks_disabled": false,
+  "hostname": "DESKTOP-E63V3UH",
+  "instance_id": "desktop-e63v3uh",
+  "pid": 60484,
+  "process_birth": "01dd7905474a375a",
+  "prompt_count": 0,
+  "reporting_layer": "plugin",
+  "server_url": "http://127.0.0.1:1",
+  "session_id": "stale-id",
+  "started_at": "2026-11-20T15:39:27.4143544Z",
+  "user": "User",
+  "user_prompt": ""
+}

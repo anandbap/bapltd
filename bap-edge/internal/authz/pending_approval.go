@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -24,28 +25,29 @@ var (
 	ErrApprovalNotFound = errors.New("approval request not found")
 	ErrApprovalDecided  = errors.New("approval request is not pending")
 	ErrApprovalExpired  = errors.New("approval request has expired")
+	ErrApprovalChanged  = errors.New("approval request changed since it was reviewed; review it again")
 )
 
 const defaultApprovalRequestTTL = 30 * time.Minute
 
 // PendingApproval is one raised human-approval request.
 type PendingApproval struct {
-	ID         string    `json:"id"`
-	SessionID  string    `json:"session_id"`
-	RequestingSessionID string `json:"requesting_session_id,omitempty"`
-	ClientType string    `json:"client_type"`
-	Mission    string    `json:"mission"`
-	Goal       string    `json:"goal"`
-	Actions    []string  `json:"actions"`
-	Resources  []string  `json:"resources"`
-	MaxUses    int       `json:"max_uses"`
-	TTLSeconds int       `json:"ttl_seconds"`
-	Reason     string    `json:"reason"`
-	Status     string    `json:"status"` // pending | approved | denied
-	CreatedAt  time.Time `json:"created_at"`
-	ExpiresAt  time.Time `json:"expires_at"`
-	DecidedAt  time.Time `json:"decided_at,omitempty"`
-	GrantID    string    `json:"grant_id,omitempty"`
+	ID                  string    `json:"id"`
+	SessionID           string    `json:"session_id"`
+	RequestingSessionID string    `json:"requesting_session_id,omitempty"`
+	ClientType          string    `json:"client_type"`
+	Mission             string    `json:"mission"`
+	Goal                string    `json:"goal"`
+	Actions             []string  `json:"actions"`
+	Resources           []string  `json:"resources"`
+	MaxUses             int       `json:"max_uses"`
+	TTLSeconds          int       `json:"ttl_seconds"`
+	Reason              string    `json:"reason"`
+	Status              string    `json:"status"` // pending | approved | denied
+	CreatedAt           time.Time `json:"created_at"`
+	ExpiresAt           time.Time `json:"expires_at"`
+	DecidedAt           time.Time `json:"decided_at,omitempty"`
+	GrantID             string    `json:"grant_id,omitempty"`
 }
 
 func approvalsDir(zspDir string) string { return filepath.Join(zspDir, "approvals") }
@@ -163,10 +165,29 @@ func (p *PendingApproval) CheckDecidable() error {
 	return nil
 }
 
+// CheckReviewed binds a decision to every displayed request field, including
+// linked identity, scope, use limits and expiry, rather than just its ID.
+func (p *PendingApproval) CheckReviewed(reviewed PendingApproval) error {
+	if !reflect.DeepEqual(*p, reviewed) {
+		return ErrApprovalChanged
+	}
+	return nil
+}
+
 // DecidePendingApproval approves (minting the requested grant for the requesting session with the human
 // out-of-band delegation) or denies a pending request. Callers must have already verified a human is
 // present (terminal one-time code); this function does not and must never be reachable by an agent.
 func DecidePendingApproval(zspDir, id string, approve bool) (*PendingApproval, *types.TaskGrant, error) {
+	return decidePendingApproval(zspDir, id, approve, nil)
+}
+
+// DecidePendingApprovalReviewed re-checks the exact human-reviewed snapshot
+// under the same lock used to decide and mint the grant.
+func DecidePendingApprovalReviewed(zspDir, id string, approve bool, reviewed PendingApproval) (*PendingApproval, *types.TaskGrant, error) {
+	return decidePendingApproval(zspDir, id, approve, &reviewed)
+}
+
+func decidePendingApproval(zspDir, id string, approve bool, reviewed *PendingApproval) (*PendingApproval, *types.TaskGrant, error) {
 	if zspDir == "" {
 		zspDir = ResolveZSPDir()
 	}
@@ -181,6 +202,11 @@ func DecidePendingApproval(zspDir, id string, approve bool) (*PendingApproval, *
 		}
 		if dErr := p.CheckDecidable(); dErr != nil {
 			return dErr
+		}
+		if reviewed != nil {
+			if err := p.CheckReviewed(*reviewed); err != nil {
+				return err
+			}
 		}
 		p.DecidedAt = time.Now().UTC()
 		if approve {
