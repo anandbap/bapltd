@@ -176,6 +176,9 @@ func RunZSP(args []string) error {
 	rest := args[1:]
 
 	switch sub {
+	case "help", "-h", "--help":
+		printZSPUsage()
+		return nil
 	case "inbox":
 		return runZSPInbox(rest)
 	case "init":

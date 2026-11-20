@@ -3,7 +3,6 @@ package cmd
 import (
 	"flag"
 	"fmt"
-	"os"
 	"os/user"
 	"strings"
 	"time"
@@ -53,8 +52,8 @@ func runZSPAutoApprove(args []string) error {
 		return nil
 
 	case "on", "enable":
-		if strings.TrimSpace(os.Getenv("BAP_IN_BROKER")) != "" {
-			return fmt.Errorf("%w: turning on auto-approve is a human-operator action and cannot run inside an agent session", authz.ErrHighRiskApprovalRequired)
+		if err := refuseAgentContext("turning on auto-approve is a human-operator action and cannot run inside an agent session"); err != nil {
+			return err
 		}
 		fs := flag.NewFlagSet("zsp autoapprove on", flag.ContinueOnError)
 		dur := fs.Duration("duration", authz.DefaultAutoApproveWindow, "Window length (maximum 8h)")

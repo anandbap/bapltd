@@ -90,16 +90,25 @@ def ensure_binaries(platforms: list):
             target = os.path.join(directory, name + cfg["ext"])
             print(f"[*] Compiling official {name} for {plat}...")
             result = subprocess.run(
-                [go_cmd, "build", "-trimpath", "-ldflags", flags, "-o", target, "."],
+                [go_cmd, "build", "-trimpath", "-tags=", "-ldflags", flags, "-o", target, "."],
                 cwd=os.path.join(REPO_ROOT, module), env=env,
                 capture_output=True, text=True, timeout=180
             )
             if result.returncode:
                 raise RuntimeError(f"Official {name} build failed for {plat}: {result.stderr}")
+            if name == "bapedge" and plat == get_platform_id():
+                verify_zsp_inbox(target)
             if name == "interceptor":
                 legacy_dir = os.path.join(directory, "cchook")
                 os.makedirs(legacy_dir, exist_ok=True)
                 shutil.copy2(target, os.path.join(legacy_dir, name + cfg["ext"]))
+
+def verify_zsp_inbox(binary):
+    """Probe safe CLI help, never open an inbox or decide an approval at build time."""
+    result = subprocess.run([binary, "zsp", "--help"], capture_output=True,
+                            text=True, timeout=15)
+    if result.returncode or not any(line.strip().startswith("inbox ") for line in result.stdout.splitlines()):
+        raise RuntimeError(f"Release edge does not expose zsp inbox: {binary}")
 
 
 def _safe_build_directory(path):

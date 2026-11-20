@@ -30,7 +30,7 @@ class TestReleaseWheelBuild(unittest.TestCase):
         version = self.root / "bap-edge/pkg/version"
         version.mkdir(parents=True)
         (version / "version.go").write_text('package version\nvar AllowDevOverrides = "true"\nvar GitCommit = "dev"\n', encoding="utf-8")
-        (self.root / "bap-edge/main.go").write_text('package main\nimport ("fmt"; "bap-edge/pkg/version")\nfunc main(){fmt.Print(version.AllowDevOverrides)}\n', encoding="utf-8")
+        (self.root / "bap-edge/main.go").write_text('package main\nimport ("fmt"; "os"; "bap-edge/pkg/version")\nfunc main(){if len(os.Args)==3 && os.Args[1]=="zsp" && os.Args[2]=="--help" {fmt.Println("  inbox   Review pending requests");return};fmt.Print(version.AllowDevOverrides)}\n', encoding="utf-8")
         (self.root / "cchook/main.go").write_text('package main\nimport "fmt"\nvar AllowDevOverrides = "true"\nfunc main(){fmt.Print(AllowDevOverrides)}\n', encoding="utf-8")
         for name, value in {"REPO_ROOT":str(self.root), "BAP_PKG_DIR":str(self.root / "bap"), "BAP_BIN_DIR":str(self.root / "bap/bin")}.items():
             mock = patch.object(build_wheel, name, value)
@@ -60,3 +60,17 @@ class TestReleaseWheelBuild(unittest.TestCase):
         with patch.object(build_wheel.shutil, "which", return_value=None):
             with self.assertRaises(RuntimeError):
                 build_wheel.ensure_binaries([self.platform_id])
+
+    def test_missing_zsp_inbox_stops_native_release_packaging(self):
+        (self.root / "bap-edge/main.go").write_text('package main\nimport "fmt"\nfunc main(){fmt.Print("old edge without inbox")}\n', encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "does not expose zsp inbox"):
+            build_wheel.ensure_binaries([self.platform_id])
+
+    def test_official_build_does_not_inherit_headless_test_tags(self):
+        for module in ("bap-edge", "cchook"):
+            (self.root / module / "unsafe.go").write_text('//go:build headlessstepup\n\npackage main\nfunc init(){panic("test-only tag leaked into release")}\n', encoding="utf-8")
+        with patch.dict(os.environ, {"GOFLAGS": "-tags=headlessstepup"}):
+            build_wheel.ensure_binaries([self.platform_id])
+        for name in ("bapedge", "interceptor"):
+            binary = self.root / "dist" / self.platform_id / "claude-client" / (name + self.ext)
+            self.assertEqual(subprocess.check_output([str(binary)], text=True, timeout=10), "false")

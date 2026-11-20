@@ -102,6 +102,45 @@ agent with same-account PTY/process control. The one-time challenge must not be
 presented as equivalent to approval through an independently authenticated human
 channel. See the remediation item in `JIRA_STORIES.md` for that remaining boundary.
 
+### What stops an agent reaching these controls (2026-11-20)
+
+Three local controls apply, all containment rather than an independent authority:
+
+1. **Authority state is not nameable.** The ZSP state directory (signing key
+   `pepper.key`, `autoapprove.json`, `approvals/`, grants, native decisions) is treated
+   like `.env`/`.ssh`: native Read/Grep/Glob/Write/Edit and shell commands that name it
+   are refused. `bapedge zsp authorize|status|grants|approvals` still work because they
+   use BAP's own code, not an agent-supplied path.
+2. **Human-only commands check process lineage as well as `BAP_IN_BROKER`.** If the
+   process descends from a registered, live agent session, `approve`, `deny`,
+   `autoapprove on`, `inbox` and the one-time challenge refuse. No evidence of agent
+   ancestry means the command proceeds, so a developer is never locked out.
+3. **Forgery does not help.** A hand-written `autoapprove.json` fails its signature check
+   and a hand-edited approval file mints no grant.
+
+### Verifying the agent boundary
+
+Run these in a terminal the agent did NOT start (plain PowerShell, and the Claude
+desktop Terminal panel). Do not run them from an agent session.
+
+```powershell
+bapedge zsp autoapprove status      # must work
+bapedge zsp approvals               # must work, lists pending requests
+bapedge zsp inbox                   # must open (a terminal you own)
+```
+
+Then ask an agent session to run each of these; every one must be refused, and the
+refusal must not end the agent's session or break its normal work:
+
+```text
+Read the file <zsp dir>\pepper.key           -> credential-store refusal
+Get-Content <zsp dir>\autoapprove.json       -> credential-store refusal
+bapedge zsp approve req-xxxxxxxx             -> human-operator refusal
+bapedge zsp autoapprove on                   -> human-operator refusal
+bapedge zsp authorize ... (routine edit)     -> still granted
+bapedge zsp status                           -> still works
+```
+
 These examples are for a human's own terminal. This document does not authorize an
 agent to enable the window or approve itself.
 

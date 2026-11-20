@@ -150,6 +150,14 @@ current queue once; `bap zsp inbox --watch` keeps waiting. In noninteractive out
 bare `bap zsp` prints usage instead of opening a console. Existing explicit
 `approve <id>`/`deny <id>` commands remain available.
 
+The inbox is compiled into the normal edge binary, not a separate preview-only
+program. `update_binaries.ps1` rebuilds and stages it, and the wheel builder compiles
+the same source for each release target. The Windows updater and native wheel
+builds check `bapedge zsp --help` for the inbox before deployment/packaging.
+`bap install` copies that packaged edge binary; it does not compile new source or
+upgrade an old wheel by itself. Existing installations need a newly built package
+installed before `bap zsp` gains the new behavior.
+
 The console and approve/deny operations are agent-blocked at supported hook/broker
 boundaries; the console also rejects broker-marked processes and nonterminal input.
 Aliases are covered, including `autoapprove enable`. Changed requests cannot be
@@ -168,6 +176,7 @@ would prevent agents from requesting legitimate grants.
 | Command | Arguments / Flags | Description |
 |---|---|---|
 | `bap zsp inbox` | `[--watch]` | Human interactive review; no IDs required. Bare `bap zsp` watches when launched in an interactive terminal. |
+| `bap zsp help` | Aliases: `--help`, `-h` | Print usage without opening the inbox or approving a request. |
 | `bap zsp init` | `[--session-id <id>] [--client <client>] [--json]` | Initialize the session principal with zero standing privileges. |
 | `bap zsp status` | `[--session-id <id>] [--client <client>] [--all] [--all-sessions] [--json]` | Inspect grants; `--all` includes burned/expired grants and `--all-sessions` spans sessions. |
 | `bap zsp grants` | Same as `status` | Alias; `zsp list` is another alias. |
@@ -643,6 +652,7 @@ bap-hook-adapter --client <claude|copilot|antigravity|opencode|codex> --event <P
 | `install_bap_global.bat` / `scripts/install_bap_global.ps1` | `[-AllowDevBuild] [-Debug]`. Installs binaries and global hooks for all agents. It reads `bapedge version --json` and **refuses** a build with `allow_dev_overrides=true` or `headless_stepup=true` (exit 3) unless `-AllowDevBuild` is passed. `-AllowDevBuild` belongs to the installer, not to `update_binaries.ps1`. |
 | `build_all_platforms.ps1` | Cross-compile release packages for Windows (`amd64`, `arm64`), Linux (`amd64`, `arm64`), and macOS (`darwin-arm64`, `darwin-amd64`). |
 | `python scripts/build_wheel.py [--universal]` | Package Python wheel and source distribution (`bap-ltd`). |
+| `python scripts/build_wheel.py --single-platform --no-sdist` | Build a native wheel for the current host. On Windows this packages the rebuilt Windows client; no source distribution is produced. |
 
 **Build modes and which command to use**
 
@@ -656,6 +666,15 @@ Why the installer refuses a dev build: a dev-override or test-harness build can 
 and a global install puts that binary under every agent hook on the workstation, including agents. Check any
 binary with `bapedge version --json` (`allow_dev_overrides`, `headless_stepup`). Agents may never run
 `bap dev-override on`; it needs an interactive human.
+
+The Windows updater now stops on every failed Go build and on binary-copy failure;
+it cannot print successful completion after those failures. It also checks that the
+rebuilt edge exposes the ZSP inbox. The wheel builder applies that safe help probe
+to the native artifact and explicitly clears inherited build tags so test-only
+headless approval cannot leak in through `GOFLAGS`. Cross-compiled artifacts are
+not executed on the build host.
+No build or package check opens an approval console, approves a request, or enables
+auto-approval. Inspect an installed client safely with `bap zsp --help`.
 
 ### 8.2 Test Suites
 

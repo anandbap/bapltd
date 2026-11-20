@@ -2,6 +2,102 @@
 
 ## Pilot hardening implementation update (candidate work)
 
+### ZSP authority-state protection and agent-lineage gate — 2026-11-20
+
+**Why:** ZSP-REVIEW-01 (below) stays P0 OPEN, but two cheap, same-account controls were
+missing and are now implemented: (1) nothing stopped an agent tool call from *naming*
+the files that decide its own privileges (`pepper.key`, `autoapprove.json`, `approvals/`,
+grants, native-invocation decisions); (2) human-only commands were guarded only by the
+`BAP_IN_BROKER` environment marker, which any process that launches `bapedge` directly
+simply does not set.
+
+**Implemented in source:**
+- `IsBAPAuthorityPath` ([authority_paths.go](bap-edge/internal/authz/authority_paths.go);
+  mirrored in [cchook/authority_paths.go](cchook/authority_paths.go)). The ZSP state
+  subtree (default `.bapstate/zsp`, `BAP_ZSP_DIR`, `BAP_STATE_DIR/zsp`, plus the file
+  names `pepper.key` and `autoapprove.json`) is now a protected credential store for
+  every screen that already protected `.env`/`.ssh`/`.aws`: native Read/Grep/Glob/
+  Write/Edit, shell command screening and batch authorization. The native-invocation
+  path refuses it for every action and for legacy clients that send no invocation ID,
+  including when the state directory sits inside the workspace. No filesystem access;
+  a drive/filesystem root can never be treated as the authority directory.
+- Process-lineage gate ([human_lineage.go](bap-edge/cmd/human_lineage.go)).
+  `zsp approve`, `zsp deny`, `zsp autoapprove on`, `zsp inbox` and the one-time
+  challenge itself now refuse when this process descends from a process BAP registered
+  as an agent session (`pid-<pid>.json` marker whose recorded process birth still
+  matches the live process), in addition to the existing `BAP_IN_BROKER` check.
+  Positive evidence only: no marker, an unreadable process table, a missing birth stamp
+  or a stale/reused PID all mean "not an agent", so a developer's own terminal is never
+  locked out. Request (`zsp authorize`), inspection (`status`, `grants`, `approvals`)
+  and `autoapprove off|status` are unchanged for agents.
+
+**Tests:** `authority_paths_test.go` (authz and cchook golden vectors, native-tool
+refusal inside the workspace boundary, root-directory guard, usability guard for the
+commands an agent legitimately runs), `human_lineage_test.go` (marker semantics,
+refusal at every human-only entry point, request/inspect still allowed), and
+`zsp_authority_e2e_test.go` through the real hook path (agent cannot name authority
+state via any tool or shell, forged `autoapprove.json` is ignored, tampered approval
+file mints nothing, normal grant/inspection flow still works). Full `bap-edge`
+`internal/authz` and `cmd` suites and the `cchook` suite pass on Windows.
+
+**Honest limits (still ZSP-REVIEW-01):** this is containment, not an authority
+boundary. An agent that escapes its own process tree (for example by having the OS
+start a process under another parent) or reads state through a path form these screens
+do not model (8.3 short names, hard links, handles inherited from an unsandboxed
+process) is not stopped. The native Read/Write/Edit tools run inside the agent process,
+outside the Bash sandbox, so they depend on these screens and the hooks. Lineage
+detection relies on BAP having registered the agent's pid marker; it has not been
+validated against a real developer terminal inside the Claude desktop app's Terminal
+panel (needs manual acceptance below). `zsp autoapprove off` remains agent-callable
+(harmless, but can disrupt a workflow).
+
+**Follow-ups (OPEN):**
+1. **ZSP-REVIEW-01a (P0):** enforce a filesystem DACL on the ZSP directory that denies
+   the agent's restricted token/Job (and set low integrity / job UI restrictions), so
+   the OS, not a path screen, stops access. Run the PEP and `pepper.key` as a service
+   under a different identity or TPM/DPAPI non-exportable key behind an ACL'd named pipe.
+2. **ZSP-REVIEW-01b (P1):** have the hook return `ask` for approve-tier requests so
+   Claude Code prompts the human in its own UI instead of a separate CLI.
+3. **ENDPOINT-STEPUP-01 (P1):** `VerifyStepUp` in
+   [layers.go](bap-controlplane/internal/endpoint/layers.go) accepts `biometricSignature`
+   but never verifies it; any caller with a challenge ID gets a signed token. Wire real
+   WebAuthn/Windows Hello verification or fail closed. Also remove the hard-coded
+   default signing key literal.
+4. **LAYERS-01 (P1):** reconcile the two incompatible "5 layer" definitions
+   (hooks/broker/pinning/anomaly/attestation vs hooks/MCP/shims/kernel/gateway); replace
+   the static `Enforcing: true` reference with real probes; implement or reword the
+   DENIED_TAMPER to CRITICAL to session-revocation chain.
+5. **Manual acceptance (needed to close this story):** run the steps in
+   `ZSP_APPROVAL_FLOW.md` "Verifying the agent boundary" from the Claude desktop Terminal
+   panel and from a plain PowerShell window, with real agent sessions live.
+
+### ZSP build, package and install path — 2026-11-20
+
+The inbox belongs to the existing `bapedge` executable; every source build includes
+it without a separate asset. Python `bap zsp` forwards to that binary. The existing
+wheel compiler/stager and `bap install` core copier carry the same executable.
+An old installed wheel does not gain source changes merely by rerunning install.
+
+**Changes:** added noninteractive `zsp --help` dispatch and Python CLI guidance;
+Windows updater checks every Go exit status before deployment, refuses a rebuilt
+edge without `inbox` in help, and throws on binary-copy failure instead of reporting
+success with a stale destination. Official native wheel builds apply the same safe
+help probe. Cross-compiled clients still require native runtime acceptance.
+Official wheel compilation explicitly overrides inherited build tags; an inherited
+`GOFLAGS=-tags=headlessstepup` cannot turn a release into a test-harness build.
+
+**Validation:** real-compiler release tests cover compiled-out developer override,
+stale development artifacts, failed compilation and a missing inbox; the real
+compiler also tests rejection of inherited headless build tags. The real
+PowerShell build-gate function is tested without executing deployment. Integration
+coverage builds actual edge/hook clients, stages them, builds a native fixture wheel
+using the real setup/package-data rules, extracts it, and exercises the real core
+installer in an isolated directory. The installed binary and packaged Python entry
+point must expose inbox help and the edge must report developer override disabled.
+Machine-wide cleanup/hooks/PATH/registry/enrollment are excluded from this fixture;
+no production request is approved. A published universal release and replacement of
+the user's installed binaries are separate steps and have not been performed here.
+
 ### ZSP approval inbox and human-authentication boundary — 2026-11-20
 
 **Implemented in source:** interactive `bap zsp` discovers pending requests and

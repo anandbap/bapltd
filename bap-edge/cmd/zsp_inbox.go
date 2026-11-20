@@ -15,7 +15,10 @@ import (
 )
 
 func runZSPInbox(args []string) error {
-	if strings.TrimSpace(os.Getenv("BAP_IN_BROKER")) != "" || !isTerminal(os.Stdin) || !isTerminal(os.Stderr) {
+	if err := refuseAgentContext("open the approval inbox in your own interactive terminal"); err != nil {
+		return err
+	}
+	if !isTerminal(os.Stdin) || !isTerminal(os.Stderr) {
 		return fmt.Errorf("%w: open the approval inbox in your own interactive terminal", authz.ErrHighRiskApprovalRequired)
 	}
 	fs := flag.NewFlagSet("zsp inbox", flag.ContinueOnError)

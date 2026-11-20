@@ -109,6 +109,11 @@ func AuthorizeNativeToolInvocation(dir, session, client, tool, target, workspace
 	canonical := ResolveCanonicalPath(target, workspace)
 	action, resource, escapes := ResolveZSPActionAndResource("", "", "", tool, target, workspace)
 	command := "tool:"+tool+" "+canonical
+	// BAP's own authority state (signing key, approvals, auto-approve window, grants) is never reachable
+	// through a native tool, for any action and for legacy clients that send no invocation ID either.
+	if IsBAPAuthorityPath(target) || IsBAPAuthorityPath(canonical) {
+		return nil, nil, nil, fmt.Errorf("%w: native target is BAP authority state", ErrResourceNotGranted)
+	}
 	if invocation.ID == "" {
 		// Legacy clients do not get guessed IDs or content/time-based reuse.
 		return VerifyOrConsumeSessionZSP(dir, session, client, action, resource, command, workspace, escapes, true, nil)

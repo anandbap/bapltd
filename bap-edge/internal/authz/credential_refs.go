@@ -35,6 +35,10 @@ func LooksLikeCredentialPath(p string) bool {
 	if norm == "" {
 		return false
 	}
+	// BAP's own authority state (signing key, approvals, auto-approve window) is never agent-addressable.
+	if IsBAPAuthorityPath(p) {
+		return true
+	}
 	segs := strings.Split(norm, "/")
 	base := ""
 	for i := len(segs) - 1; i >= 0; i-- {

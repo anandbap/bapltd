@@ -147,6 +147,9 @@ var DevOverrideActive func() bool
 // isCredentialStorePath reports whether a path names a secret store that no override or trust
 // grant may ever unlock (.env files, cloud credentials, SSH keys).
 func isCredentialStorePath(p string) bool {
+	if IsBAPAuthorityPath(p) {
+		return true
+	}
 	n := strings.ToLower(filepath.ToSlash(p))
 	for _, marker := range []string{"/.env", ".env.", "/.aws", "/.ssh", "id_rsa", "id_ed25519"} {
 		if strings.Contains(n, marker) {

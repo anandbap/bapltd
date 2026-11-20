@@ -7,7 +7,8 @@ from bap import cli
 class TestBoundaryCliRouting(unittest.TestCase):
     def test_runner_and_operator_commands_reach_the_matching_edge_command(self):
         for command, args in [("run", ["--provider", "auto", "--", "agent", "argument with spaces"]),
-                              ("exec", ["git status"]), ("learn", ["report"]), ("egress", ["list"])]:
+                              ("exec", ["git status"]), ("learn", ["report"]), ("egress", ["list"]),
+                              ("zsp", []), ("zsp", ["inbox", "--watch"]), ("zsp", ["--help"])]:
             with self.subTest(command=command), patch("sys.argv", ["bap", command] + args), \
                  patch.object(cli, "find_bapedge", return_value="test-edge"), \
                  patch.object(cli.os.path, "isfile", return_value=True), \

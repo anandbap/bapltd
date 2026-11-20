@@ -175,8 +175,8 @@ func runZSPDecide(approve bool, args []string) error {
 }
 
 func runZSPDecideReviewed(approve bool, args []string, reader *bufio.Reader, reviewed *authz.PendingApproval) error {
-	if strings.TrimSpace(os.Getenv("BAP_IN_BROKER")) != "" {
-		return fmt.Errorf("%w: approving or denying requests is a human-operator action and cannot run inside an agent session", authz.ErrHighRiskApprovalRequired)
+	if err := refuseAgentContext("approving or denying requests is a human-operator action and cannot run inside an agent session"); err != nil {
+		return err
 	}
 	if len(args) != 1 {
 		return fmt.Errorf("usage: bapedge zsp %s <request-id>", map[bool]string{true: "approve", false: "deny"}[approve])
@@ -267,7 +267,7 @@ func humanApprovalChallenge(sessionID string, actions, resources []string, goal 
 }
 
 func humanApprovalChallengeWithReader(sessionID string, actions, resources []string, goal string, reader *bufio.Reader) bool {
-	if strings.TrimSpace(os.Getenv("BAP_IN_BROKER")) != "" {
+	if refuseAgentContext("approval challenge") != nil {
 		return false
 	}
 	if !isTerminal(os.Stdin) || !isTerminal(os.Stderr) {

@@ -36,6 +36,9 @@ func looksLikeCredentialPath(p string) bool {
 	if norm == "" {
 		return false
 	}
+	if isBAPAuthorityPath(p) {
+		return true
+	}
 	segs := strings.Split(norm, "/")
 	base := ""
 	for i := len(segs) - 1; i >= 0; i-- {

@@ -41,6 +41,7 @@ Commands:
   check <cmd>   Evaluate command against policy in decision-only mode
   recommend     Recommend a blocked, benign call to your administrator (--status shows decisions)
   pin <subcmd>  Manage cryptographic content pins (scan, list, verify)
+  zsp [inbox]   Review pending approvals in your terminal (inbox --watch waits for new requests)
   version       Display current BAP version
 
 Examples:

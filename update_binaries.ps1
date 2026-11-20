@@ -27,6 +27,14 @@ $gitCommit = try { (git rev-parse --short HEAD 2>$null) } catch { "dev" }
 if (-not $gitCommit) { $gitCommit = "dev" }
 $buildDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 
+function Invoke-CheckedGoBuild {
+    param([Parameter(Mandatory = $true)][string[]]$BuildArguments)
+    & go @BuildArguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Go build failed with exit code $LASTEXITCODE. Binary deployment stopped."
+    }
+}
+
 Write-Host ">>> Compiling Windows AMD64 Binaries ($Version, Commit: $gitCommit)..." -ForegroundColor Cyan
 
 # 1. Compile bapedge
@@ -40,7 +48,11 @@ try {
     if ($HeadlessStepUp -eq "true") { $tagList += "headlessstepup" }
     $tagArgs = @()
     if ($tagList.Count -gt 0) { $tagArgs = @("-tags", ($tagList -join ",")) }
-    go build @tagArgs -ldflags $ldflags -o bapedge.exe .
+    Invoke-CheckedGoBuild -BuildArguments (@("build") + $tagArgs + @("-ldflags", $ldflags, "-o", "bapedge.exe", "."))
+    $zspHelp = & .\bapedge.exe zsp --help 2>&1
+    if ($LASTEXITCODE -ne 0 -or ($zspHelp -join "`n") -notmatch '(?m)^\s+inbox\s') {
+        throw "Rebuilt edge does not expose zsp inbox; refusing to deploy stale or incomplete binaries."
+    }
 } finally {
     Pop-Location
 }
@@ -49,8 +61,8 @@ try {
 Push-Location "bap-controlplane"
 try {
     $ldflags = "-s -w -X bap-controlplane/pkg/version.Version=$Version -X bap-controlplane/pkg/version.GitCommit=$gitCommit -X bap-controlplane/pkg/version.BuildDate=$buildDate"
-    go build -ldflags $ldflags -o bapcontrolplane.exe ./cmd/server
-    go build -ldflags $ldflags -o bapdashboard.exe ./cmd/dashboard
+    Invoke-CheckedGoBuild -BuildArguments @("build", "-ldflags", $ldflags, "-o", "bapcontrolplane.exe", "./cmd/server")
+    Invoke-CheckedGoBuild -BuildArguments @("build", "-ldflags", $ldflags, "-o", "bapdashboard.exe", "./cmd/dashboard")
 } finally {
     Pop-Location
 }
@@ -59,7 +71,7 @@ try {
 Push-Location "bap-gateway"
 try {
     $ldflags = "-s -w -X bap-gateway/pkg/version.Version=$Version -X bap-gateway/pkg/version.GitCommit=$gitCommit -X bap-gateway/pkg/version.BuildDate=$buildDate"
-    go build -ldflags $ldflags -o bapgateway.exe .
+    Invoke-CheckedGoBuild -BuildArguments @("build", "-ldflags", $ldflags, "-o", "bapgateway.exe", ".")
 } finally {
     Pop-Location
 }
@@ -70,7 +82,7 @@ try {
     $ldflags = "-s -w -X 'main.AllowDevOverrides=$AllowDevOverrides'"
     $hookTags = @()
     if ($HeadlessStepUp -eq "true") { $hookTags = @("-tags", "headlessstepup") }
-    go build @hookTags -ldflags $ldflags -o interceptor.exe .
+    Invoke-CheckedGoBuild -BuildArguments (@("build") + $hookTags + @("-ldflags", $ldflags, "-o", "interceptor.exe", "."))
 } finally {
     Pop-Location
 }
@@ -92,6 +104,7 @@ function Safe-Copy($src, $dst) {
             Remove-Item -Force $oldFile -ErrorAction SilentlyContinue
         } catch {
             Write-Warning "Could not overwrite locked binary $dst (stop running processes first): $($_.Exception.Message)"
+            throw "Binary deployment failed for $dst; update is incomplete. $($_.Exception.Message)"
         }
     }
 }
