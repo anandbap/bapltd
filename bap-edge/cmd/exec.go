@@ -50,6 +50,7 @@ type execContext struct {
 	executable          string
 	cmdArguments        string
 	shell               string
+	shellHint           string
 	enforcementMode     string
 	decisionOnly        bool
 	shadowDenied        bool
@@ -1006,6 +1007,7 @@ func RunExec(args []string) {
 		defaultShell = "auto"
 	}
 	shellFlag := fs.String("shell", defaultShell, "Target shell: auto, bapsh, bash, sh, zsh, cmd, powershell, pwsh; explicit shells never fall back")
+	shellHintFlag := fs.String("shell-hint", os.Getenv("BAP_SHELL_HINT"), "Shell hint when using bapsh (e.g. bash, pwsh, cmd, zsh, auto)")
 
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing arguments: %v\n", err)
@@ -1137,6 +1139,7 @@ func RunExec(args []string) {
 		policyPath:      *policyPath,
 		auditLogPath:    *auditLogFlag,
 		shell:           *shellFlag,
+		shellHint:       *shellHintFlag,
 		enforcementMode: strings.ToLower(strings.TrimSpace(*modeFlag)),
 		decisionOnly:    *decisionOnlyFlag || *checkOnlyFlag,
 		forceJSON:       *jsonFlag,
@@ -1652,14 +1655,10 @@ func RunExec(args []string) {
 		options.Progress = func(elapsed time.Duration) { fmt.Fprintf(os.Stderr, "[BAP] Execution running: %s elapsed\n", elapsed) }
 	}
 	var execRes sandbox.ExecResult
-	// Route to bapsh when --shell is bapsh, bash, sh, zsh, pwsh, powershell, or cmd.
-	// The agent's explicit shell declaration is mapped to the ShellMode so bapsh
-	// uses the right engine without heuristics.  "auto" and any unknown value
-	// fall through to the standard sandbox runner.
-	if bapshMode := bapsh.ParseShellHint(ec.shell); ec.shell == "bapsh" || bapshMode != bapsh.ShellModeAuto {
+	if strings.EqualFold(ec.shell, "bapsh") {
 		var outBuf bytes.Buffer
 		shOpts := bapsh.Options{
-			Mode:          bapshMode,
+			Mode:          bapsh.ParseShellHint(ec.shellHint),
 			SessionID:     ec.sessionID,
 			ClientType:    ec.source,
 			WorkspaceRoot: workspaceRoot,

@@ -78,6 +78,7 @@ def run_interceptor(payload: dict, env=None) -> dict:
     test_env["BAP_ENVIRONMENT"] = "production"
     test_env["BAP_DEV_OVERRIDE"] = ""
     test_env["BAP_DEV_MODE"] = ""
+    test_env.setdefault("LTD_SOURCE", "claude")
     if env:
         test_env.update(env)
 

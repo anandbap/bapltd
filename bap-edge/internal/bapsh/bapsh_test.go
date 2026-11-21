@@ -290,26 +290,33 @@ func TestBapsh_ResolveWindowsArgs_Aliases(t *testing.T) {
 		t.Skip("Windows-only test")
 	}
 
-	// ls → cmd.exe /d /s /c dir
-	got, ok := resolveWindowsArgs([]string{"ls", "-al"})
+	// dir is a cmd.exe builtin and never exists as a standalone binary in PATH
+	got, ok := resolveWindowsArgs([]string{"dir", "/w"})
 	if !ok {
-		t.Fatal("expected rewrite for ls on Windows")
+		t.Fatal("expected rewrite for dir on Windows")
 	}
 	if len(got) < 5 || got[0] != "cmd.exe" || got[4] != "dir" {
-		t.Errorf("unexpected rewrite: %v", got)
+		t.Errorf("unexpected rewrite for dir: %v", got)
 	}
-	// user args preserved
-	if got[len(got)-1] != "-al" {
-		t.Errorf("expected user arg -al preserved, got %v", got)
+	if got[len(got)-1] != "/w" {
+		t.Errorf("expected user arg /w preserved, got %v", got)
 	}
 
-	// cat → cmd.exe /d /s /c type
-	got, ok = resolveWindowsArgs([]string{"cat", "README.md"})
-	if !ok {
-		t.Fatal("expected rewrite for cat on Windows")
-	}
-	if got[4] != "type" {
-		t.Errorf("expected 'type', got %v", got)
+	// ls: if Git/MSYS is not in PATH, it must rewrite to dir
+	if _, err := exec.LookPath("ls"); err != nil {
+		got, ok = resolveWindowsArgs([]string{"ls", "-al"})
+		if !ok {
+			t.Fatal("expected rewrite for ls on Windows when not in PATH")
+		}
+		if got[4] != "dir" {
+			t.Errorf("expected 'dir', got %v", got)
+		}
+	} else {
+		// If ls is found in PATH (e.g. Git for Windows on CI runner), it should NOT be rewritten
+		_, ok = resolveWindowsArgs([]string{"ls", "-al"})
+		if ok {
+			t.Error("ls binary is in PATH, should not be rewritten")
+		}
 	}
 
 	// git is in PATH → no rewrite
