@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -290,39 +291,46 @@ func TestBapsh_ResolveWindowsArgs_Aliases(t *testing.T) {
 		t.Skip("Windows-only test")
 	}
 
-	// dir is a cmd.exe builtin and never exists as a standalone binary in PATH
-	got, ok := resolveWindowsArgs([]string{"dir", "/w"})
+	// Isolate PATH to System32 only, where cmd.exe exists but Unix binaries
+	// (ls.exe, cat.exe, etc., which Git for Windows or MSYS may install) do not.
+	sysRoot := os.Getenv("SystemRoot")
+	if sysRoot == "" {
+		sysRoot = `C:\Windows`
+	}
+	sys32 := filepath.Join(sysRoot, "System32")
+	t.Setenv("PATH", sys32)
+
+	// In System32, 'ls' does not exist -> must rewrite to cmd.exe /d /s /c dir
+	got, ok := resolveWindowsArgs([]string{"ls", "-al"})
 	if !ok {
-		t.Fatal("expected rewrite for dir on Windows")
+		t.Fatal("expected rewrite for ls on Windows when absent from PATH")
 	}
 	if len(got) < 5 || got[0] != "cmd.exe" || got[4] != "dir" {
-		t.Errorf("unexpected rewrite for dir: %v", got)
+		t.Errorf("unexpected rewrite for ls: %v", got)
 	}
-	if got[len(got)-1] != "/w" {
-		t.Errorf("expected user arg /w preserved, got %v", got)
-	}
-
-	// ls: if Git/MSYS is not in PATH, it must rewrite to dir
-	if _, err := exec.LookPath("ls"); err != nil {
-		got, ok = resolveWindowsArgs([]string{"ls", "-al"})
-		if !ok {
-			t.Fatal("expected rewrite for ls on Windows when not in PATH")
-		}
-		if got[4] != "dir" {
-			t.Errorf("expected 'dir', got %v", got)
-		}
-	} else {
-		// If ls is found in PATH (e.g. Git for Windows on CI runner), it should NOT be rewritten
-		_, ok = resolveWindowsArgs([]string{"ls", "-al"})
-		if ok {
-			t.Error("ls binary is in PATH, should not be rewritten")
-		}
+	if got[len(got)-1] != "-al" {
+		t.Errorf("expected user arg -al preserved, got %v", got)
 	}
 
-	// git is in PATH → no rewrite
-	_, ok = resolveWindowsArgs([]string{"git", "status"})
+	// 'cat' does not exist -> must rewrite to cmd.exe /d /s /c type
+	got, ok = resolveWindowsArgs([]string{"cat", "README.md"})
+	if !ok {
+		t.Fatal("expected rewrite for cat on Windows when absent from PATH")
+	}
+	if len(got) < 5 || got[0] != "cmd.exe" || got[4] != "type" {
+		t.Errorf("unexpected rewrite for cat: %v", got)
+	}
+
+	// cmd.exe is in System32 (in PATH) -> must NOT rewrite
+	_, ok = resolveWindowsArgs([]string{"cmd.exe", "/c", "echo", "hi"})
 	if ok {
-		t.Error("git is in PATH, should not be rewritten")
+		t.Error("cmd.exe is in PATH, should not be rewritten")
+	}
+
+	// Unknown non-existent command -> not in windowsAliases -> should NOT rewrite
+	_, ok = resolveWindowsArgs([]string{"nonexistentcmd98765"})
+	if ok {
+		t.Error("unknown command should not be rewritten")
 	}
 }
 
