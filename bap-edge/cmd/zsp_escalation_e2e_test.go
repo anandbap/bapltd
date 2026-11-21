@@ -24,6 +24,12 @@ func e2eEnv(t *testing.T) (zspDir string) {
 	t.Setenv("BAP_MODE", "enforce")
 	t.Setenv("BAP_IN_BROKER", "")
 	t.Setenv("LTD_SOURCE", "")
+	t.Setenv("BAP_SESSION_ID", "")
+	t.Setenv("LTD_SESSION_ID", "")
+	_ = os.Remove(filepath.Join(".bap", "session.json"))
+	t.Cleanup(func() {
+		_ = os.Remove(filepath.Join(".bap", "session.json"))
+	})
 
 	// Make stdin a pipe so the interactive challenge can never be answered by the test runner's terminal.
 	r, w, err := os.Pipe()

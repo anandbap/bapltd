@@ -47,6 +47,7 @@ func TestEnsureMCPSessionLeavesOtherAgentsAlone(t *testing.T) {
 }
 
 func TestEnsureMCPSessionSkippedUnderDevOverride(t *testing.T) {
+	requireDevOverrideBuild(t)
 	clearDevEnv(t)
 	t.Setenv("LTD_SOURCE", "antigravity")
 	t.Setenv("BAP_DEV_OVERRIDE", "30m")

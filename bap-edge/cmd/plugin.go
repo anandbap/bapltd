@@ -2099,7 +2099,7 @@ func evaluateWithBapedgeTool(sessionID, client, toolName, command, filePath stri
 							reason = fmt.Sprintf("ZeroStandingPrivilegeViolation: BAP Policy Denied: %s", authz.FormatPairs(decision.Denied))
 							suggestion = fmt.Sprintf("BAP POLICY DENIAL: %s. Action(s) %s permanently denied by policy. AGENT: Do NOT retry or request authorization.", authz.FormatPairs(decision.Denied), suggestedActions)
 						} else if len(decision.NeedsApproval) > 0 || errors.Is(zspErr, authz.ErrHighRiskApprovalRequired) {
-							if pending := raiseHITLRequest(sessionID, normClient, "TASK_EXECUTION", goalTarget, reqActions, reqResources, 1, 300*time.Second, zspErr); pending != nil {
+							if pending := raiseHITLRequest(sessionID, normClient, "TASK_EXECUTION", goalTarget, reqActions, reqResources, 1, 300*time.Second, zspErr, sessionID); pending != nil {
 								reason = fmt.Sprintf("ZeroStandingPrivilegeViolation: HumanApprovalRequired: %s", authz.FormatPairs(decision.NeedsApproval))
 								suggestion = fmt.Sprintf(
 									"HUMAN APPROVAL REQUIRED: Action(s) %s require verified human approval.\n"+
