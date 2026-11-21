@@ -817,6 +817,42 @@ broader capability roadmap or cross-platform acceptance is closed by this story.
 
 ---
 
+### BAP-1109 — Restricted BAP-Aware Go Shell (`bapsh`) with Pure AST Interception, Zero-Trust Invariants, and Agent Containment
+
+**Status: DONE — implementation, CLI integration, AST execution handler, tests, and agent guidance synchronization verified, 2026-11-20.**
+**Deployment: local code fix and verified suite.** This is a local backlog record, not an external Jira issue.
+
+**Problem:**
+1. Autonomous coding agents (Claude Code, GitHub Copilot, OpenAI Codex, Google Antigravity) running arbitrary shell commands through host OS shells (`cmd.exe`, `powershell.exe`, `/bin/bash`, `/bin/sh`) expose the workstation to subshell escapes, alias evasion, command-chaining obfuscation, unmonitored child processes, and platform-specific syntax fragmentation.
+2. Relying on OS shells requires running external binaries that may execute shell builtins or arbitrary script blocks outside the broker's AST inspection boundary.
+3. There was no restricted, pure-Go, BAP-aware shell available that could parse shell scripts into concrete syntax trees, intercept each command invocation prior to process execution, verify Cedar policy invariants, check Zero Standing Privileges (ZSP) task grants, guard BAP authority state directories, block credential exfiltration paths, and enforce deterministic workspace containment across all platforms without depending on host shell installations.
+
+**Delivered:**
+1. **Pure Go Restricted Shell (`bapsh`):** Implemented `bap-edge/internal/bapsh` leveraging open-source `mvdan.cc/sh/v3` (`syntax`, `expand`, `interp`). Provides an in-process, cross-platform POSIX shell interpreter that executes without spawning external shell processes.
+2. **AST-Level Command Interception (`interp.ExecHandler`):** Every command invocation, pipeline segment, and subshell call is intercepted as an AST node prior to dispatch:
+   - **BAP Authority & State Protection:** Access to `.bapstate`, `.bap`, cryptographic pins, and state paths is strictly blocked fail-closed (`BAP ZERO-TRUST SECURITY VIOLATION`).
+   - **Absolute Secret Protection:** Credential paths (`.env`, `.aws/credentials`, `.ssh/id_*`, private keys) are blocked with permanent policy denials (`BAP POLICY DENIAL`).
+   - **Zero Standing Privileges (ZSP) JIT Grants:** Evaluates Cedar permission policy and calls `authz.AuthorizeSessionCommandBatch`. Local read-only operations (`git status`, `git log`, `cat`, `ls`) are automatically permitted. Mutating, network, or interpreter commands require valid JIT task grants or raise human approval requests (`req-xxxx`).
+3. **Execution Broker Integration (`bapedge exec --shell bapsh` & `bapedge bapsh`):**
+   - Added `bapsh` and `shell` subcommands to `bapedge` (`bapedge bapsh -c "<script>"`).
+   - Added support for `--shell bapsh` in `bapedge exec`, redirecting command evaluation directly into the in-memory restricted AST interpreter.
+   - Updated `sandbox.ToolShell` to recognize and preserve `bapsh`.
+4. **Universal Agent Rules & Launcher Synchronization:**
+   - Synchronized `AGENT_TASK_GUIDANCE` in `bap/agent_guidance.py` and rule files (`AGENTS.md`, `CLAUDE.md`, `CODEX.md`, `GEMINI.md`, and all vendor plugin copies) instructing agents that all shell executions run through the BAP Edge Execution Broker via `bapsh` (`bapedge exec --shell bapsh "<command>"` or `bapedge bapsh -c "<command>"`).
+5. **Comprehensive Automated Test Coverage:**
+   - Added unit tests in `bap-edge/internal/bapsh/bapsh_test.go` and `bap-edge/cmd/bapsh_cmd_test.go` verifying AST parsing, credential denial, authority state blocking, read-only echo, and human approval escalation.
+
+**Acceptance checked:**
+- [x] `bap-edge/internal/bapsh` parses POSIX shell commands and walks AST nodes.
+- [x] Attempts to read `.env` or BAP authority paths through `bapsh` fail closed with explicit security denials.
+- [x] Read-only commands inside workspace execute cleanly without manual grants.
+- [x] Mutating and high-risk operations automatically demand task grants or raise pending HITL approval requests with `req-` IDs.
+- [x] `bapedge bapsh -c "<script>"` and `bapedge exec --shell bapsh "<command>"` execute successfully.
+- [x] All agent guidance documents and launcher engines updated.
+- [x] Go and Python test suites pass cleanly across Windows, Linux, and macOS.
+
+---
+
 - **Hooks-first prompt fallback follow-up (2026-11-14):** MCP reporting is default-on, unrelated hook heartbeats cannot suppress it, and session/turn correlation now owns prompt counting and source priority across audit and prompt ingestion. Late hooks supersede fallback text/classification without adding a turn; canonical transcript deduplicates corroboration while raw audit evidence remains immutable. Added native/broker turn-ID propagation and SQLite/checkpoint correlation persistence. Identical repeated turns require distinct native IDs; legacy hash-only correlation is qualified. Per-session telemetry batches prevent a refused old session from blocking live sessions. Fresh sign-in is acknowledged, but live historical backlog reconciliation and deployment remain open. See `docs/POLICY_AND_REPORTING_HEALTH.md`.
 
 - **Policy/reporting resilience follow-up (2026-11-14; BAP-1080/1085, BAP-1004):** added the missing daemon signed-policy poller (three seconds, independent of native hooks/watchers), daemon prompt-spool replay, reporting-only heartbeat enrollment guidance, runtime/CLI skew diagnostics and stale-daemon replacement on start. Cache files use unique staged replacement with bounded Windows sharing retries. Explicit state installations no longer import/discover/purge another installation's credentials during logout. A broad regression exposed the old cleanup touching live enrollment; fresh browser sign-in was initiated and remains an external acceptance step. Edge cmd/policystore/state and control-plane API/registry suites pass; next-poll kill-switch regression passes. No fleet-wide latency SLA, plaintext-policy encryption or hook-free automatic prompt source is claimed. See `docs/POLICY_AND_REPORTING_HEALTH.md`. Source changes require deployment.

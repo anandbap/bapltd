@@ -52,6 +52,7 @@ Execution & Protocol Integration:
   review       Inspect recent agent sessions, policy decisions, and performance
   plugin       Manage native agent plugins for Claude Code & Copilot (BAP-806)
   exec         Evaluate command against Cedar policy and run in sandboxed kernel namespace
+  bapsh        Execute command in restricted BAP-aware AST shell (alias: shell)
   check        Evaluate command against Cedar policy in decision-only mode (zero execution side effects)
   mcp          Run as Model Context Protocol (MCP) server for Claude Code, Copilot, Cursor, Antigravity
   serve        Start the zero-trust attestation server on domain socket / named pipe
@@ -251,6 +252,11 @@ func main() {
 		}
 	case "exec":
 		cmd.RunExec(args)
+	case "bapsh", "shell":
+		if err := cmd.RunBapsh(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error in bapsh: %v\n", err)
+			os.Exit(1)
+		}
 	case "check", "authorize":
 		cmd.RunCheck(args)
 	case "mcp":

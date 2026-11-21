@@ -12,7 +12,7 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
    - Package managers (Maven, Gradle, npm, pip) must use approved corporate mirrors (e.g. local Nexus / Artifactory). Bypassing internal repos to download directly from public internet registries is prohibited.
    - Installation of unapproved standalone software, third-party `.msi` installers, or setup binaries is strictly blocked.
 4. **Network Egress & Execution Broker**:
-   - All shell executions MUST run through the BAP Edge Execution Broker: `bapedge.exe exec "<command>"`.
+   - All shell executions MUST run through the BAP Edge Execution Broker with the restricted shell: `bapedge.exe exec --shell bapsh "<command>"` (or `bapedge.exe bapsh -c "<command>"`).
    - Raw network exfiltration utilities (`curl`, `wget`, `nc`, raw sockets) are strictly prohibited; external API access must route through the BAP Gateway PEP.
 5. **Zero-Trust Policy Enforcement & JIT Task Grants**:
    - Commands are evaluated against Cedar invariants before execution.
@@ -38,9 +38,10 @@ Zero Standing Privileges (ZSP) is broker-mediated. Autonomous agents do NOT run
 `bapedge zsp authorize` or mint task grants directly.
 
 Submit ordinary supported inspection and workspace edits normally: hooks and the
-execution broker (`bapedge exec "<command>"` on Windows; `bapedge.exe`) evaluate policy
+execution broker (`bapedge exec --shell bapsh "<command>"` on Windows; `bapedge.exe`) evaluate policy
 and obtain eligible JIT grants automatically. Native Read/Write/Edit tools remain
-governed by their BAP hooks.
+governed by their BAP hooks. All shell executions MUST execute through the restricted
+BAP shell: `bapedge exec --shell bapsh "<command>"` (or `bapedge bapsh -c "<command>"`).
 
 If an operation requires human approval (e.g. interpreters, git push, deletions,
 or network egress), BAP automatically registers a pending approval request in the

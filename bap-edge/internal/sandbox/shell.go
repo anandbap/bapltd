@@ -13,7 +13,7 @@ import (
 // to a different shell when the requested interpreter is unavailable.
 func ToolShell(tool string) string {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
-	case "bash", "sh", "zsh", "powershell", "pwsh", "cmd":
+	case "bash", "sh", "zsh", "powershell", "pwsh", "cmd", "bapsh":
 		return strings.ToLower(strings.TrimSpace(tool))
 	case "cmd.exe":
 		return "cmd"

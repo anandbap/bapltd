@@ -24,6 +24,7 @@ import (
 	"bap-edge/internal/antibypass"
 	"bap-edge/internal/audit"
 	"bap-edge/internal/authz"
+	"bap-edge/internal/bapsh"
 	"bap-edge/internal/config"
 	"bap-edge/internal/fim"
 	"bap-edge/internal/learn"
@@ -1004,7 +1005,7 @@ func RunExec(args []string) {
 	if defaultShell == "" {
 		defaultShell = "auto"
 	}
-	shellFlag := fs.String("shell", defaultShell, "Target shell: auto, bash, sh, zsh, cmd, powershell, pwsh; explicit shells never fall back")
+	shellFlag := fs.String("shell", defaultShell, "Target shell: auto, bapsh, bash, sh, zsh, cmd, powershell, pwsh; explicit shells never fall back")
 
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing arguments: %v\n", err)
@@ -1650,7 +1651,33 @@ func RunExec(args []string) {
 	if *progressFlag {
 		options.Progress = func(elapsed time.Duration) { fmt.Fprintf(os.Stderr, "[BAP] Execution running: %s elapsed\n", elapsed) }
 	}
-	execRes := sandbox.RunSandboxedCommandWithOptions(fullCommand, ec.shell, options)
+	var execRes sandbox.ExecResult
+	if strings.EqualFold(ec.shell, "bapsh") {
+		var outBuf bytes.Buffer
+		shOpts := bapsh.Options{
+			SessionID:     ec.sessionID,
+			ClientType:    ec.source,
+			WorkspaceRoot: workspaceRoot,
+			Stdout:        &outBuf,
+			Stderr:        &outBuf,
+			Stdin:         os.Stdin,
+			Timeout:       *timeoutFlag,
+		}
+		runErr := bapsh.Run(execCtx, fullCommand, shOpts)
+		exitCode := 0
+		if runErr != nil {
+			exitCode = 1
+		}
+		execRes = sandbox.ExecResult{
+			ExitCode:   exitCode,
+			Output:     outBuf.String(),
+			Error:      runErr,
+			ParentPID:  os.Getppid(),
+			ProcessPID: os.Getpid(),
+		}
+	} else {
+		execRes = sandbox.RunSandboxedCommandWithOptions(fullCommand, ec.shell, options)
+	}
 	ec.parentPID = execRes.ParentPID
 	ec.processPID = execRes.ProcessPID
 	ec.processTree = execRes.ProcessTree

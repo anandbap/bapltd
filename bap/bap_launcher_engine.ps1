@@ -24,9 +24,10 @@ Zero Standing Privileges (ZSP) is broker-mediated. Autonomous agents do NOT run
 `bapedge zsp authorize` or mint task grants directly.
 
 Submit ordinary supported inspection and workspace edits normally: hooks and the
-execution broker (`bapedge exec "<command>"` on Windows; `bapedge.exe`) evaluate policy
+execution broker (`bapedge exec --shell bapsh "<command>"` on Windows; `bapedge.exe`) evaluate policy
 and obtain eligible JIT grants automatically. Native Read/Write/Edit tools remain
-governed by their BAP hooks.
+governed by their BAP hooks. All shell executions MUST execute through the restricted
+BAP shell: `bapedge exec --shell bapsh "<command>"` (or `bapedge bapsh -c "<command>"`).
 
 If an operation requires human approval (e.g. interpreters, git push, deletions,
 or network egress), BAP automatically registers a pending approval request in the
@@ -712,7 +713,7 @@ function Initialize-BapShims {
         $shimContent = @"
 @echo off
 if "%BAP_IN_BROKER%"=="1" goto REAL_RUN
-"$BapEdgeBin" exec --source %LTD_SOURCE% --session-id %BAP_SESSION_ID% --reporting-layer shim --raw "%~n0 %*"
+"$BapEdgeBin" exec --shell bapsh --source %LTD_SOURCE% --session-id %BAP_SESSION_ID% --reporting-layer shim --raw "%~n0 %*"
 exit /b %ERRORLEVEL%
 
 :REAL_RUN
@@ -1225,6 +1226,7 @@ function Invoke-BapGovernedSession {
         $env:BAP_MODE = "enforce"
         $env:BAP_AGENT_SANDBOX = "1"
         $env:BAP_IN_BROKER = "0"
+        $env:BAP_SHELL = "bapsh"
 
         # Scrub ambient sensitive credentials from agent process scope (BAP-535)
         $sensitiveVarPatterns = @(

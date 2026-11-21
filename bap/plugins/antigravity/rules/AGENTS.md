@@ -3,9 +3,9 @@
 This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (`bapedge.exe`).
 
 ## Mandatory Execution Rules
-1. **Always Use BAP Edge Execution Broker**:
-   - All shell executions MUST run through `bapedge.exe exec`:
-     `bapedge.exe exec "<command>"`
+1. **Always Use BAP Edge Execution Broker with Restricted Shell**:
+   - All shell executions MUST run through `bapedge.exe exec --shell bapsh`:
+     `bapedge.exe exec --shell bapsh "<command>"` (or `bapedge.exe bapsh -c "<command>"`)
    - Never run raw, ungoverned shell commands directly on the host machine.
 2. **Zero-Trust Policy Enforcement**:
    - Commands are evaluated against Cedar invariants before execution.
@@ -21,9 +21,10 @@ Zero Standing Privileges (ZSP) is broker-mediated. Autonomous agents do NOT run
 `bapedge zsp authorize` or mint task grants directly.
 
 Submit ordinary supported inspection and workspace edits normally: hooks and the
-execution broker (`bapedge exec "<command>"` on Windows; `bapedge.exe`) evaluate policy
+execution broker (`bapedge exec --shell bapsh "<command>"` on Windows; `bapedge.exe`) evaluate policy
 and obtain eligible JIT grants automatically. Native Read/Write/Edit tools remain
-governed by their BAP hooks.
+governed by their BAP hooks. All shell executions MUST execute through the restricted
+BAP shell: `bapedge exec --shell bapsh "<command>"` (or `bapedge bapsh -c "<command>"`).
 
 If an operation requires human approval (e.g. interpreters, git push, deletions,
 or network egress), BAP automatically registers a pending approval request in the
