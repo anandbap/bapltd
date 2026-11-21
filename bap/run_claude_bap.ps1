@@ -159,41 +159,11 @@ function Write-AtomicText {
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][string]$Text
     )
-
-    $dir = Split-Path -Parent $Path
-    if (-not (Test-Path -LiteralPath $dir)) {
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    # Validate before touching the destination or moving any good configuration.
+    if ([System.IO.Path]::GetExtension($Path) -ieq '.json') {
+        [void]($Text | ConvertFrom-Json -ErrorAction Stop)
     }
-
-    $tmp = "$Path.tmp.$PID.$([Guid]::NewGuid().ToString('N'))"
-    try {
-        [System.IO.File]::WriteAllText($tmp, $Text, $Utf8NoBom)
-        $retries = 10
-        while ($retries -gt 0) {
-            try {
-                if (Test-Path -LiteralPath $Path) {
-                    Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
-                }
-                Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop
-                break
-            }
-            catch {
-                $retries--
-                if ($retries -le 0) {
-                    try {
-                        [System.IO.File]::WriteAllText($Path, $Text, $Utf8NoBom)
-                    } catch { }
-                    break
-                }
-                Start-Sleep -Milliseconds 100
-            }
-        }
-    }
-    finally {
-        if (Test-Path -LiteralPath $tmp) {
-            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-        }
-    }
+    Write-AtomicBytes -Path $Path -Bytes $Utf8NoBom.GetBytes($Text)
 }
 
 function Write-AtomicBytes {
@@ -201,37 +171,27 @@ function Write-AtomicBytes {
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][byte[]]$Bytes
     )
-
     $dir = Split-Path -Parent $Path
     if (-not [string]::IsNullOrWhiteSpace($dir) -and -not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
     }
-
     $tmp = "$Path.tmp.$PID.$([Guid]::NewGuid().ToString('N'))"
     try {
         [System.IO.File]::WriteAllBytes($tmp, $Bytes)
-        $retries = 10
-        while ($retries -gt 0) {
+        for ($attempt = 0; $attempt -lt 10; $attempt++) {
             try {
-                if (Test-Path -LiteralPath $Path) {
-                    Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+                if (Test-Path -LiteralPath $Path -PathType Leaf) {
+                    [System.IO.File]::Replace($tmp, $Path, [System.Management.Automation.Language.NullString]::Value)
+                } else {
+                    [System.IO.File]::Move($tmp, $Path)
                 }
-                Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop
-                break
-            }
-            catch {
-                $retries--
-                if ($retries -le 0) {
-                    try {
-                        [System.IO.File]::WriteAllBytes($Path, $Bytes)
-                    } catch { }
-                    break
-                }
+                return
+            } catch {
+                if ($attempt -eq 9) { throw }
                 Start-Sleep -Milliseconds 100
             }
         }
-    }
-    finally {
+    } finally {
         if (Test-Path -LiteralPath $tmp) {
             Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
         }

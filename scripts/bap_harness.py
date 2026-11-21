@@ -26,6 +26,11 @@ import urllib.error
 import urllib.request
 import uuid
 
+try:
+    from .agent_guidance import AGENT_TASK_GUIDANCE
+except ImportError:
+    from agent_guidance import AGENT_TASK_GUIDANCE
+
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BAPSTATE_DIR = os.environ.get("BAP_STATE_DIR") or os.path.join(os.path.expanduser("~"), "bin", ".bapstate")
 SESSIONS_DIR = os.path.join(BAPSTATE_DIR, "sessions")
@@ -310,7 +315,7 @@ are governed under BAP Zero-Trust constraints:
 - Operations stream to the Live Workload Radar and immutable audit ledger.
 """
     with open(gemini_file, "w", encoding="utf-8") as f:
-        f.write(gemini_rule)
+        f.write(gemini_rule + "\n" + AGENT_TASK_GUIDANCE)
     installed.append(f"Antigravity Rules: {gemini_file}")
 
     # 4. Claude Desktop User Config (optional, if AppData path exists)

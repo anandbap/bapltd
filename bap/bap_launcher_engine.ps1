@@ -15,44 +15,48 @@ Set-StrictMode -Version Latest
 
 $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
+function Get-BapAgentTaskGuidance {
+    # Single-quoted here-string preserves Markdown and shell variables literally.
+    return @'
+## BAP task authorization workflow
+
+Zero Standing Privileges (ZSP) is broker-mediated. Autonomous agents do NOT run
+`bapedge zsp authorize` or mint task grants directly.
+
+Submit ordinary supported inspection and workspace edits normally: hooks and the
+execution broker (`bapedge exec "<command>"` on Windows; `bapedge.exe`) evaluate policy
+and obtain eligible JIT grants automatically. Native Read/Write/Edit tools remain
+governed by their BAP hooks.
+
+If an operation requires human approval (e.g. interpreters, git push, deletions,
+or network egress), BAP automatically registers a pending approval request in the
+ZSP inbox and returns its request ID (`req-xxxx`). When BAP reports a pending approval request:
+1. Do NOT run `bapedge zsp authorize` or attempt to approve the request yourself.
+2. Stop and notify the human developer of the exact request ID and command to run
+   in their own terminal: `bapedge zsp approve <request-id>`.
+3. Wait for the developer to confirm approval, then retry your command.
+
+Generic grants remain single-use by default; workspace file edits receive bounded
+ceilings (up to 25 edits, 600s). Duplicate callbacks for one stable native tool-use
+ID spend once. An expired or exhausted grant is renewed automatically by the broker
+when permitted by signed policy.
+
+If BAP reports a permanent policy denial (`BAP POLICY DENIAL`, credential access,
+or protected policy assets), stop immediately. Do NOT retry through another tool
+or shell. Autonomous agents are strictly forbidden from executing `bapedge dev-override on`.
+'@
+}
+
 function Write-AtomicText {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][string]$Text
     )
-    $dir = Split-Path -Parent $Path
-    if (-not [string]::IsNullOrWhiteSpace($dir) -and -not (Test-Path -LiteralPath $dir)) {
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    # Validate before touching the destination or moving any good configuration.
+    if ([System.IO.Path]::GetExtension($Path) -ieq '.json') {
+        [void]($Text | ConvertFrom-Json -ErrorAction Stop)
     }
-    $tmp = "$Path.tmp.$PID.$([Guid]::NewGuid().ToString('N'))"
-    try {
-        [System.IO.File]::WriteAllText($tmp, $Text, $Utf8NoBom)
-        $retries = 10
-        while ($retries -gt 0) {
-            try {
-                if (Test-Path -LiteralPath $Path) {
-                    Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
-                }
-                Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop
-                break
-            }
-            catch {
-                $retries--
-                if ($retries -le 0) {
-                    try {
-                        [System.IO.File]::WriteAllText($Path, $Text, $Utf8NoBom)
-                    } catch { }
-                    break
-                }
-                Start-Sleep -Milliseconds 100
-            }
-        }
-    }
-    finally {
-        if (Test-Path -LiteralPath $tmp) {
-            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-        }
-    }
+    Write-AtomicBytes -Path $Path -Bytes $Utf8NoBom.GetBytes($Text)
 }
 
 function Write-AtomicBytes {
@@ -67,28 +71,20 @@ function Write-AtomicBytes {
     $tmp = "$Path.tmp.$PID.$([Guid]::NewGuid().ToString('N'))"
     try {
         [System.IO.File]::WriteAllBytes($tmp, $Bytes)
-        $retries = 10
-        while ($retries -gt 0) {
+        for ($attempt = 0; $attempt -lt 10; $attempt++) {
             try {
-                if (Test-Path -LiteralPath $Path) {
-                    Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+                if (Test-Path -LiteralPath $Path -PathType Leaf) {
+                    [System.IO.File]::Replace($tmp, $Path, [System.Management.Automation.Language.NullString]::Value)
+                } else {
+                    [System.IO.File]::Move($tmp, $Path)
                 }
-                Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop
-                break
-            }
-            catch {
-                $retries--
-                if ($retries -le 0) {
-                    try {
-                        [System.IO.File]::WriteAllBytes($Path, $Bytes)
-                    } catch { }
-                    break
-                }
+                return
+            } catch {
+                if ($attempt -eq 9) { throw }
                 Start-Sleep -Milliseconds 100
             }
         }
-    }
-    finally {
+    } finally {
         if (Test-Path -LiteralPath $tmp) {
             Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
         }
@@ -1052,6 +1048,21 @@ function Invoke-BapGovernedSession {
 
         # 7. Take Transactional Custody of Configuration Files (Primary Session)
         $filesSpec = & $ConfigureFiles $Workspace $SessionId
+		# All vendor JSON is parsed BEFORE the first source file is backed up.
+		foreach ($spec in $filesSpec) {
+			if ([System.IO.Path]::GetExtension([string]$spec.Path) -ieq '.json') {
+				[void](([string]$spec.Content) | ConvertFrom-Json -ErrorAction Stop)
+			}
+		}
+        $guidance = Get-BapAgentTaskGuidance
+        foreach ($spec in $filesSpec) {
+            if ([System.IO.Path]::GetExtension([string]$spec.Path) -eq '.md' -or [System.IO.Path]::GetFileName([string]$spec.Path) -eq '.cursorrules') {
+                $spec.Content = ([string]$spec.Content).TrimEnd() + "`n`n" + $guidance
+            }
+        }
+        if ($AgentId -eq 'claude-code' -and -not @($filesSpec | Where-Object { [System.IO.Path]::GetFileName([string]$_.Path) -eq 'CLAUDE.md' }).Count) {
+            $filesSpec = @($filesSpec) + @{ Path = Join-Path $Workspace 'CLAUDE.md'; Content = $guidance }
+        }
         $trackedList = @()
 
         if (-not $isSecondary) {
