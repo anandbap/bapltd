@@ -74,12 +74,18 @@ func RaisePendingApproval(zspDir string, p PendingApproval) (*PendingApproval, e
 		return nil, fmt.Errorf("%w: approval request needs at least one action", ErrInvalidEnvelope)
 	}
 	var out *PendingApproval
+	effectiveRequester := func(pa PendingApproval) string {
+		if pa.RequestingSessionID != "" {
+			return pa.RequestingSessionID
+		}
+		return pa.SessionID
+	}
 	err := withZSPStoreLock(zspDir, "__approvals__", func() error {
 		existing, _ := ListPendingApprovals(zspDir)
-		fp := approvalFingerprint(p.SessionID+"\x00"+p.ClientType, p.Actions, p.Resources)
+		fp := approvalFingerprint(p.SessionID+"\x00"+effectiveRequester(p)+"\x00"+p.ClientType, p.Actions, p.Resources)
 		for i := range existing {
 			e := existing[i]
-			if e.Status == "pending" && time.Now().Before(e.ExpiresAt) && approvalFingerprint(e.SessionID+"\x00"+e.ClientType, e.Actions, e.Resources) == fp {
+			if e.Status == "pending" && time.Now().Before(e.ExpiresAt) && approvalFingerprint(e.SessionID+"\x00"+effectiveRequester(e)+"\x00"+e.ClientType, e.Actions, e.Resources) == fp {
 				out = &e
 				return nil
 			}
