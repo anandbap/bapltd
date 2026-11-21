@@ -13,6 +13,14 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
    - Installation of unapproved standalone software, third-party .msi installers, or setup binaries is strictly blocked.
 4. **Network Egress & Execution Broker**:
    - All shell executions MUST run through the BAP Edge Execution Broker with the restricted shell: bapedge.exe exec --shell bapsh "<command>" (or bapedge.exe bapsh -c "<command>").
+   - **Shell Declaration (REQUIRED)**: Always declare the shell type explicitly using `--shell` so bapsh routes to the correct engine without heuristics:
+     - Bash / sh / zsh commands:  `bapedge exec --shell bash "<command>"`  or  `bapedge bapsh -c "<command>" --shell-hint bash`
+     - PowerShell commands:       `bapedge exec --shell pwsh "<command>"`  or  `bapedge bapsh -c "<command>" --shell-hint pwsh`
+     - Windows cmd.exe commands:  `bapedge exec --shell cmd "<command>"`   or  `bapedge bapsh -c "<command>" --shell-hint cmd`
+   - Examples by task:
+     - `bapedge exec --shell bash "git status && ls -al"`
+     - `bapedge exec --shell pwsh "Get-ChildItem -Recurse | Select-Object Name"`
+     - `bapedge exec --shell pwsh "Copy-Item src.txt dst.txt"`
    - Raw network exfiltration utilities (curl, wget, nc, raw sockets) are strictly prohibited; external API access must route through the BAP Gateway PEP.
 5. **Zero-Trust Policy Enforcement**:
    - Commands are evaluated against Cedar invariants before execution.

@@ -9,6 +9,7 @@ Reviewed against the working tree on 2026-11-14. [Architecture](../ARCHITECTURE.
 | Decision-only native hook | BAP returns a verdict in the supported client envelope | Agent host executes its original tool | Client must invoke/honor the hook; no execution containment is established by the verdict |
 | Supported command rewrite | Adapter changes the host command to invoke BAP | Broker executes the rewritten command | Depends on the client's actual rewrite contract and configuration |
 | `bap exec` | Local command classification, task-grant and policy checks | Legacy sandbox child | Parser limits and OS-specific containment apply |
+| `bapsh` / `bap exec --shell bapsh` | AST-level interception, invariant checks, ZSP grant evaluation | In-process pure Go AST interpreter (`mvdan.cc/sh/v3`) | Shell-independent in-memory interpreter; blocks credential and BAP authority access before process dispatch |
 | `bap run` | Profile/provider validation | Native provider launches executable and argv | Independent provider path; not an alias for the legacy shell broker |
 | MCP | Each BAP tool checks its supported operation | That tool's implementation | Do not assume every file tool traverses the same shell sandbox |
 | SDK/shim | Wrapper forwards supported operations | The invoked broker/tool | Only forwarded calls are covered |

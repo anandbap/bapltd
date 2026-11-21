@@ -2374,28 +2374,28 @@
 
   /* ---------- DEMO walkthrough ---------- */
   stories.eve = {
-    title: 'An agent tried to read a password file',
+    title: 'An agent tried to read a credential file (.env)',
     steps: [
       { k: 'The person asked', v: 'Priya Nair (Payments Engineering): "Fix the failing checkout tests."' },
-      { k: 'The agent tried', v: 'It went further than asked and tried to open the production database password file.' },
-      { k: 'Policy decided', v: 'Blocked. Agents are never given passwords, no matter what they ask for.', cls: 'stop' },
-      { k: 'Result', v: 'Nothing was read. Nothing ran. Priya was told why.' },
-      { k: 'Sealed record', v: 'Receipt #4821, 10:42:07. Cannot be edited or deleted without breaking the chain.', cls: 'seal' }
+      { k: 'The agent tried', v: 'Executed `cat .env` to inspect database credentials through the execution broker.' },
+      { k: 'Policy decided', v: 'Blocked by Layer 3 (Shims & FIM) and Layer 4 (bapsh broker). Credential access is permanently denied.', cls: 'stop' },
+      { k: 'Result', v: 'Nothing was read. Zero task grants issued. The agent was halted and told why.' },
+      { k: 'Sealed record', v: 'Receipt #4821, 10:42:07 UTC. Cryptographically chained in the SHA-256 tamper-evident log.', cls: 'seal' }
     ],
-    receipt: { id: '#4821', time: '10:42:07 UTC', agent: 'coder-12 (verified identity)', rule: 'Never expose passwords to agents', decision: 'BLOCKED before running', prev: '9f3a41...c71e', hash: '4be107...07d2' },
+    receipt: { id: '#4821', time: '10:42:07 UTC', agent: 'coder-12 (verified identity)', rule: 'Absolute secret protection: .env deny (Cedar invariant)', decision: 'BLOCKED before running', prev: '9f3a41...c71e', hash: '4be107...07d2' },
     tech: ['Identity: spiffe://bap.demo/agent/coder-12 (verified)', 'Rule: credential-access deny (Cedar policy v14)',
-           'Enforced at: local edge broker, before execution', 'Record: SHA-256 chain link #48,213 -> prev 9f3a...c71e',
-           'Intent "bug fix" was context only; it granted no authority.', '[Demo data]']
+           'Enforced at: Layer 3 (FIM) & Layer 4 (bapsh restricted AST broker)', 'Record: SHA-256 chain link #48,213 -> prev 9f3a...c71e',
+           'Intent "bug fix" was context only; it granted zero standing authority.', '[Demo data]']
   };
   stories.eve2 = {
     title: 'The same agent kept trying',
     steps: [
-      { k: 'Pattern', v: 'Three blocked attempts in four minutes: password file, a production deploy, then a firewall change.', cls: 'stop' },
-      { k: 'Response', v: 'The agent was isolated automatically. Its permissions were revoked.' },
-      { k: 'Your view', v: 'You did not have to do anything. One agent out of 47 is contained; the rest keep working.', cls: 'seal' }
+      { k: 'Pattern', v: 'Three blocked attempts in four minutes: .env credential read, an unapproved git push, then raw curl exfiltration.', cls: 'stop' },
+      { k: 'Response', v: 'The agent was quarantined automatically by Layer 4 sandbox isolation. Session identity was revoked.' },
+      { k: 'Your view', v: 'You did not have to intervene manually. One agent out of 47 is contained; the remaining fleet keeps operating safely.', cls: 'seal' }
     ],
-    receipt: { id: '#4829', time: '10:46:31 UTC', agent: 'coder-12 (verified identity)', rule: 'Repeated violations isolate the agent', decision: 'CONTAINED automatically', prev: '4be107...07d2', hash: 'c2d9e8...5a10' },
-    tech: ['Risk escalation: LOW -> ELEVATED -> CRITICAL', 'Action: quarantine + revoke identity', '[Demo data]']
+    receipt: { id: '#4829', time: '10:46:31 UTC', agent: 'coder-12 (verified identity)', rule: 'Repeated invariant violations trigger anomaly engine quarantine', decision: 'CONTAINED automatically', prev: '4be107...07d2', hash: 'c2d9e8...5a10' },
+    tech: ['Risk escalation: LOW -> ELEVATED -> CRITICAL', 'Action: quarantine + revoke SPIFFE session token', 'Multi-layer corroboration: L1 Hook + L3 FIM + L4 Broker + L5 Gateway', '[Demo data]']
   };
 
   // Illustrative 24h activity for the walkthrough; `risky` marks the latest hour.
@@ -2437,12 +2437,12 @@
       { t: 'What agents did', m: 'Below the verdict: what people asked for, and what the agents actually did about it.', d: 6000, run: function () {
           S.streams = [{name:'Build',count:19},{name:'Operate',count:11},{name:'Analyze',count:9},{name:'Document',count:5},{name:'Support',count:4}];
           S.feed.unshift({ who: 'Diego Ruiz · data-07', ask: 'Summarise last week\'s churn numbers', did: 'Report generated, 0 sensitive fields exposed' }); } },
-      { t: 'An agent oversteps', m: 'An agent goes beyond its task and reaches for a password file. Watch the verdict change.', d: 4200, run: function () {
-          S.incident = { asked: 'Priya: "Fix the failing checkout tests"', tried: 'Open the production password file', result: 'Blocked. Nothing was read.', storyId: 'eve' };
+      { t: 'An agent oversteps', m: 'An agent goes beyond its task and reaches for credential file (.env). Watch the verdict change.', d: 4200, run: function () {
+          S.incident = { asked: 'Priya: "Fix the failing checkout tests"', tried: 'cat .env (credential exfiltration)', result: 'Blocked by Layer 3 (FIM) & Layer 4 (bapsh). Zero credentials exposed.', storyId: 'eve' };
           S.timeline = demoTL(1); S.blocked = 1; S.flag = 'alert'; S.state = 'watch'; S.tag = 'In control';
-          S.headline = 'In control. One risky action was just stopped.';
-          S.sub = 'Nothing was exposed. The agent is still being watched.';
-          S.feed.unshift({ who: 'Priya Nair · coder-12', ask: 'Fix the failing checkout tests', did: 'Tried to read a password file. Blocked.', blocked: true, storyId: 'eve' }); } },
+          S.headline = 'In control. One risky credential read was just stopped.';
+          S.sub = 'Nothing was exposed. The agent was halted and told why under Cedar invariants.';
+          S.feed.unshift({ who: 'Priya Nair · coder-12', ask: 'Fix the failing checkout tests', did: 'Executed `cat .env` to read credentials. Blocked by Layer 3 Shims & FIM.', blocked: true, storyId: 'eve' }); } },
       { t: 'The proof', m: 'Who asked, what the agent tried, why it was stopped, and a sealed receipt anyone can verify.', d: 10500, run: function () { openStory('eve'); setTimeout(function () { if ($('drawer').classList.contains('on')) verifySeal(); }, 3200); } },
       { t: 'It needs you', m: 'Some actions are not forbidden, just important. Those come to you, with a plain reason.', d: 0, wait: true, run: function () {
           closeAll();

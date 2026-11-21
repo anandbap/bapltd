@@ -6,6 +6,14 @@ This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (
 1. **Always Use BAP Edge Execution Broker with Restricted Shell**:
    - All shell executions MUST run through `bapedge.exe exec --shell bapsh`:
      `bapedge.exe exec --shell bapsh "<command>"` (or `bapedge.exe bapsh -c "<command>"`)
+   - **Shell Declaration (REQUIRED)**: Always declare the shell type explicitly using `--shell` so bapsh routes to the correct engine without heuristics:
+     - Bash / sh / zsh commands:  `bapedge exec --shell bash "<command>"`  or  `bapedge bapsh -c "<command>" --shell-hint bash`
+     - PowerShell commands:       `bapedge exec --shell pwsh "<command>"`  or  `bapedge bapsh -c "<command>" --shell-hint pwsh`
+     - Windows cmd.exe commands:  `bapedge exec --shell cmd "<command>"`   or  `bapedge bapsh -c "<command>" --shell-hint cmd`
+   - Examples by task:
+     - `bapedge exec --shell bash "git status && ls -al"`
+     - `bapedge exec --shell pwsh "Get-ChildItem -Recurse | Select-Object Name"`
+     - `bapedge exec --shell pwsh "Copy-Item src.txt dst.txt"`
    - Never run raw, ungoverned shell commands directly on the host machine.
 2. **Zero-Trust Policy Enforcement**:
    - Commands are evaluated against Cedar invariants before execution.

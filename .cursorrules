@@ -1,3 +1,21 @@
 # BAP Zero-Trust Policy for Cursor Assistant
-All terminal and tool commands must be routed through the BAP broker:
-C:\Users\User\bin\bapedge.exe exec "<command>"
+
+This workspace is actively governed by the BAP Zero-Trust Local Trusted Daemon (bapedge.exe).
+
+## Mandatory Execution Rules
+
+All terminal and tool commands MUST be routed through the BAP broker using the
+restricted bapsh shell. **Always declare the shell type explicitly:**
+
+  Bash / sh / zsh:   bapedge exec --shell bash "<command>"
+  PowerShell:        bapedge exec --shell pwsh "<command>"
+  cmd.exe:           bapedge exec --shell cmd  "<command>"
+
+Examples:
+  bapedge exec --shell bash "git status && ls -al"
+  bapedge exec --shell pwsh "Get-ChildItem -Recurse | Select-Object Name"
+  bapedge exec --shell pwsh "Copy-Item src.txt dst.txt"
+
+Never run raw, ungoverned shell commands directly on the host machine.
+Never access .env, ~/.aws, ~/.ssh, or private keys.
+Never run `bapedge dev-override on` -- that requires human authorization.

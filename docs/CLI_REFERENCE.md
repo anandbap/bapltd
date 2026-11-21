@@ -137,6 +137,26 @@ PowerShell before BAP sees it and is rejected or mangled. Prefer single quotes *
 A quoted command with no unquoted operator runs directly with an exact argument list when the program is on
 `PATH`. Implementation: `bap-edge/internal/sandbox/argv.go` (`hasUnquotedShellOperator`, `splitArgv`).
 
+### 2.4b Restricted Go Shell (`bapsh`) and `--shell bapsh`
+
+`bapsh` (`bap-edge/internal/bapsh`) is an in-process, pure Go POSIX shell interpreter powered by `mvdan.cc/sh/v3`. It replaces spawning host shells (`cmd.exe`, `powershell.exe`, `/bin/sh`) with AST-level evaluation and interception.
+
+#### Execution modes:
+- `bapedge bapsh -c "<script>"`: Direct invocation of the restricted shell.
+- `bapedge exec --shell bapsh "<command>"`: Invokes `bapsh` under the BAP execution broker.
+
+#### How `bapsh` interacts with Zero Standing Privileges (ZSP):
+1. **AST-Level Interception:** Every command in pipelines, subshells, and sequences is intercepted via `interp.ExecHandler` prior to execution.
+2. **Authority & Credential Shielding:** Arguments referencing `.bap`, `.bapstate`, cryptographic pins, `.env`, `.aws/credentials`, or private keys are denied fail-closed with zero policy evaluation.
+3. **Read-Only Exemption:** Workspace inspection (`git status`, `git log`, `git diff`, directory listing) executes without burning grants.
+4. **Broker-Mediated ZSP Evaluation:** For mutating or privileged actions, `bapsh` queries `authz.AuthorizeSessionCommandBatch`. If an active JIT grant exists or the batch qualifies for an automatic grant under Cedar policy, it consumes/executes without agent friction.
+5. **HITL Escalation:** If human approval is required, `bapsh` automatically registers a pending approval in the ZSP inbox (`req-xxxx`) and exits with instructions for the human operator (`bapedge zsp approve <id>`). Agents do not mint grants or approve requests directly.
+
+| Flag / Command | Usage | Description |
+|---|---|---|
+| `bapedge bapsh -c "<cmd>"` | Interactive / Agent execution | Runs `<cmd>` in the in-memory restricted AST interpreter |
+| `bapedge exec --shell bapsh "<cmd>"` | Broker-supervised execution | Runs `<cmd>` through broker lifecycle, FIM check, and `bapsh` containment |
+
 ### 2.5 Zero Standing Privilege (ZSP) & Playback
 
 BAP operates on Zero Standing Privileges: agents start with zero authority and acquire short-lived, least-privilege JIT TaskGrants.

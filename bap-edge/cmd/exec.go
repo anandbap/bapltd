@@ -1652,9 +1652,14 @@ func RunExec(args []string) {
 		options.Progress = func(elapsed time.Duration) { fmt.Fprintf(os.Stderr, "[BAP] Execution running: %s elapsed\n", elapsed) }
 	}
 	var execRes sandbox.ExecResult
-	if strings.EqualFold(ec.shell, "bapsh") {
+	// Route to bapsh when --shell is bapsh, bash, sh, zsh, pwsh, powershell, or cmd.
+	// The agent's explicit shell declaration is mapped to the ShellMode so bapsh
+	// uses the right engine without heuristics.  "auto" and any unknown value
+	// fall through to the standard sandbox runner.
+	if bapshMode := bapsh.ParseShellHint(ec.shell); ec.shell == "bapsh" || bapshMode != bapsh.ShellModeAuto {
 		var outBuf bytes.Buffer
 		shOpts := bapsh.Options{
+			Mode:          bapshMode,
 			SessionID:     ec.sessionID,
 			ClientType:    ec.source,
 			WorkspaceRoot: workspaceRoot,
